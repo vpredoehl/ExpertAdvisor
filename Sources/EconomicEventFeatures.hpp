@@ -96,6 +96,34 @@ struct EconomicEventFeatureValues
     std::array<float, kEconomicEventFeatureWidth> Ordered() const noexcept;
 };
 
+// Mutually exclusive terminal state selected by the authoritative causal
+// first-release surprise computation for one completed feature row. A row
+// without any causally relevant event is explicit so observability can
+// partition the full model-feature population rather than only event rows.
+enum class CausalSurpriseDisposition
+{
+    noRelevantEvent,
+    provenanceUnavailable,
+    ambiguous,
+    notYetAvailable,
+    missingForecast,
+    incompatible,
+    available,
+};
+
+struct CausalSurpriseObservation
+{
+    CausalSurpriseDisposition disposition =
+        CausalSurpriseDisposition::noRelevantEvent;
+    float surprise = 0.0F;
+    bool lowerClamped = false;
+    bool upperClamped = false;
+    std::string eventFamily;
+    std::string firstReleaseSource;
+    std::string consensusSource;
+    bool operator==(const CausalSurpriseObservation&) const = default;
+};
+
 // Read-only row-level availability diagnostics. Provider identity never
 // changes model values, but retaining its distribution here makes the unified
 // selected-consensus provenance auditable in production verification.
@@ -156,6 +184,11 @@ public:
     const EconomicEventFeatureAvailabilityDiagnostics& Diagnostics()
         const noexcept;
 
+    // Observer-only evidence from the most recent AdvanceCompletedBar call.
+    // It is populated at the same decision point as the two Tensor channels.
+    const CausalSurpriseObservation& LastCausalSurpriseObservation()
+        const noexcept;
+
 private:
     struct MappedReleaseActual
     {
@@ -191,6 +224,7 @@ private:
 
     std::optional<PriceTP> previousBarStart_;
     EconomicEventFeatureAvailabilityDiagnostics diagnostics_;
+    CausalSurpriseObservation lastCausalSurpriseObservation_;
 };
 
 } // namespace EA::EconomicCalendar

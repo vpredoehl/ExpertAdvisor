@@ -82,6 +82,7 @@
 #include "PairedTrainingObjectiveEvaluationService.hpp"
 #include "FeatureAblationPairEvaluationService.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
+#include "CausalSurpriseObservabilityService.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -212,6 +213,10 @@ struct SchedulerOptions
     std::optional<std::string> expectedFeatureAblationMask;
     std::optional<std::vector<std::pair<long long, long long>>>
         compareFeatureAblationReplications;
+    std::optional<long long> causalSurpriseObservabilityExperimentId;
+    EA::CausalSurpriseObservability::Scope causalSurpriseObservabilityScope =
+        EA::CausalSurpriseObservability::Scope::combined;
+    bool causalSurpriseObservabilityScopeSpecified = false;
     std::optional<std::vector<long long>> verifyProfitabilityExperimentIds;
     std::optional<long long> campaignProfitabilityReadinessSnapshotId;
     std::optional<long long> campaignProfitabilityShadowSnapshotId;
@@ -1006,6 +1011,11 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--compare-feature-ablation-replications" ||
             arg.rfind("--compare-feature-ablation-replications=", 0) == 0)
             return true;
+        if (arg == "--causal-surprise-observability" ||
+            arg.rfind("--causal-surprise-observability=", 0) == 0 ||
+            arg == "--causal-surprise-observability-scope" ||
+            arg.rfind("--causal-surprise-observability-scope=", 0) == 0)
+            return true;
         if (arg == "--compare-training-objective-pair" ||
             arg == "--pair-primary-profitability-metric" ||
             arg == "--pair-min-profitability-improvement" ||
@@ -1410,6 +1420,13 @@ std::string LstmDbConnectionString()
 {
     return "hostaddr=" + GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1") +
            " gssencmode=disable user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
+}
+
+std::string ForexDbConnectionString()
+{
+    return "hostaddr=" + GetEnvOrDefault("FOREX_DB_HOST", "127.0.0.1") +
+           " gssencmode=disable user=pqxx dbname=" +
+           GetEnvOrDefault("FOREX_DB_NAME", "forex");
 }
 
 std::string LibpqConnectionValue(const std::string& value)
@@ -2119,6 +2136,17 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareFeatureAblationReplications =
                 EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
                     RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--causal-surprise-observability")
+            options.causalSurpriseObservabilityExperimentId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--causal-surprise-observability-scope")
+        {
+            options.causalSurpriseObservabilityScope =
+                EA::CausalSurpriseObservability::ParseScope(
+                    RequireNextArg(argc, argv, i, arg));
+            options.causalSurpriseObservabilityScopeSpecified = true;
+        }
         else if (arg == "--pair-primary-profitability-metric")
             options.pairPrimaryProfitabilityMetric =
                 RequireNextArg(argc, argv, i, arg);
@@ -3850,6 +3878,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
                     value);
         else if (SplitOptionWithValue(
+                     arg, "--causal-surprise-observability", value))
+            options.causalSurpriseObservabilityExperimentId =
+                ParsePositiveLongLong(
+                    "--causal-surprise-observability", value);
+        else if (SplitOptionWithValue(
+                     arg, "--causal-surprise-observability-scope", value))
+        {
+            options.causalSurpriseObservabilityScope =
+                EA::CausalSurpriseObservability::ParseScope(value);
+            options.causalSurpriseObservabilityScopeSpecified = true;
+        }
+        else if (SplitOptionWithValue(
                      arg, "--pair-primary-profitability-metric", value))
             options.pairPrimaryProfitabilityMetric = value;
         else if (SplitOptionWithValue(
@@ -4145,6 +4185,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareTrainingObjectivePair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationPair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
+        (options.causalSurpriseObservabilityExperimentId.has_value()
+             ? 1 : 0) +
         (options.verifyProfitabilityExperimentIds.has_value() ? 1 : 0) +
         (options.campaignProfitabilityReadinessSnapshotId.has_value() ? 1 : 0) +
         (options.campaignProfitabilityShadowSnapshotId.has_value() ? 1 : 0) +
@@ -4267,6 +4309,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.expectedFeatureAblationMask->empty())
         throw std::invalid_argument(
             "--expected-ablation-mask must not be empty");
+    if (options.causalSurpriseObservabilityScopeSpecified &&
+        !options.causalSurpriseObservabilityExperimentId)
+        throw std::invalid_argument(
+            "--causal-surprise-observability-scope requires "
+            "--causal-surprise-observability");
     if (options.compareTrainingObjectivePair &&
         (!options.pairPrimaryProfitabilityMetric ||
          !options.pairMinimumProfitabilityImprovement ||
@@ -25534,6 +25581,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "0 complete comparison, 4 incomplete evidence, 3 invalid pair, "
         << "2 database/tool error.\n"
         << "Usage: " << exe
+        << " --causal-surprise-observability=EXPERIMENT_ID "
+        << "[--causal-surprise-observability-scope="
+           "train|infer|combined]\n"
+        << "Reports read-only causal first-release surprise coverage over "
+        << "the experiment's exact post-warmup feature-row populations. "
+        << "Combined (the default) sums independently generated train and "
+        << "inference populations. The feature-ablation mask is reported but "
+        << "is downstream of this diagnostic.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-replications="
         << "CONTROL_ID:TREATMENT_ID[,CONTROL_ID:TREATMENT_ID...]\n"
         << "Replication aggregation preserves declared order, uses the "
@@ -27032,6 +27088,14 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
                 options.expectedFeatureAblationMask;
             return EA::FeatureAblationPairEvaluation::RunComparisonCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.causalSurpriseObservabilityExperimentId)
+        {
+            return EA::CausalSurpriseObservability::RunCommand(
+                LstmDbConnectionString(), ForexDbConnectionString(),
+                *options.causalSurpriseObservabilityExperimentId,
+                options.causalSurpriseObservabilityScope,
+                std::cout, std::cerr);
         }
         if (options.compareFeatureAblationReplications)
         {

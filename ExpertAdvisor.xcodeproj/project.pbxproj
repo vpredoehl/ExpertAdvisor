@@ -59,6 +59,12 @@
 		0E7D000931D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */; };
 		0E7D000A31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
 		0E7D000B31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
+		0E8100063350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */; };
+		0E8100073350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */; };
+		0E8100083350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */; };
+		0E8100093350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */; };
+		0E81000A3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */; };
+		0E81000B3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */; };
 		0E7E000431E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
 		0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
 		0E7E000631E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
@@ -622,6 +628,12 @@
 		0E7D000331D0000100AAA001 /* FeatureAblationPairEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationRepository.hpp; path = Sources/FeatureAblationPairEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluationService.cpp; path = Sources/FeatureAblationPairEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
 		0E7D000531D0000100AAA001 /* FeatureAblationPairEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationService.hpp; path = Sources/FeatureAblationPairEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
+		0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservability.cpp; path = Sources/CausalSurpriseObservability.cpp; sourceTree = SOURCE_ROOT; };
+		0E8100013350000100AAA001 /* CausalSurpriseObservability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservability.hpp; path = Sources/CausalSurpriseObservability.hpp; sourceTree = SOURCE_ROOT; };
+		0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservabilityRepository.cpp; path = Sources/CausalSurpriseObservabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E8100033350000100AAA001 /* CausalSurpriseObservabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservabilityRepository.hpp; path = Sources/CausalSurpriseObservabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservabilityService.cpp; path = Sources/CausalSurpriseObservabilityService.cpp; sourceTree = SOURCE_ROOT; };
+		0E8100053350000100AAA001 /* CausalSurpriseObservabilityService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservabilityService.hpp; path = Sources/CausalSurpriseObservabilityService.hpp; sourceTree = SOURCE_ROOT; };
 		0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluation.cpp; path = Sources/FeatureAblationReplicationEvaluation.cpp; sourceTree = SOURCE_ROOT; };
 		0E7E000131E0000100AAA001 /* FeatureAblationReplicationEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluation.hpp; path = Sources/FeatureAblationReplicationEvaluation.hpp; sourceTree = SOURCE_ROOT; };
 		0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluationService.cpp; path = Sources/FeatureAblationReplicationEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
@@ -759,6 +771,12 @@
 				0E7D000331D0000100AAA001 /* FeatureAblationPairEvaluationRepository.hpp */,
 				0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */,
 				0E7D000531D0000100AAA001 /* FeatureAblationPairEvaluationService.hpp */,
+				0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */,
+				0E8100013350000100AAA001 /* CausalSurpriseObservability.hpp */,
+				0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */,
+				0E8100033350000100AAA001 /* CausalSurpriseObservabilityRepository.hpp */,
+				0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */,
+				0E8100053350000100AAA001 /* CausalSurpriseObservabilityService.hpp */,
 				0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */,
 				0E7E000131E0000100AAA001 /* FeatureAblationReplicationEvaluation.hpp */,
 				0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */,
@@ -1182,6 +1200,9 @@
 				0E7D000631D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */,
 				0E7D000831D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */,
 				0E7D000A31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */,
+				0E8100063350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */,
+				0E8100083350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */,
+				0E81000A3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */,
 				0E7E000431E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */,
 				0E7E000631E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */,
 				0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
@@ -1318,6 +1339,9 @@
 				0E7D000731D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */,
 				0E7D000931D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */,
 				0E7D000B31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */,
+				0E8100073350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */,
+				0E8100093350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */,
+				0E81000B3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */,
 				0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */,
 				0E7E000731E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */,
 				0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,

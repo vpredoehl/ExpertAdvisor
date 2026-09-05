@@ -246,17 +246,6 @@ enum class SurpriseDisposition
 };
 
 
-enum class CausalSurpriseDisposition
-{
-    provenanceUnavailable,
-    ambiguous,
-    notYetAvailable,
-    missingForecast,
-    incompatible,
-    available,
-};
-
-
 template <typename MappedEvent>
 SurpriseDisposition SetSurprise(
     EconomicEventFeatureValues& values,
@@ -293,19 +282,29 @@ SurpriseDisposition SetSurprise(
 
 
 template <typename MappedEvent>
-CausalSurpriseDisposition SetCausalFirstReleaseSurprise(
+CausalSurpriseObservation SetCausalFirstReleaseSurprise(
     EconomicEventFeatureValues& values,
     const MappedEvent& event,
     std::int64_t informationCutoffUnixMicros)
 {
+    CausalSurpriseObservation observation;
+    observation.eventFamily = event.eventFamily;
+    if (event.selectedConsensus)
+        observation.consensusSource = event.selectedConsensus->provider;
+
     switch (event.firstReleaseActualState)
     {
         case EconomicEventFirstReleaseActualState::provenanceUnavailable:
-            return CausalSurpriseDisposition::provenanceUnavailable;
+            observation.disposition =
+                CausalSurpriseDisposition::provenanceUnavailable;
+            return observation;
         case EconomicEventFirstReleaseActualState::ambiguous:
-            return CausalSurpriseDisposition::ambiguous;
+            observation.disposition = CausalSurpriseDisposition::ambiguous;
+            return observation;
         case EconomicEventFirstReleaseActualState::notYetAvailable:
-            return CausalSurpriseDisposition::notYetAvailable;
+            observation.disposition =
+                CausalSurpriseDisposition::notYetAvailable;
+            return observation;
         case EconomicEventFirstReleaseActualState::provenFirstRelease:
             break;
     }
@@ -316,14 +315,21 @@ CausalSurpriseDisposition SetCausalFirstReleaseSurprise(
     if (event.firstReleaseActual->provenAvailableAtUnixMicros >
         informationCutoffUnixMicros)
     {
-        return CausalSurpriseDisposition::notYetAvailable;
+        observation.disposition =
+            CausalSurpriseDisposition::notYetAvailable;
+        return observation;
     }
     if (!event.selectedConsensus)
-        return CausalSurpriseDisposition::missingForecast;
+    {
+        observation.disposition =
+            CausalSurpriseDisposition::missingForecast;
+        return observation;
+    }
     if (!CompatibleCausalScalarSurprise(
             *event.selectedConsensus, *event.firstReleaseActual))
     {
-        return CausalSurpriseDisposition::incompatible;
+        observation.disposition = CausalSurpriseDisposition::incompatible;
+        return observation;
     }
 
     const long double difference =
@@ -337,18 +343,37 @@ CausalSurpriseDisposition SetCausalFirstReleaseSurprise(
             event.selectedConsensus->forecast.unit));
     const long double normalized = difference / normalizationScale;
     if (!std::isfinite(normalized))
-        return CausalSurpriseDisposition::incompatible;
+    {
+        observation.disposition = CausalSurpriseDisposition::incompatible;
+        return observation;
+    }
+
+    observation.lowerClamped =
+        normalized < -static_cast<long double>(
+                         kEconomicEventCausalSurpriseClamp);
+    observation.upperClamped =
+        normalized > static_cast<long double>(
+                         kEconomicEventCausalSurpriseClamp);
 
     const float bounded = static_cast<float>(std::clamp(
         normalized,
         -static_cast<long double>(kEconomicEventCausalSurpriseClamp),
         static_cast<long double>(kEconomicEventCausalSurpriseClamp)));
     if (!std::isfinite(bounded))
-        return CausalSurpriseDisposition::incompatible;
+    {
+        observation.disposition = CausalSurpriseDisposition::incompatible;
+        observation.lowerClamped = false;
+        observation.upperClamped = false;
+        return observation;
+    }
 
     values.causalFirstReleaseSurpriseAvailable = 1.0F;
     values.causalFirstReleaseSurprise = bounded;
-    return CausalSurpriseDisposition::available;
+    observation.disposition = CausalSurpriseDisposition::available;
+    observation.surprise = bounded;
+    observation.firstReleaseSource =
+        event.firstReleaseActual->sourceName;
+    return observation;
 }
 
 
@@ -649,6 +674,7 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
             informationCutoff.time_since_epoch()).count();
 
     EconomicEventFeatureValues values;
+    lastCausalSurpriseObservation_ = CausalSurpriseObservation{};
 
     while (
         nextEventIndex_ < events_.size() &&
@@ -796,9 +822,13 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
             ++diagnostics_.notYetAvailableInitialActualRowCount;
         }
 
-        switch (SetCausalFirstReleaseSurprise(
-            values, *relevantEvent, informationCutoffUnixMicros))
+        lastCausalSurpriseObservation_ = SetCausalFirstReleaseSurprise(
+            values, *relevantEvent, informationCutoffUnixMicros);
+        switch (lastCausalSurpriseObservation_.disposition)
         {
+            case CausalSurpriseDisposition::noRelevantEvent:
+                throw std::logic_error(
+                    "economic_event_causal_surprise_relevant_event_missing");
             case CausalSurpriseDisposition::provenanceUnavailable:
                 ++diagnostics_.causalSurpriseProvenanceUnavailableRowCount;
                 break;
@@ -838,6 +868,13 @@ const EconomicEventFeatureAvailabilityDiagnostics&
 EconomicEventFeatureEngine::Diagnostics() const noexcept
 {
     return diagnostics_;
+}
+
+
+const CausalSurpriseObservation&
+EconomicEventFeatureEngine::LastCausalSurpriseObservation() const noexcept
+{
+    return lastCausalSurpriseObservation_;
 }
 
 } // namespace EA::EconomicCalendar
