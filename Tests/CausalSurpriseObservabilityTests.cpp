@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,8 @@ Economic::EconomicEvent ConsensusEvent(double forecast,
 
     event.firstReleaseActualState =
         Economic::EconomicEventFirstReleaseActualState::provenFirstRelease;
+    event.firstReleaseActualSelectionReason =
+        "unique_authoritative_initial_at_earliest_source_publication";
     Economic::EconomicEventFirstReleaseActual firstRelease;
     firstRelease.actual.valueKind = "scalar";
     firstRelease.actual.canonicalValueLow = actual;
@@ -313,6 +316,8 @@ void TestControlledPairParity()
     assert(parity.coverageMatches);
     assert(left.upstreamFeatureIdentity == right.upstreamFeatureIdentity);
     assert(left.coverageIdentity == right.coverageIdentity);
+    assert(left.attributionIdentity == right.attributionIdentity);
+    assert(left.gapAttribution == right.gapAttribution);
     assert(left.diagnosticIdentity != right.diagnosticIdentity);
 
     auto symbol = ablation;
@@ -349,6 +354,232 @@ void TestControlledPairParity()
         "unexpected_feature_ablation_mask_difference"));
 }
 
+void TestExactCompatibilityReasons()
+{
+    auto event = ConsensusEvent(0.2, 0.5, 2);
+    const auto assess = [](const Economic::EconomicEvent& value)
+    {
+        return Economic::AssessCausalScalarSurpriseCompatibility(
+            *value.selectedConsensus, *value.firstReleaseActual,
+            value.eventFamily);
+    };
+
+    auto forecastRange = event;
+    forecastRange.selectedConsensus->forecast.valueKind = "range";
+    forecastRange.selectedConsensus->forecast.canonicalValueHigh = 0.3;
+    assert(assess(forecastRange) == Economic::
+        CausalSurpriseIncompatibilityReason::forecastNotScalar);
+
+    auto actualRange = event;
+    actualRange.firstReleaseActual->actual.valueKind = "range";
+    actualRange.firstReleaseActual->actual.canonicalValueHigh = 0.6;
+    assert(assess(actualRange) == Economic::
+        CausalSurpriseIncompatibilityReason::actualNotScalar);
+
+    auto unit = event;
+    unit.firstReleaseActual->actual.unit = "count";
+    assert(ObservationAt(unit, 1).incompatibilityReason == Economic::
+        CausalSurpriseIncompatibilityReason::unitMismatch);
+
+    auto scale = event;
+    scale.firstReleaseActual->actual.scale = 100.0;
+    assert(ObservationAt(scale, 1).incompatibilityReason == Economic::
+        CausalSurpriseIncompatibilityReason::scaleMismatch);
+
+    auto qualifier = event;
+    qualifier.firstReleaseActual->actual.qualifier = "seasonally_adjusted";
+    assert(ObservationAt(qualifier, 1).incompatibilityReason == Economic::
+        CausalSurpriseIncompatibilityReason::qualifierMismatch);
+
+    auto invalidForecast = event;
+    invalidForecast.selectedConsensus->forecast.canonicalValueLow =
+        std::numeric_limits<double>::quiet_NaN();
+    assert(assess(invalidForecast) == Economic::
+        CausalSurpriseIncompatibilityReason::invalidForecastValueShape);
+
+    auto invalidActual = event;
+    invalidActual.firstReleaseActual->actual.scale = 0.0;
+    assert(assess(invalidActual) == Economic::
+        CausalSurpriseIncompatibilityReason::invalidActualValueShape);
+    bool invalidShapeFailedClosed = false;
+    try
+    {
+        (void)ObservationAt(invalidActual, 1);
+    }
+    catch (const std::invalid_argument& error)
+    {
+        invalidShapeFailedClosed = std::string{error.what()}.find(
+            "first_release_actual_pit_invalid") != std::string::npos;
+    }
+    assert(invalidShapeFailedClosed);
+
+    auto unsupported = event;
+    unsupported.eventFamily = "UNSUPPORTED";
+    assert(assess(unsupported) == Economic::
+        CausalSurpriseIncompatibilityReason::
+            unsupportedNormalizationFamilyOrUnit);
+
+    assert(std::string{Economic::CausalSurpriseIncompatibilityReasonText(
+        Economic::CausalSurpriseIncompatibilityReason::scaleMismatch)} ==
+        "scale_mismatch");
+}
+
+void TestGapAttributionReconciliationAndUniqueEvents()
+{
+    auto context = Context(619);
+    const auto range = Observability::ResolveRanges(
+        context, Observability::Scope::train).front();
+    auto event = ConsensusEvent(0.2, 0.5, 2);
+    event.firstReleaseActual.reset();
+    event.firstReleaseActualState = Economic::
+        EconomicEventFirstReleaseActualState::provenanceUnavailable;
+    event.firstReleaseActualSelectionReason = "no_actual_observation";
+    const std::vector<PriceTP> bars{Bar(0), Bar(1), Bar(2), Bar(3)};
+    const auto result = Observability::Evaluate(
+        context, Observability::Scope::train,
+        {{range, bars, 1, {event}}});
+
+    // Phase 6 consumes exactly the Phase-5 denominator after its prefix.
+    assert(result.sourceRowCount - result.warmupRowCount ==
+           result.coverage.totalFeatureRows);
+    assert(result.coverage.totalFeatureRows == 3);
+    assert(result.coverage.provenanceUnavailableCount == 3);
+    assert(result.gapAttribution.provenanceReasonCounts.at(
+        "no_actual_observation") == 3);
+    assert(result.gapAttribution.familyCounts.at("CPI").totalRows == 3);
+    assert(result.gapAttribution.agencyCounts.at("BLS").totalRows == 3);
+    assert(result.gapAttribution.yearCounts.at("2023").totalRows == 3);
+    assert(result.gapAttribution.reasonCounts.size() == 1);
+    assert(result.gapAttribution.reasonCounts.front().affectedFeatureRows == 3);
+    assert(result.gapAttribution.reasonCounts.front().affectedEventIds.size() ==
+           1);
+    assert(result.gapAttribution.reasonCounts.front().remediability ==
+           Observability::RemediabilityClass::
+               potentiallyRemediableDataGap);
+    assert(!result.attributionIdentity.empty());
+
+    const auto repeated = Observability::Evaluate(
+        context, Observability::Scope::train,
+        {{range, bars, 1, {event}}});
+    assert(result.attributionIdentity == repeated.attributionIdentity);
+    assert(result.attributionCanonical == repeated.attributionCanonical);
+}
+
+void TestAllTerminalGapStatesAndClassifications()
+{
+    auto context = Context(619);
+    const auto range = Observability::ResolveRanges(
+        context, Observability::Scope::train).front();
+    const auto evaluate = [&](Economic::EconomicEvent event)
+    {
+        return Observability::Evaluate(
+            context, Observability::Scope::train,
+            {{range, {Bar(0)}, 0, {std::move(event)}}});
+    };
+
+    auto ambiguous = ConsensusEvent(0.2, 0.5, 2);
+    ambiguous.firstReleaseActual.reset();
+    ambiguous.firstReleaseActualState =
+        Economic::EconomicEventFirstReleaseActualState::ambiguous;
+    ambiguous.firstReleaseActualSelectionReason =
+        "conflicting_authoritative_initials_at_same_earliest_publication";
+    const auto ambiguousResult = evaluate(ambiguous);
+    assert(ambiguousResult.coverage.ambiguousCount == 1);
+    assert(ambiguousResult.gapAttribution.reasonCounts.front().remediability ==
+           Observability::RemediabilityClass::
+               requiresManualProvenanceReview);
+
+    auto unproved = ambiguous;
+    unproved.firstReleaseActualState = Economic::
+        EconomicEventFirstReleaseActualState::provenanceUnavailable;
+    unproved.firstReleaseActualSelectionReason =
+        "no_authoritative_initial_with_exact_source_publication";
+    const auto unprovedResult = evaluate(unproved);
+    assert(unprovedResult.gapAttribution.provenanceReasonCounts.at(
+        "no_authoritative_initial_with_exact_source_publication") == 1);
+    assert(unprovedResult.gapAttribution.reasonCounts.front().rawReason ==
+           "no_authoritative_initial_with_exact_source_publication");
+    assert(unprovedResult.gapAttribution.reasonCounts.front().remediability ==
+           Observability::RemediabilityClass::
+               requiresManualProvenanceReview);
+
+    auto notYet = ConsensusEvent(0.2, 0.5, 2);
+    notYet.firstReleaseActual.reset();
+    notYet.firstReleaseActualState =
+        Economic::EconomicEventFirstReleaseActualState::notYetAvailable;
+    const auto notYetResult = evaluate(notYet);
+    assert(notYetResult.coverage.notYetAvailableCount == 1);
+    assert(notYetResult.gapAttribution.reasonCounts.front().remediability ==
+           Observability::RemediabilityClass::expectedByContract);
+
+    auto missing = ConsensusEvent(0.2, 0.5, 1);
+    missing.selectedConsensus.reset();
+    const auto missingResult = evaluate(missing);
+    assert(missingResult.coverage.missingConsensusCount == 1);
+    assert(missingResult.gapAttribution.missingConsensusReasonCounts.at(
+        "no_selected_consensus_persisted") == 1);
+    assert(missingResult.gapAttribution.familyCounts.at("CPI")
+               .dispositionCounts.at("missing_consensus") == 1);
+    assert(missingResult.gapAttribution.agencyCounts.at("BLS")
+               .dispositionCounts.at("missing_consensus") == 1);
+    assert(missingResult.gapAttribution.yearCounts.at("2023")
+               .dispositionCounts.at("missing_consensus") == 1);
+
+    auto incompatible = ConsensusEvent(0.2, 0.5, 1);
+    incompatible.firstReleaseActual->actual.scale = 100.0;
+    const auto incompatibleResult = evaluate(incompatible);
+    assert(incompatibleResult.coverage.incompatibleCount == 1);
+    assert(incompatibleResult.gapAttribution.incompatibilityReasonCounts.at(
+        "scale_mismatch") == 1);
+
+    const auto noEvent = Observability::Evaluate(
+        context, Observability::Scope::train,
+        {{range, {Bar(0), Bar(1)}, 0, {}}});
+    assert(noEvent.coverage.noRelevantEventCount == 2);
+    assert(noEvent.gapAttribution.familyCounts.at("NONE").totalRows == 2);
+    assert(noEvent.gapAttribution.firstNoRelevantBarUnixSeconds);
+    assert(noEvent.gapAttribution.lastNoRelevantBarUnixSeconds);
+}
+
+void TestPriorityOrderingAndControlledAttributionParity()
+{
+    auto control = Context(619);
+    auto ablation = Context(620);
+    ablation.featureAblationMask = std::string{
+        EA::kCausalEconomicEventSurpriseAblationMaskText};
+    const auto ranges = Observability::ResolveRanges(
+        control, Observability::Scope::combined);
+
+    auto provenance = ConsensusEvent(0.2, 0.5, 1);
+    provenance.firstReleaseActual.reset();
+    provenance.firstReleaseActualState = Economic::
+        EconomicEventFirstReleaseActualState::provenanceUnavailable;
+    provenance.firstReleaseActualSelectionReason = "no_actual_observation";
+    auto missing = ConsensusEvent(0.2, 0.5, 1);
+    missing.selectedConsensus.reset();
+
+    const auto evaluate = [&](const Observability::ExperimentContext& value)
+    {
+        return Observability::Evaluate(
+            value, Observability::Scope::combined,
+            {{ranges[0], {Bar(0)}, 0, {provenance}},
+             {ranges[1], {Bar(1)}, 0, {missing}}});
+    };
+    const auto left = evaluate(control);
+    const auto right = evaluate(ablation);
+    assert(left.gapAttribution.priorities.size() == 2);
+    assert(left.gapAttribution.priorities[0].affectedFeatureRows == 1);
+    assert(left.gapAttribution.priorities[1].affectedFeatureRows == 1);
+    assert(left.gapAttribution.priorities[0].rawReason ==
+           "no_actual_observation");
+    assert(left.gapAttribution.priorities[1].rawReason ==
+           "no_selected_consensus_persisted");
+    assert(left.attributionIdentity == right.attributionIdentity);
+    assert(Observability::CompareUpstream(left, right).coverageMatches);
+    // Scheduler priority is intentionally absent from ExperimentContext and
+    // therefore cannot perturb either upstream identity.
+}
+
 } // namespace
 
 int main()
@@ -357,6 +588,10 @@ int main()
     TestCoveragePartitionsStatisticsAndClamp();
     TestWarmupDenominatorAndIdentity();
     TestControlledPairParity();
+    TestExactCompatibilityReasons();
+    TestGapAttributionReconciliationAndUniqueEvents();
+    TestAllTerminalGapStatesAndClassifications();
+    TestPriorityOrderingAndControlledAttributionParity();
     std::cout << "Causal surprise observability tests passed\n";
     return 0;
 }

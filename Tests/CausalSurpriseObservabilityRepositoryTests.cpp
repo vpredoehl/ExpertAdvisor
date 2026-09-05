@@ -59,6 +59,9 @@ CREATE TABLE experiment (
 INSERT INTO experiment VALUES
 (619,'EURUSDRMP',4,'2010-01-01','2025-01-01','2025-01-01','2026-01-01',
  77,6,'enabled','full_history_warmup',20,''),
+(620,'EURUSDRMP',4,'2010-01-01','2025-01-01','2025-01-01','2026-01-01',
+ 77,6,'enabled','full_history_warmup',20,
+ 'causal_first_release_surprise_available,causal_first_release_surprise'),
 (500,'eurusdrmp',4,'2010-01-01','2025-01-01',NULL,NULL,
  75,5,'zero_ablation','legacy_cold_boundary',30,''),
 (501,'eurusdrmp',4,'2010-01-01','2025-01-01',NULL,NULL,
@@ -119,6 +122,25 @@ INSERT INTO experiment VALUES
         assert(rendered.find("total_feature_rows=0") != std::string::npos);
         assert(rendered.find("read_only=true,software_success=true") !=
                std::string::npos);
+        const std::string gaps =
+            Observability::RenderGapAttribution(result);
+        assert(gaps.find("CAUSAL_SURPRISE_GAP_ATTRIBUTION") !=
+               std::string::npos);
+        assert(gaps.find("total_feature_rows=0") != std::string::npos);
+        assert(gaps.find("terminal_partition_matches_total=true") !=
+               std::string::npos);
+        assert(gaps.find("read_only=true,software_success=true") !=
+               std::string::npos);
+
+        const auto ablation =
+            Observability::LoadExperimentContext(read, 620);
+        const auto ablationResult = Observability::Evaluate(
+            ablation, Observability::Scope::train,
+            {{range, {}, 0, {}}});
+        assert(result.attributionIdentity ==
+               ablationResult.attributionIdentity);
+        assert(Observability::CompareUpstream(
+            result, ablationResult).coverageMatches);
     }
 
     // The production command uses this transaction type for all experiment
@@ -147,6 +169,19 @@ INSERT INTO experiment VALUES
         assert(status == 3);
         assert(output.str().empty());
         assert(errors.str().find("experiment_not_found") !=
+               std::string::npos);
+        assert(errors.str().find("read_only=true") != std::string::npos);
+    }
+
+    {
+        std::ostringstream output;
+        std::ostringstream errors;
+        const int status = Observability::RunGapAttributionCommand(
+            ConnectionString(), "dbname=unused", 999999,
+            Observability::Scope::train, output, errors);
+        assert(status == 3);
+        assert(output.str().empty());
+        assert(errors.str().find("CAUSAL_SURPRISE_GAP_ATTRIBUTION_FAILED") !=
                std::string::npos);
         assert(errors.str().find("read_only=true") != std::string::npos);
     }

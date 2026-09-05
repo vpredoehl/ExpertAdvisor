@@ -111,6 +111,33 @@ enum class CausalSurpriseDisposition
     available,
 };
 
+// Observer-only explanation from the exact Phase-2 compatibility decision.
+// `none` means compatibility passed or was not evaluated for the terminal
+// disposition. These values do not participate in Tensor construction.
+enum class CausalSurpriseIncompatibilityReason
+{
+    none,
+    invalidForecastValueShape,
+    invalidActualValueShape,
+    forecastNotScalar,
+    actualNotScalar,
+    unitMismatch,
+    scaleMismatch,
+    qualifierMismatch,
+    unsupportedNormalizationFamilyOrUnit,
+    normalizedValueNotFinite,
+    boundedValueNotFinite,
+};
+
+const char* CausalSurpriseIncompatibilityReasonText(
+    CausalSurpriseIncompatibilityReason reason) noexcept;
+
+CausalSurpriseIncompatibilityReason
+AssessCausalScalarSurpriseCompatibility(
+    const EconomicEventSelectedConsensus& selected,
+    const EconomicEventFirstReleaseActual& firstReleaseActual,
+    std::string_view eventFamily) noexcept;
+
 struct CausalSurpriseObservation
 {
     CausalSurpriseDisposition disposition =
@@ -118,9 +145,15 @@ struct CausalSurpriseObservation
     float surprise = 0.0F;
     bool lowerClamped = false;
     bool upperClamped = false;
+    long long economicEventId = 0;
+    std::int64_t eventTimestampUnixMicros = 0;
     std::string eventFamily;
+    std::string sourceAgency;
+    std::string firstReleaseSelectionReason;
     std::string firstReleaseSource;
     std::string consensusSource;
+    CausalSurpriseIncompatibilityReason incompatibilityReason =
+        CausalSurpriseIncompatibilityReason::none;
     bool operator==(const CausalSurpriseObservation&) const = default;
 };
 
@@ -203,14 +236,17 @@ private:
     {
         long long economicEventId = 0;
         PriceTP timestamp{};
+        std::int64_t eventTimestampUnixMicros = 0;
         EconomicEventModelFamily family =
             EconomicEventModelFamily::inflation;
         std::string eventFamily;
+        std::string sourceAgency;
         int eventImportance = 0;
         std::optional<EconomicEventSelectedConsensus> selectedConsensus;
         std::optional<MappedReleaseActual> releaseActual;
         EconomicEventFirstReleaseActualState firstReleaseActualState =
             EconomicEventFirstReleaseActualState::provenanceUnavailable;
+        std::string firstReleaseActualSelectionReason;
         std::optional<EconomicEventFirstReleaseActual> firstReleaseActual;
     };
 

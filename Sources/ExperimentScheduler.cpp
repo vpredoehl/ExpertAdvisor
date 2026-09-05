@@ -217,6 +217,10 @@ struct SchedulerOptions
     EA::CausalSurpriseObservability::Scope causalSurpriseObservabilityScope =
         EA::CausalSurpriseObservability::Scope::combined;
     bool causalSurpriseObservabilityScopeSpecified = false;
+    std::optional<long long> causalSurpriseCoverageGapsExperimentId;
+    EA::CausalSurpriseObservability::Scope causalSurpriseCoverageGapsScope =
+        EA::CausalSurpriseObservability::Scope::combined;
+    bool causalSurpriseCoverageGapsScopeSpecified = false;
     std::optional<std::vector<long long>> verifyProfitabilityExperimentIds;
     std::optional<long long> campaignProfitabilityReadinessSnapshotId;
     std::optional<long long> campaignProfitabilityShadowSnapshotId;
@@ -1015,6 +1019,11 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--causal-surprise-observability=", 0) == 0 ||
             arg == "--causal-surprise-observability-scope" ||
             arg.rfind("--causal-surprise-observability-scope=", 0) == 0)
+            return true;
+        if (arg == "--causal-surprise-coverage-gaps" ||
+            arg.rfind("--causal-surprise-coverage-gaps=", 0) == 0 ||
+            arg == "--causal-surprise-coverage-gaps-scope" ||
+            arg.rfind("--causal-surprise-coverage-gaps-scope=", 0) == 0)
             return true;
         if (arg == "--compare-training-objective-pair" ||
             arg == "--pair-primary-profitability-metric" ||
@@ -2146,6 +2155,17 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 EA::CausalSurpriseObservability::ParseScope(
                     RequireNextArg(argc, argv, i, arg));
             options.causalSurpriseObservabilityScopeSpecified = true;
+        }
+        else if (arg == "--causal-surprise-coverage-gaps")
+            options.causalSurpriseCoverageGapsExperimentId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--causal-surprise-coverage-gaps-scope")
+        {
+            options.causalSurpriseCoverageGapsScope =
+                EA::CausalSurpriseObservability::ParseScope(
+                    RequireNextArg(argc, argv, i, arg));
+            options.causalSurpriseCoverageGapsScopeSpecified = true;
         }
         else if (arg == "--pair-primary-profitability-metric")
             options.pairPrimaryProfitabilityMetric =
@@ -3890,6 +3910,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.causalSurpriseObservabilityScopeSpecified = true;
         }
         else if (SplitOptionWithValue(
+                     arg, "--causal-surprise-coverage-gaps", value))
+            options.causalSurpriseCoverageGapsExperimentId =
+                ParsePositiveLongLong(
+                    "--causal-surprise-coverage-gaps", value);
+        else if (SplitOptionWithValue(
+                     arg, "--causal-surprise-coverage-gaps-scope", value))
+        {
+            options.causalSurpriseCoverageGapsScope =
+                EA::CausalSurpriseObservability::ParseScope(value);
+            options.causalSurpriseCoverageGapsScopeSpecified = true;
+        }
+        else if (SplitOptionWithValue(
                      arg, "--pair-primary-profitability-metric", value))
             options.pairPrimaryProfitabilityMetric = value;
         else if (SplitOptionWithValue(
@@ -4187,6 +4219,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
         (options.causalSurpriseObservabilityExperimentId.has_value()
              ? 1 : 0) +
+        (options.causalSurpriseCoverageGapsExperimentId.has_value()
+             ? 1 : 0) +
         (options.verifyProfitabilityExperimentIds.has_value() ? 1 : 0) +
         (options.campaignProfitabilityReadinessSnapshotId.has_value() ? 1 : 0) +
         (options.campaignProfitabilityShadowSnapshotId.has_value() ? 1 : 0) +
@@ -4314,6 +4348,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "--causal-surprise-observability-scope requires "
             "--causal-surprise-observability");
+    if (options.causalSurpriseCoverageGapsScopeSpecified &&
+        !options.causalSurpriseCoverageGapsExperimentId)
+        throw std::invalid_argument(
+            "--causal-surprise-coverage-gaps-scope requires "
+            "--causal-surprise-coverage-gaps");
     if (options.compareTrainingObjectivePair &&
         (!options.pairPrimaryProfitabilityMetric ||
          !options.pairMinimumProfitabilityImprovement ||
@@ -25590,6 +25629,14 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "inference populations. The feature-ablation mask is reported but "
         << "is downstream of this diagnostic.\n"
         << "Usage: " << exe
+        << " --causal-surprise-coverage-gaps=EXPERIMENT_ID "
+        << "[--causal-surprise-coverage-gaps-scope="
+           "train|infer|combined]\n"
+        << "Attributes the same causal-surprise feature-row population by "
+        << "raw provenance reason, event family, authoritative agency, UTC "
+        << "calendar year, compatibility reason, and deterministic remediation "
+        << "priority. The command is repeatable-read and read-only.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-replications="
         << "CONTROL_ID:TREATMENT_ID[,CONTROL_ID:TREATMENT_ID...]\n"
         << "Replication aggregation preserves declared order, uses the "
@@ -27096,6 +27143,15 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
                 *options.causalSurpriseObservabilityExperimentId,
                 options.causalSurpriseObservabilityScope,
                 std::cout, std::cerr);
+        }
+        if (options.causalSurpriseCoverageGapsExperimentId)
+        {
+            return EA::CausalSurpriseObservability::
+                RunGapAttributionCommand(
+                    LstmDbConnectionString(), ForexDbConnectionString(),
+                    *options.causalSurpriseCoverageGapsExperimentId,
+                    options.causalSurpriseCoverageGapsScope,
+                    std::cout, std::cerr);
         }
         if (options.compareFeatureAblationReplications)
         {

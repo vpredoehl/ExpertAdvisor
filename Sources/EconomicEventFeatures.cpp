@@ -219,23 +219,6 @@ bool CompatibleScalarSurprise(
 }
 
 
-bool CompatibleCausalScalarSurprise(
-    const EconomicEventSelectedConsensus& selected,
-    const EconomicEventFirstReleaseActual& firstReleaseActual)
-{
-    const EconomicEventConsensusValue& forecast = selected.forecast;
-    const EconomicEventConsensusValue& actual = firstReleaseActual.actual;
-
-    return
-        ValidValueShape(actual) &&
-        forecast.valueKind == "scalar" &&
-        actual.valueKind == "scalar" &&
-        forecast.unit == actual.unit &&
-        forecast.scale == actual.scale &&
-        forecast.qualifier == actual.qualifier;
-}
-
-
 enum class SurpriseDisposition
 {
     missingActual,
@@ -288,7 +271,12 @@ CausalSurpriseObservation SetCausalFirstReleaseSurprise(
     std::int64_t informationCutoffUnixMicros)
 {
     CausalSurpriseObservation observation;
+    observation.economicEventId = event.economicEventId;
+    observation.eventTimestampUnixMicros = event.eventTimestampUnixMicros;
     observation.eventFamily = event.eventFamily;
+    observation.sourceAgency = event.sourceAgency;
+    observation.firstReleaseSelectionReason =
+        event.firstReleaseActualSelectionReason;
     if (event.selectedConsensus)
         observation.consensusSource = event.selectedConsensus->provider;
 
@@ -325,8 +313,12 @@ CausalSurpriseObservation SetCausalFirstReleaseSurprise(
             CausalSurpriseDisposition::missingForecast;
         return observation;
     }
-    if (!CompatibleCausalScalarSurprise(
-            *event.selectedConsensus, *event.firstReleaseActual))
+    observation.incompatibilityReason =
+        AssessCausalScalarSurpriseCompatibility(
+            *event.selectedConsensus, *event.firstReleaseActual,
+            event.eventFamily);
+    if (observation.incompatibilityReason !=
+        CausalSurpriseIncompatibilityReason::none)
     {
         observation.disposition = CausalSurpriseDisposition::incompatible;
         return observation;
@@ -345,6 +337,8 @@ CausalSurpriseObservation SetCausalFirstReleaseSurprise(
     if (!std::isfinite(normalized))
     {
         observation.disposition = CausalSurpriseDisposition::incompatible;
+        observation.incompatibilityReason =
+            CausalSurpriseIncompatibilityReason::normalizedValueNotFinite;
         return observation;
     }
 
@@ -362,6 +356,8 @@ CausalSurpriseObservation SetCausalFirstReleaseSurprise(
     if (!std::isfinite(bounded))
     {
         observation.disposition = CausalSurpriseDisposition::incompatible;
+        observation.incompatibilityReason =
+            CausalSurpriseIncompatibilityReason::boundedValueNotFinite;
         observation.lowerClamped = false;
         observation.upperClamped = false;
         return observation;
@@ -442,6 +438,75 @@ EconomicEventFeatureValues::Ordered() const noexcept
         causalFirstReleaseSurpriseAvailable,
         causalFirstReleaseSurprise,
     };
+}
+
+
+const char* CausalSurpriseIncompatibilityReasonText(
+    CausalSurpriseIncompatibilityReason reason) noexcept
+{
+    switch (reason)
+    {
+        case CausalSurpriseIncompatibilityReason::none:
+            return "none";
+        case CausalSurpriseIncompatibilityReason::invalidForecastValueShape:
+            return "invalid_forecast_value_shape";
+        case CausalSurpriseIncompatibilityReason::invalidActualValueShape:
+            return "invalid_actual_value_shape";
+        case CausalSurpriseIncompatibilityReason::forecastNotScalar:
+            return "forecast_not_scalar";
+        case CausalSurpriseIncompatibilityReason::actualNotScalar:
+            return "actual_not_scalar";
+        case CausalSurpriseIncompatibilityReason::unitMismatch:
+            return "unit_mismatch";
+        case CausalSurpriseIncompatibilityReason::scaleMismatch:
+            return "scale_mismatch";
+        case CausalSurpriseIncompatibilityReason::qualifierMismatch:
+            return "qualifier_mismatch";
+        case CausalSurpriseIncompatibilityReason::
+                unsupportedNormalizationFamilyOrUnit:
+            return "unsupported_normalization_family_or_unit";
+        case CausalSurpriseIncompatibilityReason::normalizedValueNotFinite:
+            return "normalized_value_not_finite";
+        case CausalSurpriseIncompatibilityReason::boundedValueNotFinite:
+            return "bounded_value_not_finite";
+    }
+    return "unknown";
+}
+
+
+CausalSurpriseIncompatibilityReason
+AssessCausalScalarSurpriseCompatibility(
+    const EconomicEventSelectedConsensus& selected,
+    const EconomicEventFirstReleaseActual& firstReleaseActual,
+    std::string_view eventFamily) noexcept
+{
+    const EconomicEventConsensusValue& forecast = selected.forecast;
+    const EconomicEventConsensusValue& actual = firstReleaseActual.actual;
+    if (!ValidValueShape(forecast))
+        return CausalSurpriseIncompatibilityReason::
+            invalidForecastValueShape;
+    if (!ValidValueShape(actual))
+        return CausalSurpriseIncompatibilityReason::invalidActualValueShape;
+    if (forecast.valueKind != "scalar")
+        return CausalSurpriseIncompatibilityReason::forecastNotScalar;
+    if (actual.valueKind != "scalar")
+        return CausalSurpriseIncompatibilityReason::actualNotScalar;
+    if (forecast.unit != actual.unit)
+        return CausalSurpriseIncompatibilityReason::unitMismatch;
+    if (forecast.scale != actual.scale)
+        return CausalSurpriseIncompatibilityReason::scaleMismatch;
+    if (forecast.qualifier != actual.qualifier)
+        return CausalSurpriseIncompatibilityReason::qualifierMismatch;
+    try
+    {
+        (void)EconomicEventNormalizationScale(eventFamily, forecast.unit);
+    }
+    catch (const std::invalid_argument&)
+    {
+        return CausalSurpriseIncompatibilityReason::
+            unsupportedNormalizationFamilyOrUnit;
+    }
+    return CausalSurpriseIncompatibilityReason::none;
 }
 
 
@@ -618,14 +683,17 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
             MappedEvent{
                 event.economicEventId,
                 eventTime,
+                event.eventTimestampUnixMicros,
                 MapEconomicEventModelFamily(
                     event.sourceAgency,
                     event.eventFamily),
                 event.eventFamily,
+                event.sourceAgency,
                 event.eventImportance,
                 event.selectedConsensus,
                 std::move(releaseActual),
                 event.firstReleaseActualState,
+                event.firstReleaseActualSelectionReason,
                 event.firstReleaseActual});
 
         if (event.selectedConsensus)

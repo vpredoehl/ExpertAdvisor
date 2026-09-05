@@ -7,8 +7,10 @@
 #include "FeatureWarmupScope.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -16,10 +18,13 @@ namespace EA::CausalSurpriseObservability
 {
 
 inline constexpr int kDiagnosticSemanticVersion = 1;
+inline constexpr int kGapAttributionSemanticVersion = 1;
 inline constexpr const char* kFirstReleasePitContract =
     "economic_event_first_release_actual_at_v1_migration090";
 inline constexpr const char* kNormalizationContract =
     "economic_event_family_unit_fixed_scale_clamp_10_v1";
+inline constexpr const char* kCompatibilityContract =
+    "causal_scalar_valid_shape_kind_unit_scale_qualifier_v1";
 inline constexpr const char* kRepositorySelectionContract =
     "economic_event_feature_range_relevant_event_selected_consensus_v1";
 
@@ -92,6 +97,67 @@ struct SegmentInput
     std::vector<EconomicCalendar::EconomicEvent> economicEvents;
 };
 
+enum class RemediabilityClass
+{
+    expectedByContract,
+    potentiallyRemediableDataGap,
+    requiresManualProvenanceReview,
+    unsupportedSemantics,
+};
+
+const char* RemediabilityClassText(RemediabilityClass value) noexcept;
+const char* DispositionText(
+    EconomicCalendar::CausalSurpriseDisposition value) noexcept;
+
+struct AttributionAggregate
+{
+    std::size_t totalRows = 0;
+    std::size_t availableRows = 0;
+    std::size_t unavailableRows = 0;
+    std::map<std::string, std::size_t> dispositionCounts;
+    std::set<long long> affectedEventIds;
+    bool operator==(const AttributionAggregate&) const = default;
+};
+
+struct GapReasonSummary
+{
+    std::string disposition;
+    std::string rawReason;
+    RemediabilityClass remediability =
+        RemediabilityClass::expectedByContract;
+    std::size_t affectedFeatureRows = 0;
+    std::set<long long> affectedEventIds;
+    bool operator==(const GapReasonSummary&) const = default;
+};
+
+struct GapPriorityEntry
+{
+    std::string disposition;
+    std::string rawReason;
+    std::string eventFamily;
+    std::string sourceAgency;
+    RemediabilityClass remediability =
+        RemediabilityClass::expectedByContract;
+    std::size_t affectedFeatureRows = 0;
+    std::set<long long> affectedEventIds;
+    bool operator==(const GapPriorityEntry&) const = default;
+};
+
+struct GapAttribution
+{
+    std::map<std::string, std::size_t> provenanceReasonCounts;
+    std::map<std::string, std::size_t> missingConsensusReasonCounts;
+    std::map<std::string, std::size_t> incompatibilityReasonCounts;
+    std::map<std::string, AttributionAggregate> familyCounts;
+    std::map<std::string, AttributionAggregate> agencyCounts;
+    std::map<std::string, AttributionAggregate> yearCounts;
+    std::vector<GapReasonSummary> reasonCounts;
+    std::vector<GapPriorityEntry> priorities;
+    std::optional<std::int64_t> firstNoRelevantBarUnixSeconds;
+    std::optional<std::int64_t> lastNoRelevantBarUnixSeconds;
+    bool operator==(const GapAttribution&) const = default;
+};
+
 struct Result
 {
     ExperimentContext experiment;
@@ -104,6 +170,9 @@ struct Result
     std::string upstreamFeatureIdentity;
     std::string coverageIdentity;
     std::string diagnosticIdentity;
+    GapAttribution gapAttribution;
+    std::string attributionCanonical;
+    std::string attributionIdentity;
 };
 
 struct ParityResult
@@ -132,5 +201,6 @@ Result Evaluate(const ExperimentContext& experiment,
 ParityResult CompareUpstream(const Result& left, const Result& right);
 
 std::string CoverageCanonicalText(const Coverage& coverage);
+std::string GapAttributionCanonicalText(const GapAttribution& attribution);
 
 } // namespace EA::CausalSurpriseObservability

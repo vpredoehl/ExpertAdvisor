@@ -6,11 +6,13 @@
 #include "TrainingObjective.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
 #include <locale>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 
 namespace EA::CausalSurpriseObservability
 {
@@ -57,6 +59,294 @@ void AppendMap(std::ostringstream& output,
         output << ';' << name << '[' << index++ << "]="
                << key.size() << ':' << key << ':' << count;
     }
+}
+
+std::size_t MapCount(const auto& values)
+{
+    std::size_t total = 0;
+    for (const auto& [key, count] : values)
+    {
+        (void)key;
+        total += count;
+    }
+    return total;
+}
+
+std::string FeatureYear(PriceTP barStart)
+{
+    const std::chrono::year_month_day date{
+        std::chrono::floor<std::chrono::days>(barStart)};
+    return std::to_string(static_cast<int>(date.year()));
+}
+
+std::string RawGapReason(
+    const EconomicCalendar::CausalSurpriseObservation& observation)
+{
+    using Disposition = EconomicCalendar::CausalSurpriseDisposition;
+    switch (observation.disposition)
+    {
+        case Disposition::noRelevantEvent:
+            return "no_relevant_event_before_information_cutoff";
+        case Disposition::provenanceUnavailable:
+        case Disposition::ambiguous:
+        case Disposition::notYetAvailable:
+            return observation.firstReleaseSelectionReason.empty()
+                ? "selection_reason_unavailable"
+                : observation.firstReleaseSelectionReason;
+        case Disposition::missingForecast:
+            return "no_selected_consensus_persisted";
+        case Disposition::incompatible:
+            return EconomicCalendar::
+                CausalSurpriseIncompatibilityReasonText(
+                    observation.incompatibilityReason);
+        case Disposition::available:
+            return "available";
+    }
+    return "unknown";
+}
+
+RemediabilityClass Classify(
+    EconomicCalendar::CausalSurpriseDisposition disposition,
+    std::string_view rawReason)
+{
+    using Disposition = EconomicCalendar::CausalSurpriseDisposition;
+    switch (disposition)
+    {
+        case Disposition::noRelevantEvent:
+        case Disposition::notYetAvailable:
+            return RemediabilityClass::expectedByContract;
+        case Disposition::provenanceUnavailable:
+            return rawReason == "no_actual_observation"
+                ? RemediabilityClass::potentiallyRemediableDataGap
+                : RemediabilityClass::requiresManualProvenanceReview;
+        case Disposition::ambiguous:
+            return RemediabilityClass::requiresManualProvenanceReview;
+        case Disposition::missingForecast:
+            return RemediabilityClass::potentiallyRemediableDataGap;
+        case Disposition::incompatible:
+            return RemediabilityClass::unsupportedSemantics;
+        case Disposition::available:
+            return RemediabilityClass::expectedByContract;
+    }
+    return RemediabilityClass::requiresManualProvenanceReview;
+}
+
+void AddAggregate(
+    AttributionAggregate& aggregate,
+    const EconomicCalendar::CausalSurpriseObservation& observation)
+{
+    ++aggregate.totalRows;
+    const std::string disposition = DispositionText(observation.disposition);
+    ++aggregate.dispositionCounts[disposition];
+    if (observation.disposition ==
+        EconomicCalendar::CausalSurpriseDisposition::available)
+    {
+        ++aggregate.availableRows;
+    }
+    else
+    {
+        ++aggregate.unavailableRows;
+        if (observation.economicEventId > 0)
+            aggregate.affectedEventIds.insert(observation.economicEventId);
+    }
+}
+
+void ObserveAttribution(
+    GapAttribution& attribution,
+    const EconomicCalendar::CausalSurpriseObservation& observation,
+    PriceTP barStart)
+{
+    const std::string family = observation.eventFamily.empty()
+        ? "NONE" : observation.eventFamily;
+    const std::string agency = observation.sourceAgency.empty()
+        ? "NONE" : observation.sourceAgency;
+    const std::string year = FeatureYear(barStart);
+    AddAggregate(attribution.familyCounts[family], observation);
+    AddAggregate(attribution.agencyCounts[agency], observation);
+    AddAggregate(attribution.yearCounts[year], observation);
+
+    using Disposition = EconomicCalendar::CausalSurpriseDisposition;
+    if (observation.disposition == Disposition::available) return;
+
+    const std::string rawReason = RawGapReason(observation);
+    const RemediabilityClass remediability =
+        Classify(observation.disposition, rawReason);
+    if (observation.disposition == Disposition::provenanceUnavailable)
+        ++attribution.provenanceReasonCounts[rawReason];
+    if (observation.disposition == Disposition::missingForecast)
+        ++attribution.missingConsensusReasonCounts[rawReason];
+    if (observation.disposition == Disposition::incompatible)
+        ++attribution.incompatibilityReasonCounts[rawReason];
+
+    const std::string disposition = DispositionText(observation.disposition);
+    auto reason = std::find_if(
+        attribution.reasonCounts.begin(), attribution.reasonCounts.end(),
+        [&](const GapReasonSummary& value)
+        {
+            return value.disposition == disposition &&
+                value.rawReason == rawReason &&
+                value.remediability == remediability;
+        });
+    if (reason == attribution.reasonCounts.end())
+    {
+        attribution.reasonCounts.push_back(
+            {disposition, rawReason, remediability, 0, {}});
+        reason = std::prev(attribution.reasonCounts.end());
+    }
+    ++reason->affectedFeatureRows;
+    if (observation.economicEventId > 0)
+        reason->affectedEventIds.insert(observation.economicEventId);
+
+    auto priority = std::find_if(
+        attribution.priorities.begin(), attribution.priorities.end(),
+        [&](const GapPriorityEntry& value)
+        {
+            return value.disposition == disposition &&
+                value.rawReason == rawReason &&
+                value.eventFamily == family &&
+                value.sourceAgency == agency &&
+                value.remediability == remediability;
+        });
+    if (priority == attribution.priorities.end())
+    {
+        attribution.priorities.push_back(
+            {disposition, rawReason, family, agency, remediability, 0, {}});
+        priority = std::prev(attribution.priorities.end());
+    }
+    ++priority->affectedFeatureRows;
+    if (observation.economicEventId > 0)
+        priority->affectedEventIds.insert(observation.economicEventId);
+
+    if (observation.disposition == Disposition::noRelevantEvent)
+    {
+        const std::int64_t seconds =
+            std::chrono::duration_cast<std::chrono::seconds>(
+                barStart.time_since_epoch()).count();
+        if (!attribution.firstNoRelevantBarUnixSeconds)
+            attribution.firstNoRelevantBarUnixSeconds = seconds;
+        attribution.lastNoRelevantBarUnixSeconds = seconds;
+    }
+}
+
+void MergeAggregate(AttributionAggregate& destination,
+                    const AttributionAggregate& source)
+{
+    destination.totalRows += source.totalRows;
+    destination.availableRows += source.availableRows;
+    destination.unavailableRows += source.unavailableRows;
+    for (const auto& [key, count] : source.dispositionCounts)
+        destination.dispositionCounts[key] += count;
+    destination.affectedEventIds.insert(
+        source.affectedEventIds.begin(), source.affectedEventIds.end());
+}
+
+void MergeAttribution(GapAttribution& destination,
+                      const GapAttribution& source)
+{
+    const auto mergeMap = [](auto& target, const auto& values)
+    {
+        for (const auto& [key, count] : values) target[key] += count;
+    };
+    mergeMap(destination.provenanceReasonCounts,
+             source.provenanceReasonCounts);
+    mergeMap(destination.missingConsensusReasonCounts,
+             source.missingConsensusReasonCounts);
+    mergeMap(destination.incompatibilityReasonCounts,
+             source.incompatibilityReasonCounts);
+    const auto mergeAggregates = [](auto& target, const auto& values)
+    {
+        for (const auto& [key, aggregate] : values)
+            MergeAggregate(target[key], aggregate);
+    };
+    mergeAggregates(destination.familyCounts, source.familyCounts);
+    mergeAggregates(destination.agencyCounts, source.agencyCounts);
+    mergeAggregates(destination.yearCounts, source.yearCounts);
+    for (const GapReasonSummary& value : source.reasonCounts)
+    {
+        auto existing = std::find_if(
+            destination.reasonCounts.begin(), destination.reasonCounts.end(),
+            [&](const GapReasonSummary& candidate)
+            {
+                return candidate.disposition == value.disposition &&
+                    candidate.rawReason == value.rawReason &&
+                    candidate.remediability == value.remediability;
+            });
+        if (existing == destination.reasonCounts.end())
+            destination.reasonCounts.push_back(value);
+        else
+        {
+            existing->affectedFeatureRows += value.affectedFeatureRows;
+            existing->affectedEventIds.insert(
+                value.affectedEventIds.begin(), value.affectedEventIds.end());
+        }
+    }
+    for (const GapPriorityEntry& value : source.priorities)
+    {
+        auto existing = std::find_if(
+            destination.priorities.begin(), destination.priorities.end(),
+            [&](const GapPriorityEntry& candidate)
+            {
+                return candidate.disposition == value.disposition &&
+                    candidate.rawReason == value.rawReason &&
+                    candidate.eventFamily == value.eventFamily &&
+                    candidate.sourceAgency == value.sourceAgency &&
+                    candidate.remediability == value.remediability;
+            });
+        if (existing == destination.priorities.end())
+            destination.priorities.push_back(value);
+        else
+        {
+            existing->affectedFeatureRows += value.affectedFeatureRows;
+            existing->affectedEventIds.insert(
+                value.affectedEventIds.begin(), value.affectedEventIds.end());
+        }
+    }
+    if (source.firstNoRelevantBarUnixSeconds)
+    {
+        if (!destination.firstNoRelevantBarUnixSeconds ||
+            *source.firstNoRelevantBarUnixSeconds <
+                *destination.firstNoRelevantBarUnixSeconds)
+        {
+            destination.firstNoRelevantBarUnixSeconds =
+                source.firstNoRelevantBarUnixSeconds;
+        }
+    }
+    if (source.lastNoRelevantBarUnixSeconds)
+    {
+        if (!destination.lastNoRelevantBarUnixSeconds ||
+            *source.lastNoRelevantBarUnixSeconds >
+                *destination.lastNoRelevantBarUnixSeconds)
+        {
+            destination.lastNoRelevantBarUnixSeconds =
+                source.lastNoRelevantBarUnixSeconds;
+        }
+    }
+}
+
+void SortAttribution(GapAttribution& attribution)
+{
+    std::sort(
+        attribution.reasonCounts.begin(), attribution.reasonCounts.end(),
+        [](const GapReasonSummary& left, const GapReasonSummary& right)
+        {
+            return std::tie(left.disposition, left.rawReason,
+                            left.remediability) <
+                std::tie(right.disposition, right.rawReason,
+                         right.remediability);
+        });
+    std::sort(
+        attribution.priorities.begin(), attribution.priorities.end(),
+        [](const GapPriorityEntry& left, const GapPriorityEntry& right)
+        {
+            if (left.affectedFeatureRows != right.affectedFeatureRows)
+                return left.affectedFeatureRows > right.affectedFeatureRows;
+            return std::tie(left.rawReason, left.eventFamily,
+                            left.sourceAgency, left.disposition,
+                            left.remediability) <
+                std::tie(right.rawReason, right.eventFamily,
+                         right.sourceAgency, right.disposition,
+                         right.remediability);
+        });
 }
 
 std::string RangesCanonical(const std::vector<DateRange>& ranges)
@@ -163,7 +453,13 @@ void Merge(Coverage& destination, const Coverage& source)
     mergeMap(destination.eventFamilyCounts, source.eventFamilyCounts);
 }
 
-Coverage EvaluateSegment(SegmentInput segment)
+struct SegmentEvaluation
+{
+    Coverage coverage;
+    GapAttribution attribution;
+};
+
+SegmentEvaluation EvaluateSegment(SegmentInput segment)
 {
     if (segment.warmupRowCount > segment.sourceBarStarts.size())
         throw std::invalid_argument(
@@ -171,15 +467,19 @@ Coverage EvaluateSegment(SegmentInput segment)
 
     EconomicCalendar::EconomicEventFeatureEngine engine{
         std::move(segment.economicEvents)};
-    Coverage coverage;
+    SegmentEvaluation evaluation;
     for (std::size_t index = 0;
          index < segment.sourceBarStarts.size(); ++index)
     {
         (void)engine.AdvanceCompletedBar(segment.sourceBarStarts[index]);
         if (index < segment.warmupRowCount) continue;
-        Observe(coverage, engine.LastCausalSurpriseObservation());
+        const auto& observation = engine.LastCausalSurpriseObservation();
+        Observe(evaluation.coverage, observation);
+        ObserveAttribution(
+            evaluation.attribution, observation,
+            segment.sourceBarStarts[index]);
     }
-    return coverage;
+    return evaluation;
 }
 
 void AddReason(ParityResult& result, std::string reason)
@@ -188,6 +488,40 @@ void AddReason(ParityResult& result, std::string reason)
 }
 
 } // namespace
+
+const char* RemediabilityClassText(RemediabilityClass value) noexcept
+{
+    switch (value)
+    {
+        case RemediabilityClass::expectedByContract:
+            return "expected_by_contract";
+        case RemediabilityClass::potentiallyRemediableDataGap:
+            return "potentially_remediable_data_gap";
+        case RemediabilityClass::requiresManualProvenanceReview:
+            return "requires_manual_provenance_review";
+        case RemediabilityClass::unsupportedSemantics:
+            return "unsupported_semantics";
+    }
+    return "unknown";
+}
+
+const char* DispositionText(
+    EconomicCalendar::CausalSurpriseDisposition value) noexcept
+{
+    using Disposition = EconomicCalendar::CausalSurpriseDisposition;
+    switch (value)
+    {
+        case Disposition::noRelevantEvent: return "no_relevant_event";
+        case Disposition::provenanceUnavailable:
+            return "provenance_unavailable";
+        case Disposition::ambiguous: return "ambiguous";
+        case Disposition::notYetAvailable: return "not_yet_available";
+        case Disposition::missingForecast: return "missing_consensus";
+        case Disposition::incompatible: return "incompatible";
+        case Disposition::available: return "available";
+    }
+    return "unknown";
+}
 
 const char* ScopeText(Scope scope)
 {
@@ -206,8 +540,8 @@ Scope ParseScope(const std::string& text)
     if (text == "infer") return Scope::infer;
     if (text == "combined") return Scope::combined;
     throw std::invalid_argument(
-        "invalid --causal-surprise-observability-scope value; expected "
-        "train, infer, or combined");
+        "invalid causal-surprise scope value; expected train, infer, or "
+        "combined");
 }
 
 std::vector<DateRange> ResolveRanges(
@@ -359,6 +693,89 @@ std::string CoverageCanonicalText(const Coverage& coverage)
     return output.str();
 }
 
+std::string GapAttributionCanonicalText(const GapAttribution& attribution)
+{
+    const auto appendSet = [](std::ostringstream& output,
+                              const std::set<long long>& values)
+    {
+        output << values.size();
+        for (const long long value : values) output << ':' << value;
+    };
+    const auto appendAggregates = [&](std::ostringstream& output,
+                                      std::string_view name,
+                                      const auto& values)
+    {
+        output << ';' << name << "_count=" << values.size();
+        std::size_t index = 0;
+        for (const auto& [key, aggregate] : values)
+        {
+            output << ';' << name << '[' << index++ << "]="
+                   << key.size() << ':' << key
+                   << ':' << aggregate.totalRows
+                   << ':' << aggregate.availableRows
+                   << ':' << aggregate.unavailableRows
+                   << ":dispositions=" << aggregate.dispositionCounts.size();
+            for (const auto& [disposition, count] :
+                 aggregate.dispositionCounts)
+            {
+                output << ':' << disposition.size() << ':' << disposition
+                       << ':' << count;
+            }
+            output << ":events=";
+            appendSet(output, aggregate.affectedEventIds);
+        }
+    };
+
+    std::ostringstream output;
+    output << "causal_surprise_gap_attribution_v1";
+    AppendMap(output, "provenance_reason",
+              attribution.provenanceReasonCounts);
+    AppendMap(output, "missing_consensus_reason",
+              attribution.missingConsensusReasonCounts);
+    AppendMap(output, "incompatibility_reason",
+              attribution.incompatibilityReasonCounts);
+    appendAggregates(output, "family", attribution.familyCounts);
+    appendAggregates(output, "agency", attribution.agencyCounts);
+    appendAggregates(output, "year", attribution.yearCounts);
+    output << ";reason_count=" << attribution.reasonCounts.size();
+    for (std::size_t index = 0;
+         index < attribution.reasonCounts.size(); ++index)
+    {
+        const auto& value = attribution.reasonCounts[index];
+        output << ";reason[" << index << "]="
+               << value.disposition.size() << ':' << value.disposition
+               << ':' << value.rawReason.size() << ':' << value.rawReason
+               << ':' << RemediabilityClassText(value.remediability)
+               << ':' << value.affectedFeatureRows << ":events=";
+        appendSet(output, value.affectedEventIds);
+    }
+    output << ";priority_count=" << attribution.priorities.size();
+    for (std::size_t index = 0;
+         index < attribution.priorities.size(); ++index)
+    {
+        const auto& value = attribution.priorities[index];
+        output << ";priority[" << index << "]="
+               << value.disposition.size() << ':' << value.disposition
+               << ':' << value.rawReason.size() << ':' << value.rawReason
+               << ':' << value.eventFamily.size() << ':' << value.eventFamily
+               << ':' << value.sourceAgency.size() << ':' << value.sourceAgency
+               << ':' << RemediabilityClassText(value.remediability)
+               << ':' << value.affectedFeatureRows << ":events=";
+        appendSet(output, value.affectedEventIds);
+    }
+    output << ";first_no_relevant_bar_unix_seconds="
+           << (attribution.firstNoRelevantBarUnixSeconds
+                   ? std::to_string(
+                         *attribution.firstNoRelevantBarUnixSeconds)
+                   : "NULL")
+           << ";last_no_relevant_bar_unix_seconds="
+           << (attribution.lastNoRelevantBarUnixSeconds
+                   ? std::to_string(
+                         *attribution.lastNoRelevantBarUnixSeconds)
+                   : "NULL");
+    return output.str();
+}
+
 Result Evaluate(const ExperimentContext& experiment,
                 Scope scope,
                 std::vector<SegmentInput> segments)
@@ -379,16 +796,34 @@ Result Evaluate(const ExperimentContext& experiment,
                 "causal_surprise_observability_scope_segment_range_mismatch");
         result.sourceRowCount += segments[index].sourceBarStarts.size();
         result.warmupRowCount += segments[index].warmupRowCount;
-        Merge(result.coverage, EvaluateSegment(std::move(segments[index])));
+        SegmentEvaluation evaluation =
+            EvaluateSegment(std::move(segments[index]));
+        Merge(result.coverage, evaluation.coverage);
+        MergeAttribution(result.gapAttribution, evaluation.attribution);
     }
-    const auto mapCount = [](const auto& values)
+    SortAttribution(result.gapAttribution);
+    const auto aggregateRows = [](const auto& values)
     {
         std::size_t total = 0;
-        for (const auto& [key, count] : values)
+        for (const auto& [key, aggregate] : values)
         {
             (void)key;
-            total += count;
+            if (aggregate.totalRows !=
+                    aggregate.availableRows + aggregate.unavailableRows ||
+                MapCount(aggregate.dispositionCounts) != aggregate.totalRows)
+            {
+                throw std::logic_error(
+                    "causal_surprise_gap_aggregate_invariant_failed");
+            }
+            total += aggregate.totalRows;
         }
+        return total;
+    };
+    const auto vectorRows = [](const auto& values)
+    {
+        std::size_t total = 0;
+        for (const auto& value : values)
+            total += value.affectedFeatureRows;
         return total;
     };
     if (result.sourceRowCount - result.warmupRowCount !=
@@ -405,12 +840,28 @@ Result Evaluate(const ExperimentContext& experiment,
         result.coverage.lowerClampedCount +
                 result.coverage.upperClampedCount >
             result.coverage.surpriseAvailableCount ||
-        mapCount(result.coverage.firstReleaseSourceCounts) !=
+        MapCount(result.coverage.firstReleaseSourceCounts) !=
             result.coverage.surpriseAvailableCount ||
-        mapCount(result.coverage.consensusSourceCounts) !=
+        MapCount(result.coverage.consensusSourceCounts) !=
             result.coverage.surpriseAvailableCount ||
-        mapCount(result.coverage.eventFamilyCounts) !=
-            result.coverage.surpriseAvailableCount)
+        MapCount(result.coverage.eventFamilyCounts) !=
+            result.coverage.surpriseAvailableCount ||
+        MapCount(result.gapAttribution.provenanceReasonCounts) !=
+            result.coverage.provenanceUnavailableCount ||
+        MapCount(result.gapAttribution.missingConsensusReasonCounts) !=
+            result.coverage.missingConsensusCount ||
+        MapCount(result.gapAttribution.incompatibilityReasonCounts) !=
+            result.coverage.incompatibleCount ||
+        aggregateRows(result.gapAttribution.familyCounts) !=
+            result.coverage.totalFeatureRows ||
+        aggregateRows(result.gapAttribution.agencyCounts) !=
+            result.coverage.totalFeatureRows ||
+        aggregateRows(result.gapAttribution.yearCounts) !=
+            result.coverage.totalFeatureRows ||
+        vectorRows(result.gapAttribution.reasonCounts) !=
+            SurpriseUnavailableCount(result.coverage) ||
+        vectorRows(result.gapAttribution.priorities) !=
+            SurpriseUnavailableCount(result.coverage))
     {
         throw std::logic_error(
             "causal_surprise_observability_partition_invariant_failed");
@@ -437,6 +888,19 @@ Result Evaluate(const ExperimentContext& experiment,
         ";coverage_identity=" + result.coverageIdentity;
     result.diagnosticIdentity =
         TrainingObjective::DeterministicHash(diagnosticCanonical);
+    result.attributionCanonical =
+        "causal_surprise_gap_attribution_identity_v1;semantic_version=" +
+        std::to_string(kGapAttributionSemanticVersion) +
+        ";upstream_feature_identity=" + result.upstreamFeatureIdentity +
+        ";coverage_identity=" + result.coverageIdentity +
+        ";compatibility_contract=" + kCompatibilityContract +
+        ";normalization_contract=" + kNormalizationContract +
+        ";source_row_count=" + std::to_string(result.sourceRowCount) +
+        ";warmup_row_count=" + std::to_string(result.warmupRowCount) +
+        ";attribution=" +
+        GapAttributionCanonicalText(result.gapAttribution);
+    result.attributionIdentity = TrainingObjective::DeterministicHash(
+        result.attributionCanonical);
     return result;
 }
 
@@ -485,7 +949,9 @@ ParityResult CompareUpstream(const Result& left, const Result& right)
     result.comparable = result.reasons.empty();
     result.coverageMatches = result.comparable &&
         left.coverageIdentity == right.coverageIdentity &&
-        left.coverage == right.coverage;
+        left.coverage == right.coverage &&
+        left.attributionIdentity == right.attributionIdentity &&
+        left.gapAttribution == right.gapAttribution;
     if (result.comparable && !result.coverageMatches)
         AddReason(result, "upstream_coverage_mismatch");
     return result;
