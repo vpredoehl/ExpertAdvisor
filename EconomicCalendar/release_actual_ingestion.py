@@ -27,6 +27,7 @@ UTC = dt.timezone.utc
 CENSUS_SUPPORTED_FAMILIES = ("DURABLE_GOODS", "RETAIL_SALES")
 BEA_SUPPORTED_FAMILIES = ("GDP", "PCE")
 BLS_SUPPORTED_FAMILIES = ("CPI", "EMPLOYMENT", "PPI", "JOLTS")
+DOL_ETA_SUPPORTED_FAMILIES = ("WEEKLY_CLAIMS",)
 SUPPORTED_FAMILIES = CENSUS_SUPPORTED_FAMILIES
 SEMANTIC_CONTRACT = "census_advance_release_headline_mom_percent_v1"
 BEA_GDP_SEMANTIC_CONTRACT = "bea_real_gdp_annualized_quarterly_percent_v1"
@@ -36,6 +37,9 @@ BLS_EMPLOYMENT_SEMANTIC_CONTRACT = "bls_total_nonfarm_payroll_sa_change_v1"
 BLS_PPI_FINISHED_GOODS_SEMANTIC_CONTRACT = "bls_ppi_finished_goods_sa_mom_percent_v1"
 BLS_PPI_FINAL_DEMAND_SEMANTIC_CONTRACT = "bls_ppi_final_demand_sa_mom_percent_v1"
 BLS_JOLTS_SEMANTIC_CONTRACT = "bls_jolts_total_nonfarm_job_openings_sa_level_v1"
+DOL_ETA_WEEKLY_CLAIMS_SEMANTIC_CONTRACT = (
+    "dol_eta_seasonally_adjusted_initial_claims_advance_level_v1"
+)
 
 
 def canonical_instant(value: str | dt.datetime) -> str:
@@ -176,6 +180,9 @@ class ReleaseActualCandidate:
             BLS_PPI_FINISHED_GOODS_SEMANTIC_CONTRACT: ("BLS", "percent", "m/m"),
             BLS_PPI_FINAL_DEMAND_SEMANTIC_CONTRACT: ("BLS", "percent", "m/m"),
             BLS_JOLTS_SEMANTIC_CONTRACT: ("BLS", "count", None),
+            DOL_ETA_WEEKLY_CLAIMS_SEMANTIC_CONTRACT: (
+                "DOL_ETA", "count", None
+            ),
         }
         expected = expected_semantics.get(self.semantic_contract)
         if expected is None:
@@ -186,6 +193,8 @@ class ReleaseActualCandidate:
                 if self.semantic_contract == SEMANTIC_CONTRACT
                 else "bls_semantics_invalid"
                 if self.source_agency == "BLS"
+                else "dol_eta_semantics_invalid"
+                if self.source_agency == "DOL_ETA"
                 else "bea_semantics_invalid"
             )
             raise ValueError(error)
@@ -200,6 +209,12 @@ class ReleaseActualCandidate:
             if self.source_agency == "BEA"
             else re.match(r"^https://www\.bls\.gov/news\.release/archives/", self.source_url)
             if self.source_agency == "BLS"
+            else re.match(
+                r"^https://oui\.doleta\.gov/press/[0-9]{4}/[0-9]{6}\.(?:asp|pdf)$",
+                self.source_url,
+                re.IGNORECASE,
+            )
+            if self.source_agency == "DOL_ETA"
             else None
         )
         if not authoritative_url:

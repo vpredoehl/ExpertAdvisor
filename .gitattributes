@@ -1,3 +1,5 @@
 Database/backups/*.dump filter=lfs diff=lfs merge=lfs -text
 Tests/fixtures/CampaignOperationsH1Artifacts.tsv whitespace=-blank-at-eol
 EconomicCalendar/raw/bls/**/*.htm binary
+EconomicCalendar/raw/dol_eta/**/*.asp binary
+EconomicCalendar/raw/dol_eta/**/*.pdf binary

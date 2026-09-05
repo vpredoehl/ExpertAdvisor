@@ -112,12 +112,37 @@ this corpus only when `--bls-manifest` is supplied. The dedicated
 reads production with `default_transaction_read_only=on`, and emits review-only
 append-only SQL; it does not import BLS actuals.
 
+Phase 7 adds a release-specific DOL/ETA `WEEKLY_CLAIMS` contract backed by the
+retained official archive in `EconomicCalendar/raw/dol_eta`. Each qualifying
+initial is the current reporting week's seasonally adjusted advance initial-
+claims level, represented as scalar `count`, scale `1`, qualifier `NULL`.
+The adapter derives the publication boundary only from the embargo date, time,
+and zone embedded in that release artifact. It retains an explicitly labelled
+prior-week revised value as revision 1 and never substitutes it for the current
+initial. Exact URL, reference-period, release-instant, artifact identity, and
+SHA-256 checks all fail closed.
+
+The acquisition manifest is resumable and separates original PDF/HTML bytes
+from derived PDF parser text. The preparation workflow is read-only unless an
+explicit disposable `ea_*` database is selected:
+
+```sh
+python3 EconomicCalendar/prepare_dol_eta_weekly_claims_actual_import.py \
+  --db LSTM \
+  --import-manifest-output /tmp/dol-eta-actual-import.jsonl \
+  --sql-output /tmp/dol-eta-actual-import.sql \
+  --classification-output /tmp/dol-eta-classifications.jsonl \
+  --audit-output /tmp/dol-eta-coverage-audit.json
+```
+
+Production import remains a separate scientific gate. The Phase 7 package was
+prepared but not applied while experiments 619 and 620 could still consume the
+production economic-event corpus.
+
 ## Deliberately unsupported families
 
 - Federal Reserve FOMC: statements contain target ranges, while Phase 8
   surprise requires a compatible scalar consensus/actual pair.
-- DOL/ETA Weekly Claims: no local authoritative historical source archive is
-  present (`raw/dol` is absent).
 
 ## Workflow
 

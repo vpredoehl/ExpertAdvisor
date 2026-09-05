@@ -1,0 +1,36 @@
+{
+  "acquired_artifacts": 862,
+  "actual_only_events": 815,
+  "after_actual_events_if_applied": 815,
+  "before_actual_events": 0,
+  "candidate_release_artifacts": 862,
+  "conflicting_observations": 0,
+  "contract": "dol_eta_weekly_claims_actual_remediation_phase7_v1",
+  "database_interaction": "read_only_catalog_or_explicit_disposable_write",
+  "duplicate_identical_observations": 0,
+  "eligibility_dispositions": {
+    "eligible": 815,
+    "missing_event_mapping": 2,
+    "publication_time_unproven": 45
+  },
+  "event_count": 860,
+  "event_date_range": {
+    "first": "2010-01-07T13:30:00.000000Z",
+    "last": "2026-08-20T12:30:00.000000Z"
+  },
+  "failed_or_unavailable_artifacts": 0,
+  "initial_or_revision_semantics_insufficient": 0,
+  "mapped_initial_events": 815,
+  "matched_insert_observations": 1504,
+  "production_writes": false,
+  "publication_time_unproven": 45,
+  "qualifying_immutable_observations": 1504,
+  "qualifying_initial_observations": 815,
+  "qualifying_revision_observations": 689,
+  "remaining_consensus_blocker": 815,
+  "selected_consensus_events": 0,
+  "sql_operation": "INSERT_ONLY_TRANSACTION",
+  "sql_sha256": "76ccee530ca0968c10634a96c737eb40a4c24d9e95f5155b21a6bd6a075e5c81",
+  "unmapped_or_ambiguous": 2,
+  "usable_consensus_actual_intersection": 0
+}

@@ -1,0 +1,402 @@
+                                                                                                  Connect with DOL at
+                                                                                                   https://blog.dol.gov
+
+          News Release
+                 TRANSMISSION OF MATERIALS IN THIS RELEASE IS EMBARGOED UNTIL
+                            8:30 A.M. (Eastern) Thursday, February 16, 2023
+
+UNEMPLOYMENT INSURANCE WEEKLY CLAIMS
+
+  SEASONALLY ADJUSTED DATA
+
+In the week ending February 11, the advance figure for seasonally adjusted initial claims was 194,000, a decrease of
+1,000 from the previous week's revised level. The previous week's level was revised down by 1,000 from 196,000 to
+195,000. The 4-week moving average was 189,500, an increase of 500 from the previous week's revised average. The
+previous week's average was revised down by 250 from 189,250 to 189,000.
+
+The advance seasonally adjusted insured unemployment rate was 1.2 percent for the week ending February 4,
+unchanged from the previous week's unrevised rate. The advance number for seasonally adjusted insured
+unemployment during the week ending February 4 was 1,696,000, an increase of 16,000 from the previous week's
+revised level. The previous week's level was revised down by 8,000 from 1,688,000 to 1,680,000. The 4-week moving
+average was 1,673,000, an increase of 10,250 from the previous week's revised average. The previous week's average
+was revised down by 2,000 from 1,664,750 to 1,662,750.
+
+
+
+
+                                                           1
+  UNADJUSTED DATA
+
+The advance number of actual initial claims under state programs, unadjusted, totaled 224,727 in the week ending
+February 11, a decrease of 9,280 (or -4.0 percent) from the previous week. The seasonal factors had expected a decrease
+of 8,190 (or -3.5 percent) from the previous week. There were 239,812 initial claims in the comparable week in 2022.
+
+The advance unadjusted insured unemployment rate was 1.3 percent during the week ending February 4, unchanged from
+the prior week. The advance unadjusted level of insured unemployment in state programs totaled 1,954,081, an increase
+of 29,190 (or 1.5 percent) from the preceding week. The seasonal factors had expected an increase of 10,078 (or 0.5
+percent) from the previous week. A year earlier the rate was 1.4 percent and the volume was 1,971,486.
+
+
+
+
+The total number of continued weeks claimed for benefits in all programs for the week ending January 28 was 1,952,795,
+an increase of 10,109 from the previous week. There were 2,063,573 weekly claims filed for benefits in all programs in
+the comparable week in 2022.
+
+No state was triggered "on" the Extended Benefits program during the week ending January 28.
+
+Initial claims for UI benefits filed by former Federal civilian employees totaled 501 in the week ending February 4, an
+increase of 16 from the prior week. There were 401 initial claims filed by newly discharged veterans, an increase of 14
+from the preceding week.
+
+There were 7,722 continued weeks claimed filed by former Federal civilian employees the week ending January 28, a
+decrease of 89 from the previous week. Newly discharged veterans claiming benefits totaled 4,280, a decrease of 286
+from the prior week.
+
+                                                            2
+The highest insured unemployment rates in the week ending January 28 were in New Jersey (2.6), Rhode Island (2.5),
+California (2.3), Minnesota (2.3), Alaska (2.2), Massachusetts (2.2), Montana (2.1), Illinois (2.0), Puerto Rico (2.0),
+Connecticut (1.9), and New York (1.9).
+
+The largest increases in initial claims for the week ending February 4 were in California (+6,820), Ohio (+3,528), Illinois
+(+1,533), Kansas (+611), and Florida (+568), while the largest decreases were in Georgia (-1,463), New Jersey (-1,291),
+Texas (-859), Oregon (-692), and Arkansas (-632).
+
+
+
+
+                                                             3
+UNEMPLOYMENT INSURANCE DATA FOR REGULAR STATE PROGRAMS
+
+WEEK ENDING                                February 11         February 4            Change        January 28       Prior Year1
+Initial Claims (SA)                            194,000            195,000             -1,000          183,000           209,000
+Initial Claims (NSA)                           224,727            234,007             -9,280          225,026           239,812
+4-Wk Moving Average (SA)                       189,500            189,000              +500           191,750           209,000
+
+WEEK ENDING                                 February 4         January 28           Change         January 21       Prior Year1
+Insured Unemployment (SA)                    1,696,000           1,680,000          +16,000          1,650,000        1,714,000
+Insured Unemployment (NSA)                   1,954,081           1,924,891          +29,190          1,911,201        1,971,486
+4-Wk Moving Average (SA)                     1,673,000           1,662,750          +10,250          1,650,250        1,750,250
+Insured Unemployment Rate (SA)2                  1.2%                1.2%               0.0              1.1%             1.2%
+Insured Unemployment Rate (NSA)2                 1.3%                1.3%               0.0              1.3%             1.4%
+
+INITIAL CLAIMS FILED IN FEDERAL PROGRAMS (UNADJUSTED)
+
+WEEK ENDING                                February 4        January 28            Change        Prior Year1
+Federal Employees (UCFE)                         501               485                +16                624
+Newly Discharged Veterans (UCX)                  401               387                +14                372
+
+CONTINUED WEEKS CLAIMED FILED FOR UI BENEFITS IN ALL PROGRAMS (UNADJUSTED)
+
+WEEK ENDING                                         January 28            January 21                Change         Prior Year1
+Regular State                                         1,917,833             1,903,649               +14,184          1,994,743
+Federal Employees                                         7,722                 7,811                   -89             10,899
+Newly Discharged Veterans                                 4,280                 4,566                  -286              4,592
+Extended Benefits3                                        3,049                 2,871                 +178              36,029
+State Additional Benefits4                                2,566                 2,037                 +529               2,197
+STC / Workshare 5                                        17,345                21,752                -4,407             15,113
+TOTAL                                                 1,952,795             1,942,686               +10,109          2,063,573
+
+
+FOOTNOTES
+SA - Seasonally Adjusted Data, NSA - Not Seasonally Adjusted Data Continued weeks claimed represent all weeks of benefits
+claimed during the week being reported, and do not represent weeks claimed by unique individuals.
+
+    1.   Prior year is comparable to most recent data.
+    2.   Most recent week used covered employment of 145,292,485 as denominator.
+    3.   Information on the EB program can be found here: EB Program information
+    4.   Some states maintain additional benefit programs for those claimants who exhaust regular benefits, and when
+         applicable, extended benefits. Information on states that participate, and the extent of benefits paid, can be found
+         starting on page 4-5 of this link: Extensions and Special Programs PDF
+    5.   Information on STC/Worksharing can be found starting on page 4-11 of the following link: Extensions and Special
+         Programs PDF
+
+
+
+
+                                                               4
+                          Advance State Claims - Not Seasonally Adjusted
+
+                           Initial Claims Filed During Week Ended February 11   Insured Unemployment For Week Ended February 4
+STATE                      Advance               Prior Wk         Change          Advance              Prior Wk           Change
+Alabama                      2,125                 2,488            -363            5,673                 6,158             -485
+Alaska                        884                   884                0            6,151                 6,429             -278
+Arizona                      2,910                 3,352            -442           18,044                19,250            -1,206
+Arkansas                     1,332                  961              371            7,730                 7,186              544
+California                  48,688                52,384           -3,696          410,449              395,952            14,497
+Colorado                     2,769                 3,114            -345           26,860                25,902              958
+Connecticut                  3,734                 3,005             729           30,118                30,187              -69
+Delaware                      318                   379              -61            5,331                 4,938              393
+District of Columbia          653                   598               55            4,512                 3,779              733
+Florida                      5,677                 6,434            -757           33,128                37,110            -3,982
+Georgia                      6,308                 6,575            -267           28,391                29,100             -709
+Hawaii                       1,087                 1,074              13            5,933                 5,544              389
+Idaho                        1,369                 1,461             -92           10,639                10,806             -167
+Illinois                     9,398                11,304           -1,906          113,366              116,798            -3,432
+Indiana                      4,315                 4,500            -185           33,180                32,407              773
+Iowa                         1,950                 2,515            -565           22,984                21,486             1,498
+Kansas                       1,377                 2,058            -681            6,150                 5,526              624
+Kentucky                     1,765                 1,940            -175           11,375                11,475             -100
+Louisiana                    1,607                 1,929            -322           11,145                12,119             -974
+Maine                         747                   719               28            7,926                 7,751              175
+Maryland                     1,671                 1,962            -291           20,982                21,476             -494
+Massachusetts                7,436                 6,727             709           81,619                79,080             2,539
+Michigan                     8,811                 7,477            1,334          66,050                65,754              296
+Minnesota                    5,103                 4,300             803           68,925                61,839             7,086
+Mississippi                   825                   918              -93            5,086                 5,906             -820
+Missouri                     3,040                 3,853            -813           21,879                22,424             -545
+Montana                       730                   950             -220           10,176                 9,661              515
+Nebraska                      750                   800              -50            6,018                 5,907              111
+Nevada                       2,265                 2,333             -68           19,077                20,099            -1,022
+New Hampshire                 339                   404              -65            2,989                 2,903              86
+New Jersey                   5,763                 5,853             -90           110,069              104,709             5,360
+New Mexico                    682                   735              -53            9,952                10,042              -90
+New York                    16,800                17,210            -410           176,079              173,377             2,702
+North Carolina               3,209                 3,713            -504           19,084                19,649             -565
+North Dakota                  327                   410              -83            5,892                 5,265              627
+Ohio                        13,303                11,487            1,816          61,137                61,561             -424
+Oklahoma                     1,213                 1,198              15           10,654                10,598              56
+Oregon                       4,780                 4,706              74           33,370                32,468              902
+Pennsylvania                 8,909                11,593           -2,684          101,248              102,136             -888
+Puerto Rico                  1,313                 1,465            -152           15,438                17,823            -2,385
+Rhode Island                  877                  1,252            -375           11,734                11,714              20
+South Carolina               1,972                 2,135            -163           13,428                13,616             -188
+South Dakota                  194                   225              -31            2,704                 2,625              79
+Tennessee                    2,527                 2,472              55           16,375                17,060             -685
+Texas                       15,340                14,947             393           119,249              121,057            -1,808
+Utah                         2,013                 2,216            -203           13,723                13,628              95
+Vermont                       323                   373              -50            4,044                 3,891              153
+Virgin Islands                 27                   25                 2             212                   222               -10
+Virginia                     2,032                 1,829             203           13,199                11,699             1,500
+Washington                   5,555                 5,339             216           62,353                57,902             4,451
+West Virginia                 872                  1,070            -198           10,328                 9,724              604
+Wisconsin                    6,297                 5,906             391           38,853                36,426             2,427
+Wyoming                       416                   450              -34            3,070                 2,747              323
+US Total                   224,727               234,007           -9,280         1,954,081            1,924,891           29,190
+
+
+Note: Advance claims are not directly comparable to claims reported in prior weeks. Advance claims are reported by the
+state liable for paying the unemployment compensation, whereas previous weeks reported claims reflect claimants by
+state of residence. In addition, claims reported as "workshare equivalent" in the previous week are added to the advance
+claims as a proxy for the current week's "workshare equivalent" activity.
+
+
+
+
+                                                                      5
+Seasonally Adjusted US Weekly UI Claims (in thousands)
+
+                                   Change                              Change
+                                    from                                from
+                         Initial    Prior   4-Week           Insured    Prior   4-Week
+Week Ending              Claims     Week    Average       Unemployment Week     Average    IUR
+February 5, 2022          191        -23     216.75           1,714      -29    1,750.25    1.2
+February 12, 2022         209         18     209.00           1,633      -81    1,711.75    1.2
+February 19, 2022         198        -11     203.00           1,623      -10    1,678.25    1.2
+February 26, 2022         182        -16     195.00           1,664       41    1,658.50    1.2
+March 5, 2022             198         16     196.75           1,594      -70    1,628.50    1.2
+March 12, 2022            177        -21     188.75           1,542      -52    1,605.75    1.1
+March 19, 2022            166        -11     180.75           1,506      -36    1,576.50    1.1
+March 26, 2022            171          5     178.00           1,529       23    1,542.75    1.1
+April 2, 2022             168         -3     170.50           1,474      -55    1,512.75    1.1
+April 9, 2022             186         18     172.75           1,407      -67    1,479.00    1.0
+April 16, 2022            185         -1     177.50           1,403       -4    1,453.25    1.0
+April 23, 2022            181         -4     180.00           1,387      -16    1,417.75    1.0
+April 30, 2022            202         21     188.50           1,342      -45    1,384.75    1.0
+May 7, 2022               197         -5     191.25           1,315      -27    1,361.75    0.9
+May 14, 2022              218         21     199.50           1,343       28    1,346.75    1.0
+May 21, 2022              211         -7     207.00           1,306      -37    1,326.50    0.9
+May 28, 2022              202         -9     207.00           1,309        3    1,318.25    0.9
+June 4, 2022              232         30     215.75           1,310        1    1,317.00    0.9
+June 11, 2022             231         -1     219.00           1,331       21    1,314.00    1.0
+June 18, 2022             233          2     224.50           1,324       -7    1,318.50    0.9
+June 25, 2022             231         -2     231.75           1,372       48    1,334.25    1.0
+July 2, 2022              236          5     232.75           1,333      -39    1,340.00    0.9
+July 9, 2022              244          8     236.00           1,384       51    1,353.25    1.0
+July 16, 2022             261         17     243.00           1,365      -19    1,363.50    1.0
+July 23, 2022             237        -24     244.50           1,420       55    1,375.50    1.0
+July 30, 2022             248         11     247.50           1,430       10    1,399.75    1.0
+August 6, 2022            252          4     249.50           1,434        4    1,412.25    1.0
+August 13, 2022           245         -7     245.50           1,412      -22    1,424.00    1.0
+August 20, 2022           237         -8     245.50           1,437       25    1,428.25    1.0
+August 27, 2022           228         -9     240.50           1,402      -35    1,421.25    1.0
+September 3, 2022         218        -10     232.00           1,400       -2    1,412.75    1.0
+September 10, 2022        208        -10     222.75           1,376      -24    1,403.75    1.0
+September 17, 2022        209          1     215.75           1,346      -30    1,381.00    0.9
+September 24, 2022        190        -19     206.25           1,365       19    1,371.75    1.0
+October 1, 2022           219         29     206.50           1,364       -1    1,362.75    0.9
+October 8, 2022           226          7     211.00           1,383       19    1,364.50    1.0
+October 15, 2022          214        -12     212.25           1,438       55    1,387.50    1.0
+October 22, 2022          218          4     219.25           1,487       49    1,418.00    1.0
+October 29, 2022          218          0     219.00           1,498       11    1,451.50    1.0
+November 5, 2022          226          8     219.00           1,498        0    1,480.25    1.0
+November 12, 2022         223         -3     221.25           1,551       53    1,508.50    1.1
+November 19, 2022         241         18     227.00           1,609       58    1,539.00    1.1
+November 26, 2022         226        -15     229.00           1,670       61    1,582.00    1.2
+December 3, 2022          231          5     230.25           1,669       -1    1,624.75    1.2
+December 10, 2022         212        -19     227.50           1,669        0    1,654.25    1.2
+December 17, 2022         216          4     221.25           1,718       49    1,681.50    1.2
+December 24, 2022         223          7     220.50           1,697      -21    1,688.25    1.2
+December 31, 2022         206        -17     214.25           1,630      -67    1,678.50    1.1
+January 7, 2023           206          0     212.75           1,655       25    1,675.00    1.1
+January 14, 2023          192        -14     206.75           1,666       11    1,662.00    1.1
+January 21, 2023          186         -6     197.50           1,650      -16    1,650.25    1.1
+January 28, 2023          183         -3     191.75           1,680       30    1,662.75    1.2
+February 4, 2023          195         12     189.00           1,696       16    1,673.00    1.2
+February 11, 2023         194         -1     189.50
+                                                      6
+              INITIAL CLAIMS FILED DURING WEEK ENDED                        INSURED UNEMPLOYMENT FOR WEEK ENDED
+                            FEBRUARY 4                                                      JANUARY 28
+                                                                                                            ALL PROGRAMS
+                                       CHANGE FROM                               CHANGE FROM                 EXCLUDING
+                                        LAST YEAR                                LAST    YEAR                 RAILROAD
+STATE NAME                     STATE WEEK      AGO UCFE 1 UCX 1    STATE (%) 2 WEEK       AGO UCFE 1 UCX 1   RETIREMENT
+Alabama                         2,488     92  -1,471  6     9       6,158 0.3      483     777    31   11        6,200
+Alaska                           884      32   -289   2     0       6,429 2.2     -137   -1,668  110   12        6,551
+Arizona                         3,352    256    587   8     2      19,250 0.6      -25    5,714  109   12        19,371
+Arkansas                         961     -632  -436   0     0       7,186 0.6     -497   -3,294   42   15        7,243
+California                     52,384 6,820     783  121   65      395,952 2.3 -3,147 -46,223 1,194 814         397,960
+Colorado                        3,114    -305  -282   5     8      25,902 1.0      423   -3,950  244   105       26,251
+Connecticut                     3,005    194   -291   1     2      30,187 1.9 1,524        205    33   28        30,248
+Delaware                         379      31    -36   2     1       4,938 1.1      30      32     16    7        4,961
+District of Columbia             598     128   -510  17     0       3,779 0.7     -538   -1,741  169    3        3,951
+Florida                         6,434    568   -246  10    24      37,110 0.4 -1,222     -6,987  116   99        37,325
+Georgia                         6,575 -1,463    -44  33    19      29,100 0.6     -162   -9,171  142   119       29,361
+Hawaii                          1,074     59   -467   1    14       5,544 1.0     -108   -3,619   50   51        5,645
+Idaho                           1,461      -6   136  12     1      10,806 1.4      224    1,921  231   20        11,057
+Illinois                       11,304 1,533     570   7     1      116,798 2.0 6,667    -21,504  301   107      117,206
+Indiana                         4,500    275  -3,232  3     2      32,407 1.1      270    -773    59   20        32,486
+Iowa                            2,515    534    -42   2     0      21,486 1.4     -196   -2,254   26    9        21,521
+Kansas                          2,058    611    538   0     0       5,526 0.4      531   -2,635   26    9        5,561
+Kentucky                        1,940    132  -3,465  1     0      11,475 0.6      -87   -1,392   38   62        11,575
+Louisiana                       1,929     89     36   2     1      12,119 0.7     -234   -3,261   47   15        12,181
+Maine                            719      93   -136   1     3       7,751 1.3      107    -423    29   14        7,794
+Maryland                        1,962     55   -941   8     1      21,476 0.7      734   -2,201  101   80        21,657
+Massachusetts                   6,727    -236   656   6     6      79,080 2.2 3,436       2,013  147   69        79,296
+Michigan                        7,477    326  -3,434  5     7      65,754 1.6 -1,112     -1,042  157   52        65,963
+Minnesota                       4,300    112   -697   3     2      61,839 2.3      650   -5,564  111   60        62,010
+Mississippi                      918     -155  -179   1     1       5,906 0.5       -6     194    25   19        5,950
+Missouri                        3,853    347   -407   5     1      22,424 0.8 1,052        458   101   32        22,557
+Montana                          950      -34    89  21     5       9,661 2.1      343     548   555   24        10,240
+Nebraska                         800      52    -90   1     0       5,907 0.6      -12     63     8     4        5,919
+Nevada                          2,333     11   -258   7     1      20,099 1.4      -31    -328   133   32        20,264
+New Hampshire                    404      -31   -85   0     0       2,903 0.4     -126    -250    4     3        2,910
+New Jersey                      5,853 -1,291  -3,269 22    12      104,709 2.6     549  10,100   257   189      105,155
+New Mexico                       735      -10    -1   1     2      10,042 1.3        1    -235   188   17        10,247
+New York                       17,210    -424  -998  23    19      173,377 1.9 2,225    -30,401  302   242      173,921
+North Carolina                  3,713     59     8    4     3      19,649 0.4      339    3,416   65   92        19,806
+North Dakota                     410      -27   -93   2     1       5,265 1.3      48     -801    10    7        5,282
+Ohio                           11,487 3,528    1,163  5     9      61,561 1.2      710    2,276   72   95        61,728
+Oklahoma                        1,198     -78  -881   5     3      10,598 0.7      48    -2,264   34   39        10,671
+Oregon                          4,706    -692   110  24     4      32,468 1.7      574    1,129  578   46        33,092
+Pennsylvania                   11,593    -495 -1,883 31    10      102,136 1.8 2,397     -1,392  243   129      102,508
+Puerto Rico                     1,465     50   -121  12    11      17,823 2.0      -90     734   108   97        18,028
+Rhode Island                    1,252    162    252   2     1      11,714 2.5      439     682    21   16        11,751
+South Carolina                  2,135    -223   647   3     5      13,616 0.6     -251    1,419   23   37        13,676
+South Dakota                     225        3    3    2     1       2,625 0.6      49     -220    33    2        2,660
+Tennessee                       2,472    -158 -3,382  6     7      17,060 0.5      -11   -2,590   43   48        17,151
+Texas                          14,947    -859  -985  24    104     121,057 1.0 -1,774     6,369  481   945      122,483
+Utah                            2,216     -43  1,341 18     2      13,628 0.9      25     3,639  214   10        13,852
+Vermont                          373      -42  -128   0     1       3,891 1.3      43     -459    3     2        3,896
+Virgin Islands                   25        -1   -36   0     0        222     0.6   26     -650    0     0         222
+Virginia                        1,829     -91  -328   3     3      11,699 0.3      75     4,260   54   75        11,828
+Washington                      5,339    -163   356  11    21      57,902 1.7     -187    1,946  445   252       58,599
+West Virginia                   1,070    267   -622   1     0       9,724 1.5      469   -1,910   38   20        9,782
+Wisconsin                       5,906     13  -1,743  6     6      36,426 1.3     -909   -7,224   97   13        36,536
+Wyoming                          450        8   -48   5     0       2,747 1.1      61      20     58    0        2,805
+Totals                         234,007 8,981 -24,281 501   401    1,924,891 1.3 13,690 -118,511 7,722 4,280    1,936,893
+
+
+Figures appearing in columns showing over-the-week changes reflect all revisions in data for prior week submitted by
+state agencies.
+
+     1. The Unemployment Compensation program for Federal Employees (UCFE) and the Unemployment
+        Compensation for Ex-servicemembers (UCX) exclude claims filed jointly under other programs to avoid
+        duplication.
+     2. Rate is not seasonally adjusted. The source of U.S. total covered employment is BLS.
+
+                                                              7
+UNADJUSTED INITIAL CLAIMS FOR WEEK ENDED February 4, 2023
+
+
+STATES WITH AN INCREASE OF MORE THAN 1,000
+
+State   Change    State Supplied Comment
+CA      +6,820    Layoffs in the service industry.
+OH      +3,528    No comment.
+IL      +1,533    Layoffs in the construction, administrative and support and waste management and remediation
+                  services, wholesale trade, and retail trade industries.
+
+STATES WITH A DECREASE OF MORE THAN 1,000
+
+State    Change   State Supplied Comment
+GA       -1,463   Fewer layoffs in the retail trade, manufacturing, accommodation and food services, and
+                  administrative and support and waste management and remediation services industries.
+NJ       -1,291   No comment.
+
+
+
+
+                                                   8
+TECHNICAL NOTES
+
+This news release presents the weekly unemployment insurance (UI) claims reported by each state's unemployment
+insurance program offices. These claims may be used for monitoring workload volume, assessing state program
+operations and for assessing labor market conditions. States initially report claims directly taken by the state liable for the
+benefit payments, regardless of where the claimant who filed the claim resided. These are the basis for the advance initial
+claims and continued claims reported each week. These data come from ETA 538, Advance Weekly Initial and
+Continued Claims Report. The following week initial claims and continued claims are revised based on a second
+reporting by states that reflect the claimants by state of residence. These data come from the ETA 539, Weekly Claims
+and Extended Benefits Trigger Data Report.
+
+A. Initial Claims
+
+An initial claim is a claim filed by an unemployed individual after a separation from an employer. The claimant requests
+a determination of basic eligibility for the UI program. When an initial claim is filed with a state, certain programmatic
+activities take place and these result in activity counts including the count of initial claims. The count of U.S. initial
+claims for unemployment insurance is a leading economic indicator because it is an indication of emerging labor market
+conditions in the country. However, these are weekly administrative data which are difficult to seasonally adjust, making
+the series subject to some volatility.
+
+B. Continued Weeks Claimed
+
+A person who has already filed an initial claim and who has experienced a week of unemployment then files a continued
+claim to claim benefits for that week of unemployment. On a weekly basis, continued claims are also referred to as
+insured unemployment, as continued claims reflect a good approximation of the current number of insured unemployed
+workers filing for UI benefits. The count of U.S. continued weeks claimed is also a good indicator of labor market
+conditions. While continued claims are not a leading indicator (they roughly coincide with economic cycles at their peaks
+and lag at cycle troughs), they provide confirming evidence of the direction of the U.S. economy.
+
+C. Seasonal Adjustments and Annual Revisions
+
+Over the course of a year, the weekly changes in the levels of initial claims and continued claims undergo regularly
+occurring fluctuations. These fluctuations may result from seasonal changes in weather, major holidays, the opening and
+closing of schools, or other similar events. Because these seasonal events follow a more or less regular pattern each year,
+their influence on the level of a series can be tempered by adjusting for regular seasonal variation. These adjustments
+make trend and cycle developments easier to spot. At the beginning of each calendar year, the Bureau of Labor Statistics
+provides the Employment and Training Administration (ETA) with a set of seasonal factors to apply to the unadjusted
+data during that year. Concurrent with the implementation and release of the new seasonal factors, ETA incorporates
+revisions to the UI claims historical series caused by updates to the unadjusted data. For further questions on the seasonal
+adjustment methodology, please see the official release page for the UI claims seasonal adjustment factors or contact
+BLS directly through the Local Area Unemployment Statistics web contact form.
+
+Weekly Claims Archives
+Weekly Claims Data
+
+U.S. Department of Labor news materials are accessible at http://www.dol.gov. The Department's Reasonable Accommodation
+Resource Center converts Departmental information and documents into alternative formats, which include Braille and large
+print. For alternative format requests, please contact the Department at (202) 693-7828 (voice) or (800) 877-8339 (federal
+relay).
+
+U.S. Department of Labor
+                                                                    Program Contacts:
+Employment and Training Administration
+                                                                    Kevin Stapleton: (202) 693-3009
+Washington, D.C. 20210
+                                                                    Media Contact:    (202) 693-4676
+Release Number: USDL 23-324-NAT
+
+
+
+                                                              9
+
