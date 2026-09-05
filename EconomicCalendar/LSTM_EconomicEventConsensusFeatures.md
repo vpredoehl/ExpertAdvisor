@@ -22,10 +22,12 @@ authoritative initial row from migration 088. Surprise is derived in C++ as
 normalized canonical `actual - forecast`; no persisted or provider-computed
 surprise is loaded.
 
-The persisted consensus rows do not contain a historical `known_at` instant for
-each forecast revision. Therefore, the final selected forecast is not projected
-into arbitrary earlier bars. For a completed 15-minute bar with information
-cutoff `bar_start + 15 minutes`:
+Legacy migration-081/082 consensus rows do not contain a historical `known_at`
+instant for each forecast revision. Migration 091 adds explicit availability
+provenance only for retained Myfxbook Weekly Claims pre-release snapshots; it
+does not infer a historical instant for legacy rows. The final selected
+forecast is not projected into arbitrary earlier bars. For a completed
+15-minute bar with information cutoff `bar_start + 15 minutes`:
 
 - an event exactly at the cutoff supplies consensus, but not actual/surprise;
 - otherwise consensus describes the most recent released event;
@@ -62,9 +64,12 @@ America/New_York rules, and are marked `reconstructed`. This bounded
 reconstruction is part of the authoritative calendar audit contract and is
 causally suitable for the same strict completed-bar cutoff as exact rows.
 
-Production schema 082 has no selected consensus for Weekly Claims. Therefore,
-when it is the relevant event, consensus presence/low/high/range remain zero;
-the reserved surprise fields also remain zero.
+The pre-Phase-8 production baseline has no provider observation or selected
+consensus for Weekly Claims. Migration 091 permits only an archive capture
+whose provider and archive clocks precede the canonical release. Current
+retrieval time remains separate and cannot establish historical availability.
+Until the reviewed Phase-7 actual and Phase-8 consensus packages are imported,
+production consensus and causal surprise remain unavailable.
 
 This compatibility correction did not add or reorder a v4 feature, so its
 physical Tensor width remains 67 and model input width remains 71. Although
@@ -92,7 +97,7 @@ applied before this layer.
 | --- | --- | ---: |
 | CPI, PPI, PCE, GDP, DURABLE_GOODS, RETAIL_SALES | percent | 10 percentage points |
 | FOMC | percent | 10 percentage points |
-| EMPLOYMENT, EMPLOYMENT_ANNUAL | count | 1,000,000 |
+| EMPLOYMENT, EMPLOYMENT_ANNUAL, WEEKLY_CLAIMS | count | 1,000,000 |
 | JOLTS | count | 10,000,000 |
 
 No dataset distribution, future observation, rolling statistic, or fitted scale
@@ -195,4 +200,6 @@ manifest into production.
   `resume_expand_input_width` workflow with zero-initialized appended weights.
 
 Semantic-layout-v5 runtime requires migration 088. The historical v4 consensus
-contract remains defined by migration 082 and never consumes the new columns.
+value contract remains defined by migration 082. Migration 091 only adds
+provenance columns exposed by the selected view; it does not add or reorder a
+Tensor field or change model semantics.

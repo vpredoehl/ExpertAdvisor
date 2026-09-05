@@ -3,3 +3,7 @@ Tests/fixtures/CampaignOperationsH1Artifacts.tsv whitespace=-blank-at-eol
 EconomicCalendar/raw/bls/**/*.htm binary
 EconomicCalendar/raw/dol_eta/**/*.asp binary
 EconomicCalendar/raw/dol_eta/**/*.pdf binary
+
+# Preserve archived Myfxbook evidence byte-for-byte and do not
+# apply textual diff/whitespace policy to immutable source artifacts.
+EconomicCalendar/raw/myfxbook/weekly_claims_wayback/*.html -text -diff

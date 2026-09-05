@@ -93,6 +93,10 @@ create_schema() {
         --dbname="$database" \
         -f "$ROOT/Database/migrations/082_economic_event_consensus_provider_provenance.sql" \
         >/dev/null
+    psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+        --dbname="$database" \
+        -f "$ROOT/Database/migrations/091_weekly_claims_historical_consensus.sql" \
+        >/dev/null
 }
 
 create_schema "$FOCUSED_DB"
@@ -251,6 +255,10 @@ psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$WORKFLOW_DB" \
     -f "$ROOT/Database/migrations/082_economic_event_consensus_provider_provenance.sql" \
     >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$WORKFLOW_DB" \
+    -f "$ROOT/Database/migrations/091_weekly_claims_historical_consensus.sql" \
+    >/dev/null
 
 EVIDENCE_ROOT="$ROOT/EconomicCalendar/raw"
 
@@ -284,6 +292,7 @@ workflow_scalar() {
 test "$(workflow_scalar 'SELECT count(*) FROM economic_event_consensus;')" = "1532"
 test "$(workflow_scalar "SELECT count(*) FROM pg_indexes WHERE tablename = 'economic_event_consensus' AND indexname = 'economic_event_consensus_one_populated_per_event_uq';")" = "1"
 test "$(workflow_scalar 'SELECT count(*) FROM economic_event_selected_consensus;')" = "1521"
+test "$(workflow_scalar 'SELECT count(*) FROM economic_event_consensus WHERE provider_observed_at IS NOT NULL OR forecast_available_at IS NOT NULL OR source_retrieved_at IS NOT NULL OR forecast_availability_proof IS NOT NULL;')" = "0"
 test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE consensus_source = 'OANDA';")" = "1405"
 test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE consensus_source = 'MYFXBOOK';")" = "116"
 test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE candidate_classification = 'myfxbook_jolts_gap_fill';")" = "113"

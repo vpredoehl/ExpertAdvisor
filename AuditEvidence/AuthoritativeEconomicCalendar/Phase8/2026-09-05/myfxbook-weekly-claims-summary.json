@@ -1,0 +1,25 @@
+{
+  "cdx_captures": 1083,
+  "cdx_index_sha256": "3f5935d98ebb0f1f943b097e92b8b9add8914b2b577ae05bf2b38eddb4392003",
+  "classification_counts": {
+    "conflicting_latest_provider_snapshots": 2,
+    "duplicate_identical_snapshot": 1,
+    "forecast_missing": 9,
+    "post_release_actual_present": 1,
+    "unmapped_release_timestamp": 2
+  },
+  "classifications_sha256": "b847180da57e9cb3da930ffea3bb993d3120d27da7dba8868a51f7c5812fce85",
+  "eligible_consensus_observations": 9,
+  "eligible_date_max": "2025-09-18",
+  "eligible_date_min": "2012-06-14",
+  "eligible_unique_economic_event_ids": 9,
+  "import_csv_sha256": "783d2bc3e7cb03c16006162e5b6151a7f9f85a7a35281e2e4bc94b9058cefb46",
+  "parser_version": "myfxbook_weekly_claims_pre_release_snapshot_v1",
+  "production_catalog_date_max": "2026-08-20",
+  "production_catalog_date_min": "2010-01-07",
+  "production_catalog_events": 860,
+  "raw_manifest_sha256": "100d2d606b33cf93a6739adc3c538cf18d1e18b496e527787cf80cd238fe2ec0",
+  "retained_provider_rows": 24,
+  "selected_capture_attempts": 750,
+  "successful_retained_artifacts": 14
+}

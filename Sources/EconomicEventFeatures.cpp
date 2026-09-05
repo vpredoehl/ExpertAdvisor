@@ -573,7 +573,8 @@ double EconomicEventNormalizationScale(
 {
     if (
         canonicalEventFamily == "EMPLOYMENT" ||
-        canonicalEventFamily == "EMPLOYMENT_ANNUAL")
+        canonicalEventFamily == "EMPLOYMENT_ANNUAL" ||
+        canonicalEventFamily == "WEEKLY_CLAIMS")
     {
         if (canonicalUnit != "count")
             throw std::invalid_argument(

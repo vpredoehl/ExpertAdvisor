@@ -42,6 +42,22 @@ constexpr std::array<std::string_view, 52> kRequiredColumns{
     "actual_canonical_value_high", "actual_unit", "actual_scale",
     "actual_qualifier"};
 
+constexpr std::array<std::string_view, 34>
+kWeeklyClaimsHistoricalRequiredColumns{
+    "economic_event_id", "event_family", "event_timestamp_utc",
+    "source_agency", "source_event_id", "reference_period",
+    "source_release_date", "consensus_source", "myfxbook_event_id",
+    "archive_capture_timestamp", "provider_source_url",
+    "provider_release_timestamp", "provider_reference_period",
+    "source_observation_id", "source_event_name", "source_artifact_path",
+    "source_artifact_sha256", "candidate_classification", "match_rule",
+    "semantic_contract", "provider_observed_at", "forecast_available_at",
+    "source_retrieved_at", "forecast_availability_proof",
+    "provider_provenance", "forecast_raw", "forecast_parse_status",
+    "forecast_value_kind", "forecast_value_low",
+    "forecast_canonical_value_low", "forecast_unit", "forecast_scale",
+    "forecast_qualifier", "pre_release_actual_raw"};
+
 struct Decimal
 {
     __int128 coefficient = 0;
@@ -209,6 +225,37 @@ bool ValidDate(const std::string& value)
         std::chrono::year{year},
         std::chrono::month{month},
         std::chrono::day{day}}.ok();
+}
+
+bool ValidCanonicalUtcInstant(const std::string& value)
+{
+    if (value.size() != 27 || value[4] != '-' || value[7] != '-' ||
+        value[10] != 'T' || value[13] != ':' || value[16] != ':' ||
+        value[19] != '.' || value[26] != 'Z' ||
+        !ValidDate(value.substr(0, 10)))
+        return false;
+    for (const std::size_t index : {11U, 12U, 14U, 15U, 17U, 18U,
+                                    20U, 21U, 22U, 23U, 24U, 25U})
+    {
+        if (value[index] < '0' || value[index] > '9')
+            return false;
+    }
+    const auto twoDigits = [&](const std::size_t offset)
+    {
+        return (value[offset] - '0') * 10 + value[offset + 1] - '0';
+    };
+    return twoDigits(11) <= 23 && twoDigits(14) <= 59 &&
+        twoDigits(17) <= 59;
+}
+
+bool ValidLowercaseSha256(const std::string& value)
+{
+    return value.size() == 64 && std::all_of(
+        value.begin(), value.end(), [](const char character)
+        {
+            return (character >= '0' && character <= '9') ||
+                (character >= 'a' && character <= 'f');
+        });
 }
 
 std::vector<std::vector<std::string>> ParseCsv(
@@ -386,7 +433,8 @@ void ValidateParsedValue(
     }
 
     const bool countFamily = candidate.eventFamily == "EMPLOYMENT" ||
-        candidate.eventFamily == "JOLTS";
+        candidate.eventFamily == "JOLTS" ||
+        candidate.eventFamily == "WEEKLY_CLAIMS";
     if (countFamily)
     {
         if (*value.unit != "count" || value.qualifier)
@@ -437,7 +485,55 @@ void ValidateParsedValue(
     }
 
     std::string rawNumber;
-    if (candidate.consensusSource == "MYFXBOOK")
+    if (candidate.candidateClassification ==
+        "myfxbook_weekly_claims_pre_release_snapshot")
+    {
+        rawNumber = *value.raw;
+        while (!rawNumber.empty() && rawNumber.front() == ' ')
+            rawNumber.erase(rawNumber.begin());
+        while (!rawNumber.empty() && rawNumber.back() == ' ')
+            rawNumber.pop_back();
+        Decimal rawCount;
+        if (!rawNumber.empty() &&
+            (rawNumber.back() == 'K' || rawNumber.back() == 'k'))
+        {
+            rawNumber.pop_back();
+            while (!rawNumber.empty() && rawNumber.back() == ' ')
+                rawNumber.pop_back();
+            std::replace(rawNumber.begin(), rawNumber.end(), ',', '.');
+            rawCount = Multiply(
+                ParseDecimal(rawNumber, field, candidate.economicEventId),
+                ParseDecimal("1000", field, candidate.economicEventId));
+        }
+        else
+        {
+            const std::size_t firstComma = rawNumber.find(',');
+            if (firstComma != std::string::npos)
+            {
+                if (firstComma == 0 || firstComma > 3)
+                    fail("raw_count_grouping_mismatch");
+                for (std::size_t comma = firstComma; comma < rawNumber.size();
+                     comma += 4)
+                {
+                    if (rawNumber[comma] != ',' ||
+                        rawNumber.size() - comma - 1 < 3)
+                        fail("raw_count_grouping_mismatch");
+                }
+                rawNumber.erase(
+                    std::remove(rawNumber.begin(), rawNumber.end(), ','),
+                    rawNumber.end());
+            }
+            rawCount = ParseDecimal(
+                rawNumber, field, candidate.economicEventId);
+        }
+        if (!EqualDecimal(scale, ParseDecimal(
+                "1", field, candidate.economicEventId)) ||
+            !EqualDecimal(low, canonicalLow) ||
+            !EqualDecimal(rawCount, low))
+            fail("weekly_claims_count_semantics_mismatch");
+        return;
+    }
+    else if (candidate.consensusSource == "MYFXBOOK")
     {
         rawNumber = *value.raw;
     }
@@ -533,15 +629,21 @@ void ValidateCandidate(const EconomicEventConsensusCandidate& candidate)
             (candidate.eventFamily == "CPI" ||
              candidate.eventFamily == "PPI" ||
              candidate.eventFamily == "RETAIL_SALES");
+        const bool weeklyClaims = candidate.candidateClassification ==
+                "myfxbook_weekly_claims_pre_release_snapshot" &&
+            candidate.eventFamily == "WEEKLY_CLAIMS";
         if (candidate.sourceReportId || candidate.secondarySourcePeriod ||
             candidate.secondarySourcePriority ||
             candidate.secondarySourceTimestampEpoch ||
             candidate.secondarySourceDate ||
             !candidate.secondarySourceArtifactSha256 ||
-            candidate.secondarySourceArtifactSha256->size() != 64 ||
-            candidate.semanticContract !=
-                "myfxbook_consensus_observation_v1" ||
-            (!gap && !blankFill) ||
+            !ValidLowercaseSha256(
+                *candidate.secondarySourceArtifactSha256) ||
+            ((!weeklyClaims && candidate.semanticContract !=
+                "myfxbook_consensus_observation_v1") ||
+             (weeklyClaims && candidate.semanticContract !=
+                "myfxbook_weekly_claims_pre_release_snapshot_v1")) ||
+            (!gap && !blankFill && !weeklyClaims) ||
             candidate.forecast.parseStatus != "parsed" ||
             candidate.previous.parseStatus != "missing" ||
             candidate.actual.parseStatus != "missing")
@@ -555,6 +657,44 @@ void ValidateCandidate(const EconomicEventConsensusCandidate& candidate)
             throw std::invalid_argument(
                 "invalid_consensus_date:economic_event_id=" +
                 std::to_string(candidate.economicEventId));
+        if (weeklyClaims)
+        {
+            if (!candidate.providerObservedAt ||
+                !candidate.forecastAvailableAt ||
+                !candidate.sourceRetrievedAt ||
+                candidate.forecastAvailabilityProof !=
+                    std::optional<std::string>{
+                        "internet_archive_pre_release_capture"} ||
+                !ValidCanonicalUtcInstant(*candidate.providerObservedAt) ||
+                !ValidCanonicalUtcInstant(*candidate.forecastAvailableAt) ||
+                !ValidCanonicalUtcInstant(*candidate.sourceRetrievedAt) ||
+                !ValidCanonicalUtcInstant(candidate.eventTimestampUtc) ||
+                *candidate.providerObservedAt >
+                    *candidate.forecastAvailableAt ||
+                *candidate.forecastAvailableAt >=
+                    candidate.eventTimestampUtc ||
+                *candidate.forecastAvailableAt >
+                    *candidate.sourceRetrievedAt)
+                throw std::invalid_argument(
+                    "invalid_historical_consensus_availability:economic_event_id=" +
+                    std::to_string(candidate.economicEventId));
+            if (candidate.secondarySourceEventName !=
+                    "Initial Jobless Claims" ||
+                candidate.matchRule !=
+                    "exact_family_currency_release_timestamp")
+                throw std::invalid_argument(
+                    "invalid_weekly_claims_provider_identity:economic_event_id=" +
+                    std::to_string(candidate.economicEventId));
+        }
+        else if (candidate.providerObservedAt ||
+                 candidate.forecastAvailableAt ||
+                 candidate.sourceRetrievedAt ||
+                 candidate.forecastAvailabilityProof)
+        {
+            throw std::invalid_argument(
+                "unexpected_historical_consensus_availability:economic_event_id=" +
+                std::to_string(candidate.economicEventId));
+        }
         ValidateParsedValue(candidate, candidate.forecast, "forecast");
         ValidateParsedValue(candidate, candidate.previous, "previous");
         ValidateParsedValue(candidate, candidate.actual, "actual");
@@ -923,6 +1063,7 @@ EconomicEventConsensusCandidate MakeMyfxbookCandidate(
 struct CliArguments
 {
     std::filesystem::path input;
+    std::filesystem::path weeklyClaimsInput;
     std::filesystem::path evidenceRoot;
     EconomicEventConsensusImportMode mode =
         EconomicEventConsensusImportMode::dryRun;
@@ -954,6 +1095,20 @@ CliArguments ParseCli(int argc, const char* const argv[])
             if (!parsed.input.empty())
                 throw std::invalid_argument("--input specified more than once");
             parsed.input = argument.substr(8);
+        }
+        else if (argument == "--weekly-claims-input")
+        {
+            if (!parsed.weeklyClaimsInput.empty() || ++index >= argc)
+                throw std::invalid_argument(
+                    "--weekly-claims-input requires one path");
+            parsed.weeklyClaimsInput = argv[index];
+        }
+        else if (argument.rfind("--weekly-claims-input=", 0) == 0)
+        {
+            if (!parsed.weeklyClaimsInput.empty())
+                throw std::invalid_argument(
+                    "--weekly-claims-input specified more than once");
+            parsed.weeklyClaimsInput = argument.substr(22);
         }
         else if (argument == "--evidence-root")
         {
@@ -987,9 +1142,11 @@ CliArguments ParseCli(int argc, const char* const argv[])
     }
     if (!commandSeen)
         throw std::invalid_argument("--import-economic-consensus is required");
-    if (parsed.input.empty() == parsed.evidenceRoot.empty())
+    const int inputCount = !parsed.input.empty() +
+        !parsed.weeklyClaimsInput.empty() + !parsed.evidenceRoot.empty();
+    if (inputCount != 1)
         throw std::invalid_argument(
-            "exactly one of --input or --evidence-root is required");
+            "exactly one of --input, --weekly-claims-input, or --evidence-root is required");
     if (!parsed.modeSpecified)
         throw std::invalid_argument(
             "exactly one of --dry-run or --apply is required");
@@ -1070,6 +1227,175 @@ LoadAndValidateOandaEconomicConsensusCsv(const std::filesystem::path& path)
             ",\"source_artifact\":\"" +
             JsonEscape(candidate.secondarySourceArtifactPath) +
             "\",\"phase\":\"phase_1_initial_population\"}";
+        candidates.push_back(std::move(candidate));
+    }
+    if (candidates.empty())
+        throw std::invalid_argument("consensus_csv_has_no_candidates");
+    return ValidateAndOrder(std::move(candidates));
+}
+
+
+std::vector<EconomicEventConsensusCandidate>
+LoadAndValidateWeeklyClaimsHistoricalConsensusCsv(
+    const std::filesystem::path& path)
+{
+    const auto rows = ParseCsv(path);
+    std::unordered_map<std::string, std::size_t> columns;
+    for (std::size_t index = 0; index < rows.front().size(); ++index)
+    {
+        if (!columns.emplace(rows.front()[index], index).second)
+            throw std::invalid_argument("duplicate_consensus_csv_column:" +
+                                        rows.front()[index]);
+    }
+    for (const std::string_view required :
+         kWeeklyClaimsHistoricalRequiredColumns)
+    {
+        if (!columns.contains(std::string{required}))
+            throw std::invalid_argument("missing_consensus_csv_column:" +
+                                        std::string{required});
+    }
+
+    std::vector<EconomicEventConsensusCandidate> candidates;
+    candidates.reserve(rows.size() - 1);
+    const auto value = [&](const std::vector<std::string>& row,
+                           std::string_view column) -> const std::string&
+    {
+        return row.at(columns.at(std::string{column}));
+    };
+    for (std::size_t index = 1; index < rows.size(); ++index)
+    {
+        const auto& row = rows[index];
+        if (row.size() != rows.front().size())
+            throw std::invalid_argument(
+                "consensus_csv_column_count_mismatch:row=" +
+                std::to_string(index + 1));
+        if (!value(row, "pre_release_actual_raw").empty())
+            throw std::invalid_argument(
+                "post_release_consensus_evidence:row=" +
+                std::to_string(index + 1));
+
+        EconomicEventConsensusCandidate candidate;
+        candidate.economicEventId = ParseInteger<std::int64_t>(
+            value(row, "economic_event_id"), "economic_event_id", index + 1);
+        candidate.eventFamily = value(row, "event_family");
+        candidate.eventTimestampUtc = value(row, "event_timestamp_utc");
+        candidate.sourceAgency = value(row, "source_agency");
+        candidate.sourceEventId = value(row, "source_event_id");
+        candidate.referencePeriod = OptionalText(value(row, "reference_period"));
+        candidate.sourceReleaseDate = value(row, "source_release_date");
+        candidate.consensusSource = value(row, "consensus_source");
+        candidate.secondarySourceEventId = ParseInteger<std::int64_t>(
+            value(row, "myfxbook_event_id"), "myfxbook_event_id", index + 1);
+        const std::string& archiveCapture =
+            value(row, "archive_capture_timestamp");
+        const std::string& providerUrl = value(row, "provider_source_url");
+        const std::string& providerRelease =
+            value(row, "provider_release_timestamp");
+        const std::string& providerReference =
+            value(row, "provider_reference_period");
+        if (archiveCapture.size() != 14 ||
+            !std::all_of(archiveCapture.begin(), archiveCapture.end(),
+                         [](const char character)
+                         {
+                             return character >= '0' && character <= '9';
+                         }))
+            throw std::invalid_argument(
+                "invalid_archive_capture_timestamp:row=" +
+                std::to_string(index + 1));
+        const std::string captureInstant =
+            archiveCapture.substr(0, 4) + "-" +
+            archiveCapture.substr(4, 2) + "-" +
+            archiveCapture.substr(6, 2) + "T" +
+            archiveCapture.substr(8, 2) + ":" +
+            archiveCapture.substr(10, 2) + ":" +
+            archiveCapture.substr(12, 2) + ".000000Z";
+        if (!ValidCanonicalUtcInstant(captureInstant) ||
+            providerRelease != candidate.eventTimestampUtc)
+            throw std::invalid_argument(
+                "invalid_archive_release_identity:row=" +
+                std::to_string(index + 1));
+        static const std::array<std::string_view, 4> providerPrefixes{
+            "https://www.myfxbook.com/", "http://www.myfxbook.com/",
+            "http://www.myfxbook.com:80/", "http://myfxbook.com:80/"};
+        std::string providerPath;
+        for (const std::string_view prefix : providerPrefixes)
+        {
+            if (providerUrl.rfind(prefix, 0) == 0)
+            {
+                providerPath = providerUrl.substr(prefix.size());
+                break;
+            }
+        }
+        static const std::set<std::string> providerPaths{
+            "forex-economic-calendar", "forex-economic-calendar?",
+            "forex-economic-calendar/united-states",
+            "forex-economic-calendar/united-states/initial-jobless-claims",
+            "forex-economic-calendar/category/initial-jobless-claims"};
+        if (!providerPaths.contains(providerPath))
+            throw std::invalid_argument(
+                "invalid_archive_provider_url:row=" +
+                std::to_string(index + 1));
+        candidate.secondarySourceObservationId =
+            value(row, "source_observation_id");
+        candidate.secondarySourceEventName = value(row, "source_event_name");
+        candidate.secondarySourceArtifactPath =
+            value(row, "source_artifact_path");
+        if (candidate.secondarySourceArtifactPath.rfind(
+                "EconomicCalendar/raw/myfxbook/weekly_claims_wayback/", 0) !=
+                0 ||
+            !candidate.secondarySourceArtifactPath.ends_with(".html"))
+            throw std::invalid_argument(
+                "invalid_archive_artifact_path:row=" +
+                std::to_string(index + 1));
+        candidate.secondarySourceArtifactSha256 =
+            value(row, "source_artifact_sha256");
+        candidate.candidateClassification =
+            value(row, "candidate_classification");
+        candidate.matchRule = value(row, "match_rule");
+        candidate.semanticContract = value(row, "semantic_contract");
+        candidate.providerObservedAt = value(row, "provider_observed_at");
+        candidate.forecastAvailableAt = value(row, "forecast_available_at");
+        candidate.sourceRetrievedAt = value(row, "source_retrieved_at");
+        candidate.forecastAvailabilityProof =
+            value(row, "forecast_availability_proof");
+        candidate.providerProvenance = value(row, "provider_provenance");
+        const std::string expectedObservationId =
+            "myfxbook:calendar-row:" +
+            std::to_string(candidate.secondarySourceEventId) + ":release:" +
+            candidate.eventTimestampUtc + ":archive:" + archiveCapture;
+        const std::string expectedProvenance =
+            "{\"archive_capture_timestamp\":\"" + archiveCapture +
+            "\",\"archive_replay_url\":\"https://web.archive.org/web/" +
+            archiveCapture + "id_/" + JsonEscape(providerUrl) +
+            "\",\"myfxbook_event_id\":" +
+            std::to_string(candidate.secondarySourceEventId) +
+            ",\"parser_version\":\"myfxbook_weekly_claims_pre_release_snapshot_v1\""
+            ",\"provider\":\"MYFXBOOK\",\"provider_release_timestamp\":\"" +
+            providerRelease + "\",\"provider_source_url\":\"" +
+            JsonEscape(providerUrl) + "\",\"reference_period_raw\":" +
+            (providerReference.empty()
+                 ? std::string{"null"}
+                 : "\"" + JsonEscape(providerReference) + "\"") + "}";
+        if (candidate.secondarySourceObservationId != expectedObservationId ||
+            candidate.providerProvenance != expectedProvenance ||
+            candidate.forecastAvailableAt !=
+                std::optional<std::string>{std::max(
+                    captureInstant, *candidate.providerObservedAt)})
+            throw std::invalid_argument(
+                "invalid_archive_provider_provenance:row=" +
+                std::to_string(index + 1));
+        candidate.forecast.raw = value(row, "forecast_raw");
+        candidate.forecast.parseStatus = value(row, "forecast_parse_status");
+        candidate.forecast.valueKind = value(row, "forecast_value_kind");
+        candidate.forecast.valueLow = value(row, "forecast_value_low");
+        candidate.forecast.canonicalValueLow =
+            value(row, "forecast_canonical_value_low");
+        candidate.forecast.unit = value(row, "forecast_unit");
+        candidate.forecast.scale = value(row, "forecast_scale");
+        candidate.forecast.qualifier =
+            OptionalText(value(row, "forecast_qualifier"));
+        candidate.previous.parseStatus = "missing";
+        candidate.actual.parseStatus = "missing";
         candidates.push_back(std::move(candidate));
     }
     if (candidates.empty())
@@ -1406,12 +1732,15 @@ int RunEconomicEventConsensusImportCli(
                 ? 0 : 2;
         }
 
-        const auto candidates =
-            LoadAndValidateOandaEconomicConsensusCsv(arguments.input);
+        const bool weeklyClaims = !arguments.weeklyClaimsInput.empty();
+        const auto candidates = weeklyClaims
+            ? LoadAndValidateWeeklyClaimsHistoricalConsensusCsv(
+                arguments.weeklyClaimsInput)
+            : LoadAndValidateOandaEconomicConsensusCsv(arguments.input);
         const auto report = RunEconomicEventConsensusImport(
             connection, candidates, arguments.mode);
         std::cout << "ECONOMIC_EVENT_CONSENSUS_IMPORT_SUMMARY"
-                  << ",source=OANDA"
+                  << ",source=" << (weeklyClaims ? "MYFXBOOK" : "OANDA")
                   << ",mode="
                   << (arguments.mode == EconomicEventConsensusImportMode::dryRun
                           ? "dry-run" : "apply")

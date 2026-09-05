@@ -17,7 +17,7 @@ struct Column
     std::string_view type;
 };
 
-constexpr std::array<Column, 46> kPayloadColumns{{
+constexpr std::array<Column, 50> kPayloadColumns{{
     {"consensus_source", "text"},
     {"source_report_id", "bigint"},
     {"source_event_id", "bigint"},
@@ -34,6 +34,10 @@ constexpr std::array<Column, 46> kPayloadColumns{{
     {"match_rule", "text"},
     {"semantic_contract", "text"},
     {"provider_provenance", "jsonb"},
+    {"provider_observed_at", "timestamp with time zone"},
+    {"forecast_available_at", "timestamp with time zone"},
+    {"source_retrieved_at", "timestamp with time zone"},
+    {"forecast_availability_proof", "text"},
     {"forecast_raw", "text"},
     {"forecast_parse_status", "text"},
     {"forecast_value_kind", "text"},
@@ -101,6 +105,10 @@ pqxx::params CandidateParameters(
     parameters.append(candidate.matchRule);
     parameters.append(candidate.semanticContract);
     parameters.append(candidate.providerProvenance);
+    parameters.append(candidate.providerObservedAt);
+    parameters.append(candidate.forecastAvailableAt);
+    parameters.append(candidate.sourceRetrievedAt);
+    parameters.append(candidate.forecastAvailabilityProof);
     AppendValue(parameters, candidate.forecast);
     AppendValue(parameters, candidate.previous);
     AppendValue(parameters, candidate.actual);

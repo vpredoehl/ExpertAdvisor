@@ -214,6 +214,10 @@ void AssertInvalidArgument(Function&& function)
 
 int main()
 {
+    assert(
+        EconomicEventNormalizationScale("WEEKLY_CLAIMS", "count") ==
+        kEconomicEmploymentNormalizationScale);
+
     static_assert(kEconomicEventModelFamilyCount == 5);
     static_assert(kPreConsensusEconomicEventFeatureWidth == 10);
     static_assert(kEconomicEventConsensusFeatureWidth == 8);

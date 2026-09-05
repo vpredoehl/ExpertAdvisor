@@ -50,6 +50,10 @@ struct EconomicEventConsensusCandidate
     std::string matchRule;
     std::string semanticContract = "oanda_economic_consensus_candidate_v1";
     std::string providerProvenance = "{}";
+    std::optional<std::string> providerObservedAt;
+    std::optional<std::string> forecastAvailableAt;
+    std::optional<std::string> sourceRetrievedAt;
+    std::optional<std::string> forecastAvailabilityProof;
 
     ConsensusParsedValue forecast;
     ConsensusParsedValue previous;
@@ -109,6 +113,10 @@ struct EconomicEventConsensusWorkflowReport
 
 std::vector<EconomicEventConsensusCandidate>
 LoadAndValidateOandaEconomicConsensusCsv(const std::filesystem::path& path);
+
+std::vector<EconomicEventConsensusCandidate>
+LoadAndValidateWeeklyClaimsHistoricalConsensusCsv(
+    const std::filesystem::path& path);
 
 EconomicEventConsensusImportReport RunEconomicEventConsensusImport(
     pqxx::connection& connection,

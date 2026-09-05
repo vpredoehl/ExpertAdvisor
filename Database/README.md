@@ -100,6 +100,15 @@ Economic-calendar enrichment persistence is created by:
   It leaves the migration-088 feature view and width-75 model semantics
   unchanged. The selection, PIT, importer, audit, and Phase-2 contracts are in
   `EconomicCalendar/LSTM_EconomicEventFirstReleaseActualProvenance.md`.
+- `091_weekly_claims_historical_consensus.sql`: adds separate provider-page,
+  forecast-availability, and current-retrieval timestamps plus an explicit
+  availability-proof field. Only the
+  `myfxbook_weekly_claims_pre_release_snapshot` classification requires these
+  fields and must be archived strictly before the canonical release. Existing
+  OANDA and Myfxbook observations remain valid with all four fields null; the
+  migration does not infer historical availability for them. The selected
+  view exposes the provenance fields without changing its one-populated-row
+  value semantics.
 
 The width-77/semantic-layout-6 causal surprise runtime consumes migration
 090's PIT function and persists its input identity through the existing
