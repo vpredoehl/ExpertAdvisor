@@ -28,7 +28,7 @@ Feature::ArmEvidence Arm(long long experimentId,
                          long long modelId,
                          long long inferenceId,
                          long long observationId,
-                         bool control)
+                         bool ablation)
 {
     Feature::ArmEvidence result;
     auto& arm = result.authoritative;
@@ -58,7 +58,7 @@ Feature::ArmEvidence Arm(long long experimentId,
     configuration.featureWarmupScope = "legacy_cold_boundary";
     configuration.donchianMode = "enabled";
     configuration.donchianLookback = 20;
-    configuration.featureAblationMask = control
+    configuration.featureAblationMask = ablation
         ? std::string(EA::kEconomicEventConsensusAblationMaskText)
         : "";
     configuration.optimizerMetadataSchemaVersion = 1;
@@ -92,6 +92,8 @@ Feature::ArmEvidence Arm(long long experimentId,
     result.extended.checkpointPolicyStopMode = "next_checkpoint";
     result.extended.checkpointPolicyGraceEvaluations = 1;
     result.extended.checkpointPolicyRevision = 1;
+    result.extended.configuredModelInputWidth = 71;
+    result.extended.configuredModelInputLayoutVersion = 4;
 
     arm.experimentStatus = "completed";
     arm.experimentPhase = "done";
@@ -112,19 +114,23 @@ Feature::ArmEvidence Arm(long long experimentId,
     classification.inferenceStart = configuration.inferenceStart;
     classification.inferenceEnd = configuration.inferenceEnd;
     classification.completedEpochs = configuration.targetEpochs;
-    classification.accuracy = control ? 0.61 : 0.64;
+    classification.accuracy = ablation ? 0.61 : 0.64;
     classification.predictedDownProportion = 0.30;
-    classification.predictedNeutralProportion = control ? 0.40 : 0.35;
-    classification.predictedUpProportion = control ? 0.30 : 0.35;
+    classification.predictedNeutralProportion = ablation ? 0.40 : 0.35;
+    classification.predictedUpProportion = ablation ? 0.30 : 0.35;
     classification.analysisId = inferenceId + 1000;
     classification.analysisExperimentId = experimentId;
     classification.analysisModelId = modelId;
     classification.analysisScope = "final";
     classification.analysisStatus = "completed";
     classification.inferenceAccuracy = classification.accuracy;
-    classification.acceptAccuracy = control ? 0.66 : 0.70;
-    classification.acceptRate = control ? 0.60 : 0.65;
-    classification.leaderScore = control ? 0.55 : 0.60;
+    classification.acceptAccuracy = ablation ? 0.66 : 0.70;
+    classification.acceptRate = ablation ? 0.60 : 0.65;
+    classification.leaderScore = ablation ? 0.55 : 0.60;
+    classification.predictedDownCount = ablation ? 30 : 35;
+    classification.predictedNeutralCount = ablation ? 40 : 35;
+    classification.predictedUpCount = 30;
+    classification.acceptedPredictionCount = ablation ? 60 : 65;
     arm.classification = classification;
 
     Pair::ProfitabilityEvidence profitability;
@@ -135,10 +141,10 @@ Feature::ArmEvidence Arm(long long experimentId,
     profitability.inferenceScope = "final";
     profitability.inferenceStart = configuration.inferenceStart;
     profitability.inferenceEnd = configuration.inferenceEnd;
-    profitability.predictionCount = control ? 100 : 110;
-    profitability.actionableCount = control ? 60 : 70;
+    profitability.predictionCount = 100;
+    profitability.actionableCount = ablation ? 60 : 70;
     profitability.aggregateTerminalHorizonLogReturnSum =
-        control ? 0.12 : 0.21;
+        ablation ? 0.12 : 0.21;
     profitability.averageTerminalHorizonLogReturnPerActionablePrediction =
         profitability.aggregateTerminalHorizonLogReturnSum /
         static_cast<double>(profitability.actionableCount);
@@ -159,14 +165,22 @@ bool Has(const std::vector<std::string>& values, const std::string& value)
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+Feature::ComparisonResult EvaluatePair(
+    const Feature::ArmEvidence& control,
+    const Feature::ArmEvidence& ablation,
+    std::string_view expected = EA::kEconomicEventConsensusAblationMaskText)
+{
+    return Feature::Compare(control, ablation, expected);
+}
+
 } // namespace
 
 int main()
 {
-    const Feature::ArmEvidence control = Arm(601, 1601, 2601, 3601, true);
-    const Feature::ArmEvidence treatment = Arm(602, 1602, 2602, 3602, false);
+    const Feature::ArmEvidence control = Arm(601, 1601, 2601, 3601, false);
+    const Feature::ArmEvidence ablation = Arm(602, 1602, 2602, 3602, true);
 
-    const auto complete = Feature::Compare(control, treatment);
+    const auto complete = EvaluatePair(control, ablation);
     assert(complete.disposition == Feature::Disposition::ComparableComplete);
     assert(complete.invalidReasons.empty());
     assert(complete.canonicalAblatedFeatureSet ==
@@ -174,22 +188,53 @@ int main()
                std::string(EA::kEconomicEventConsensusAblationMaskText))
                .CanonicalText());
     assert(!complete.ablationIdentityHash.empty());
-    assert(complete.predictionCount.treatmentMinusControl == 10.0);
-    assert(complete.actionableCount.treatmentMinusControl == 10.0);
-    assert(std::fabs(*complete.aggregateProfitability.treatmentMinusControl -
+    assert(Feature::EvaluationIdentityCanonical(
+               control, ablation, complete)
+               .starts_with("feature_ablation_pair_evaluation_v2;"));
+    assert(complete.predictionCount.controlMinusAblation == 0.0);
+    assert(complete.actionableCount.controlMinusAblation == 10.0);
+    assert(std::fabs(*complete.aggregateProfitability.controlMinusAblation -
                      0.09) < 1.0e-15);
-    assert(std::fabs(*complete.inferenceAccuracy.treatmentMinusControl -
+    assert(std::fabs(*complete.inferenceAccuracy.controlMinusAblation -
                      0.03) < 1.0e-15);
     assert(Feature::ExitCode(complete.disposition) == 0);
 
-    // optimizerUpdateCount is post-treatment optimizer behavior, not
-    // pre-treatment scientific configuration. A feature ablation can change
+    const auto legacy = Feature::CompareLegacyConsensusPair(
+        ablation, control);
+    assert(legacy.disposition == Feature::Disposition::ComparableComplete);
+    assert(legacy.aggregateProfitability.controlMinusAblation ==
+           complete.aggregateProfitability.controlMinusAblation);
+    assert(legacy.inferenceAccuracy.controlMinusAblation ==
+           complete.inferenceAccuracy.controlMinusAblation);
+
+    auto arbitraryControl = control;
+    auto arbitraryAblation = ablation;
+    arbitraryAblation.authoritative.configuration.featureAblationMask =
+        "relative_tick_volume";
+    assert(EvaluatePair(arbitraryControl, arbitraryAblation,
+                   "relative_tick_volume")
+               .disposition == Feature::Disposition::ComparableComplete);
+
+    auto historicalControl = control;
+    auto historicalAblation = ablation;
+    for (auto* arm : {&historicalControl, &historicalAblation})
+    {
+        arm->extended.configuredModelInputWidth.reset();
+        arm->extended.configuredModelInputLayoutVersion.reset();
+        arm->authoritative.configuration.inputWidth = 75;
+        arm->authoritative.configuration.modelInputLayoutVersion = 5;
+    }
+    assert(EvaluatePair(historicalControl, historicalAblation).disposition ==
+           Feature::Disposition::ComparableComplete);
+
+    // optimizerUpdateCount is post-ablation optimizer behavior, not
+    // pre-ablation scientific configuration. A feature ablation can change
     // gradient finiteness and therefore the number of successful SGD updates.
-    auto differentOptimizerUpdates = treatment;
+    auto differentOptimizerUpdates = ablation;
     differentOptimizerUpdates.authoritative.configuration.optimizerUpdateCount =
         control.authoritative.configuration.optimizerUpdateCount - 3;
     const auto updateCountDifference =
-        Feature::Compare(control, differentOptimizerUpdates);
+        EvaluatePair(control, differentOptimizerUpdates);
     assert(updateCountDifference.disposition ==
            Feature::Disposition::ComparableComplete);
     assert(!Has(updateCountDifference.invalidReasons,
@@ -199,122 +244,288 @@ int main()
     // Analysis persistence rounds inference accuracy to six decimal places.
     // A discrepancy within half of one unit in the sixth decimal remains the
     // same underlying inference result.
-    auto roundedAnalysisAccuracy = treatment;
+    auto roundedAnalysisAccuracy = ablation;
     roundedAnalysisAccuracy.authoritative.classification->accuracy =
         *roundedAnalysisAccuracy.authoritative.classification->inferenceAccuracy +
         3.7e-7;
     const auto roundedAccuracyResult =
-        Feature::Compare(control, roundedAnalysisAccuracy);
+        EvaluatePair(control, roundedAnalysisAccuracy);
     assert(roundedAccuracyResult.disposition ==
            Feature::Disposition::ComparableComplete);
     assert(!Has(roundedAccuracyResult.invalidReasons,
-                "treatment_inference_analysis_accuracy_mismatch"));
+                "ablation_inference_analysis_accuracy_mismatch"));
 
     // A discrepancy beyond the six-decimal rounding boundary is a genuine
     // consistency failure and must continue to fail closed.
-    auto inconsistentAnalysisAccuracy = treatment;
+    auto inconsistentAnalysisAccuracy = ablation;
     inconsistentAnalysisAccuracy.authoritative.classification->accuracy =
         *inconsistentAnalysisAccuracy.authoritative.classification->inferenceAccuracy +
         6.0e-7;
     const auto inconsistentAccuracyResult =
-        Feature::Compare(control, inconsistentAnalysisAccuracy);
+        EvaluatePair(control, inconsistentAnalysisAccuracy);
     assert(Has(inconsistentAccuracyResult.invalidReasons,
-               "treatment_inference_analysis_accuracy_mismatch"));
+               "ablation_inference_analysis_accuracy_mismatch"));
 
-    auto mismatch = treatment;
+    auto mismatch = ablation;
     mismatch.authoritative.configuration.symbol = "eurusdrmp";
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "symbol_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.predictionHorizon = 6;
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "prediction_horizon_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.threshold = 0.0009;
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "threshold_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.coreLearningRateMultiplier = 120.0;
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "core_lr_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.trainStart = "2011-01-01";
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "train_start_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.inferenceEnd = "2026-02-01";
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "inference_end_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.featureWarmupScope =
         "full_history_warmup";
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "feature_warmup_scope_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.donchianMode = "disabled";
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "donchian_mode_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.donchianLookback = 40;
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "donchian_lookback_mismatch"));
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.extended.trainingObjectiveVersion = 2;
-    assert(Has(Feature::Compare(control, mismatch).invalidReasons,
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "training_objective_version_mismatch"));
 
-    mismatch = treatment;
+    mismatch = ablation;
     mismatch.authoritative.configuration.featureAblationMask =
         "relative_tick_volume";
-    const auto unrelatedTreatment = Feature::Compare(control, mismatch);
-    assert(unrelatedTreatment.disposition ==
+    const auto unrelatedAblation = EvaluatePair(control, mismatch);
+    assert(unrelatedAblation.disposition ==
            Feature::Disposition::InvalidAblationPair);
-    assert(Has(unrelatedTreatment.invalidReasons,
-               "treatment_contains_feature_ablations"));
+    assert(Has(unrelatedAblation.invalidReasons,
+               "ablation_mask_does_not_match_expected"));
 
     auto extraControl = control;
-    extraControl.authoritative.configuration.featureAblationMask +=
-        ",relative_tick_volume";
-    assert(Has(Feature::Compare(extraControl, treatment).invalidReasons,
-               "control_ablation_not_consensus_feature_family"));
+    extraControl.authoritative.configuration.featureAblationMask =
+        "relative_tick_volume";
+    assert(Has(EvaluatePair(extraControl, ablation).invalidReasons,
+               "control_feature_ablation_mask_not_empty"));
 
-    const auto reversed = Feature::Compare(treatment, control);
+    const auto reversed = EvaluatePair(ablation, control);
     assert(reversed.disposition == Feature::Disposition::InvalidAblationPair);
-    assert(Has(reversed.invalidReasons, "reversed_control_treatment_order"));
+    assert(Has(reversed.invalidReasons,
+               "control_feature_ablation_mask_not_empty"));
 
     auto pendingControl = control;
-    auto pendingTreatment = treatment;
+    auto pendingAblation = ablation;
     pendingControl.authoritative.experimentStatus = "running";
     pendingControl.authoritative.experimentPhase = "train";
     pendingControl.authoritative.finalModelId.reset();
     pendingControl.exactFinalInferenceResultId.reset();
     pendingControl.authoritative.classification.reset();
     pendingControl.authoritative.profitability.reset();
-    pendingTreatment.authoritative.experimentStatus = "pending";
-    pendingTreatment.authoritative.experimentPhase = "pending";
-    pendingTreatment.authoritative.finalModelId.reset();
-    pendingTreatment.exactFinalInferenceResultId.reset();
-    pendingTreatment.authoritative.classification.reset();
-    pendingTreatment.authoritative.profitability.reset();
-    const auto pending = Feature::Compare(pendingControl, pendingTreatment);
+    pendingAblation.authoritative.experimentStatus = "pending";
+    pendingAblation.authoritative.experimentPhase = "pending";
+    pendingAblation.authoritative.finalModelId.reset();
+    pendingAblation.exactFinalInferenceResultId.reset();
+    pendingAblation.authoritative.classification.reset();
+    pendingAblation.authoritative.profitability.reset();
+    const auto pending = EvaluatePair(pendingControl, pendingAblation);
     assert(pending.disposition ==
            Feature::Disposition::ComparableIncomplete);
     assert(Feature::ExitCode(pending.disposition) == 4);
 
-    auto noProfitability = treatment;
+    auto noProfitability = ablation;
     noProfitability.authoritative.profitability.reset();
-    const auto unavailable = Feature::Compare(control, noProfitability);
+    const auto unavailable = EvaluatePair(control, noProfitability);
     assert(unavailable.disposition ==
            Feature::Disposition::ProfitabilityEvidenceUnavailable);
     assert(Has(unavailable.incompleteReasons,
-               "treatment_final_profitability_evidence_unavailable"));
+               "ablation_final_profitability_evidence_unavailable"));
+    assert(unavailable.inferenceAccuracy.controlMinusAblation.has_value());
 
-    auto noInference = treatment;
+    auto zeroActionable = ablation;
+    zeroActionable.authoritative.profitability->actionableCount = 0;
+    zeroActionable.authoritative.profitability
+        ->aggregateTerminalHorizonLogReturnSum = 0.0;
+    zeroActionable.authoritative.profitability
+        ->averageTerminalHorizonLogReturnPerActionablePrediction.reset();
+    const auto zeroActionableResult = EvaluatePair(control, zeroActionable);
+    assert(zeroActionableResult.disposition ==
+           Feature::Disposition::ComparableComplete);
+    assert(zeroActionableResult.averageProfitability.ablation == std::nullopt);
+    assert(zeroActionableResult.averageProfitability.controlMinusAblation ==
+           std::nullopt);
+
+    auto noInference = ablation;
     noInference.authoritative.classification.reset();
     noInference.authoritative.profitability.reset();
     noInference.exactFinalInferenceResultId.reset();
-    assert(Feature::Compare(control, noInference).disposition ==
+    assert(EvaluatePair(control, noInference).disposition ==
            Feature::Disposition::MissingFinalInference);
+
+    auto checkpointOnly = ablation;
+    checkpointOnly.authoritative.classification->inferenceScope = "checkpoint";
+    checkpointOnly.authoritative.classification->checkpointEvalId = 77;
+    assert(Has(EvaluatePair(control, checkpointOnly).invalidReasons,
+               "ablation_classification_not_exact_final_scope"));
+
+    // Exact current first-release surprise profile: generic identity remains
+    // width/layout agnostic while requiring the arms to match at 77/6.
+    auto surpriseControl = control;
+    auto surpriseAblation = ablation;
+    surpriseControl.authoritative.configuration.experimentId = 619;
+    surpriseAblation.authoritative.configuration.experimentId = 620;
+    surpriseControl.authoritative.configuration.symbol = "eurusdrmp";
+    surpriseAblation.authoritative.configuration.symbol = "eurusdrmp";
+    surpriseControl.authoritative.configuration.featureAblationMask.clear();
+    surpriseAblation.authoritative.configuration.featureAblationMask =
+        std::string(EA::kCausalEconomicEventSurpriseAblationMaskText);
+    for (auto* arm : {&surpriseControl, &surpriseAblation})
+    {
+        arm->extended.configuredModelInputWidth = 77;
+        arm->extended.configuredModelInputLayoutVersion = 6;
+        arm->authoritative.configuration.inputWidth = 77;
+        arm->authoritative.configuration.modelInputLayoutVersion = 6;
+        arm->authoritative.classification->symbol = "eurusdrmp";
+        arm->authoritative.classification->analysisExperimentId =
+            arm->authoritative.configuration.experimentId;
+        arm->authoritative.profitability->experimentId =
+            arm->authoritative.configuration.experimentId;
+    }
+    const auto surprise = EvaluatePair(
+        surpriseControl, surpriseAblation,
+        "causal_first_release_surprise,"
+        "causal_first_release_surprise_available,"
+        "causal_first_release_surprise");
+    assert(surprise.disposition == Feature::Disposition::ComparableComplete);
+    assert(surprise.canonicalAblatedFeatureSet ==
+           EA::kCausalEconomicEventSurpriseAblationMaskText);
+
+    auto noncanonicalSurpriseAblation = surpriseAblation;
+    noncanonicalSurpriseAblation.authoritative.configuration
+        .featureAblationMask =
+            " causal_first_release_surprise,"
+            "causal_first_release_surprise_available,"
+            "causal_first_release_surprise ";
+    const auto canonicalizedPersistedMask = EvaluatePair(
+        surpriseControl, noncanonicalSurpriseAblation,
+        EA::kCausalEconomicEventSurpriseAblationMaskText);
+    assert(canonicalizedPersistedMask.disposition ==
+           Feature::Disposition::ComparableComplete);
+    assert(canonicalizedPersistedMask.canonicalAblatedFeatureSet ==
+           EA::kCausalEconomicEventSurpriseAblationMaskText);
+
+    auto oneChannel = surpriseAblation;
+    oneChannel.authoritative.configuration.featureAblationMask =
+        "causal_first_release_surprise";
+    assert(Has(EvaluatePair(surpriseControl, oneChannel,
+                       EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "ablation_mask_does_not_match_expected"));
+
+    auto extraChannel = surpriseAblation;
+    extraChannel.authoritative.configuration.featureAblationMask +=
+        ",relative_tick_volume";
+    assert(Has(EvaluatePair(surpriseControl, extraChannel,
+                       EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "ablation_mask_does_not_match_expected"));
+
+    auto widthMismatch = surpriseAblation;
+    widthMismatch.extended.configuredModelInputWidth = 75;
+    widthMismatch.authoritative.configuration.inputWidth = 75;
+    assert(Has(EvaluatePair(surpriseControl, widthMismatch,
+                       EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "configured_model_input_width_mismatch"));
+
+    auto layoutMismatch = surpriseAblation;
+    layoutMismatch.extended.configuredModelInputLayoutVersion = 5;
+    layoutMismatch.authoritative.configuration.modelInputLayoutVersion = 5;
+    assert(Has(EvaluatePair(surpriseControl, layoutMismatch,
+                       EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "configured_model_input_layout_mismatch"));
+
+    auto configuredFinalWidthMismatch = surpriseAblation;
+    configuredFinalWidthMismatch.authoritative.configuration.inputWidth = 75;
+    assert(Has(EvaluatePair(
+                   surpriseControl, configuredFinalWidthMismatch,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "ablation_configured_final_model_input_width_mismatch"));
+
+    auto configuredFinalLayoutMismatch = surpriseAblation;
+    configuredFinalLayoutMismatch.authoritative.configuration
+        .modelInputLayoutVersion = 5;
+    assert(Has(EvaluatePair(
+                   surpriseControl, configuredFinalLayoutMismatch,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "ablation_configured_final_model_input_layout_mismatch"));
+
+    mismatch = ablation;
+    mismatch.authoritative.configuration.hiddenSize = 32;
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
+               "hidden_size_mismatch"));
+    mismatch = ablation;
+    mismatch.authoritative.configuration.experimentObjective.canonical +=
+        "changed=true;";
+    mismatch.authoritative.configuration.experimentObjective.hash =
+        Objective::DeterministicHash(
+            mismatch.authoritative.configuration.experimentObjective.canonical);
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
+               "training_objective_mismatch"));
+    mismatch = ablation;
+    mismatch.extended.freshInitializationSeed = 43U;
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
+               "fresh_initialization_seed_mismatch"));
+    mismatch = ablation;
+    mismatch.authoritative.configuration.resumeModelId = 42;
+    mismatch.extended.freshInitializationSeed.reset();
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
+               "resume_model_id_mismatch"));
+    mismatch = ablation;
+    mismatch.extended.continuationPolicyEnabled = true;
+    mismatch.extended.continuationPolicyScientificIdentity = "policy-a";
+    assert(Has(EvaluatePair(control, mismatch).invalidReasons,
+               "continuation_policy_enabled_mismatch"));
+
+    bool unknownRejected = false;
+    try
+    {
+        const auto unknown = EvaluatePair(control, ablation, "unknown_feature");
+        unknownRejected = unknown.disposition ==
+            Feature::Disposition::InvalidAblationPair &&
+            Has(unknown.invalidReasons, "feature_ablation_mask_invalid");
+    }
+    catch (...) {}
+    assert(unknownRejected);
+
+    const auto emptyExpectedMask = EvaluatePair(control, ablation, "");
+    assert(emptyExpectedMask.disposition ==
+           Feature::Disposition::InvalidAblationPair);
+    assert(Has(emptyExpectedMask.invalidReasons,
+               "expected_ablation_mask_empty"));
+
+    auto operationallyDifferent = ablation;
+    operationallyDifferent.operational.schedulerPriority = "high";
+    operationallyDifferent.operational.workerPid = 12345;
+    assert(EvaluatePair(control, operationallyDifferent).disposition ==
+           Feature::Disposition::ComparableComplete);
 
     assert(Feature::ParseExperimentIdPair("601:602") ==
            std::make_pair(601LL, 602LL));

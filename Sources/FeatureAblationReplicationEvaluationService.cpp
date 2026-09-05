@@ -119,7 +119,7 @@ MemberEvaluation LoadMember(
     {
         return MakeMemberEvaluation(
             ordinal, *control.arm, *treatment.arm,
-            Pair::Compare(*control.arm, *treatment.arm));
+            Pair::CompareLegacyConsensusPair(*control.arm, *treatment.arm));
     }
 
     MemberEvaluation member;

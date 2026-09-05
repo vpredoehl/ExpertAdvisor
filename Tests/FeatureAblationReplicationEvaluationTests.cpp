@@ -35,12 +35,12 @@ Replication::MemberEvaluation Complete(
     member.ablationIdentityHash = "fnv1a64:aaaaaaaaaaaaaaaa";
     member.scientificallyValidComplete = true;
     member.comparison.disposition = Pair::Disposition::ComparableComplete;
-    member.comparison.aggregateProfitability.treatmentMinusControl = aggregate;
-    member.comparison.averageProfitability.treatmentMinusControl = average;
-    member.comparison.inferenceAccuracy.treatmentMinusControl = inference;
-    member.comparison.leaderScore.treatmentMinusControl = leader;
-    member.comparison.neutralProportion.treatmentMinusControl = neutral;
-    member.comparison.actionableCount.treatmentMinusControl = actionable;
+    member.comparison.aggregateProfitability.controlMinusAblation = aggregate;
+    member.comparison.averageProfitability.controlMinusAblation = average;
+    member.comparison.inferenceAccuracy.controlMinusAblation = inference;
+    member.comparison.leaderScore.controlMinusAblation = leader;
+    member.comparison.neutralProportion.controlMinusAblation = neutral;
+    member.comparison.actionableCount.controlMinusAblation = actionable;
     return member;
 }
 
@@ -94,6 +94,9 @@ int main()
     assert(early.action == Action::AwaitReplication);
     assert(early.population.completeComparablePairCount == 1);
     assert(early.population.incompletePairCount == 3);
+    assert(early.evaluationIdentityCanonical.find(
+               "pair_evaluation_semantic_version=2;") !=
+           std::string::npos);
     assert(Replication::ExitCode(early) == 4);
 
     const auto promising = Replication::Evaluate({

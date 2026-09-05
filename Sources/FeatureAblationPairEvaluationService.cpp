@@ -1,6 +1,7 @@
 #include "FeatureAblationPairEvaluationService.hpp"
 
 #include "FeatureAblationPairEvaluationRepository.hpp"
+#include "FeatureAblation.hpp"
 #include "PairedTrainingObjectiveEvaluationRepository.hpp"
 #include "TrainingObjective.hpp"
 
@@ -70,9 +71,19 @@ void PrintMetric(std::ostringstream& output,
     output << "FEATURE_ABLATION_PAIR_DELTA"
            << ",metric=" << name
            << ",control=" << OptionalNumber(metric.control)
-           << ",treatment=" << OptionalNumber(metric.treatment)
-           << ",treatment_minus_control="
-           << OptionalNumber(metric.treatmentMinusControl) << '\n';
+           << ",ablation=" << OptionalNumber(metric.ablation)
+           << ",control_minus_ablation="
+           << OptionalNumber(metric.controlMinusAblation) << '\n';
+}
+
+std::optional<std::uint64_t> PredictionCount(
+    const SharedEvidence::ClassificationEvidence& value)
+{
+    if (!value.predictedDownCount || !value.predictedNeutralCount ||
+        !value.predictedUpCount)
+        return std::nullopt;
+    return *value.predictedDownCount + *value.predictedNeutralCount +
+        *value.predictedUpCount;
 }
 
 void PrintArm(std::ostringstream& output,
@@ -81,6 +92,18 @@ void PrintArm(std::ostringstream& output,
 {
     const auto& shared = arm.authoritative;
     const auto& configuration = shared.configuration;
+    const std::optional<int> reportedWidth =
+        arm.extended.configuredModelInputWidth
+            ? arm.extended.configuredModelInputWidth
+            : (shared.finalModelId
+                   ? std::optional<int>{configuration.inputWidth}
+                   : std::nullopt);
+    const std::optional<int> reportedLayout =
+        arm.extended.configuredModelInputLayoutVersion
+            ? arm.extended.configuredModelInputLayoutVersion
+            : (shared.finalModelId
+                   ? std::optional<int>{configuration.modelInputLayoutVersion}
+                   : std::nullopt);
     output << "FEATURE_ABLATION_PAIR_ARM"
            << ",role=" << role
            << ",experiment_id=" << configuration.experimentId
@@ -99,12 +122,16 @@ void PrintArm(std::ostringstream& output,
                          *arm.resumeCheckpointProvenance->checkpointEpoch)
                    : "NULL")
            << ",model_input_width="
-           << (shared.finalModelId ? std::to_string(configuration.inputWidth)
-                                   : "NULL")
-           << ",semantic_layout_version="
-           << (shared.finalModelId
-                   ? std::to_string(configuration.modelInputLayoutVersion)
-                   : "NULL") << '\n';
+           << (reportedWidth ? std::to_string(*reportedWidth) : "NULL")
+           << ",model_input_semantic_layout_version="
+           << (reportedLayout ? std::to_string(*reportedLayout) : "NULL")
+           << ",scheduler_priority="
+           << (arm.operational.schedulerPriority.empty()
+                   ? "NULL" : MachineText(arm.operational.schedulerPriority))
+           << ",worker_pid="
+           << (arm.operational.workerPid
+                   ? std::to_string(*arm.operational.workerPid) : "NULL")
+           << ",operational_metadata_in_scientific_identity=false\n";
 
     output << "FEATURE_ABLATION_PAIR_INFERENCE"
            << ",role=" << role
@@ -114,6 +141,16 @@ void PrintArm(std::ostringstream& output,
            << (shared.classification
                    ? std::to_string(shared.classification->analysisId)
                    : "NULL")
+           << ",final_epoch="
+           << (shared.finalModelId
+                   ? std::to_string(configuration.targetEpochs)
+                   : "NULL")
+           << ",inference_start="
+           << (shared.classification
+                   ? shared.classification->inferenceStart : "NULL")
+           << ",inference_end="
+           << (shared.classification
+                   ? shared.classification->inferenceEnd : "NULL")
            << ",scope="
            << (shared.classification
                    ? shared.classification->inferenceScope : "NULL")
@@ -121,8 +158,31 @@ void PrintArm(std::ostringstream& output,
            << (shared.classification
                    ? shared.classification->status : "NULL")
            << ",prediction_count="
-           << (shared.profitability
-                   ? std::to_string(shared.profitability->predictionCount)
+           << (shared.classification &&
+                       PredictionCount(*shared.classification)
+                   ? std::to_string(
+                         *PredictionCount(*shared.classification))
+                   : "NULL")
+           << ",predicted_down_count="
+           << (shared.classification &&
+                       shared.classification->predictedDownCount
+                   ? std::to_string(
+                         *shared.classification->predictedDownCount) : "NULL")
+           << ",predicted_neutral_count="
+           << (shared.classification &&
+                       shared.classification->predictedNeutralCount
+                   ? std::to_string(
+                         *shared.classification->predictedNeutralCount) : "NULL")
+           << ",predicted_up_count="
+           << (shared.classification &&
+                       shared.classification->predictedUpCount
+                   ? std::to_string(
+                         *shared.classification->predictedUpCount) : "NULL")
+           << ",accepted_prediction_count="
+           << (shared.classification &&
+                       shared.classification->acceptedPredictionCount
+                   ? std::to_string(
+                         *shared.classification->acceptedPredictionCount)
                    : "NULL")
            << ",inference_accuracy="
            << (shared.classification
@@ -141,6 +201,16 @@ void PrintArm(std::ostringstream& output,
                    ? OptionalNumber(
                          shared.classification->predictedNeutralProportion)
                    : "NULL")
+           << ",down_proportion="
+           << (shared.classification
+                   ? OptionalNumber(
+                         shared.classification->predictedDownProportion)
+                   : "NULL")
+           << ",up_proportion="
+           << (shared.classification
+                   ? OptionalNumber(
+                         shared.classification->predictedUpProportion)
+                   : "NULL")
            << ",leader_score="
            << (shared.classification
                    ? OptionalNumber(shared.classification->leaderScore)
@@ -148,9 +218,25 @@ void PrintArm(std::ostringstream& output,
 
     output << "FEATURE_ABLATION_PAIR_PROFITABILITY"
            << ",role=" << role
+           << ",evidence_available="
+           << (shared.profitability ? "true" : "false")
            << ",observation_id="
            << (shared.profitability
                    ? std::to_string(shared.profitability->observationId)
+                   : "NULL")
+           << ",model_id="
+           << (shared.profitability
+                   ? std::to_string(shared.profitability->modelId)
+                   : "NULL")
+           << ",inference_result_id="
+           << (shared.profitability
+                   ? std::to_string(shared.profitability->inferenceResultId)
+                   : "NULL")
+           << ",checkpoint_eval_id="
+           << (shared.profitability &&
+                       shared.profitability->checkpointEvalId
+                   ? std::to_string(
+                         *shared.profitability->checkpointEvalId)
                    : "NULL")
            << ",scope="
            << (shared.profitability
@@ -174,27 +260,32 @@ void PrintArm(std::ostringstream& output,
 } // namespace
 
 std::string RenderComparisonOutput(const ArmEvidence& control,
-                                   const ArmEvidence& treatment,
+                                   const ArmEvidence& ablation,
                                    const ComparisonResult& result)
 {
     std::ostringstream output;
     output << "FEATURE_ABLATION_PAIR_COMPARISON"
-           << ",version=1"
+           << ",version=2"
            << ",control_experiment_id="
            << control.authoritative.configuration.experimentId
-           << ",treatment_experiment_id="
-           << treatment.authoritative.configuration.experimentId
+           << ",ablation_experiment_id="
+           << ablation.authoritative.configuration.experimentId
            << ",read_only=true\n";
     output << "FEATURE_ABLATION_PAIR_IDENTITY"
-           << ",ablated_features="
+           << ",expected_ablation_mask="
            << (result.canonicalAblatedFeatureSet.empty()
                    ? "NULL" : result.canonicalAblatedFeatureSet)
            << ",ablation_identity_hash="
            << (result.ablationIdentityHash.empty()
                    ? "NULL" : result.ablationIdentityHash) << '\n';
     PrintArm(output, "control", control);
-    PrintArm(output, "treatment", treatment);
+    PrintArm(output, "ablation", ablation);
     PrintMetric(output, "prediction_count", result.predictionCount);
+    PrintMetric(output, "predicted_down_count", result.predictedDownCount);
+    PrintMetric(output, "predicted_neutral_count", result.predictedNeutralCount);
+    PrintMetric(output, "predicted_up_count", result.predictedUpCount);
+    PrintMetric(output, "accepted_prediction_count",
+                result.acceptedPredictionCount);
     PrintMetric(output, "actionable_count", result.actionableCount);
     PrintMetric(output, "aggregate_terminal_horizon_log_return_sum",
                 result.aggregateProfitability);
@@ -204,14 +295,29 @@ std::string RenderComparisonOutput(const ArmEvidence& control,
     PrintMetric(output, "inference_accuracy", result.inferenceAccuracy);
     PrintMetric(output, "accept_accuracy", result.acceptAccuracy);
     PrintMetric(output, "accept_rate", result.acceptRate);
+    PrintMetric(output, "down_proportion", result.downProportion);
     PrintMetric(output, "neutral_proportion", result.neutralProportion);
+    PrintMetric(output, "up_proportion", result.upProportion);
     PrintMetric(output, "leader_score", result.leaderScore);
     output << "FEATURE_ABLATION_PAIR_RESULT"
            << ",disposition=" << DispositionText(result.disposition)
+           << ",pair_validity_state="
+           << (result.disposition == Disposition::IncompatibleConfiguration ||
+                       result.disposition == Disposition::AmbiguousFinalInference ||
+                       result.disposition == Disposition::InvalidAblationPair
+                   ? "invalid" : "valid")
+           << ",readiness_state="
+           << (result.disposition == Disposition::ComparableComplete
+                   ? "ready"
+                   : result.disposition ==
+                             Disposition::ProfitabilityEvidenceUnavailable
+                         ? "final_inference_ready_profitability_unavailable"
+                         : "not_ready")
+           << ",delta_sign_convention=control_minus_ablation"
            << ",invalid_reasons=" << Reasons(result.invalidReasons)
            << ",incomplete_reasons=" << Reasons(result.incompleteReasons)
            << ",evaluation_identity_hash="
-           << EvaluationIdentityHash(control, treatment, result)
+           << EvaluationIdentityHash(control, ablation, result)
            << ",exit_code=" << ExitCode(result.disposition)
            << ",software_success=true\n";
     return output.str();
@@ -222,17 +328,32 @@ int RunComparisonCommand(const std::string& connectionString,
                          std::ostream& output,
                          std::ostream& errors)
 {
+    const bool legacyCompatibility = !command.expectedAblationMask;
+    const long long controlExperimentId = legacyCompatibility
+        ? command.experimentIds.second : command.experimentIds.first;
+    const long long ablationExperimentId = legacyCompatibility
+        ? command.experimentIds.first : command.experimentIds.second;
     try
     {
+        const std::string expectedMask = FeatureAblationMask::Parse(
+            command.expectedAblationMask.value_or(
+                std::string{kEconomicEventConsensusAblationMaskText}))
+                .CanonicalText();
+        if (command.expectedAblationMask && expectedMask.empty())
+            throw std::invalid_argument(
+                "--expected-ablation-mask must not be empty");
         pqxx::connection connection{connectionString};
         pqxx::read_transaction transaction{connection};
         transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
-        const ArmEvidence control = LoadAuthoritativeArmEvidence(
+        const ArmEvidence first = LoadAuthoritativeArmEvidence(
             transaction, command.experimentIds.first);
-        const ArmEvidence treatment = LoadAuthoritativeArmEvidence(
+        const ArmEvidence second = LoadAuthoritativeArmEvidence(
             transaction, command.experimentIds.second);
-        const ComparisonResult result = Compare(control, treatment);
-        output << RenderComparisonOutput(control, treatment, result);
+        const ArmEvidence& control = legacyCompatibility ? second : first;
+        const ArmEvidence& ablation = legacyCompatibility ? first : second;
+        const ComparisonResult result = Compare(
+            control, ablation, expectedMask);
+        output << RenderComparisonOutput(control, ablation, result);
         return ExitCode(result.disposition);
     }
     catch (const PairedTrainingObjectiveEvaluation::EvidenceLoadError& error)
@@ -244,8 +365,8 @@ int RunComparisonCommand(const std::string& connectionString,
             ? Disposition::AmbiguousFinalInference
             : Disposition::IncompatibleConfiguration;
         errors << "FEATURE_ABLATION_PAIR_LOAD_FAILED"
-               << ",control_experiment_id=" << command.experimentIds.first
-               << ",treatment_experiment_id=" << command.experimentIds.second
+               << ",control_experiment_id=" << controlExperimentId
+               << ",ablation_experiment_id=" << ablationExperimentId
                << ",disposition=" << DispositionText(disposition)
                << ",reason=" << MachineText(error.reason())
                << ",exit_code=" << ExitCode(disposition)
@@ -255,8 +376,8 @@ int RunComparisonCommand(const std::string& connectionString,
     catch (const std::invalid_argument& error)
     {
         errors << "FEATURE_ABLATION_PAIR_LOAD_FAILED"
-               << ",control_experiment_id=" << command.experimentIds.first
-               << ",treatment_experiment_id=" << command.experimentIds.second
+               << ",control_experiment_id=" << controlExperimentId
+               << ",ablation_experiment_id=" << ablationExperimentId
                << ",disposition=incompatible_configuration"
                << ",reason=" << MachineText(error.what())
                << ",exit_code=3,read_only=true\n";
@@ -269,8 +390,8 @@ int RunComparisonCommand(const std::string& connectionString,
     catch (const std::runtime_error& error)
     {
         errors << "FEATURE_ABLATION_PAIR_LOAD_FAILED"
-               << ",control_experiment_id=" << command.experimentIds.first
-               << ",treatment_experiment_id=" << command.experimentIds.second
+               << ",control_experiment_id=" << controlExperimentId
+               << ",ablation_experiment_id=" << ablationExperimentId
                << ",disposition=incompatible_configuration"
                << ",reason=" << MachineText(error.what())
                << ",exit_code=3,read_only=true\n";

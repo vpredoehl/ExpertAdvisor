@@ -6,9 +6,10 @@ build_dir="${repo_root}/Build/inference_profitability_repository_tests"
 binary="${build_dir}/InferenceProfitabilityRepositoryTests"
 schema="inference_profitability_test_${$}"
 db_host="${LSTM_DB_HOST:-127.0.0.1}"
+db_port="${LSTM_DB_PORT:-5432}"
 db_name="${LSTM_DB_NAME:-LSTM}"
 db_admin_user="${LSTM_DB_ADMIN_USER:-${USER}}"
-psql_admin=(psql -X -v ON_ERROR_STOP=1 -q -h "${db_host}" -U "${db_admin_user}" -d "${db_name}")
+psql_admin=(psql -X -v ON_ERROR_STOP=1 -q -h "${db_host}" -p "${db_port}" -U "${db_admin_user}" -d "${db_name}")
 
 cleanup() {
     "${psql_admin[@]}" -c "DROP SCHEMA IF EXISTS \"${schema}\" CASCADE;" >/dev/null
@@ -91,6 +92,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
     "${pqxx_libs[@]}" -o "${binary}"
 
 LSTM_DB_HOST="${db_host}" \
+LSTM_DB_PORT="${db_port}" \
 LSTM_DB_USER="${LSTM_DB_USER:-pqxx}" \
 LSTM_DB_NAME="${db_name}" \
 LSTM_PROFITABILITY_TEST_SCHEMA="${schema}" \

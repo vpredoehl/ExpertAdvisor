@@ -123,7 +123,31 @@ ArmEvidence LoadAuthoritativeArmEvidence(
         "checkpoint_policy_min_infer_accuracy,checkpoint_policy_top_n,"
         "checkpoint_policy_scope,checkpoint_policy_stop_mode,"
         "checkpoint_policy_grace_evals,checkpoint_policy_revision,"
-        "checkpoint_policy_hash FROM experiment WHERE experiment_id=$1;",
+        "checkpoint_policy_hash,model_input_width,"
+        "model_input_semantic_layout_version,scheduler_priority,worker_pid,"
+        "continuation_policy_enabled,"
+        "CASE WHEN continuation_policy_enabled THEN ROW("
+        "continuation_policy_target_epochs,continuation_policy_min_evals,"
+        "continuation_policy_patience,continuation_policy_min_leader_score,"
+        "continuation_policy_min_infer_accuracy,"
+        "continuation_policy_min_profit_actionable_count,"
+        "continuation_policy_min_profit_aggregate_log_return_sum,"
+        "continuation_policy_min_profit_average_log_return,"
+        "continuation_policy_min_improvement,"
+        "continuation_policy_max_degradation,continuation_policy_top_n,"
+        "continuation_policy_scope,continuation_policy_trend_mode,"
+        "continuation_policy_source_mode,continuation_policy_include_excluded,"
+        "continuation_candidate_excluded,continuation_policy_inherit_to_child,"
+        "continuation_policy_progression_mode,"
+        "array_to_string(continuation_policy_target_sequence,':'),"
+        "continuation_policy_target_increment,"
+        "continuation_policy_max_target_epochs,continuation_policy_inherited,"
+        "continuation_policy_inherited_from_experiment_id,"
+        "continuation_policy_inherited_from_revision,"
+        "continuation_policy_inherited_from_hash,"
+        "continuation_policy_inheritance_status,continuation_policy_revision"
+        ")::text ELSE 'disabled' END AS continuation_policy_scientific_identity "
+        "FROM experiment WHERE experiment_id=$1;",
         pqxx::params{experimentId});
     if (rows.size() != 1)
         throw PairedTrainingObjectiveEvaluation::EvidenceLoadError(
@@ -133,6 +157,14 @@ ArmEvidence LoadAuthoritativeArmEvidence(
                 "_extended_configuration_missing");
     const pqxx::row row = rows.one_row();
     auto& extended = arm.extended;
+    extended.configuredModelInputWidth = OptionalValue<int>(
+        row, "model_input_width");
+    extended.configuredModelInputLayoutVersion = OptionalValue<int>(
+        row, "model_input_semantic_layout_version");
+    // Fresh initialization is deterministic in the current executable. A
+    // resumed arm is governed by its validated model ancestry instead.
+    if (arm.authoritative.configuration.resumeModelId)
+        extended.freshInitializationSeed.reset();
     extended.trainingObjectiveVersion =
         row["training_objective_version"].as<int>();
     extended.lossDefinitionVersion = row["loss_definition_version"].as<int>();
@@ -174,6 +206,13 @@ ArmEvidence LoadAuthoritativeArmEvidence(
         row["checkpoint_policy_revision"].as<long long>();
     extended.checkpointPolicyHash = OptionalValue<std::string>(
         row, "checkpoint_policy_hash");
+    extended.continuationPolicyEnabled =
+        row["continuation_policy_enabled"].as<bool>();
+    extended.continuationPolicyScientificIdentity =
+        row["continuation_policy_scientific_identity"].as<std::string>();
+    arm.operational.schedulerPriority =
+        row["scheduler_priority"].as<std::string>();
+    arm.operational.workerPid = OptionalValue<int>(row, "worker_pid");
 
     if (arm.authoritative.finalModelId)
     {

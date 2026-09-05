@@ -30,17 +30,36 @@ bool Finite(double value)
 }
 
 MetricDelta Delta(std::optional<double> control,
-                  std::optional<double> treatment)
+                  std::optional<double> ablation)
 {
-    MetricDelta result{control, treatment, std::nullopt};
-    if (control && treatment && Finite(*control) && Finite(*treatment))
-        result.treatmentMinusControl = *treatment - *control;
+    MetricDelta result{control, ablation, std::nullopt};
+    if (control && ablation && Finite(*control) && Finite(*ablation))
+        result.controlMinusAblation = *control - *ablation;
     return result;
 }
 
-MetricDelta CountDelta(std::uint64_t control, std::uint64_t treatment)
+MetricDelta CountDelta(std::uint64_t control, std::uint64_t ablation)
 {
-    return Delta(static_cast<double>(control), static_cast<double>(treatment));
+    return Delta(static_cast<double>(control), static_cast<double>(ablation));
+}
+
+MetricDelta CountDelta(const std::optional<std::uint64_t>& control,
+                       const std::optional<std::uint64_t>& ablation)
+{
+    return Delta(control ? std::optional<double>{static_cast<double>(*control)}
+                         : std::nullopt,
+                 ablation ? std::optional<double>{static_cast<double>(*ablation)}
+                          : std::nullopt);
+}
+
+std::optional<std::uint64_t> PredictionCount(
+    const SharedEvidence::ClassificationEvidence& value)
+{
+    if (!value.predictedDownCount || !value.predictedNeutralCount ||
+        !value.predictedUpCount)
+        return std::nullopt;
+    return *value.predictedDownCount + *value.predictedNeutralCount +
+        *value.predictedUpCount;
 }
 
 bool TaggedHash(const std::string& value)
@@ -81,8 +100,18 @@ void ValidateExperimentConfiguration(
         (value.headLearningRateMultiplier &&
          !Finite(*value.headLearningRateMultiplier)) ||
         !Finite(extended.auxiliaryLossCoefficient) ||
+        !Finite(extended.baseLearningRate) ||
         (extended.robustLossDelta && !Finite(*extended.robustLossDelta)))
         Add(reasons, prefix + "nonfinite_configuration");
+    if (extended.batchSize <= 0)
+        Add(reasons, prefix + "batch_size_invalid");
+    if ((extended.configuredModelInputWidth.has_value() !=
+         extended.configuredModelInputLayoutVersion.has_value()) ||
+        (extended.configuredModelInputWidth &&
+         *extended.configuredModelInputWidth <= 0) ||
+        (extended.configuredModelInputLayoutVersion &&
+         *extended.configuredModelInputLayoutVersion <= 0))
+        Add(reasons, prefix + "configured_model_input_identity_invalid");
     RequireText(value.symbol, prefix + "symbol", reasons);
     RequireText(value.trainStart, prefix + "train_start", reasons);
     RequireText(value.trainEnd, prefix + "train_end", reasons);
@@ -110,6 +139,8 @@ void ValidateExperimentConfiguration(
                 prefix + "checkpoint_policy_scope", reasons);
     RequireText(extended.checkpointPolicyStopMode,
                 prefix + "checkpoint_policy_stop_mode", reasons);
+    RequireText(extended.continuationPolicyScientificIdentity,
+                prefix + "continuation_policy_scientific_identity", reasons);
     if (extended.checkpointPolicyGraceEvaluations <= 0 ||
         extended.checkpointPolicyRevision <= 0)
         Add(reasons, prefix + "checkpoint_policy_identity_invalid");
@@ -131,11 +162,11 @@ void ValidateExperimentConfiguration(
 #define EA_COMPARE_FIELD(field, name)                                        \
     do                                                                       \
     {                                                                        \
-        if (control.field != treatment.field) Add(reasons, name);            \
+        if (control.field != ablation.field) Add(reasons, name);            \
     } while (false)
 
 void ValidateExperimentPair(const ScientificConfiguration& control,
-                            const ScientificConfiguration& treatment,
+                            const ScientificConfiguration& ablation,
                             std::vector<std::string>& reasons)
 {
     EA_COMPARE_FIELD(symbol, "symbol_mismatch");
@@ -156,7 +187,7 @@ void ValidateExperimentPair(const ScientificConfiguration& control,
                      "resume_expand_input_width_mismatch");
     EA_COMPARE_FIELD(experimentObjective, "training_objective_mismatch");
     EA_COMPARE_FIELD(runProvenance, "run_provenance_mismatch");
-    if (control.experimentId == treatment.experimentId)
+    if (control.experimentId == ablation.experimentId)
         Add(reasons, "experiment_id_reused");
 }
 
@@ -176,20 +207,20 @@ bool ValidOwnCheckpointResume(
 
 void ValidateResumeCompatibility(
     const FeatureAblationPairEvaluation::ArmEvidence& control,
-    const FeatureAblationPairEvaluation::ArmEvidence& treatment,
+    const FeatureAblationPairEvaluation::ArmEvidence& ablation,
     std::vector<std::string>& reasons)
 {
     const auto& controlResume =
         control.authoritative.configuration.resumeModelId;
-    const auto& treatmentResume =
-        treatment.authoritative.configuration.resumeModelId;
+    const auto& ablationResume =
+        ablation.authoritative.configuration.resumeModelId;
 
     // Preserve the original behavior when the persisted initialization
     // identity is literally equal, including fresh/fresh.
-    if (controlResume == treatmentResume) return;
+    if (controlResume == ablationResume) return;
 
     // A fresh arm paired with a resumed arm is not scientifically equivalent.
-    if (!controlResume || !treatmentResume)
+    if (!controlResume || !ablationResume)
     {
         Add(reasons, "resume_model_id_mismatch");
         return;
@@ -199,19 +230,19 @@ void ValidateResumeCompatibility(
     // where each ID is the arm's own persisted checkpoint and both checkpoints
     // represent the same continuation epoch.
     if (!ValidOwnCheckpointResume(control) ||
-        !ValidOwnCheckpointResume(treatment))
+        !ValidOwnCheckpointResume(ablation))
     {
         Add(reasons, "resume_model_id_mismatch");
         return;
     }
 
     if (control.resumeCheckpointProvenance->checkpointEpoch !=
-        treatment.resumeCheckpointProvenance->checkpointEpoch)
+        ablation.resumeCheckpointProvenance->checkpointEpoch)
         Add(reasons, "resume_checkpoint_epoch_mismatch");
 }
 
 void ValidateFinalModelPair(const ScientificConfiguration& control,
-                            const ScientificConfiguration& treatment,
+                            const ScientificConfiguration& ablation,
                             std::vector<std::string>& reasons)
 {
     EA_COMPARE_FIELD(inputWidth, "input_width_mismatch");
@@ -261,18 +292,44 @@ void ValidateFinalModelPair(const ScientificConfiguration& control,
                      "input_width_expansion_mismatch");
 }
 
+void ValidateConfiguredAndFinalInputIdentity(
+    const FeatureAblationPairEvaluation::ArmEvidence& arm,
+    std::string_view role,
+    std::vector<std::string>& reasons)
+{
+    const auto& configured = arm.extended;
+    const auto& model = arm.authoritative.configuration;
+    if (configured.configuredModelInputWidth &&
+        *configured.configuredModelInputWidth != model.inputWidth)
+        Add(reasons, std::string(role) +
+            "_configured_final_model_input_width_mismatch");
+    if (configured.configuredModelInputLayoutVersion &&
+        *configured.configuredModelInputLayoutVersion !=
+            model.modelInputLayoutVersion)
+        Add(reasons, std::string(role) +
+            "_configured_final_model_input_layout_mismatch");
+}
+
 #undef EA_COMPARE_FIELD
 
 void ValidateExtendedPair(const ExtendedScientificConfiguration& control,
-                          const ExtendedScientificConfiguration& treatment,
+                          const ExtendedScientificConfiguration& ablation,
                           std::vector<std::string>& reasons)
 {
-    if (control == treatment) return;
+    if (control == ablation) return;
 #define EA_COMPARE_EXTENDED(field, name)                                     \
     do                                                                       \
     {                                                                        \
-        if (control.field != treatment.field) Add(reasons, name);            \
+        if (control.field != ablation.field) Add(reasons, name);            \
     } while (false)
+    EA_COMPARE_EXTENDED(configuredModelInputWidth,
+                        "configured_model_input_width_mismatch");
+    EA_COMPARE_EXTENDED(configuredModelInputLayoutVersion,
+                        "configured_model_input_layout_mismatch");
+    EA_COMPARE_EXTENDED(baseLearningRate, "base_learning_rate_mismatch");
+    EA_COMPARE_EXTENDED(batchSize, "batch_size_mismatch");
+    EA_COMPARE_EXTENDED(freshInitializationSeed,
+                        "fresh_initialization_seed_mismatch");
     EA_COMPARE_EXTENDED(trainingObjectiveVersion,
                         "training_objective_version_mismatch");
     EA_COMPARE_EXTENDED(lossDefinitionVersion,
@@ -315,11 +372,16 @@ void ValidateExtendedPair(const ExtendedScientificConfiguration& control,
                         "checkpoint_policy_revision_mismatch");
     EA_COMPARE_EXTENDED(checkpointPolicyHash,
                         "checkpoint_policy_hash_mismatch");
+    EA_COMPARE_EXTENDED(continuationPolicyEnabled,
+                        "continuation_policy_enabled_mismatch");
+    EA_COMPARE_EXTENDED(continuationPolicyScientificIdentity,
+                        "continuation_policy_scientific_identity_mismatch");
 #undef EA_COMPARE_EXTENDED
 }
 
 bool ValidateAblationIdentity(const ScientificConfiguration& control,
-                              const ScientificConfiguration& treatment,
+                              const ScientificConfiguration& ablation,
+                              std::string_view expectedAblationMask,
                               ComparisonResult& result)
 {
     const std::size_t invalidReasonCountBefore =
@@ -329,34 +391,29 @@ bool ValidateAblationIdentity(const ScientificConfiguration& control,
     {
         const FeatureAblationMask controlMask =
             FeatureAblationMask::Parse(control.featureAblationMask);
-        const FeatureAblationMask treatmentMask =
-            FeatureAblationMask::Parse(treatment.featureAblationMask);
+        const FeatureAblationMask ablationMask =
+            FeatureAblationMask::Parse(ablation.featureAblationMask);
         const FeatureAblationMask expected = FeatureAblationMask::Parse(
-            std::string(kEconomicEventConsensusAblationMaskText));
+            std::string(expectedAblationMask));
         const std::string controlCanonical = controlMask.CanonicalText();
-        const std::string treatmentCanonical = treatmentMask.CanonicalText();
+        const std::string ablationCanonical = ablationMask.CanonicalText();
         const std::string expectedCanonical = expected.CanonicalText();
         result.canonicalAblatedFeatureSet = expectedCanonical;
 
-        if (controlMask.empty() && treatmentCanonical == expectedCanonical)
-            Add(result.invalidReasons, "reversed_control_treatment_order");
-        else
-        {
-            if (controlCanonical != expectedCanonical)
-                Add(result.invalidReasons,
-                    "control_ablation_not_consensus_feature_family");
-            if (!treatmentMask.empty())
-                Add(result.invalidReasons,
-                    "treatment_contains_feature_ablations");
-        }
+        if (expected.empty())
+            Add(result.invalidReasons, "expected_ablation_mask_empty");
+        if (!controlMask.empty())
+            Add(result.invalidReasons, "control_feature_ablation_mask_not_empty");
+        if (ablationCanonical != expectedCanonical)
+            Add(result.invalidReasons, "ablation_mask_does_not_match_expected");
         if (result.invalidReasons.size() != invalidReasonCountBefore)
             return false;
 
         result.ablationIdentityCanonical =
-            "feature_ablation_pair_identity_v1;control_mask=" +
-            controlCanonical + ";treatment_mask=EMPTY;ablated_features=" +
+            "feature_ablation_pair_identity_v2;control_mask=EMPTY;ablation_mask=" +
+            ablationCanonical + ";expected_ablation_mask=" +
             expectedCanonical +
-            ";direction=control_ablated_treatment_enabled;";
+            ";direction=control_minus_ablation;";
         result.ablationIdentityHash = TrainingObjective::DeterministicHash(
             result.ablationIdentityCanonical);
         return true;
@@ -414,6 +471,20 @@ void ValidateClassification(const FeatureAblationPairEvaluation::ArmEvidence& ar
         else if (!Finite(*metric))
             Add(invalid, prefix + "classification_metric_nonfinite");
     }
+    const std::optional<double> optionalProportions[] = {
+        value.predictedDownProportion, value.predictedUpProportion};
+    for (const auto& proportion : optionalProportions)
+        if (proportion && (!Finite(*proportion) || *proportion < 0.0 ||
+                           *proportion > 1.0))
+            Add(invalid, prefix + "class_proportion_invalid");
+    if (value.predictedNeutralProportion &&
+        (*value.predictedNeutralProportion < 0.0 ||
+         *value.predictedNeutralProportion > 1.0))
+        Add(invalid, prefix + "class_proportion_invalid");
+    const auto predictionCount = PredictionCount(value);
+    if (value.acceptedPredictionCount && predictionCount &&
+        *value.acceptedPredictionCount > *predictionCount)
+        Add(invalid, prefix + "accepted_prediction_count_invalid");
     // experiment_analysis_result.infer_accuracy is persisted at six
     // decimal places, while inference_eval_result.accuracy retains the
     // underlying full-precision ratio. Values representing the same result
@@ -469,20 +540,22 @@ void ValidateProfitability(const FeatureAblationPairEvaluation::ArmEvidence& arm
 } // namespace
 
 ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& control,
-                         const FeatureAblationPairEvaluation::ArmEvidence& treatment)
+                         const FeatureAblationPairEvaluation::ArmEvidence& ablation,
+                         std::string_view expectedAblationMask)
 {
     ComparisonResult result;
     ValidateExperimentConfiguration(control, "control", result.invalidReasons);
-    ValidateExperimentConfiguration(treatment, "treatment", result.invalidReasons);
+    ValidateExperimentConfiguration(ablation, "ablation", result.invalidReasons);
     const auto& controlConfiguration = control.authoritative.configuration;
-    const auto& treatmentConfiguration = treatment.authoritative.configuration;
-    ValidateExperimentPair(controlConfiguration, treatmentConfiguration,
+    const auto& ablationConfiguration = ablation.authoritative.configuration;
+    ValidateExperimentPair(controlConfiguration, ablationConfiguration,
                            result.invalidReasons);
-    ValidateResumeCompatibility(control, treatment, result.invalidReasons);
-    ValidateExtendedPair(control.extended, treatment.extended,
+    ValidateResumeCompatibility(control, ablation, result.invalidReasons);
+    ValidateExtendedPair(control.extended, ablation.extended,
                          result.invalidReasons);
     const bool validAblation = ValidateAblationIdentity(
-        controlConfiguration, treatmentConfiguration, result);
+        controlConfiguration, ablationConfiguration, expectedAblationMask,
+        result);
     if (!validAblation)
     {
         result.disposition = Disposition::InvalidAblationPair;
@@ -497,14 +570,14 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
     const bool controlComplete =
         control.authoritative.experimentStatus == "completed" &&
         control.authoritative.experimentPhase == "done";
-    const bool treatmentComplete =
-        treatment.authoritative.experimentStatus == "completed" &&
-        treatment.authoritative.experimentPhase == "done";
+    const bool ablationComplete =
+        ablation.authoritative.experimentStatus == "completed" &&
+        ablation.authoritative.experimentPhase == "done";
     if (!controlComplete)
         Add(result.incompleteReasons, "control_experiment_not_complete");
-    if (!treatmentComplete)
-        Add(result.incompleteReasons, "treatment_experiment_not_complete");
-    if (!controlComplete || !treatmentComplete)
+    if (!ablationComplete)
+        Add(result.incompleteReasons, "ablation_experiment_not_complete");
+    if (!controlComplete || !ablationComplete)
     {
         Add(result.incompleteReasons,
             "final_model_input_contract_provenance_unavailable");
@@ -514,16 +587,20 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
 
     if (!control.authoritative.finalModelId)
         Add(result.incompleteReasons, "control_final_model_missing");
-    if (!treatment.authoritative.finalModelId)
-        Add(result.incompleteReasons, "treatment_final_model_missing");
+    if (!ablation.authoritative.finalModelId)
+        Add(result.incompleteReasons, "ablation_final_model_missing");
     if (!result.incompleteReasons.empty())
     {
         result.disposition = Disposition::MissingFinalInference;
         return result;
     }
 
-    ValidateFinalModelPair(controlConfiguration, treatmentConfiguration,
+    ValidateFinalModelPair(controlConfiguration, ablationConfiguration,
                            result.invalidReasons);
+    ValidateConfiguredAndFinalInputIdentity(
+        control, "control", result.invalidReasons);
+    ValidateConfiguredAndFinalInputIdentity(
+        ablation, "ablation", result.invalidReasons);
     if (!result.invalidReasons.empty())
     {
         result.disposition = Disposition::IncompatibleConfiguration;
@@ -532,7 +609,7 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
 
     ValidateClassification(control, "control", result.invalidReasons,
                            result.incompleteReasons);
-    ValidateClassification(treatment, "treatment", result.invalidReasons,
+    ValidateClassification(ablation, "ablation", result.invalidReasons,
                            result.incompleteReasons);
     if (!result.invalidReasons.empty())
     {
@@ -545,9 +622,32 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
         return result;
     }
 
+    const auto& cc = *control.authoritative.classification;
+    const auto& ac = *ablation.authoritative.classification;
+    result.predictionCount = CountDelta(PredictionCount(cc),
+                                        PredictionCount(ac));
+    result.predictedDownCount = CountDelta(
+        cc.predictedDownCount, ac.predictedDownCount);
+    result.predictedNeutralCount = CountDelta(
+        cc.predictedNeutralCount, ac.predictedNeutralCount);
+    result.predictedUpCount = CountDelta(
+        cc.predictedUpCount, ac.predictedUpCount);
+    result.acceptedPredictionCount = CountDelta(
+        cc.acceptedPredictionCount, ac.acceptedPredictionCount);
+    result.inferenceAccuracy = Delta(cc.inferenceAccuracy, ac.inferenceAccuracy);
+    result.acceptAccuracy = Delta(cc.acceptAccuracy, ac.acceptAccuracy);
+    result.acceptRate = Delta(cc.acceptRate, ac.acceptRate);
+    result.downProportion = Delta(
+        cc.predictedDownProportion, ac.predictedDownProportion);
+    result.neutralProportion = Delta(
+        cc.predictedNeutralProportion, ac.predictedNeutralProportion);
+    result.upProportion = Delta(
+        cc.predictedUpProportion, ac.predictedUpProportion);
+    result.leaderScore = Delta(cc.leaderScore, ac.leaderScore);
+
     ValidateProfitability(control, "control", result.invalidReasons,
                           result.incompleteReasons);
-    ValidateProfitability(treatment, "treatment", result.invalidReasons,
+    ValidateProfitability(ablation, "ablation", result.invalidReasons,
                           result.incompleteReasons);
     if (!result.invalidReasons.empty())
     {
@@ -560,31 +660,30 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
         return result;
     }
 
-    const auto& cc = *control.authoritative.classification;
-    const auto& tc = *treatment.authoritative.classification;
     const auto& cp = *control.authoritative.profitability;
-    const auto& tp = *treatment.authoritative.profitability;
-    result.predictionCount = CountDelta(cp.predictionCount, tp.predictionCount);
-    result.actionableCount = CountDelta(cp.actionableCount, tp.actionableCount);
+    const auto& ap = *ablation.authoritative.profitability;
+    result.actionableCount = CountDelta(cp.actionableCount, ap.actionableCount);
     result.aggregateProfitability = Delta(
         cp.aggregateTerminalHorizonLogReturnSum,
-        tp.aggregateTerminalHorizonLogReturnSum);
+        ap.aggregateTerminalHorizonLogReturnSum);
     result.averageProfitability = Delta(
         cp.averageTerminalHorizonLogReturnPerActionablePrediction,
-        tp.averageTerminalHorizonLogReturnPerActionablePrediction);
-    result.inferenceAccuracy = Delta(cc.inferenceAccuracy, tc.inferenceAccuracy);
-    result.acceptAccuracy = Delta(cc.acceptAccuracy, tc.acceptAccuracy);
-    result.acceptRate = Delta(cc.acceptRate, tc.acceptRate);
-    result.neutralProportion = Delta(
-        cc.predictedNeutralProportion, tc.predictedNeutralProportion);
-    result.leaderScore = Delta(cc.leaderScore, tc.leaderScore);
+        ap.averageTerminalHorizonLogReturnPerActionablePrediction);
     result.disposition = Disposition::ComparableComplete;
     return result;
 }
 
+ComparisonResult CompareLegacyConsensusPair(
+    const FeatureAblationPairEvaluation::ArmEvidence& legacyAblatedControl,
+    const FeatureAblationPairEvaluation::ArmEvidence& legacyEnabledTreatment)
+{
+    return Compare(legacyEnabledTreatment, legacyAblatedControl,
+                   kEconomicEventConsensusAblationMaskText);
+}
+
 std::string EvaluationIdentityCanonical(
     const FeatureAblationPairEvaluation::ArmEvidence& control,
-    const FeatureAblationPairEvaluation::ArmEvidence& treatment,
+    const FeatureAblationPairEvaluation::ArmEvidence& ablation,
     const ComparisonResult& result)
 {
     const auto optionalId = [](const std::optional<long long>& value)
@@ -598,27 +697,27 @@ std::string EvaluationIdentityCanonical(
             ? std::to_string(arm.authoritative.profitability->observationId)
             : std::string("NULL");
     };
-    return "feature_ablation_pair_evaluation_v1;control_experiment_id=" +
+    return "feature_ablation_pair_evaluation_v2;control_experiment_id=" +
         std::to_string(control.authoritative.configuration.experimentId) +
-        ";treatment_experiment_id=" +
-        std::to_string(treatment.authoritative.configuration.experimentId) +
+        ";ablation_experiment_id=" +
+        std::to_string(ablation.authoritative.configuration.experimentId) +
         ";ablation_identity_hash=" + result.ablationIdentityHash +
         ";control_final_inference_result_id=" +
         optionalId(control.exactFinalInferenceResultId) +
-        ";treatment_final_inference_result_id=" +
-        optionalId(treatment.exactFinalInferenceResultId) +
+        ";ablation_final_inference_result_id=" +
+        optionalId(ablation.exactFinalInferenceResultId) +
         ";control_profitability_observation_id=" + observationId(control) +
-        ";treatment_profitability_observation_id=" + observationId(treatment) +
+        ";ablation_profitability_observation_id=" + observationId(ablation) +
         ";disposition=" + DispositionText(result.disposition) + ";";
 }
 
 std::string EvaluationIdentityHash(
     const FeatureAblationPairEvaluation::ArmEvidence& control,
-    const FeatureAblationPairEvaluation::ArmEvidence& treatment,
+    const FeatureAblationPairEvaluation::ArmEvidence& ablation,
     const ComparisonResult& result)
 {
     return TrainingObjective::DeterministicHash(
-        EvaluationIdentityCanonical(control, treatment, result));
+        EvaluationIdentityCanonical(control, ablation, result));
 }
 
 std::pair<long long, long long> ParseExperimentIdPair(std::string_view text)
@@ -628,7 +727,7 @@ std::pair<long long, long long> ParseExperimentIdPair(std::string_view text)
         separator + 1 >= text.size() ||
         text.find(':', separator + 1) != std::string_view::npos)
         throw std::invalid_argument(
-            "--compare-feature-ablation-pair requires CONTROL_ID:TREATMENT_ID");
+            "--compare-feature-ablation-pair requires CONTROL_ID:ABLATION_ID");
     const auto parse = [](std::string_view value) -> long long
     {
         long long parsed = 0;

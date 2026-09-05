@@ -362,7 +362,8 @@ void LoadFinalClassificationAndProfitability(
     const pqxx::result analysisRows = transaction.exec(
         "SELECT analysis_id,experiment_id,model_id,analysis_scope,"
         "checkpoint_eval_id,parent_experiment_id,analysis_status,"
-        "infer_accuracy,accept_accuracy,accept_rate,leader_score "
+        "infer_accuracy,accept_accuracy,accept_rate,leader_score,"
+        "pred_down_count,pred_neutral_count,pred_up_count,accept_count "
         "FROM experiment_analysis_result WHERE experiment_id=$1 "
         "AND model_id=$2 AND analysis_scope='final' ORDER BY analysis_id;",
         pqxx::params{experimentId, modelId});
@@ -421,6 +422,14 @@ void LoadFinalClassificationAndProfitability(
     classification.acceptRate = OptionalValue<double>(analysis, "accept_rate");
     classification.leaderScore =
         OptionalValue<double>(analysis, "leader_score");
+    classification.predictedDownCount = OptionalValue<std::uint64_t>(
+        analysis, "pred_down_count");
+    classification.predictedNeutralCount = OptionalValue<std::uint64_t>(
+        analysis, "pred_neutral_count");
+    classification.predictedUpCount = OptionalValue<std::uint64_t>(
+        analysis, "pred_up_count");
+    classification.acceptedPredictionCount = OptionalValue<std::uint64_t>(
+        analysis, "accept_count");
     arm.classification = classification;
 
     Profitability::AuthoritativeObservationSelector selector;

@@ -75,14 +75,17 @@ void InsertAscii(pqxx::transaction_base& transaction,
 void InsertExperiment(pqxx::transaction_base& transaction,
                       const Ids& ids,
                       bool control,
-                      bool complete = true)
+                      bool complete = true,
+                      std::optional<std::string> maskOverride = std::nullopt,
+                      int modelInputWidth = 71,
+                      int modelInputLayoutVersion = 4)
 {
     const auto objective = Objective::Legacy();
     const std::string canonical = Objective::CanonicalText(objective);
     const std::string hash = Objective::DeterministicHash(canonical);
-    const std::string mask = control
-        ? std::string(EA::kEconomicEventConsensusAblationMaskText)
-        : "";
+    const std::string mask = maskOverride.value_or(
+        control ? std::string(EA::kEconomicEventConsensusAblationMaskText)
+                : "");
     transaction.exec(
         "INSERT INTO experiment("
         "experiment_id,symbol,prediction_horizon,c_next_threshold,"
@@ -95,20 +98,23 @@ void InsertExperiment(pqxx::transaction_base& transaction,
         "training_objective_version,loss_definition_version,"
         "training_objective_canonical,training_objective_hash,"
         "auxiliary_loss_mode,auxiliary_loss_coefficient,"
-        "target_clipping_definition,objective_normalization_identity) VALUES("
+        "target_clipping_definition,objective_normalization_identity,"
+        "model_input_width,model_input_semantic_layout_version) VALUES("
         "$1,'audchfrmp',4,$2,119.75,25,80,20,"
         "'2010-01-01','2025-01-01','2025-01-01','2026-01-01',$3,$4,$5,"
         "NULL,$1,'enabled',20,'legacy_cold_boundary',$6,false,"
         "'b5b925234367ede13528f6bdbfa0ae328ecc5103','phase6',false,"
         "'Release','AppleClang-test','079','scheduler-test','LSTM_Release',"
         "$7,1,1,$8,$9,'disabled',0,'none',"
-        "'weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1');",
+        "'weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1',"
+        "$10,$11);",
         pqxx::params{ids.experiment, kExperimentThreshold,
                      complete ? "completed" : "running",
                      complete ? "done" : "train",
                      complete ? std::optional<long long>{ids.model}
                               : std::nullopt,
-                     mask, objective.objectiveIdentifier, canonical, hash});
+                     mask, objective.objectiveIdentifier, canonical, hash,
+                     modelInputWidth, modelInputLayoutVersion});
     if (!complete) return;
 
     transaction.exec(
@@ -119,9 +125,10 @@ void InsertExperiment(pqxx::transaction_base& transaction,
         1.0, 1.0, 80.0, 119.75, 25.0, 25.0});
     InsertMatrixRow(transaction, ids.model, "target_meta",
                     {0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
-    InsertMatrixRow(transaction, ids.model, "model_meta", {1.0, 71.0, 64.0});
+    InsertMatrixRow(transaction, ids.model, "model_meta",
+                    {1.0, static_cast<double>(modelInputWidth), 64.0});
     InsertMatrixRow(transaction, ids.model, "model_input_semantics_meta",
-                    {1.0, 4.0});
+                    {1.0, static_cast<double>(modelInputLayoutVersion)});
     InsertMatrixRow(transaction, ids.model, "optimizer_meta",
                     {1.0, 1.0, 100.0, 0.0, 0.0});
     InsertAscii(transaction, ids.model, "train_symbol_meta", "audchfrmp");
@@ -129,8 +136,8 @@ void InsertExperiment(pqxx::transaction_base& transaction,
                 "2010-01-01|2025-01-01");
     transaction.exec(
         "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,n_rows,"
-        "n_cols,value) VALUES($1,'param',0,0,135,256,0);",
-        pqxx::params{ids.model});
+        "n_cols,value) VALUES($1,'param',0,0,$2,256,0);",
+        pqxx::params{ids.model, modelInputWidth + 64});
     InsertAscii(transaction, ids.model, "training_objective_canonical_meta",
                 canonical);
     InsertAscii(transaction, ids.model, "training_objective_hash_meta", hash);
@@ -153,8 +160,9 @@ void InsertFinalClassificationEvidence(
     transaction.exec(
         "INSERT INTO experiment_analysis_result("
         "analysis_id,experiment_id,model_id,analysis_scope,analysis_status,"
-        "infer_accuracy,accept_accuracy,accept_rate,leader_score) VALUES("
-        "$1,$2,$3,'final','completed',$4,$5,0.65,$6);",
+        "infer_accuracy,accept_accuracy,accept_rate,leader_score,"
+        "pred_down_count,pred_neutral_count,pred_up_count,accept_count) VALUES("
+        "$1,$2,$3,'final','completed',$4,$5,0.65,$6,25,35,40,65);",
         pqxx::params{ids.analysis, ids.experiment, ids.model,
                      persistedAnalysisAccuracy.value_or(accuracy),
                      accuracy + 0.05, accuracy * 0.9});
@@ -274,6 +282,8 @@ int main()
         const Ids incompatibleTreatment{990652, 1990652, 2990652, 3990652};
         const Ids accuracyMismatchControl{990661, 1990661, 2990661, 3990661};
         const Ids accuracyMismatchTreatment{990662, 1990662, 2990662, 3990662};
+        const Ids surpriseControl{990619, 1990619, 2990619, 3990619};
+        const Ids surpriseAblation{990620, 1990620, 2990620, 3990620};
 
         InsertExperiment(fixture, control, true);
         InsertExperiment(fixture, treatment, false);
@@ -317,6 +327,15 @@ int main()
         InsertFinalClassificationEvidence(
             fixture, accuracyMismatchTreatment, 0.6400004, 0.64);
         InsertProfitabilityEvidence(fixture, accuracyMismatchTreatment, 0.08);
+
+        InsertExperiment(fixture, surpriseControl, false, true,
+                         std::string{}, 77, 6);
+        InsertExperiment(
+            fixture, surpriseAblation, false, true,
+            std::string(EA::kCausalEconomicEventSurpriseAblationMaskText),
+            77, 6);
+        InsertFinalEvidence(fixture, surpriseControl, 0.64, 0.08);
+        InsertFinalEvidence(fixture, surpriseAblation, 0.61, 0.05);
         fixture.commit();
     }
 
@@ -329,9 +348,49 @@ int main()
     assert(errors.str().empty());
     assert(output.str().find("disposition=comparable_complete") !=
            std::string::npos);
-    assert(output.str().find("treatment_minus_control=") !=
+    assert(output.str().find("control_experiment_id=990602") !=
+           std::string::npos);
+    assert(output.str().find("ablation_experiment_id=990601") !=
+           std::string::npos);
+    assert(output.str().find(
+               "expected_ablation_mask=relevant_event_has_consensus,") !=
+           std::string::npos);
+    assert(output.str().find(
+               "metric=inference_accuracy,control=0.64000000000000001,") !=
+           std::string::npos);
+    assert(output.str().find(
+               "control_minus_ablation=0.030000000000000027") !=
+           std::string::npos);
+    assert(output.str().find("control_minus_ablation=") !=
            std::string::npos);
     assert(output.str().find("read_only=true") != std::string::npos);
+    assert(DatabaseDigest(connection) == before);
+
+    output.str("");
+    output.clear();
+    errors.str("");
+    errors.clear();
+    const int surpriseExit = Feature::RunComparisonCommand(
+        connectionString,
+        {{990619, 990620},
+         std::string(EA::kCausalEconomicEventSurpriseAblationMaskText)},
+        output, errors);
+    assert(surpriseExit == 0);
+    assert(errors.str().empty());
+    assert(output.str().find("control_experiment_id=990619") !=
+           std::string::npos);
+    assert(output.str().find("ablation_experiment_id=990620") !=
+           std::string::npos);
+    assert(output.str().find(
+               "expected_ablation_mask=causal_first_release_surprise_available,"
+               "causal_first_release_surprise") != std::string::npos);
+    assert(output.str().find("model_input_width=77") != std::string::npos);
+    assert(output.str().find(
+               "model_input_semantic_layout_version=6") !=
+           std::string::npos);
+    assert(output.str().find(
+               "delta_sign_convention=control_minus_ablation") !=
+           std::string::npos);
     assert(DatabaseDigest(connection) == before);
 
     // Different resume_model_id values are valid for feature-ablation pairs
@@ -353,14 +412,14 @@ int main()
                 9100602, 990602, true, 60};
 
         const auto matchedResume =
-            Feature::Compare(resumedControl, resumedTreatment);
+            Feature::CompareLegacyConsensusPair(resumedControl, resumedTreatment);
         assert(matchedResume.disposition ==
                Feature::Disposition::ComparableComplete);
         assert(matchedResume.invalidReasons.empty());
 
         resumedTreatment.resumeCheckpointProvenance->checkpointEpoch = 40;
         const auto mismatchedEpoch =
-            Feature::Compare(resumedControl, resumedTreatment);
+            Feature::CompareLegacyConsensusPair(resumedControl, resumedTreatment);
         assert(mismatchedEpoch.disposition ==
                Feature::Disposition::IncompatibleConfiguration);
         assert(std::find(
@@ -373,7 +432,7 @@ int main()
         resumedTreatment.resumeCheckpointProvenance->
             ownExperimentCheckpoint = false;
         const auto unverifiedResume =
-            Feature::Compare(resumedControl, resumedTreatment);
+            Feature::CompareLegacyConsensusPair(resumedControl, resumedTreatment);
         assert(unverifiedResume.disposition ==
                Feature::Disposition::IncompatibleConfiguration);
         assert(std::find(
@@ -386,7 +445,7 @@ int main()
             std::nullopt;
         resumedTreatment.resumeCheckpointProvenance = std::nullopt;
         const auto freshVsResumed =
-            Feature::Compare(resumedControl, resumedTreatment);
+            Feature::CompareLegacyConsensusPair(resumedControl, resumedTreatment);
         assert(freshVsResumed.disposition ==
                Feature::Disposition::IncompatibleConfiguration);
         assert(std::find(
@@ -406,7 +465,7 @@ int main()
     assert(accuracyMismatchExit == 3);
     assert(errors.str().empty());
     assert(output.str().find(
-               "control_inference_analysis_accuracy_mismatch") !=
+               "ablation_inference_analysis_accuracy_mismatch") !=
            std::string::npos);
     assert(DatabaseDigest(connection) == before);
 
@@ -475,7 +534,7 @@ int main()
     assert(errors.str().empty());
     assert(output.str().find("disposition=missing_final_inference") !=
            std::string::npos);
-    assert(output.str().find("role=control,inference_result_id=NULL") !=
+    assert(output.str().find("role=ablation,inference_result_id=NULL") !=
            std::string::npos);
     assert(DatabaseDigest(connection) == before);
 
@@ -491,7 +550,7 @@ int main()
                "disposition=profitability_evidence_unavailable") !=
            std::string::npos);
     assert(output.str().find(
-               "control_final_profitability_evidence_unavailable") !=
+               "ablation_final_profitability_evidence_unavailable") !=
            std::string::npos);
     assert(DatabaseDigest(connection) == before);
 

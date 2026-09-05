@@ -148,6 +148,10 @@ struct ClassificationEvidence
     std::optional<double> acceptAccuracy;
     std::optional<double> acceptRate;
     std::optional<double> leaderScore;
+    std::optional<std::uint64_t> predictedDownCount;
+    std::optional<std::uint64_t> predictedNeutralCount;
+    std::optional<std::uint64_t> predictedUpCount;
+    std::optional<std::uint64_t> acceptedPredictionCount;
 };
 
 struct ProfitabilityEvidence

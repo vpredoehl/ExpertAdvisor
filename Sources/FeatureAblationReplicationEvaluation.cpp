@@ -54,9 +54,9 @@ std::vector<double> Deltas(
     {
         if (!member.scientificallyValidComplete) continue;
         const auto& delta = member.comparison.*metric;
-        if (!delta.treatmentMinusControl)
+        if (!delta.controlMinusAblation)
             throw std::invalid_argument("complete_replication_metric_missing");
-        values.push_back(*delta.treatmentMinusControl);
+        values.push_back(*delta.controlMinusAblation);
     }
     return values;
 }
@@ -116,7 +116,7 @@ MemberEvaluation MakeMemberEvaluation(
         control.authoritative.configuration.predictionHorizon;
     member.pairDisposition = comparison.disposition;
     member.pairEvaluationIdentityHash =
-        Pair::EvaluationIdentityHash(control, treatment, comparison);
+        Pair::EvaluationIdentityHash(treatment, control, comparison);
     member.ablationIdentityHash = comparison.ablationIdentityHash;
     member.incompleteReasons = comparison.incompleteReasons;
     member.invalidReasons = comparison.invalidReasons;
@@ -363,7 +363,7 @@ ReplicationEvaluation Evaluate(
              << "ablation_identity_hash="
              << (expectedAblationIdentity.empty() ? "NULL" : expectedAblationIdentity)
              << ';'
-             << "pair_evaluation_semantic_version=1;"
+             << "pair_evaluation_semantic_version=2;"
              << "replication_evaluation_semantic_version="
              << kReplicationEvaluationVersion << ';'
              << "model_input_width="

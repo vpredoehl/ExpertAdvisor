@@ -163,7 +163,11 @@ CREATE TABLE experiment_analysis_result (
     infer_accuracy double precision,
     accept_accuracy double precision,
     accept_rate double precision,
-    leader_score double precision
+    leader_score double precision,
+    pred_down_count bigint,
+    pred_neutral_count bigint,
+    pred_up_count bigint,
+    accept_count bigint
 );
 
 \i '${repo_root}/Database/migrations/073_inference_profitability_observation.sql'

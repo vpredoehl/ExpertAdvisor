@@ -1,90 +1,111 @@
-# Consensus feature-ablation pair evaluation
+# Controlled feature-ablation pair evaluation
 
-The read-only command is:
+The generic read-only command is:
 
 ```text
---compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID
+--compare-feature-ablation-pair=CONTROL_ID:ABLATION_ID \
+--expected-ablation-mask=FEATURE[,FEATURE...]
 ```
 
-The argument order is authoritative. The control must have exactly the four
-active consensus channels ablated, and the treatment must have an empty
-feature-ablation mask. Reversed order is rejected rather than silently
-normalized.
+The argument roles are authoritative. The control must have an empty
+`feature_ablation_mask`; the ablation arm must have exactly the requested mask.
+The existing `FeatureAblationMask` parser is the sole canonicalization and
+feature-registry authority. It rejects unknown features and an explicitly empty
+expected mask. Ordering, whitespace, and duplicates follow that parser's normal
+canonicalization rules. Reversed roles are rejected rather than silently
+inverting the result.
+
+For compatibility, omitting `--expected-ablation-mask` retains the historic
+consensus-family command contract:
+
+```text
+--compare-feature-ablation-pair=LEGACY_ABLATED_ID:LEGACY_ENABLED_ID
+```
+
+That mode supplies the four-channel economic-consensus mask and adapts the old
+argument order to the generic evaluator. Its numeric interpretation is
+unchanged: enabled minus ablated. New feature families must use the explicit
+expected mask and `CONTROL_ID:ABLATION_ID` order.
 
 ## Scientific identity
 
-The only allowed difference is:
+The generic evaluator allows only the requested feature-ablation mask to differ.
+It compares the following experiment/configuration identity exactly:
+
+- symbol, prediction horizon, train and inference ranges, target epochs,
+  checkpoint interval, and threshold;
+- base learning rate, core learning-rate multiplier, and head learning-rate
+  multiplier;
+- configured model-input width and semantic-layout version;
+- objective canonical text/hash/version, loss-definition version, auxiliary
+  objective configuration, target clipping, and objective normalization;
+- feature warmup scope, Donchian mode/lookback, checkpoint-inference
+  configuration, checkpoint-policy configuration, and the enabled
+  continuation-policy scientific identity;
+- deterministic fresh-initialization seed, or compatible resume lineage and
+  checkpoint epoch;
+- source/build provenance used by the established paired-evidence contract.
+
+After both workflows complete, it also compares the final persisted model's:
+
+- input width, semantic layout, hidden size, layer count, and window size;
+- model, training-configuration, optimizer, and input-semantic metadata
+  versions;
+- class weights, label rule, target semantics/normalization, and training
+  symbol/range;
+- optimizer type/buffer shape and persisted core, head-weight, and head-bias
+  learning-rate multipliers;
+- input-width expansion provenance.
+
+Final `optimizerUpdateCount` is deliberately not a compatibility field because
+the ablation can change gradient finiteness and therefore successful update
+count. Scheduler priority, worker PID, scheduler ownership/fencing state, and
+queue/admission timestamps are operational metadata and are not scientific
+compatibility fields.
+
+Configured model-input width/layout are available before completion. When a
+final model exists, the evaluator cross-checks its persisted width/layout
+against the configured identity. Width and layout are not globally hard-coded:
+historical compatible identities remain valid, while mixed identities fail.
+
+The first-release surprise pair uses:
 
 ```text
-control feature_ablation_mask =
-  relevant_event_has_consensus,
-  relevant_event_consensus_low,
-  relevant_event_consensus_high,
-  relevant_event_consensus_is_range
-
-treatment feature_ablation_mask = empty
+control mask = empty
+ablation mask = causal_first_release_surprise_available,causal_first_release_surprise
+model_input_width = 77
+model_input_semantic_layout_version = 6
 ```
-
-The existing `FeatureAblationMask` parser and canonical registry order are the
-authority. No group alias or second persisted representation is introduced.
-The evaluator emits the canonical feature set and a tagged FNV-1a-64 identity
-hash.
-
-The following experiment-level fields must match exactly:
-
-- symbol, prediction horizon, threshold, core/head learning-rate multipliers;
-- target epochs, checkpoint interval, train and inference date ranges;
-- feature warmup scope, Donchian mode, and Donchian lookback;
-- resume model identity and input-width-expansion flag;
-- complete training-objective canonical/hash plus objective and loss versions;
-- auxiliary-loss mode/coefficient, regression target/normalization, robust-loss
-  definition/delta, target clipping, and objective normalization;
-- checkpoint inference enablement/minimum epoch/interval;
-- checkpoint policy enablement, thresholds, top-N, scope, stop mode, grace
-  evaluations, semantic revision, and policy hash;
-- git commit/branch/dirty state, build configuration, compiler, database schema,
-  scheduler, and binary provenance.
-
-After both workflows complete, these final-model fields must also match:
-
-- model input width, hidden size, layer count, window size;
-- model, train-configuration, optimizer, and input-semantic metadata versions;
-- semantic input layout version and input-width expansion provenance;
-- normalization, class weights, label rule, target metadata;
-- optimizer type/buffer shapes and persisted learning-rate multipliers.
-  Final `optimizerUpdateCount` is deliberately not a compatibility field:
-  successful finite-gradient update counts are treatment outcomes and may
-  differ after a feature intervention;
-- persisted training symbol and range.
-
-Pending/running pairs can therefore be proven comparable at the experiment
-level, but remain `comparable_incomplete` until immutable final-model input
-contract provenance exists.
 
 ## Evidence selection and output
 
-The evaluator reuses the existing paired-evidence repository only as shared
-infrastructure. It does not invoke the training-objective comparison policy.
-The exact FINAL inference resolver requires the final model, final scope, no
-checkpoint identity, no parent experiment, the persisted symbol/horizon/
-threshold/window/label/target/range, completed target epochs, and completed
-status. Ambiguous or context-mismatched evidence fails closed.
+The exact FINAL inference resolver is authoritative. It binds the completed
+final-scope inference row to the experiment's final model and persisted
+symbol/horizon/threshold/window/label/target/range/final-epoch context, with no
+checkpoint or parent identity. Missing evidence is not ready; ambiguous or
+context-mismatched evidence fails closed. No checkpoint, best/latest checkpoint,
+or checkpoint-policy selection can substitute for FINAL inference.
 
 The matching completed final analysis supplies inference accuracy, accept
-accuracy, accept rate, neutral prediction proportion, and leader score. The
-authoritative profitability selector is bound to that exact experiment, model,
-FINAL inference-result ID, final scope, inference range, and current metric
-definition. It never falls back to a checkpoint or a different inference row.
+accuracy/rate, leader score, prediction-class counts, accepted count, and class
+proportions. Profitability is selected only by exact experiment, final model,
+FINAL inference-result ID, final scope, inference range, and metric definition.
+It never falls back to a different model, inference row, scope, or metric.
+Missing profitability stays unavailable. For zero actionable predictions, an
+authoritative aggregate zero is retained while the per-actionable average stays
+`NULL`.
 
-Per arm, output includes the selected identities and:
+Output identifies each arm's experiment, final model, final epoch, exact final
+inference result, final analysis, width/layout, and canonical mask. It reports
+available classification and profitability metrics for each arm and uses this
+explicit sign convention for every delta:
 
-- inference accuracy, accept accuracy, accept rate, neutral proportion, leader
-  score, and prediction count;
-- profitability actionable count, aggregate terminal-horizon log-return sum,
-  and average terminal-horizon log return per actionable prediction.
+```text
+control_minus_ablation = control - ablation
+```
 
-For a complete pair, every numeric metric also has a treatment-minus-control
-delta. No single metric is interpreted as scientific success or failure.
+A positive delta means the metric was higher with the requested features
+present than with them removed.
 
 Dispositions and CLI exits are:
 
@@ -98,26 +119,3 @@ Dispositions and CLI exits are:
 
 The service uses one repeatable-read `pqxx::read_transaction` and exposes no
 write or persistence operation.
-
-## Event-conditioned efficacy follow-up
-
-Event-conditioned analysis is intentionally not implemented in this phase.
-Persisted `inference_eval_result` and `experiment_analysis_result` rows contain
-aggregate metrics, and `inference_profitability_observation` contains aggregate
-return statistics. They do not retain one row per inference prediction with
-its causal bar/release timestamp, predicted class/actionability, label/outcome,
-and economic-event consensus-availability state. Consequently, near/away and
-consensus-present/missing partitions cannot be reconstructed deterministically
-from authoritative persistence.
-
-The smallest follow-up is an immutable prediction-level FINAL inference
-evidence table (or content-addressed artifact) keyed by inference-result ID and
-ordered prediction timestamp, containing predicted class/actionability,
-authoritative label/terminal outcome, and the causal economic-event context
-actually available at that timestamp. A later read-only partitioner can join
-that evidence to authoritative release timestamps under an explicitly
-versioned window policy, deduplicate same-time events deterministically, and
-retain the existing `WEEKLY_CLAIMS` semantics.
-
-Reserved surprise columns 63-66 remain disabled and play no role in either the
-pair identity or the proposed follow-up.

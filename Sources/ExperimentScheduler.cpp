@@ -209,6 +209,7 @@ struct SchedulerOptions
     std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
     std::optional<std::pair<long long, long long>> compareTrainingObjectivePair;
     std::optional<std::pair<long long, long long>> compareFeatureAblationPair;
+    std::optional<std::string> expectedFeatureAblationMask;
     std::optional<std::vector<std::pair<long long, long long>>>
         compareFeatureAblationReplications;
     std::optional<std::vector<long long>> verifyProfitabilityExperimentIds;
@@ -1000,6 +1001,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             return true;
         if (arg == "--compare-feature-ablation-pair" ||
             arg.rfind("--compare-feature-ablation-pair=", 0) == 0 ||
+            arg == "--expected-ablation-mask" ||
+            arg.rfind("--expected-ablation-mask=", 0) == 0 ||
             arg == "--compare-feature-ablation-replications" ||
             arg.rfind("--compare-feature-ablation-replications=", 0) == 0)
             return true;
@@ -2108,6 +2111,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareFeatureAblationPair =
                 EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(
                     RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--expected-ablation-mask")
+            options.expectedFeatureAblationMask =
+                EA::FeatureAblationMask::Parse(
+                    RequireNextArg(argc, argv, i, arg)).CanonicalText();
         else if (arg == "--compare-feature-ablation-replications")
             options.compareFeatureAblationReplications =
                 EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
@@ -3834,6 +3841,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareFeatureAblationPair =
                 EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(value);
         else if (SplitOptionWithValue(
+                     arg, "--expected-ablation-mask", value))
+            options.expectedFeatureAblationMask =
+                EA::FeatureAblationMask::Parse(value).CanonicalText();
+        else if (SplitOptionWithValue(
                      arg, "--compare-feature-ablation-replications", value))
             options.compareFeatureAblationReplications =
                 EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
@@ -4247,6 +4258,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "pair materiality options require "
             "--compare-training-objective-pair");
+    if (options.expectedFeatureAblationMask &&
+        !options.compareFeatureAblationPair)
+        throw std::invalid_argument(
+            "--expected-ablation-mask requires "
+            "--compare-feature-ablation-pair");
+    if (options.expectedFeatureAblationMask &&
+        options.expectedFeatureAblationMask->empty())
+        throw std::invalid_argument(
+            "--expected-ablation-mask must not be empty");
     if (options.compareTrainingObjectivePair &&
         (!options.pairPrimaryProfitabilityMetric ||
          !options.pairMinimumProfitabilityImprovement ||
@@ -25502,10 +25522,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "coverage gaps and remains pending until the window is complete. "
         << "The command is repeatable-read and read-only.\n"
         << "Usage: " << exe
-        << " --compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID\n"
-        << "Feature-ablation pair comparison validates the persisted consensus "
-        << "feature-family ablation, resolves exact FINAL inference and "
-        << "profitability evidence, and performs no database writes. Exit codes: "
+        << " --compare-feature-ablation-pair=CONTROL_ID:ABLATION_ID "
+        << "--expected-ablation-mask=FEATURE[,FEATURE...]\n"
+        << "Feature-ablation pair comparison canonicalizes the requested mask, "
+        << "requires an empty-mask control and exact-mask ablation, resolves "
+        << "exact FINAL inference and "
+        << "profitability evidence, and performs no database writes. Omitting "
+        << "--expected-ablation-mask retains the legacy consensus-family "
+        << "ABLATION_ID:ENABLED_ID argument order; new comparisons must provide "
+        << "the expected mask and use CONTROL_ID:ABLATION_ID. Exit codes: "
         << "0 complete comparison, 4 incomplete evidence, 3 invalid pair, "
         << "2 database/tool error.\n"
         << "Usage: " << exe
@@ -27003,6 +27028,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         {
             EA::FeatureAblationPairEvaluation::ComparisonCommand command;
             command.experimentIds = *options.compareFeatureAblationPair;
+            command.expectedAblationMask =
+                options.expectedFeatureAblationMask;
             return EA::FeatureAblationPairEvaluation::RunComparisonCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
         }

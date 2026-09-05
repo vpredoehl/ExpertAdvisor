@@ -41,6 +41,7 @@ int main()
 {
     const std::string connectionString =
         "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
+        " port=" + EnvironmentOr("LSTM_DB_PORT", "5432") +
         " user=" + EnvironmentOr("LSTM_DB_USER", "pqxx") +
         " dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
     const std::string schema =
