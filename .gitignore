@@ -50,3 +50,9 @@ __pycache__/
 
 # Python dependency manifest is repository source, not scratch text.
 !requirements.txt
+
+# Downloaded authoritative economic-calendar source corpus.
+# Reconstruct/preserve using acquisition manifests, not Git.
+EconomicCalendar/raw/dol_eta/**/*.pdf
+
+
