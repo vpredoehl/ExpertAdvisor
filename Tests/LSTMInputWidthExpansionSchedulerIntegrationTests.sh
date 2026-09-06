@@ -30,6 +30,10 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/InputWidthExpansionMigrationTests.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/LSTMModelInputIdentityMigrationTests.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/091_weekly_claims_historical_consensus.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/092_economic_calendar_snapshot.sql"
 
 source_experiment_id="$(psql -X -At -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment(

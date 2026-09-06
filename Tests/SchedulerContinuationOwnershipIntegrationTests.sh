@@ -30,6 +30,8 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/071_resume_input_width_expansion.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/092_economic_calendar_snapshot.sql"
 
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment_global_control(singleton,desired_state)
@@ -63,13 +65,14 @@ INSERT INTO experiment(
     continuation_policy_min_leader_score,continuation_policy_scope,
     continuation_policy_trend_mode,continuation_policy_source_mode,
     continuation_policy_include_excluded,
-    continuation_candidate_excluded,continuation_policy_revision
+    continuation_candidate_excluded,continuation_policy_revision,
+    model_input_width,model_input_semantic_layout_version
 ) VALUES(
     930070,'continuationfixture',4,0.0008,1.0,1.0,20,20,
     '2020-01-01','2021-01-01','2021-02-01','2021-03-01',
     'completed','done',935070,'analyze',930070,
     true,40,1,2,0.1,'symbol_horizon','none','final_model',
-    false,false,1
+    false,false,1,77,6
 );
 INSERT INTO model(model_id,name,experiment_id)
 VALUES(935070,'continuation-source-model',930070);
@@ -102,6 +105,69 @@ INSERT INTO matrix(
 SELECT 935070,'train_range_meta',1,length(value),0,index-1,
        ascii(substr(value,index,1))
 FROM encoded,generate_series(1,length(value)) AS index;
+
+WITH v AS (SELECT ARRAY[1.0,77.0,1.0]::double precision[] a)
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'model_meta',1,3,0,i-1,a[i]
+FROM v,generate_series(1,3)i;
+
+WITH v AS (SELECT ARRAY[1.0,6.0]::double precision[] a)
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'model_input_semantics_meta',1,2,0,i-1,a[i]
+FROM v,generate_series(1,2)i;
+
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'param',78,4,(i-1)/4,(i-1)%4,0.0
+FROM generate_series(1,312)i;
+
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'bias',1,4,0,i-1,0.0
+FROM generate_series(1,4)i;
+
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+VALUES
+    (935070,'returnHeadWeight',1,1,0,0,0.0),
+    (935070,'returnHeadBias',1,1,0,0,0.0);
+
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'returnHeadDirWeight',1,3,0,i-1,0.0
+FROM generate_series(1,3)i;
+
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'returnHeadDirBias',1,3,0,i-1,0.0
+FROM generate_series(1,3)i;
+
+WITH v AS (
+    SELECT ARRAY[2.0,1.0,0.0,0.0,0.0,1.0]::double precision[] a
+)
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'target_meta',1,6,0,i-1,a[i]
+FROM v,generate_series(1,6)i;
+
+WITH v AS (
+    SELECT ARRAY[1.0,1.0,20.0,0.0,0.0]::double precision[] a
+)
+INSERT INTO matrix(
+    model_id,param_name,n_rows,n_cols,row_idx,col_idx,value
+)
+SELECT 935070,'optimizer_meta',1,5,0,i-1,a[i]
+FROM v,generate_series(1,5)i;
 INSERT INTO experiment_analysis_result(
     experiment_id,model_id,symbol,prediction_horizon,
     target_epochs,completed_epochs,infer_accuracy,leader_score,
