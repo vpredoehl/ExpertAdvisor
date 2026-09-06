@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
+DB_ADMIN_USER="${LSTM_DB_ADMIN_USER:-${USER:-vjp}}"
 DB_NAME="ea_release_actual_phase10_corpus_${$}"
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ea-release-actual-corpus.XXXXXX")"
 EVENT_SEED="$TEMP_DIR/economic_event.csv"
@@ -16,7 +17,7 @@ case "$DB_NAME" in
 esac
 
 cleanup() {
-    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_ADMIN_USER" \
         "$DB_NAME" >/dev/null 2>&1 || true
     rm -f "$EVENT_SEED" "$DRY_RUN" "$COVERAGE"
     rmdir "$TEMP_DIR" 2>/dev/null || true
@@ -54,7 +55,7 @@ if psql -X --host="$DB_HOST" --username="$DB_USER" --dbname=postgres \
     exit 1
 fi
 
-createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 "$DB_NAME"
+createdb --host="$DB_HOST" --username="$DB_ADMIN_USER" --owner="$DB_USER" --template=template0 "$DB_NAME"
 for migration in \
     072_economic_event.sql \
     081_economic_event_consensus.sql \

@@ -6,6 +6,7 @@ BUILD_DIR="$ROOT/DerivedData/Development/Tests/causal_surprise_observability_rep
 BIN="$BUILD_DIR/CausalSurpriseObservabilityRepositoryTests"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
+DB_ADMIN_USER="${LSTM_DB_ADMIN_USER:-${USER:-vjp}}"
 DB_NAME="ea_causal_surprise_observability_${$}"
 
 case "$DB_NAME" in
@@ -14,7 +15,7 @@ case "$DB_NAME" in
 esac
 
 cleanup() {
-    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_ADMIN_USER" \
         "$DB_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -24,7 +25,7 @@ if psql -X --host="$DB_HOST" --username="$DB_USER" --dbname=postgres \
     printf 'refusing to reuse existing database: %s\n' "$DB_NAME" >&2
     exit 2
 fi
-createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 \
+createdb --host="$DB_HOST" --username="$DB_ADMIN_USER" --owner="$DB_USER" --template=template0 \
     "$DB_NAME"
 
 mkdir -p "$BUILD_DIR"

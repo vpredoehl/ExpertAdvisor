@@ -8,6 +8,7 @@ CLI_BIN="$BUILD_DIR/EconomicEventImportCliHarness"
 DB_NAME="ea_economic_calendar_phase2_dol_001"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
+DB_ADMIN_USER="${LSTM_DB_ADMIN_USER:-${USER:-vjp}}"
 FIXTURES="$ROOT/Tests/fixtures/economic_calendar/dol_eta"
 mkdir -p "$BUILD_DIR"
 
@@ -46,7 +47,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
     "${PQXX_LIBS[@]}" -o "$CLI_BIN"
 
 cleanup() {
-    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" "$DB_NAME" >/dev/null
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_ADMIN_USER" "$DB_NAME" >/dev/null
 }
 trap cleanup EXIT
 
@@ -56,7 +57,7 @@ if psql -X --host="$DB_HOST" --username="$DB_USER" --dbname=postgres \
     exit 1
 fi
 
-createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 "$DB_NAME"
+createdb --host="$DB_HOST" --username="$DB_ADMIN_USER" --owner="$DB_USER" --template=template0 "$DB_NAME"
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$DB_NAME" -f "$ROOT/Database/migrations/072_economic_event.sql" >/dev/null
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \

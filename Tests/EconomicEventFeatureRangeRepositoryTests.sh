@@ -7,6 +7,7 @@ BIN="$BUILD_DIR/EconomicEventFeatureRangeRepositoryTests"
 DB_NAME="ea_economic_event_feature_range_${$}"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
+DB_ADMIN_USER="${LSTM_DB_ADMIN_USER:-${USER:-vjp}}"
 mkdir -p "$BUILD_DIR"
 
 case "$DB_NAME" in
@@ -15,7 +16,7 @@ case "$DB_NAME" in
 esac
 
 cleanup() {
-    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_ADMIN_USER" \
         "$DB_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -43,7 +44,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
     "$ROOT/Tests/EconomicEventFeatureRangeRepositoryTests.cpp" \
     "${PQXX_LIBS[@]}" -o "$BIN"
 
-createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 "$DB_NAME"
+createdb --host="$DB_HOST" --username="$DB_ADMIN_USER" --owner="$DB_USER" --template=template0 "$DB_NAME"
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$DB_NAME" \
     -f "$ROOT/Database/migrations/072_economic_event.sql" >/dev/null

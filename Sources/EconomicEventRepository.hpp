@@ -10,6 +10,29 @@
 namespace EA::EconomicCalendar
 {
 
+inline constexpr int kEconomicCalendarSnapshotHashContractVersion = 1;
+
+struct EconomicCalendarSnapshotIdentity
+{
+    long long snapshotId = 0;
+    std::string contentHash;
+};
+
+struct EconomicCalendarSnapshotReport
+{
+    std::optional<long long> snapshotId;
+    std::string contentHash;
+    long long canonicalEventCount = 0;
+    long long selectedConsensusCount = 0;
+    long long releaseActualCount = 0;
+    long long provenFirstReleaseActualCount = 0;
+    long long provenanceUnavailableCount = 0;
+    long long ambiguousFirstReleaseCount = 0;
+    std::string sourceFamilyCountsJson;
+    bool reused = false;
+    bool dryRun = false;
+};
+
 struct EconomicEventConsensusValue
 {
     std::string valueKind;
@@ -141,6 +164,31 @@ std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
     pqxx::transaction_base& transaction,
     const std::string& currency,
     const std::string& startUtc,
-    const std::string& endUtc);
+    const std::string& endUtc,
+    const std::optional<EconomicCalendarSnapshotIdentity>& snapshot =
+        std::nullopt);
+
+// Capture and finalize the current model-facing corpus inside the caller's
+// transaction. Equal canonical content reuses the same finalized snapshot.
+// Dry-run computes the complete report without writing.
+EconomicCalendarSnapshotReport CreateOrReuseEconomicCalendarSnapshot(
+    pqxx::work& transaction,
+    const std::string& createdBy,
+    const std::optional<std::string>& creationNote,
+    bool dryRun);
+
+EconomicCalendarSnapshotReport InspectEconomicCalendarSnapshot(
+    pqxx::transaction_base& transaction,
+    const EconomicCalendarSnapshotIdentity& identity);
+
+std::optional<EconomicCalendarSnapshotIdentity>
+LoadExperimentEconomicCalendarSnapshot(
+    pqxx::transaction_base& transaction,
+    long long experimentId);
+
+std::optional<EconomicCalendarSnapshotIdentity>
+LoadModelEconomicCalendarSnapshot(
+    pqxx::transaction_base& transaction,
+    long long modelId);
 
 } // namespace EA::EconomicCalendar

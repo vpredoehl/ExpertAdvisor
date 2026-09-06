@@ -30,6 +30,7 @@
 #include "RunMetadata.hpp"
 #include "SupportedSymbols.hpp"
 #include "TrainingObjective.hpp"
+#include "EconomicEventRepository.hpp"
 
 namespace EA::ExperimentMetaAnalyzer
 {
@@ -1494,7 +1495,8 @@ std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(con
 }
 
 std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
-                                                                 const NextExperimentRecommendation& rec)
+    const NextExperimentRecommendation& rec,
+    const EA::EconomicCalendar::EconomicCalendarSnapshotIdentity& snapshot)
 {
     if (!ColumnExists(w, "experiment", "model_input_width") ||
         !ColumnExists(w, "experiment",
@@ -1530,6 +1532,10 @@ std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
             std::to_string(EA::kCurrentModelInputWidth) + " "
         "AND model_input_semantic_layout_version = " +
             std::to_string(EA::kModelInputSemanticLayoutVersion) + " "
+        "AND economic_calendar_snapshot_id = " +
+            std::to_string(snapshot.snapshotId) + " "
+        "AND economic_calendar_snapshot_hash = " +
+            w.quote(snapshot.contentHash) + " "
         "ORDER BY experiment_id ASC LIMIT 1;");
     if (rows.empty())
         return std::nullopt;
@@ -1537,7 +1543,8 @@ std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
 }
 
 long long InsertMetaRecommendationExperiment(pqxx::work& w,
-                                             const NextExperimentRecommendation& rec)
+    const NextExperimentRecommendation& rec,
+    const EA::EconomicCalendar::EconomicCalendarSnapshotIdentity& snapshot)
 {
     const bool includeRunMetadata = EA::RunMetadata::ExperimentRunMetadataColumnsExist(w);
     const EA::RunMetadata::Snapshot runMetadata =
@@ -1550,7 +1557,8 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at, "
         << "donchian20_mode, feature_warmup_scope, donchian_lookback, "
-        << "model_input_width, model_input_semantic_layout_version";
+        << "model_input_width, model_input_semantic_layout_version, "
+        << "economic_calendar_snapshot_id,economic_calendar_snapshot_hash";
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataColumns(sql);
     sql << ") VALUES ("
@@ -1572,7 +1580,8 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << w.quote(FeatureWarmupScopeText(kDefaultFeatureWarmupScope)) << ","
         << DonchianLookbackDatabaseValue(kDefaultDonchianLookback) << ","
         << EA::kCurrentModelInputWidth << ","
-        << EA::kModelInputSemanticLayoutVersion;
+        << EA::kModelInputSemanticLayoutVersion << ","
+        << snapshot.snapshotId << "," << w.quote(snapshot.contentHash);
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
     sql << ") RETURNING experiment_id;";
@@ -2413,7 +2422,12 @@ int QueueMetaRecommendations(const MetaAnalysisOptions& options)
 
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    w.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
     w.exec("SET TRANSACTION READ WRITE;");
+    if (!options.dryRun)
+        w.exec(
+            "LOCK TABLE economic_calendar_snapshot "
+            "IN SHARE ROW EXCLUSIVE MODE;");
     if (!RequireMetaAnalysisTables(w))
         return 2;
 
@@ -2428,13 +2442,44 @@ int QueueMetaRecommendations(const MetaAnalysisOptions& options)
                                                                               options.limit,
                                                                               result.nextExperimentNotes);
 
+    std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
+        calendarSnapshot;
+    if (options.dryRun)
+    {
+        const auto audit =
+            EA::EconomicCalendar::CreateOrReuseEconomicCalendarSnapshot(
+                w, "queue_meta_recommendations", std::nullopt, true);
+        const pqxx::result existing = w.exec(
+            "SELECT economic_calendar_snapshot_id FROM "
+            "economic_calendar_snapshot WHERE content_hash=$1 AND "
+            "snapshot_state='finalized';",
+            pqxx::params{audit.contentHash});
+        if (!existing.empty())
+            calendarSnapshot =
+                EA::EconomicCalendar::EconomicCalendarSnapshotIdentity{
+                    existing.one_row()[0].as<long long>(),
+                    audit.contentHash};
+    }
+    else
+    {
+        const auto created =
+            EA::EconomicCalendar::CreateOrReuseEconomicCalendarSnapshot(
+                w, "queue_meta_recommendations", std::nullopt, false);
+        calendarSnapshot =
+            EA::EconomicCalendar::EconomicCalendarSnapshotIdentity{
+                *created.snapshotId, created.contentHash};
+    }
+
     int queued = 0;
     int skipped = 0;
     int candidates = 0;
     for (const auto& rec : result.nextExperimentRecommendations)
     {
         ++candidates;
-        const std::optional<long long> duplicate = FindExistingExperimentForRecommendation(w, rec);
+        const std::optional<long long> duplicate = calendarSnapshot
+            ? FindExistingExperimentForRecommendation(
+                  w, rec, *calendarSnapshot)
+            : std::nullopt;
         if (duplicate.has_value())
         {
             ++skipped;
@@ -2455,7 +2500,8 @@ int QueueMetaRecommendations(const MetaAnalysisOptions& options)
             continue;
         }
 
-        const long long experimentId = InsertMetaRecommendationExperiment(w, rec);
+        const long long experimentId = InsertMetaRecommendationExperiment(
+            w, rec, *calendarSnapshot);
         ++queued;
         std::cout << "META_RECOMMENDATION_QUEUED"
                   << ",experiment_id=" << experimentId;

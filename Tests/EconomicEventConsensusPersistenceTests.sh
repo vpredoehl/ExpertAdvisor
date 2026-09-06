@@ -8,6 +8,7 @@ CLI_BIN="$BUILD_DIR/EconomicEventConsensusImportCliHarness"
 CANDIDATES="$ROOT/EconomicCalendar/raw/oanda/oanda_consensus_enrichment_candidates.csv"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
+DB_ADMIN_USER="${LSTM_DB_ADMIN_USER:-${USER:-vjp}}"
 PRODUCTION_DB="${LSTM_PRODUCTION_DB_NAME:-LSTM}"
 RUN_ID="$(date -u +%Y%m%d%H%M%S)_$$"
 FOCUSED_DB="ea_consensus_phase1_test_${RUN_ID}"
@@ -20,11 +21,11 @@ CONSENSUS_SEED_FILE="$TEMP_DIR/economic_event_consensus_seed.csv"
 BAD_HEADER_FILE="$TEMP_DIR/missing_required_column.csv"
 
 cleanup() {
-    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_ADMIN_USER" \
         "$FOCUSED_DB" >/dev/null
-    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_ADMIN_USER" \
         "$INTEGRATION_DB" >/dev/null
-    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_ADMIN_USER" \
         "$WORKFLOW_DB" >/dev/null
     rm -f "$SEED_FILE" "$ALL_EVENT_SEED_FILE" "$CONSENSUS_SEED_FILE" \
         "$BAD_HEADER_FILE"
@@ -76,7 +77,7 @@ database_must_not_exist() {
 create_schema() {
     local database="$1"
     database_must_not_exist "$database"
-    createdb --host="$DB_HOST" --username="$DB_USER" \
+    createdb --host="$DB_HOST" --username="$DB_ADMIN_USER" --owner="$DB_USER" \
         --template=template0 "$database"
     psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
         --dbname="$database" \
@@ -116,7 +117,7 @@ if LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" \
     exit 1
 fi
 
-dropdb --host="$DB_HOST" --username="$DB_USER" "$FOCUSED_DB"
+dropdb --host="$DB_HOST" --username="$DB_ADMIN_USER" "$FOCUSED_DB"
 database_must_not_exist "$FOCUSED_DB"
 echo "FOCUSED_DISPOSABLE_DATABASE_DROPPED=true"
 
@@ -193,7 +194,7 @@ ACTUAL_FAMILY_COUNTS="$(psql -X --host="$DB_HOST" --username="$DB_USER" \
     'SELECT e.event_family, count(*) FROM economic_event_consensus c JOIN economic_event e USING (economic_event_id) GROUP BY e.event_family ORDER BY e.event_family;')"
 test "$ACTUAL_FAMILY_COUNTS" = "$EXPECTED_FAMILY_COUNTS"
 
-dropdb --host="$DB_HOST" --username="$DB_USER" "$INTEGRATION_DB"
+dropdb --host="$DB_HOST" --username="$DB_ADMIN_USER" "$INTEGRATION_DB"
 database_must_not_exist "$INTEGRATION_DB"
 echo "INTEGRATION_DISPOSABLE_DATABASE_DROPPED=true"
 
@@ -234,7 +235,7 @@ psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     ) TO '$CONSENSUS_SEED_FILE' CSV HEADER" >/dev/null
 
 database_must_not_exist "$WORKFLOW_DB"
-createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 \
+createdb --host="$DB_HOST" --username="$DB_ADMIN_USER" --owner="$DB_USER" --template=template0 \
     "$WORKFLOW_DB"
 for migration in \
     072_economic_event.sql \
@@ -304,7 +305,7 @@ test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus 
 test "$(workflow_scalar "SELECT string_agg(e.event_family || ':' || e.source_release_date::text || ':' || c.consensus_value_low::text, ',' ORDER BY e.source_release_date) FROM economic_event_selected_consensus c JOIN economic_event e USING (economic_event_id) WHERE c.candidate_classification = 'myfxbook_oanda_blank_fill';")" = "PPI:2013-12-13:-0.1,RETAIL_SALES:2022-09-15:0.0,CPI:2023-12-12:0.0"
 test "$(workflow_scalar "SELECT string_agg(e.source_release_date::text || ':' || c.consensus_value_low::text, ',' ORDER BY e.source_release_date) FROM economic_event_selected_consensus c JOIN economic_event e USING (economic_event_id) WHERE c.candidate_classification = 'myfxbook_jolts_gap_fill' AND e.source_release_date IN (DATE '2014-07-08', DATE '2023-11-01');")" = "2014-07-08:4530000,2023-11-01:9250000"
 
-dropdb --host="$DB_HOST" --username="$DB_USER" "$WORKFLOW_DB"
+dropdb --host="$DB_HOST" --username="$DB_ADMIN_USER" "$WORKFLOW_DB"
 database_must_not_exist "$WORKFLOW_DB"
 echo "WORKFLOW_DISPOSABLE_DATABASE_DROPPED=true"
 

@@ -8,7 +8,7 @@ FEATURE_BIN="$BUILD_DIR/WeeklyClaimsHistoricalConsensusPersistenceTests"
 DB_NAME="ea_weekly_claims_consensus_${$}"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
-DB_ADMIN_USER="${LSTM_DB_ADMIN_USER:-$DB_USER}"
+DB_ADMIN_USER="${LSTM_DB_ADMIN_USER:-${USER:-vjp}}"
 TEMP_DIR="$(mktemp -d)"
 SOURCE_CSV="$ROOT/AuditEvidence/AuthoritativeEconomicCalendar/Phase8/2026-09-05/myfxbook-weekly-claims-consensus-import.csv"
 

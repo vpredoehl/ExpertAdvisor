@@ -153,6 +153,9 @@ Result EvaluateFromRepositories(
     lstmRead.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
     const ExperimentContext experiment =
         LoadExperimentContext(lstmRead, experimentId);
+    const auto economicCalendarSnapshot =
+        EconomicCalendar::LoadExperimentEconomicCalendarSnapshot(
+            lstmRead, experimentId);
     const std::vector<DateRange> ranges =
         ResolveRanges(experiment, scope);
 
@@ -178,7 +181,8 @@ Result EvaluateFromRepositories(
                 std::string{EconomicCalendar::
                     kEconomicEventFeatureCurrency},
                 sourceStart,
-                range.end);
+                range.end,
+                economicCalendarSnapshot);
         segments.push_back(SegmentInput{
             range,
             std::move(bars.sourceBarStarts),

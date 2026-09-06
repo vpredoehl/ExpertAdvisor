@@ -83,6 +83,7 @@
 #include "FeatureAblationPairEvaluationService.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
+#include "EconomicEventRepository.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -93,6 +94,7 @@ struct SchedulerOptions
 {
     bool modelInfo = false;
     bool compactStatus = false;
+    bool createEconomicCalendarSnapshot = false;
     bool scheduleExperiments = false;
     bool enqueueExperiment = false;
     bool queueExperiment = false;
@@ -374,6 +376,8 @@ struct SchedulerOptions
     int checkpointPolicyGraceEvals = 1;
     std::set<std::string> checkpointPolicySetKeys;
     bool queueContinuationCandidateExcluded = false;
+    std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
+        economicCalendarSnapshot;
     bool help = false;
     bool dryRun = false;
     bool yes = false;
@@ -1046,6 +1050,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             return true;
         if (arg == "--schedule-experiments" ||
             arg == "--complete-scheduler-protocol-cutover" ||
+            arg == "--create-economic-calendar-snapshot" ||
             arg == "--model-info" ||
             arg == "--status" ||
             arg == "--enqueue-experiment" ||
@@ -1964,6 +1969,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.modelInfo = true;
         else if (arg == "--status")
             options.compactStatus = true;
+        else if (arg == "--create-economic-calendar-snapshot")
+            options.createEconomicCalendarSnapshot = true;
         else if (arg == "--schedule-experiments")
             options.scheduleExperiments = true;
         else if (arg == "--enqueue-experiment")
@@ -4146,6 +4153,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     const int commandCount =
         (options.modelInfo ? 1 : 0) +
         (options.compactStatus ? 1 : 0) +
+        (options.createEconomicCalendarSnapshot ? 1 : 0) +
         (options.scheduleExperiments ? 1 : 0) +
         (options.enqueueExperiment ? 1 : 0) +
         (options.queueExperiment ? 1 : 0) +
@@ -6794,6 +6802,30 @@ struct QueuedModelInputIdentity
     int semanticLayoutVersion = EA::kModelInputSemanticLayoutVersion;
 };
 
+void ResolveEconomicCalendarSnapshotForQueue(
+    pqxx::work& transaction,
+    SchedulerOptions& options,
+    const std::string& creationMode)
+{
+    if (options.economicCalendarSnapshot) return;
+    if (options.resumeModelId)
+    {
+        options.economicCalendarSnapshot =
+            EA::EconomicCalendar::LoadModelEconomicCalendarSnapshot(
+                transaction, *options.resumeModelId);
+        return;
+    }
+    const auto report =
+        EA::EconomicCalendar::CreateOrReuseEconomicCalendarSnapshot(
+            transaction, creationMode, std::nullopt, false);
+    if (!report.snapshotId)
+        throw std::runtime_error(
+            "economic_calendar_snapshot_queue_resolution_failed");
+    options.economicCalendarSnapshot =
+        EA::EconomicCalendar::EconomicCalendarSnapshotIdentity{
+            *report.snapshotId, report.contentHash};
+}
+
 QueuedModelInputIdentity ResolveQueuedModelInputIdentity(
     pqxx::work& w, const SchedulerOptions& options)
 {
@@ -6866,7 +6898,15 @@ std::string DuplicateWhereClause(pqxx::work& w,
             EA::TrainingObjective::CanonicalText(options.trainingObjective))
         << " AND model_input_width = " << inputIdentity.width
         << " AND model_input_semantic_layout_version = "
-        << inputIdentity.semanticLayoutVersion
+            << inputIdentity.semanticLayoutVersion
+        << " AND economic_calendar_snapshot_id IS NOT DISTINCT FROM "
+        << (options.economicCalendarSnapshot
+                ? std::to_string(options.economicCalendarSnapshot->snapshotId)
+                : "NULL")
+        << " AND economic_calendar_snapshot_hash IS NOT DISTINCT FROM "
+        << (options.economicCalendarSnapshot
+                ? w.quote(options.economicCalendarSnapshot->contentHash)
+                : "NULL")
         << " AND status <> 'cancelled'";
     return sql.str();
 }
@@ -6897,7 +6937,15 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
             EA::TrainingObjective::CanonicalText(options.trainingObjective))
         << " AND model_input_width = " << inputIdentity.width
         << " AND model_input_semantic_layout_version = "
-        << inputIdentity.semanticLayoutVersion
+            << inputIdentity.semanticLayoutVersion
+        << " AND economic_calendar_snapshot_id IS NOT DISTINCT FROM "
+        << (options.economicCalendarSnapshot
+                ? std::to_string(options.economicCalendarSnapshot->snapshotId)
+                : "NULL")
+        << " AND economic_calendar_snapshot_hash IS NOT DISTINCT FROM "
+        << (options.economicCalendarSnapshot
+                ? w.quote(options.economicCalendarSnapshot->contentHash)
+                : "NULL")
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
@@ -6969,7 +7017,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
-    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash, training_objective_id, training_objective_version, loss_definition_version, auxiliary_loss_mode, auxiliary_loss_coefficient, regression_target_definition, regression_normalization_identity, robust_loss_definition, robust_loss_delta, target_clipping_definition, objective_normalization_identity, model_input_width, model_input_semantic_layout_version";
+    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash, training_objective_id, training_objective_version, loss_definition_version, auxiliary_loss_mode, auxiliary_loss_coefficient, regression_target_definition, regression_normalization_identity, robust_loss_definition, robust_loss_delta, target_clipping_definition, objective_normalization_identity, model_input_width, model_input_semantic_layout_version, economic_calendar_snapshot_id, economic_calendar_snapshot_hash";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -7046,7 +7094,13 @@ long long InsertExperimentRecord(pqxx::work& w,
                 ? "classification_weighted_ce_plus_unweighted_coefficient_huber__loss_and_gradients_by_true_class_weight_sum__calculate_batch_return_by_example_count_v1"
                 : "weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1")
         << "," << inputIdentity.width
-        << "," << inputIdentity.semanticLayoutVersion;
+        << "," << inputIdentity.semanticLayoutVersion
+        << "," << (options.economicCalendarSnapshot
+                ? std::to_string(options.economicCalendarSnapshot->snapshotId)
+                : "NULL")
+        << "," << (options.economicCalendarSnapshot
+                ? w.quote(options.economicCalendarSnapshot->contentHash)
+                : "NULL");
     if (hasCheckpointInferEnabled)
         sql << "," << (options.queueCheckpointInfer ? "true" : "false");
     if (hasOpportunisticCheckpointInfer)
@@ -7079,8 +7133,9 @@ long long InsertExperimentRecord(pqxx::work& w,
     return inserted[0][0].as<long long>();
 }
 
-int EnqueueExperiment(const SchedulerOptions& options)
+int EnqueueExperiment(const SchedulerOptions& rawOptions)
 {
+    SchedulerOptions options = rawOptions;
     EnsureRequiredEnqueueOptions(options);
 
     std::optional<std::string> dryRunSymbol;
@@ -7117,11 +7172,15 @@ int EnqueueExperiment(const SchedulerOptions& options)
 
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    w.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
     SetTransactionReadWrite(w);
+    w.exec("LOCK TABLE economic_calendar_snapshot IN SHARE ROW EXCLUSIVE MODE;");
     if (!RequireSchedulerTables(w))
         return 1;
 
     const std::string canonicalSymbol = ResolveExperimentCanonicalSymbol(w, options);
+    ResolveEconomicCalendarSnapshotForQueue(
+        w, options, "enqueue_experiment");
 
     if (!options.allowDuplicateExperiment)
     {
@@ -7244,6 +7303,15 @@ void PrintQueueConfig(const char* marker,
               << options.trainingObjective.objectiveIdentifier
               << ",training_objective_hash="
               << EA::TrainingObjective::Identity(options.trainingObjective)
+              << ",economic_calendar_snapshot_id="
+              << (options.economicCalendarSnapshot
+                      ? std::to_string(
+                            options.economicCalendarSnapshot->snapshotId)
+                      : "NULL")
+              << ",economic_calendar_snapshot_hash="
+              << (options.economicCalendarSnapshot
+                      ? options.economicCalendarSnapshot->contentHash
+                      : "NULL")
               << ",checkpoint_interval=" << options.checkpointInterval
               << ",checkpoint_infer=" << (options.queueCheckpointInfer ? "1" : "0")
               << ",checkpoint_infer_min_epoch="
@@ -7316,7 +7384,9 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
 
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    w.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
     SetTransactionReadWrite(w);
+    w.exec("LOCK TABLE economic_calendar_snapshot IN SHARE ROW EXCLUSIVE MODE;");
     if (!RequireSchedulerTables(w))
         return 2;
 
@@ -7357,6 +7427,9 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
         w.commit();
         return 0;
     }
+
+    ResolveEconomicCalendarSnapshotForQueue(
+        w, options, options.queueSweep ? "queue_sweep" : "queue_experiment");
 
     int created = 0;
     int duplicates = 0;
@@ -7401,6 +7474,56 @@ std::string FormatOptionalMetadataBool(const pqxx::row& row, int index)
     return row[index].as<bool>() ? "1" : "0";
 }
 
+void PrintEconomicCalendarSnapshotReport(
+    const EA::EconomicCalendar::EconomicCalendarSnapshotReport& report,
+    const char* marker)
+{
+    std::cout << marker
+              << ",snapshot_id="
+              << (report.snapshotId
+                      ? std::to_string(*report.snapshotId) : "DRY_RUN")
+              << ",content_hash=" << report.contentHash
+              << ",canonical_event_count=" << report.canonicalEventCount
+              << ",selected_consensus_count="
+              << report.selectedConsensusCount
+              << ",release_actual_count=" << report.releaseActualCount
+              << ",proven_first_release_actual_count="
+              << report.provenFirstReleaseActualCount
+              << ",provenance_unavailable_count="
+              << report.provenanceUnavailableCount
+              << ",ambiguous_first_release_count="
+              << report.ambiguousFirstReleaseCount
+              << ",source_family_counts=" << report.sourceFamilyCountsJson
+              << ",reused=" << (report.reused ? 1 : 0)
+              << ",dry_run=" << (report.dryRun ? 1 : 0)
+              << std::endl;
+}
+
+int CreateEconomicCalendarSnapshotCommand(const SchedulerOptions& options)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    if (options.dryRun)
+        SetTransactionReadOnly(transaction);
+    else
+    {
+        SetTransactionReadWrite(transaction);
+        transaction.exec(
+            "LOCK TABLE economic_calendar_snapshot "
+            "IN SHARE ROW EXCLUSIVE MODE;");
+    }
+    const auto report =
+        EA::EconomicCalendar::CreateOrReuseEconomicCalendarSnapshot(
+            transaction, "manual_cli", std::nullopt, options.dryRun);
+    transaction.commit();
+    PrintEconomicCalendarSnapshotReport(
+        report, options.dryRun
+            ? "ECONOMIC_CALENDAR_SNAPSHOT_DRY_RUN"
+            : "ECONOMIC_CALENDAR_SNAPSHOT_FINALIZED");
+    return 0;
+}
+
 int PrintExperimentMetadata(long long experimentId)
 {
     pqxx::connection c{LstmDbConnectionString()};
@@ -7433,7 +7556,8 @@ int PrintExperimentMetadata(long long experimentId)
         "SELECT experiment_id, symbol, prediction_horizon, status, phase, feature_ablation_mask, "
         "git_commit, git_branch, git_dirty, build_config, compiler_version, "
         "schema_version, scheduler_version, binary_name, invocation_mode, "
-        "run_metadata_captured_at::text "
+        "run_metadata_captured_at::text,economic_calendar_snapshot_id,"
+        "economic_calendar_snapshot_hash "
         "FROM experiment WHERE experiment_id = $1 LIMIT 1;",
         experimentId);
     if (rows.empty())
@@ -7463,6 +7587,15 @@ int PrintExperimentMetadata(long long experimentId)
               << ",binary_name=" << FormatOptionalMetadataString(row, 13)
               << ",invocation_mode=" << FormatOptionalMetadataString(row, 14)
               << ",captured_at=" << FormatOptionalMetadataString(row, 15)
+              << ",economic_calendar_snapshot_id="
+              << (row[16].is_null() ? "NULL" :
+                  std::to_string(row[16].as<long long>()))
+              << ",economic_calendar_snapshot_hash="
+              << (row[17].is_null() ? "NULL" :
+                  row[17].as<std::string>())
+              << ",economic_calendar_behavior="
+              << (row[16].is_null() ? "legacy_live_corpus" :
+                  "immutable_snapshot")
               << std::endl;
     return 0;
 }
@@ -14222,6 +14355,10 @@ std::optional<long long> FindEquivalentContinuationExperiment(
         "AND target_epochs = $3 "
         "AND model_input_width = $4 "
         "AND model_input_semantic_layout_version = $5 "
+        "AND economic_calendar_snapshot_id IS NOT DISTINCT FROM "
+        "(SELECT economic_calendar_snapshot_id FROM model WHERE model_id=$2) "
+        "AND economic_calendar_snapshot_hash IS NOT DISTINCT FROM "
+        "(SELECT economic_calendar_snapshot_hash FROM model WHERE model_id=$2) "
         "ORDER BY (continuation_source_model_id IS NOT NULL) DESC, experiment_id ASC "
         "LIMIT 1;",
         sourceExperimentId,
@@ -15431,6 +15568,8 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
                 sourceMask[0][0].as<std::string>()).CanonicalText();
         }
         MergeResumeMetaIntoQueueOptions(child, resumeMeta);
+        ResolveEconomicCalendarSnapshotForQueue(
+            w, child, "continuation_inherit");
         const ContinuationChildPolicyPlan childPolicy =
             PrepareContinuationChildPolicy(
                 w,
@@ -25540,6 +25679,11 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "[--continuation-dry-run]\n"
         << "Scheduler worker limits accept non-negative integers. Zero prevents new workers "
         << "in that capacity class without stopping the scheduler or existing workers.\n"
+        << "Usage: " << exe
+        << " --create-economic-calendar-snapshot [--dry-run]\n"
+        << "Computes the deterministic current economic-calendar corpus identity. "
+        << "Dry-run reports without persistence; apply creates or reuses one "
+        << "finalized immutable snapshot.\n"
         << "Continuation automation is disabled by default. Evaluation-only persists/reuses Phase 3A "
         << "decisions without creating children. --auto-queue-continuations implies evaluation; children "
         << "enter the normal pending/train queue and obey ordinary scheduler capacity. Defaults: scan "
@@ -27193,6 +27337,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         }
         if (options.modelInfo)
             return PrintModelInfo(*options.modelInfoModelId);
+        if (options.createEconomicCalendarSnapshot)
+            return CreateEconomicCalendarSnapshotCommand(options);
         if (options.compactStatus)
             return PrintCompactExperimentStatus(options);
         if (options.queueExperiment || options.queueSweep)

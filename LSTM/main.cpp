@@ -3793,6 +3793,51 @@ struct LaunchArgs
     std::optional<FrozenOutcomeSpec> frozenOutcome;
 };
 
+std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
+ResolveRuntimeEconomicCalendarSnapshot(
+    pqxx::transaction_base& transaction,
+    const LaunchArgs& launchArgs)
+{
+    std::optional<long long> experimentId = launchArgs.schedulerExperimentId;
+    if (launchArgs.schedulerCheckpointEvalId)
+    {
+        const pqxx::result rows = transaction.exec(
+            "SELECT COALESCE(parent_experiment_id,experiment_id) FROM "
+            "experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            pqxx::params{*launchArgs.schedulerCheckpointEvalId});
+        if (rows.size() != 1)
+            throw std::runtime_error(
+                "checkpoint_eval_not_found_for_economic_calendar_snapshot");
+        experimentId = rows.one_row()[0].as<long long>();
+    }
+
+    std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
+        experimentSnapshot;
+    if (experimentId)
+        experimentSnapshot = EA::EconomicCalendar::
+            LoadExperimentEconomicCalendarSnapshot(
+                transaction, *experimentId);
+
+    std::optional<long long> sourceModelId = launchArgs.resumeModelId;
+    if (!sourceModelId) sourceModelId = launchArgs.modelId;
+    std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
+        modelSnapshot;
+    if (sourceModelId)
+        modelSnapshot = EA::EconomicCalendar::
+            LoadModelEconomicCalendarSnapshot(transaction, *sourceModelId);
+
+    if (experimentSnapshot.has_value() != modelSnapshot.has_value() &&
+        experimentId && sourceModelId)
+        throw std::runtime_error(
+            "runtime_economic_calendar_snapshot_lineage_mismatch");
+    if (experimentSnapshot && modelSnapshot &&
+        (experimentSnapshot->snapshotId != modelSnapshot->snapshotId ||
+         experimentSnapshot->contentHash != modelSnapshot->contentHash))
+        throw std::runtime_error(
+            "runtime_economic_calendar_snapshot_identity_conflict");
+    return experimentSnapshot ? experimentSnapshot : modelSnapshot;
+}
+
 struct LSTMHotspotProfileFinalizer
 {
     bool enabled = false;
@@ -8104,13 +8149,32 @@ int main(int argc, const char * argv[])
             {
                 pqxx::work economicEventRead { c_LSTM };
                 economicEventRead.exec("SET TRANSACTION READ ONLY;");
+                const auto economicCalendarSnapshot =
+                    ResolveRuntimeEconomicCalendarSnapshot(
+                        economicEventRead, launchArgs);
                 economicEvents =
                     EA::EconomicCalendar::LoadEconomicEventsForFeatureRange(
                         economicEventRead,
                         std::string{EA::EconomicCalendar::
                             kEconomicEventFeatureCurrency},
                         queryStart,
-                        toDate);
+                        toDate,
+                        economicCalendarSnapshot);
+                std::cout << "ECONOMIC_CALENDAR_CORPUS"
+                          << ",behavior="
+                          << (economicCalendarSnapshot
+                                  ? "immutable_snapshot"
+                                  : "legacy_live_corpus")
+                          << ",snapshot_id="
+                          << (economicCalendarSnapshot
+                                  ? std::to_string(
+                                        economicCalendarSnapshot->snapshotId)
+                                  : "NULL")
+                          << ",content_hash="
+                          << (economicCalendarSnapshot
+                                  ? economicCalendarSnapshot->contentHash
+                                  : "NULL")
+                          << std::endl;
                 economicEventRead.commit();
             }
             Tensor t{ rawPriceTableName, runtimeDonchian20Mode,
