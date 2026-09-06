@@ -199,7 +199,10 @@ BEGIN
       FROM economic_calendar_snapshot
      WHERE economic_calendar_snapshot_id =
            NEW.economic_calendar_snapshot_id
-     FOR KEY SHARE;
+     -- FOR SHARE conflicts with the non-key UPDATE used to finalize the
+     -- parent.  It therefore prevents a child INSERT that has observed the
+     -- 'creating' state from committing after finalization.
+     FOR SHARE;
     IF parent_state IS DISTINCT FROM 'creating' THEN
         RAISE EXCEPTION
             'economic calendar snapshot content requires creating snapshot';
@@ -298,7 +301,9 @@ BEGIN
        OLD.economic_calendar_snapshot_id IS NULL AND
        NEW.economic_calendar_snapshot_id IS NOT NULL AND
        (OLD.status <> 'pending' OR OLD.phase <> 'train' OR
-        OLD.started_at IS NOT NULL OR OLD.last_model_id IS NOT NULL)
+        OLD.started_at IS NOT NULL OR OLD.last_model_id IS NOT NULL OR
+        EXISTS (SELECT 1 FROM model
+                 WHERE experiment_id = OLD.experiment_id))
     THEN
         RAISE EXCEPTION
             'scientifically active experiment cannot acquire a snapshot';
@@ -387,7 +392,10 @@ BEGIN
         SELECT economic_calendar_snapshot_id,
                economic_calendar_snapshot_hash
           INTO experiment_snapshot_id, experiment_snapshot_hash
-          FROM experiment WHERE experiment_id = NEW.experiment_id;
+          FROM experiment WHERE experiment_id = NEW.experiment_id
+          -- Serialize model inheritance with a concurrent first binding of an
+          -- otherwise untouched legacy experiment.
+          FOR SHARE;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'model references missing experiment';
         END IF;

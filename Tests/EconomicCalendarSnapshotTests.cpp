@@ -233,6 +233,20 @@ void TestFull(
     pqxx::connection& connection,
     pqxx::connection& adminConnection)
 {
+    assert(SameEconomicCalendarSnapshotIdentity(std::nullopt, std::nullopt));
+    assert(!SameEconomicCalendarSnapshotIdentity(
+        std::nullopt,
+        EconomicCalendarSnapshotIdentity{1, "fnv1a64:0000000000000001"}));
+    assert(SameEconomicCalendarSnapshotIdentity(
+        EconomicCalendarSnapshotIdentity{1, "fnv1a64:0000000000000001"},
+        EconomicCalendarSnapshotIdentity{1, "fnv1a64:0000000000000001"}));
+    assert(!SameEconomicCalendarSnapshotIdentity(
+        EconomicCalendarSnapshotIdentity{1, "fnv1a64:0000000000000001"},
+        EconomicCalendarSnapshotIdentity{2, "fnv1a64:0000000000000001"}));
+    assert(!SameEconomicCalendarSnapshotIdentity(
+        EconomicCalendarSnapshotIdentity{1, "fnv1a64:0000000000000001"},
+        EconomicCalendarSnapshotIdentity{1, "fnv1a64:0000000000000002"}));
+
     SeedBaseline(adminConnection, false, "2026-09-05 00:00:00+00");
 
     {
@@ -367,6 +381,7 @@ void TestFull(
 
     long long boundExperimentId = 0;
     long long boundModelId = 0;
+    long long pendingLegacyWithModelId = 0;
     {
         pqxx::work write{connection};
         boundExperimentId = InsertExperiment(
@@ -375,7 +390,24 @@ void TestFull(
             "INSERT INTO model(name,experiment_id) VALUES('phase9-bound',$1) "
             "RETURNING model_id", pqxx::params{boundExperimentId})
             .one_row()[0].as<long long>();
+        pendingLegacyWithModelId = InsertExperiment(
+            write, "phase9pendingmodel", std::nullopt);
+        write.exec(
+            "INSERT INTO model(name,experiment_id) VALUES("
+            "'phase9-pending-legacy-model',$1)",
+            pqxx::params{pendingLegacyWithModelId});
         write.commit();
+    }
+    {
+        pqxx::work write{connection};
+        RequireFailure([&]
+        {
+            write.exec(
+                "UPDATE experiment SET economic_calendar_snapshot_id=$2,"
+                "economic_calendar_snapshot_hash=$3 WHERE experiment_id=$1",
+                pqxx::params{pendingLegacyWithModelId, *s1.snapshotId,
+                             s1.contentHash});
+        });
     }
     {
         pqxx::read_transaction read{connection};
@@ -481,6 +513,37 @@ void TestFull(
             "economic_calendar_snapshot_id")
             .one_row()[0].as<long long>();
         write.commit();
+    }
+    {
+        pqxx::work childInsert{connection};
+        childInsert.exec(R"SQL(
+            INSERT INTO economic_calendar_snapshot_event(
+                economic_calendar_snapshot_id,economic_event_id,
+                canonical_event_order,currency,event_family,
+                event_timestamp_utc,source_agency,source_event_id,source_url,
+                reference_period,event_importance,historical_time_confidence,
+                source_release_date,source_release_time,source_timezone)
+            VALUES($1,999999999,1,'USD','LOCK_TEST',
+                   '2024-01-01 00:00:00+00','TEST','lock-test','test://lock',
+                   NULL,1,'exact','2024-01-01','00:00:00','UTC');
+        )SQL", pqxx::params{creatingId});
+        pqxx::work concurrentFinalize{adminConnection};
+        concurrentFinalize.exec("SET LOCAL lock_timeout='250ms';");
+        RequireFailure([&]
+        {
+            concurrentFinalize.exec(R"SQL(
+                UPDATE economic_calendar_snapshot SET
+                    snapshot_state='finalized',finalized_at=clock_timestamp(),
+                    canonical_event_count=1,selected_consensus_count=0,
+                    release_actual_count=0,
+                    proven_first_release_actual_count=0,
+                    provenance_unavailable_count=0,
+                    ambiguous_first_release_count=0,
+                    source_family_counts='{}'::jsonb
+                WHERE economic_calendar_snapshot_id=$1;
+            )SQL", pqxx::params{creatingId});
+        });
+        childInsert.abort();
     }
     {
         pqxx::read_transaction read{connection};

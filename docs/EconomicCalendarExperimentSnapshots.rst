@@ -81,6 +81,8 @@ first repeatable-read data query.  They compute or reuse one finalized current
 snapshot and insert the experiment's id/hash in the same transaction.  The
 snapshot and experiment therefore commit together; a failure or rollback
 leaves neither a partial finalized snapshot nor an experiment binding.
+Child insertion takes a row lock that conflicts with finalization, so an
+in-flight child insert cannot commit after the header becomes finalized.
 Duplicate identity includes both snapshot id and hash, so experiments observing
 different calendar corpora are not scientifically identical.
 
@@ -97,6 +99,10 @@ finalized identity is required whenever a binding exists.  Missing snapshots,
 unsupported hash versions, incomplete id/hash pairs, hash mismatches, corrupt
 materializations, and lineage conflicts fail closed.  NULL-bound historical
 lineage continues through the legacy live loader.
+Because ``--infer-all`` builds one shared tensor, it evaluates only candidates
+whose snapshot identity exactly matches that tensor (including the explicit
+NULL/legacy identity); mismatched or invalid candidate lineage is skipped with
+a fail-closed diagnostic.
 
 Point-in-time and range behavior
 --------------------------------

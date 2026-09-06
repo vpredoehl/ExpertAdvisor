@@ -33,6 +33,10 @@ struct EconomicCalendarSnapshotReport
     bool dryRun = false;
 };
 
+bool SameEconomicCalendarSnapshotIdentity(
+    const std::optional<EconomicCalendarSnapshotIdentity>& lhs,
+    const std::optional<EconomicCalendarSnapshotIdentity>& rhs);
+
 struct EconomicEventConsensusValue
 {
     std::string valueKind;

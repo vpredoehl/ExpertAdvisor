@@ -570,6 +570,17 @@ std::vector<EconomicEvent> MapEconomicEvents(const pqxx::result& rows)
 } // namespace
 
 
+bool SameEconomicCalendarSnapshotIdentity(
+    const std::optional<EconomicCalendarSnapshotIdentity>& lhs,
+    const std::optional<EconomicCalendarSnapshotIdentity>& rhs)
+{
+    if (lhs.has_value() != rhs.has_value()) return false;
+    if (!lhs) return true;
+    return lhs->snapshotId == rhs->snapshotId &&
+           lhs->contentHash == rhs->contentHash;
+}
+
+
 bool EconomicEventSchemaExists(
     pqxx::transaction_base& transaction)
 {

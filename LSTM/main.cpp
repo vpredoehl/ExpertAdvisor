@@ -6929,6 +6929,9 @@ bool InferAllCandidateCompatible(pqxx::work& w,
                                  EA::LSTM::TargetType requestedTargetType,
                                  const Tensor& tensor,
                                  const TrainConfigMeta* anchorTrainConfig,
+                                 const std::optional<EA::EconomicCalendar::
+                                     EconomicCalendarSnapshotIdentity>&
+                                     tensorCalendarSnapshot,
                                  InferAllCandidate& candidate,
                                  InferAllSkipDetail& skipDetail)
 {
@@ -6951,6 +6954,32 @@ bool InferAllCandidateCompatible(pqxx::work& w,
         skipDetail.detail = detail;
         return false;
     };
+
+    try
+    {
+        const auto candidateCalendarSnapshot =
+            EA::EconomicCalendar::LoadModelEconomicCalendarSnapshot(
+                w, modelId);
+        if (!EA::EconomicCalendar::SameEconomicCalendarSnapshotIdentity(
+                tensorCalendarSnapshot, candidateCalendarSnapshot))
+        {
+            const auto identityText = [](const auto& identity)
+            {
+                return identity
+                    ? std::to_string(identity->snapshotId) + "/" +
+                          identity->contentHash
+                    : std::string{"legacy_live_corpus"};
+            };
+            return configMismatch(
+                "economic_calendar_snapshot_identity",
+                identityText(tensorCalendarSnapshot),
+                identityText(candidateCalendarSnapshot));
+        }
+    }
+    catch (const std::exception& e)
+    {
+        return invalidMetadata("economic_calendar_snapshot_identity", e.what());
+    }
 
     if (MatrixParamExists(w, modelId, "train_symbol_meta"))
     {
@@ -7170,6 +7199,9 @@ std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
                                                       EA::LSTM::TargetType requestedTargetType,
                                                       const Tensor& tensor,
                                                       const TrainConfigMeta* anchorTrainConfig,
+                                                      const std::optional<EA::EconomicCalendar::
+                                                          EconomicCalendarSnapshotIdentity>&
+                                                          tensorCalendarSnapshot,
                                                       size_t& skippedDueToResume,
                                                       size_t& skippedIncompatible,
                                                       std::vector<std::string>& skippedModelLogs)
@@ -7204,6 +7236,7 @@ std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
                                         requestedTargetType,
                                         tensor,
                                         anchorTrainConfig,
+                                        tensorCalendarSnapshot,
                                         candidate,
                                         skipDetail))
         {
@@ -7323,7 +7356,10 @@ int RunInferAllForSymbol(pqxx::work& w,
                          const Tensor& tensor,
                          size_t logicalOutputStartIndex,
                          EA::LSTM::TargetType requestedTargetType,
-                         const std::optional<PersistedInferenceConfig>& inferenceConfig)
+                         const std::optional<PersistedInferenceConfig>& inferenceConfig,
+                         const std::optional<EA::EconomicCalendar::
+                             EconomicCalendarSnapshotIdentity>&
+                             tensorCalendarSnapshot)
 {
     size_t skippedDueToResume = 0;
     size_t skippedIncompatible = 0;
@@ -7338,6 +7374,7 @@ int RunInferAllForSymbol(pqxx::work& w,
                                requestedTargetType,
                                tensor,
                                inferenceConfig.has_value() ? &inferenceConfig->trainConfig : nullptr,
+                               tensorCalendarSnapshot,
                                skippedDueToResume,
                                skippedIncompatible,
                                skippedModelLogs);
@@ -8146,10 +8183,12 @@ int main(int argc, const char * argv[])
             const size_t logicalOutputStartIndex =
                 forexDataRead.exec1(warmupCountQuery)[0].as<size_t>();
             std::vector<EA::EconomicCalendar::EconomicEvent> economicEvents;
+            std::optional<EA::EconomicCalendar::
+                EconomicCalendarSnapshotIdentity> economicCalendarSnapshot;
             {
                 pqxx::work economicEventRead { c_LSTM };
                 economicEventRead.exec("SET TRANSACTION READ ONLY;");
-                const auto economicCalendarSnapshot =
+                economicCalendarSnapshot =
                     ResolveRuntimeEconomicCalendarSnapshot(
                         economicEventRead, launchArgs);
                 economicEvents =
@@ -8263,7 +8302,8 @@ int main(int argc, const char * argv[])
                                             t,
                                             logicalOutputStartIndex,
                                             requestedTargetType,
-                                            inferenceConfig);
+                                            inferenceConfig,
+                                            economicCalendarSnapshot);
             const EA::FeatureAblationMask runtimeFeatureAblationMask =
                 schedulerFeatureAblationMask.has_value()
                     ? *schedulerFeatureAblationMask
