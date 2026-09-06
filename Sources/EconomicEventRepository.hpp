@@ -162,8 +162,9 @@ std::vector<EconomicEvent> LoadEconomicEvents(
 // Legacy migration-088 authoritative initials are projected only when
 // available_at is strictly before endUtc, preserving width-75 behavior.
 // Phase-2 actuals are bulk-loaded exclusively through
-// economic_event_first_release_actual_at(endUtc); per-bar evaluation repeats
-// its inclusive proven_available_at boundary in memory.
+// economic_event_first_release_actual_at(endUtc). That database API is an
+// inclusive point-in-time loader; per-bar feature evaluation applies the
+// stricter half-open rule proven_available_at < completed-bar cutoff.
 std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
     pqxx::transaction_base& transaction,
     const std::string& currency,

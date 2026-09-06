@@ -460,6 +460,35 @@ int main()
                    .invalidReasons,
                "configured_model_input_layout_mismatch"));
 
+    // Snapshot identity is a matched within-pair reproducibility boundary,
+    // never the feature treatment. Legacy NULL/NULL and snapshot-bound pairs
+    // are each valid, but mixing those contracts inside one pair fails closed.
+    surpriseControl.extended.economicCalendarSnapshotId = 1;
+    surpriseControl.extended.economicCalendarSnapshotHash =
+        "fnv1a64:67610f94f5c8e7cc";
+    surpriseAblation.extended.economicCalendarSnapshotId = 1;
+    surpriseAblation.extended.economicCalendarSnapshotHash =
+        "fnv1a64:67610f94f5c8e7cc";
+    assert(EvaluatePair(
+               surpriseControl, surpriseAblation,
+               EA::kCausalEconomicEventSurpriseAblationMaskText)
+               .disposition == Feature::Disposition::ComparableComplete);
+    auto mixedCorpus = surpriseAblation;
+    mixedCorpus.extended.economicCalendarSnapshotId.reset();
+    mixedCorpus.extended.economicCalendarSnapshotHash.reset();
+    assert(Has(EvaluatePair(
+                   surpriseControl, mixedCorpus,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "economic_calendar_snapshot_id_mismatch"));
+    auto partialSnapshot = surpriseAblation;
+    partialSnapshot.extended.economicCalendarSnapshotHash.reset();
+    assert(Has(EvaluatePair(
+                   surpriseControl, partialSnapshot,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "ablation_economic_calendar_snapshot_identity_invalid"));
+
     auto configuredFinalWidthMismatch = surpriseAblation;
     configuredFinalWidthMismatch.authoritative.configuration.inputWidth = 75;
     assert(Has(EvaluatePair(

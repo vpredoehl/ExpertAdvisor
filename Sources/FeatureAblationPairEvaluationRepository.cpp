@@ -124,7 +124,8 @@ ArmEvidence LoadAuthoritativeArmEvidence(
         "checkpoint_policy_scope,checkpoint_policy_stop_mode,"
         "checkpoint_policy_grace_evals,checkpoint_policy_revision,"
         "checkpoint_policy_hash,model_input_width,"
-        "model_input_semantic_layout_version,scheduler_priority,worker_pid,"
+        "model_input_semantic_layout_version,economic_calendar_snapshot_id,"
+        "economic_calendar_snapshot_hash,scheduler_priority,worker_pid,"
         "continuation_policy_enabled,"
         "CASE WHEN continuation_policy_enabled THEN ROW("
         "continuation_policy_target_epochs,continuation_policy_min_evals,"
@@ -161,6 +162,10 @@ ArmEvidence LoadAuthoritativeArmEvidence(
         row, "model_input_width");
     extended.configuredModelInputLayoutVersion = OptionalValue<int>(
         row, "model_input_semantic_layout_version");
+    extended.economicCalendarSnapshotId = OptionalValue<long long>(
+        row, "economic_calendar_snapshot_id");
+    extended.economicCalendarSnapshotHash = OptionalValue<std::string>(
+        row, "economic_calendar_snapshot_hash");
     // Fresh initialization is deterministic in the current executable. A
     // resumed arm is governed by its validated model ancestry instead.
     if (arm.authoritative.configuration.resumeModelId)

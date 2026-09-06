@@ -111,12 +111,20 @@ ArmLoad LoadArm(pqxx::transaction_base& transaction, long long experimentId)
 MemberEvaluation LoadMember(
     pqxx::transaction_base& transaction,
     std::size_t ordinal,
-    const std::pair<long long, long long>& ids)
+    const std::pair<long long, long long>& ids,
+    const std::optional<std::string>& expectedAblationMask)
 {
     const ArmLoad control = LoadArm(transaction, ids.first);
     const ArmLoad treatment = LoadArm(transaction, ids.second);
     if (control.arm && treatment.arm)
     {
+        if (expectedAblationMask)
+        {
+            return MakeMemberEvaluation(
+                ordinal, *control.arm, *treatment.arm,
+                Pair::Compare(*control.arm, *treatment.arm,
+                              *expectedAblationMask), true);
+        }
         return MakeMemberEvaluation(
             ordinal, *control.arm, *treatment.arm,
             Pair::CompareLegacyConsensusPair(*control.arm, *treatment.arm));
@@ -163,6 +171,11 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
            << ",declared_pair_count=" << result.population.declaredPairCount
            << ",membership_identity_hash=" << result.membershipIdentityHash
            << ",evaluation_identity_hash=" << result.evaluationIdentityHash
+           << ",expected_ablation_mask="
+           << (result.canonicalAblatedFeatureSet.empty()
+                   ? "NULL" : result.canonicalAblatedFeatureSet)
+           << ",economic_calendar_snapshot_role=reproducibility_boundary"
+           << ",economic_calendar_snapshot_is_treatment=false"
            << ",read_only=true\n";
     output << "FEATURE_ABLATION_REPLICATION_POLICY"
            << ",version=" << kReplicationPolicyVersion
@@ -190,6 +203,23 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
                << ",ablation_identity_hash="
                << (member.ablationIdentityHash.empty()
                        ? "NULL" : member.ablationIdentityHash)
+               << ",control_economic_calendar_snapshot_id="
+               << (member.controlEconomicCalendarSnapshotId
+                       ? std::to_string(
+                             *member.controlEconomicCalendarSnapshotId)
+                       : "NULL")
+               << ",control_economic_calendar_snapshot_hash="
+               << member.controlEconomicCalendarSnapshotHash.value_or("NULL")
+               << ",treatment_economic_calendar_snapshot_id="
+               << (member.treatmentEconomicCalendarSnapshotId
+                       ? std::to_string(
+                             *member.treatmentEconomicCalendarSnapshotId)
+                       : "NULL")
+               << ",treatment_economic_calendar_snapshot_hash="
+               << member.treatmentEconomicCalendarSnapshotHash.value_or("NULL")
+               << ",corpus_contract="
+               << (member.controlEconomicCalendarSnapshotId
+                       ? "immutable_snapshot" : "legacy_live_unbound")
                << ",scientifically_valid_complete="
                << Boolean(member.scientificallyValidComplete)
                << ",incomplete_reasons=" << Reasons(member.incompleteReasons)
@@ -221,7 +251,9 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
                          p.profitabilityPositivePairCount) /
                          static_cast<double>(p.profitabilityAvailablePairCount)))
            << ",distinct_symbol_count=" << p.distinctSymbolCount
-           << ",distinct_horizon_count=" << p.distinctHorizonCount << '\n';
+           << ",distinct_horizon_count=" << p.distinctHorizonCount
+           << ",distinct_economic_calendar_corpus_count="
+           << p.distinctEconomicCalendarCorpusCount << '\n';
     PrintMetric(output, "aggregate_terminal_horizon_log_return_sum_delta",
                 result.aggregateProfitability);
     PrintMetric(output,
@@ -241,7 +273,7 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
     output << "FEATURE_ABLATION_PRODUCTIONIZATION_GATE"
            << ",productionization_software_ready="
            << Boolean(result.softwareReady)
-           << ",software_readiness_version=1"
+           << ",software_readiness_version=2"
            << ",software_readiness_hash=" << result.softwareReadinessHash
            << ",replication_decision="
            << ReplicationDecisionText(result.decision)
@@ -267,7 +299,8 @@ int RunComparisonCommand(const std::string& connectionString,
     members.reserve(command.experimentIdPairs.size());
     for (std::size_t index = 0; index < command.experimentIdPairs.size(); ++index)
         members.push_back(LoadMember(transaction, index + 1,
-                                     command.experimentIdPairs[index]));
+                                     command.experimentIdPairs[index],
+                                     command.expectedAblationMask));
     const ReplicationEvaluation result = Evaluate(
         std::move(members), command.policy, command.softwareAudit);
     output << RenderComparisonOutput(result);

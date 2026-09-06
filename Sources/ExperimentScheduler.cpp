@@ -4343,10 +4343,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             "pair materiality options require "
             "--compare-training-objective-pair");
     if (options.expectedFeatureAblationMask &&
-        !options.compareFeatureAblationPair)
+        !options.compareFeatureAblationPair &&
+        !options.compareFeatureAblationReplications)
         throw std::invalid_argument(
             "--expected-ablation-mask requires "
-            "--compare-feature-ablation-pair");
+            "--compare-feature-ablation-pair or "
+            "--compare-feature-ablation-replications");
     if (options.expectedFeatureAblationMask &&
         options.expectedFeatureAblationMask->empty())
         throw std::invalid_argument(
@@ -25782,13 +25784,17 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "priority. The command is repeatable-read and read-only.\n"
         << "Usage: " << exe
         << " --compare-feature-ablation-replications="
-        << "CONTROL_ID:TREATMENT_ID[,CONTROL_ID:TREATMENT_ID...]\n"
+        << "CONTROL_ID:ABLATION_ID[,CONTROL_ID:ABLATION_ID...] "
+        << "--expected-ablation-mask=FEATURE[,FEATURE...]\n"
         << "Replication aggregation preserves declared order, uses the "
+        << "exact requested treatment mask, preserves each pair's economic-"
+        << "calendar snapshot provenance without treating it as treatment, "
         << "versioned profitability-primary policy, performs no writes or "
         << "activation, and separates software readiness from scientific "
         << "decision. Exit codes: 0 all evidence complete, 4 incomplete or "
         << "profitability unavailable, 3 invalid or missing evidence, "
-        << "2 database/tool error.\n"
+        << "2 database/tool error. Omitting --expected-ablation-mask retains "
+        << "the legacy consensus ABLATED_ID:ENABLED_ID mode.\n"
         << "Usage: " << exe
         << " --compare-training-objective-pair=CONTROL_ID:TREATMENT_ID "
         << "--pair-primary-profitability-metric=aggregate|average "
@@ -27302,6 +27308,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             EA::FeatureAblationReplicationEvaluation::ComparisonCommand command;
             command.experimentIdPairs =
                 *options.compareFeatureAblationReplications;
+            command.expectedAblationMask =
+                options.expectedFeatureAblationMask;
             return EA::FeatureAblationReplicationEvaluation::
                 RunComparisonCommand(
                     LstmDbConnectionString(), command,

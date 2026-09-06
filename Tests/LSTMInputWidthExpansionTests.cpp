@@ -231,6 +231,28 @@ int main()
         assert(currentInput[col] == 0.0f);
     assert(currentInput[returnAutocorrelationCol] == 2.0f);
 
+    // The causal first-release surprise treatment is a paired zero mask. It
+    // preserves width and every unrelated input byte while clearing both the
+    // availability and value channels.
+    std::vector<float> surpriseControl(EA::kCurrentModelInputWidth, -1.0f);
+    std::vector<float> surpriseAblation(EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        surpriseControl.data(), physical.data(), currentContract);
+    const auto surpriseMask = EA::FeatureAblationMask::Parse(
+        std::string{EA::kCausalEconomicEventSurpriseAblationMaskText});
+    EA::CopyTensorFeaturesForModelInput(
+        surpriseAblation.data(), physical.data(), currentContract,
+        surpriseMask);
+    assert(surpriseControl.size() == surpriseAblation.size());
+    for (std::size_t col = 0; col < currentContract.tensorFeatureCount; ++col)
+    {
+        const bool ablated =
+            col == causalFirstReleaseSurpriseAvailableCol ||
+            col == causalFirstReleaseSurpriseCol;
+        assert(surpriseAblation[col] ==
+               (ablated ? 0.0f : surpriseControl[col]));
+    }
+
     // Ordinary historical-width projection remains unchanged.
     const auto legacyContract = EA::ResolveModelInputContract(
         EA::kLegacyModelInputWidth, feature_size);

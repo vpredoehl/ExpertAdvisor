@@ -35,6 +35,12 @@ struct ExtendedScientificConfiguration
     std::optional<int> configuredModelInputWidth;
     std::optional<int> configuredModelInputLayoutVersion;
 
+    // NULL/NULL is the explicit legacy live-corpus contract. A populated
+    // pair is the immutable economic-calendar corpus identity. This is a
+    // reproducibility boundary, not the feature treatment.
+    std::optional<long long> economicCalendarSnapshotId;
+    std::optional<std::string> economicCalendarSnapshotHash;
+
     // These runtime constants are not separate database columns. They are
     // part of the executable scientific contract and are paired with exact
     // run provenance. Keeping them explicit lets deterministic fixtures prove

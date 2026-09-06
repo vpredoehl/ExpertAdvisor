@@ -30,6 +30,8 @@ expected mask and `CONTROL_ID:ABLATION_ID` order.
 ## Scientific identity
 
 The generic evaluator allows only the requested feature-ablation mask to differ.
+Economic-calendar snapshot ID/hash is loaded and must be identical across the
+two arms. It is rendered as corpus provenance and is not the treatment.
 It compares the following experiment/configuration identity exactly:
 
 - symbol, prediction horizon, train and inference ranges, target epochs,

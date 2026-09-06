@@ -64,6 +64,16 @@ std::string Reasons(const std::vector<std::string>& values)
     return output.str();
 }
 
+std::string ObjectiveId(const std::string& canonical)
+{
+    constexpr std::string_view key = "objective_id=";
+    const std::size_t start = canonical.find(key);
+    if (start == std::string::npos) return "UNKNOWN";
+    const std::size_t valueStart = start + key.size();
+    const std::size_t end = canonical.find(';', valueStart);
+    return MachineText(canonical.substr(valueStart, end - valueStart));
+}
+
 void PrintMetric(std::ostringstream& output,
                  std::string_view name,
                  const MetricDelta& metric)
@@ -125,6 +135,23 @@ void PrintArm(std::ostringstream& output,
            << (reportedWidth ? std::to_string(*reportedWidth) : "NULL")
            << ",model_input_semantic_layout_version="
            << (reportedLayout ? std::to_string(*reportedLayout) : "NULL")
+           << ",economic_calendar_snapshot_id="
+           << OptionalId(arm.extended.economicCalendarSnapshotId)
+           << ",economic_calendar_snapshot_hash="
+           << arm.extended.economicCalendarSnapshotHash.value_or("NULL")
+           << ",symbol=" << MachineText(configuration.symbol)
+           << ",prediction_horizon=" << configuration.predictionHorizon
+           << ",train_start=" << MachineText(configuration.trainStart)
+           << ",train_end=" << MachineText(configuration.trainEnd)
+           << ",configured_inference_start="
+           << MachineText(configuration.inferenceStart)
+           << ",configured_inference_end="
+           << MachineText(configuration.inferenceEnd)
+           << ",target_epochs=" << configuration.targetEpochs
+           << ",training_objective_id="
+           << ObjectiveId(configuration.experimentObjective.canonical)
+           << ",training_objective_hash="
+           << configuration.experimentObjective.hash
            << ",scheduler_priority="
            << (arm.operational.schedulerPriority.empty()
                    ? "NULL" : MachineText(arm.operational.schedulerPriority))

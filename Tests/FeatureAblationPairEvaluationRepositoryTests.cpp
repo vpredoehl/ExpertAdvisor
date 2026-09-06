@@ -78,7 +78,9 @@ void InsertExperiment(pqxx::transaction_base& transaction,
                       bool complete = true,
                       std::optional<std::string> maskOverride = std::nullopt,
                       int modelInputWidth = 71,
-                      int modelInputLayoutVersion = 4)
+                      int modelInputLayoutVersion = 4,
+                      std::optional<long long> snapshotId = std::nullopt,
+                      std::optional<std::string> snapshotHash = std::nullopt)
 {
     const auto objective = Objective::Legacy();
     const std::string canonical = Objective::CanonicalText(objective);
@@ -99,7 +101,8 @@ void InsertExperiment(pqxx::transaction_base& transaction,
         "training_objective_canonical,training_objective_hash,"
         "auxiliary_loss_mode,auxiliary_loss_coefficient,"
         "target_clipping_definition,objective_normalization_identity,"
-        "model_input_width,model_input_semantic_layout_version) VALUES("
+        "model_input_width,model_input_semantic_layout_version,"
+        "economic_calendar_snapshot_id,economic_calendar_snapshot_hash) VALUES("
         "$1,'audchfrmp',4,$2,119.75,25,80,20,"
         "'2010-01-01','2025-01-01','2025-01-01','2026-01-01',$3,$4,$5,"
         "NULL,$1,'enabled',20,'legacy_cold_boundary',$6,false,"
@@ -107,14 +110,15 @@ void InsertExperiment(pqxx::transaction_base& transaction,
         "'Release','AppleClang-test','079','scheduler-test','LSTM_Release',"
         "$7,1,1,$8,$9,'disabled',0,'none',"
         "'weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1',"
-        "$10,$11);",
+        "$10,$11,$12,$13);",
         pqxx::params{ids.experiment, kExperimentThreshold,
                      complete ? "completed" : "running",
                      complete ? "done" : "train",
                      complete ? std::optional<long long>{ids.model}
                               : std::nullopt,
                      mask, objective.objectiveIdentifier, canonical, hash,
-                     modelInputWidth, modelInputLayoutVersion});
+                     modelInputWidth, modelInputLayoutVersion,
+                     snapshotId, snapshotHash});
     if (!complete) return;
 
     transaction.exec(
@@ -284,6 +288,10 @@ int main()
         const Ids accuracyMismatchTreatment{990662, 1990662, 2990662, 3990662};
         const Ids surpriseControl{990619, 1990619, 2990619, 3990619};
         const Ids surpriseAblation{990620, 1990620, 2990620, 3990620};
+        const Ids snapshotSurpriseControl{
+            990671, 1990671, 2990671, 3990671};
+        const Ids snapshotSurpriseAblation{
+            990672, 1990672, 2990672, 3990672};
 
         InsertExperiment(fixture, control, true);
         InsertExperiment(fixture, treatment, false);
@@ -336,6 +344,15 @@ int main()
             77, 6);
         InsertFinalEvidence(fixture, surpriseControl, 0.64, 0.08);
         InsertFinalEvidence(fixture, surpriseAblation, 0.61, 0.05);
+        InsertExperiment(fixture, snapshotSurpriseControl, false, true,
+                         std::string{}, 77, 6, 1,
+                         "fnv1a64:67610f94f5c8e7cc");
+        InsertExperiment(
+            fixture, snapshotSurpriseAblation, false, true,
+            std::string(EA::kCausalEconomicEventSurpriseAblationMaskText),
+            77, 6, 1, "fnv1a64:67610f94f5c8e7cc");
+        InsertFinalEvidence(fixture, snapshotSurpriseControl, 0.63, 0.07);
+        InsertFinalEvidence(fixture, snapshotSurpriseAblation, 0.60, 0.04);
         fixture.commit();
     }
 
@@ -390,6 +407,44 @@ int main()
            std::string::npos);
     assert(output.str().find(
                "delta_sign_convention=control_minus_ablation") !=
+           std::string::npos);
+    assert(output.str().find("economic_calendar_snapshot_id=NULL") !=
+           std::string::npos);
+    assert(DatabaseDigest(connection) == before);
+
+    output.str("");
+    output.clear();
+    errors.str("");
+    errors.clear();
+    Replication::ComparisonCommand surpriseReplication;
+    surpriseReplication.experimentIdPairs = {
+        {990619, 990620}, {990671, 990672}};
+    surpriseReplication.expectedAblationMask =
+        std::string(EA::kCausalEconomicEventSurpriseAblationMaskText);
+    const int surpriseReplicationExit = Replication::RunComparisonCommand(
+        connectionString, surpriseReplication, output, errors);
+    assert(surpriseReplicationExit == 0);
+    assert(errors.str().empty());
+    assert(output.str().find(
+               "expected_ablation_mask=causal_first_release_surprise_available,"
+               "causal_first_release_surprise") != std::string::npos);
+    assert(output.str().find(
+               "ordinal=1,control_experiment_id=990619,") !=
+           std::string::npos);
+    assert(output.str().find(
+               "control_economic_calendar_snapshot_id=NULL") !=
+           std::string::npos);
+    assert(output.str().find(
+               "ordinal=2,control_experiment_id=990671,") !=
+           std::string::npos);
+    assert(output.str().find(
+               "control_economic_calendar_snapshot_id=1") !=
+           std::string::npos);
+    assert(output.str().find(
+               "distinct_economic_calendar_corpus_count=2") !=
+           std::string::npos);
+    assert(output.str().find(
+               "economic_calendar_snapshot_is_treatment=false") !=
            std::string::npos);
     assert(DatabaseDigest(connection) == before);
 

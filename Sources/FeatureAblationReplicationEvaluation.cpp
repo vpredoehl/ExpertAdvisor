@@ -103,7 +103,8 @@ MemberEvaluation MakeMemberEvaluation(
     std::size_t ordinal,
     const Pair::ArmEvidence& control,
     const Pair::ArmEvidence& treatment,
-    const Pair::ComparisonResult& comparison)
+    const Pair::ComparisonResult& comparison,
+    bool evidenceOrderIsControlThenAblation)
 {
     MemberEvaluation member;
     member.ordinal = ordinal;
@@ -115,9 +116,18 @@ MemberEvaluation MakeMemberEvaluation(
     member.predictionHorizon =
         control.authoritative.configuration.predictionHorizon;
     member.pairDisposition = comparison.disposition;
-    member.pairEvaluationIdentityHash =
-        Pair::EvaluationIdentityHash(treatment, control, comparison);
+    member.pairEvaluationIdentityHash = evidenceOrderIsControlThenAblation
+        ? Pair::EvaluationIdentityHash(control, treatment, comparison)
+        : Pair::EvaluationIdentityHash(treatment, control, comparison);
     member.ablationIdentityHash = comparison.ablationIdentityHash;
+    member.controlEconomicCalendarSnapshotId =
+        control.extended.economicCalendarSnapshotId;
+    member.controlEconomicCalendarSnapshotHash =
+        control.extended.economicCalendarSnapshotHash;
+    member.treatmentEconomicCalendarSnapshotId =
+        treatment.extended.economicCalendarSnapshotId;
+    member.treatmentEconomicCalendarSnapshotHash =
+        treatment.extended.economicCalendarSnapshotHash;
     member.incompleteReasons = comparison.incompleteReasons;
     member.invalidReasons = comparison.invalidReasons;
     member.comparison = comparison;
@@ -184,14 +194,16 @@ std::string SoftwareReadinessCanonicalText(
            << "availability_diagnostics_present=" << flag(audit.availabilityDiagnosticsPresent) << ';'
            << "read_only_evaluation=" << flag(audit.readOnlyEvaluation) << ';'
            << "activation_mutation_path_absent=" << flag(audit.activationMutationPathAbsent) << ';'
-           << "model_input_width=" << EA::kEconomicEventConsensusModelInputWidth << ';'
-           << "semantic_layout_version=4;";
+           << "registered_model_input_contracts=true;"
+           << "current_model_input_width=" << EA::kCurrentModelInputWidth << ';'
+           << "current_semantic_layout_version="
+           << EA::kModelInputSemanticLayoutVersion << ';';
     return output.str();
 }
 
 bool SoftwareReady(const SoftwareReadinessAudit& audit)
 {
-    return audit.version == 1 && audit.causalReleaseBoundary &&
+    return audit.version == 2 && audit.causalReleaseBoundary &&
         audit.consensusProvenanceRetained && audit.missingConsensusExplicit &&
         audit.scalarRangeSemanticsValidated && audit.normalizationFailClosed &&
         audit.finiteFeatureValuesEnforced &&
@@ -199,7 +211,8 @@ bool SoftwareReady(const SoftwareReadinessAudit& audit)
         audit.deterministicFeaturePathTested &&
         audit.availabilityDiagnosticsPresent && audit.readOnlyEvaluation &&
         audit.activationMutationPathAbsent &&
-        EA::kEconomicEventConsensusModelInputWidth == 71;
+        EA::kCurrentModelInputWidth == 77 &&
+        EA::kModelInputSemanticLayoutVersion == 6;
 }
 
 ReplicationEvaluation Evaluate(
@@ -258,11 +271,24 @@ ReplicationEvaluation Evaluate(
 
     std::set<std::string> symbols;
     std::set<int> horizons;
+    std::set<std::string> economicCalendarCorpora;
     result.population.declaredPairCount = members.size();
     for (const auto& member : members)
     {
         if (!member.symbol.empty()) symbols.insert(member.symbol);
         if (member.predictionHorizon) horizons.insert(*member.predictionHorizon);
+        const auto snapshot = [](const std::optional<long long>& id,
+                                 const std::optional<std::string>& hash)
+        {
+            return id && hash
+                ? std::to_string(*id) + "/" + *hash
+                : std::string{"legacy_live_unbound"};
+        };
+        economicCalendarCorpora.insert(
+            snapshot(member.controlEconomicCalendarSnapshotId,
+                     member.controlEconomicCalendarSnapshotHash) + "|" +
+            snapshot(member.treatmentEconomicCalendarSnapshotId,
+                     member.treatmentEconomicCalendarSnapshotHash));
         switch (member.evidenceState)
         {
             case MemberEvidenceState::Complete:
@@ -291,6 +317,8 @@ ReplicationEvaluation Evaluate(
     }
     result.population.distinctSymbolCount = symbols.size();
     result.population.distinctHorizonCount = horizons.size();
+    result.population.distinctEconomicCalendarCorpusCount =
+        economicCalendarCorpora.size();
 
     result.aggregateProfitability = Summarize(
         Deltas(members, &Pair::ComparisonResult::aggregateProfitability), true);
@@ -356,8 +384,17 @@ ReplicationEvaluation Evaluate(
         result.action = ProductionizationAction::DoNotEnable;
 
     result.members = std::move(members);
+    for (const auto& member : result.members)
+    {
+        if (!member.comparison.canonicalAblatedFeatureSet.empty())
+        {
+            result.canonicalAblatedFeatureSet =
+                member.comparison.canonicalAblatedFeatureSet;
+            break;
+        }
+    }
     std::ostringstream identity;
-    identity << "feature_ablation_replication_evaluation_v1;"
+    identity << "feature_ablation_replication_evaluation_v2;"
              << "membership_identity_hash=" << result.membershipIdentityHash << ';'
              << "policy_hash=" << result.policyHash << ';'
              << "ablation_identity_hash="
@@ -366,9 +403,11 @@ ReplicationEvaluation Evaluate(
              << "pair_evaluation_semantic_version=2;"
              << "replication_evaluation_semantic_version="
              << kReplicationEvaluationVersion << ';'
-             << "model_input_width="
-             << EA::kEconomicEventConsensusModelInputWidth << ';'
-             << "model_input_semantic_layout_version=4;"
+             << "expected_ablation_mask="
+             << (result.canonicalAblatedFeatureSet.empty()
+                     ? "NULL" : result.canonicalAblatedFeatureSet) << ';'
+             << "input_contract=validated_per_pair;"
+             << "economic_calendar_snapshot=provenance_not_treatment;"
              << "software_readiness_hash=" << result.softwareReadinessHash << ';';
     for (const auto& member : result.members)
         identity << "ordinal=" << member.ordinal

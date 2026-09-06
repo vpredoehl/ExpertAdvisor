@@ -127,6 +127,8 @@ CREATE TABLE experiment (
     continuation_policy_revision bigint NOT NULL DEFAULT 1,
     model_input_width integer,
     model_input_semantic_layout_version integer,
+    economic_calendar_snapshot_id bigint,
+    economic_calendar_snapshot_hash text,
     scheduler_priority text NOT NULL DEFAULT 'normal',
     worker_pid integer,
     git_commit text,

@@ -300,7 +300,10 @@ CausalSurpriseObservation SetCausalFirstReleaseSurprise(
     if (!event.firstReleaseActual)
         throw std::logic_error(
             "economic_event_causal_surprise_proven_value_missing");
-    if (event.firstReleaseActual->provenAvailableAtUnixMicros >
+    // Feature rows represent the half-open completed information interval
+    // [barStart, informationCutoff).  A publication exactly at the cutoff is
+    // first usable by the next bar, matching the event-time boundary above.
+    if (event.firstReleaseActual->provenAvailableAtUnixMicros >=
         informationCutoffUnixMicros)
     {
         observation.disposition =

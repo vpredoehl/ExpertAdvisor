@@ -6,6 +6,21 @@ Phase 7 adds this read-only command:
 --compare-feature-ablation-replications=601:602,603:604,605:606,607:608
 ```
 
+Current generic feature replications provide the exact treatment explicitly
+and use conventional control/ablation order:
+
+```text
+--compare-feature-ablation-replications=619:620,622:623 \
+--expected-ablation-mask=causal_first_release_surprise_available,causal_first_release_surprise
+```
+
+Within each generic pair, the control mask must be empty and the ablation mask
+must exactly match the request. Economic-calendar snapshot ID/hash must match
+within a pair, but may differ across replication members. Output retains those
+corpus contracts and explicitly classifies snapshot identity as reproducibility
+provenance, not treatment. Omitting the expected mask retains the historical
+consensus-specific argument convention below.
+
 The declared order is authoritative and identity-significant. Every experiment
 ID must be positive and globally unique across the set; duplicate pairs or an
 experiment reused in another pair are rejected. Each member is evaluated with
@@ -36,9 +51,9 @@ The command emits the complete canonical policy and its tagged FNV-1a-64 hash.
 
 The membership identity includes every pair in declared order. The evaluation
 identity includes that membership hash, every pair-evaluation identity/state,
-the common ablation identity, policy identity, pair/replication semantic
-versions, EconomicEventFeatures model input width 71, semantic layout version
-4, and the software-readiness identity.
+the common ablation identity and canonical treatment mask, policy identity,
+pair/replication semantic versions, per-pair validated input contracts, the
+snapshot-provenance role, and the software-readiness identity.
 
 ## Readiness gate
 

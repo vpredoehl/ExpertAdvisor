@@ -904,9 +904,9 @@ int main()
         AssertReservedSurpriseZero(values);
     }
 
-    // Phase-1 PIT semantics are inclusive. A proved first release remains
-    // unavailable immediately before publication, appears exactly at its
-    // proven boundary, and remains the same afterward.
+    // The Phase-1 loader may return evidence at an inclusive range endpoint,
+    // but completed feature rows use [barStart, cutoff). A proved first
+    // release at the exact cutoff remains unavailable until the next bar.
     {
         EconomicEvent event = ScalarConsensusEventAt(
             kBase, "BLS", "CPI", "OANDA", 0.2, std::nullopt,
@@ -919,15 +919,13 @@ int main()
         AssertCausalFirstReleaseSurpriseUnavailable(before);
         const auto atBoundary =
             engine.AdvanceCompletedBar(At(kBase + 900));
-        assert(atBoundary.causalFirstReleaseSurpriseAvailable == 1.0F);
-        assert(Near(atBoundary.causalFirstReleaseSurprise, 0.03));
+        AssertCausalFirstReleaseSurpriseUnavailable(atBoundary);
         const auto after =
             engine.AdvanceCompletedBar(At(kBase + 1800));
         assert(after.causalFirstReleaseSurpriseAvailable == 1.0F);
-        assert(after.causalFirstReleaseSurprise ==
-               atBoundary.causalFirstReleaseSurprise);
-        assert(engine.Diagnostics().causalSurpriseNotYetAvailableRowCount == 1);
-        assert(engine.Diagnostics().causalSurpriseAvailableRowCount == 2);
+        assert(Near(after.causalFirstReleaseSurprise, 0.03));
+        assert(engine.Diagnostics().causalSurpriseNotYetAvailableRowCount == 2);
+        assert(engine.Diagnostics().causalSurpriseAvailableRowCount == 1);
     }
 
     // Missing/provenance-unavailable, not-yet-available, and ambiguous states

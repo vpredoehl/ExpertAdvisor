@@ -14,11 +14,11 @@ namespace EA::FeatureAblationReplicationEvaluation
 
 namespace Pair = FeatureAblationPairEvaluation;
 
-inline constexpr int kReplicationEvaluationVersion = 1;
+inline constexpr int kReplicationEvaluationVersion = 2;
 inline constexpr int kReplicationPolicyVersion = 1;
 inline constexpr int kMinimumValidReplications = 3;
 inline constexpr std::string_view kEconomicEventSoftwareReadinessVersion =
-    "economic_event_features_productionization_readiness_v1";
+    "economic_event_features_productionization_readiness_v2";
 
 enum class MemberEvidenceState
 {
@@ -53,7 +53,7 @@ struct ReplicationPolicy
 
 struct SoftwareReadinessAudit
 {
-    int version = 1;
+    int version = 2;
     bool causalReleaseBoundary = true;
     bool consensusProvenanceRetained = true;
     bool missingConsensusExplicit = true;
@@ -78,6 +78,10 @@ struct MemberEvaluation
     Pair::Disposition pairDisposition = Pair::Disposition::ComparableIncomplete;
     std::string pairEvaluationIdentityHash;
     std::string ablationIdentityHash;
+    std::optional<long long> controlEconomicCalendarSnapshotId;
+    std::optional<std::string> controlEconomicCalendarSnapshotHash;
+    std::optional<long long> treatmentEconomicCalendarSnapshotId;
+    std::optional<std::string> treatmentEconomicCalendarSnapshotHash;
     bool scientificallyValidComplete = false;
     std::vector<std::string> incompleteReasons;
     std::vector<std::string> invalidReasons;
@@ -109,6 +113,7 @@ struct PopulationSummary
     std::size_t profitabilityZeroPairCount = 0;
     std::size_t distinctSymbolCount = 0;
     std::size_t distinctHorizonCount = 0;
+    std::size_t distinctEconomicCalendarCorpusCount = 0;
 };
 
 struct ReplicationEvaluation
@@ -135,6 +140,7 @@ struct ReplicationEvaluation
     std::string softwareReadinessHash;
     std::string evaluationIdentityCanonical;
     std::string evaluationIdentityHash;
+    std::string canonicalAblatedFeatureSet;
 };
 
 std::vector<std::pair<long long, long long>> ParseExperimentIdPairs(
@@ -144,7 +150,8 @@ MemberEvaluation MakeMemberEvaluation(
     std::size_t ordinal,
     const Pair::ArmEvidence& control,
     const Pair::ArmEvidence& treatment,
-    const Pair::ComparisonResult& comparison);
+    const Pair::ComparisonResult& comparison,
+    bool evidenceOrderIsControlThenAblation = false);
 
 std::string PolicyCanonicalText(const ReplicationPolicy& policy);
 std::string PolicyHash(const ReplicationPolicy& policy);

@@ -112,6 +112,13 @@ void ValidateExperimentConfiguration(
         (extended.configuredModelInputLayoutVersion &&
          *extended.configuredModelInputLayoutVersion <= 0))
         Add(reasons, prefix + "configured_model_input_identity_invalid");
+    if (extended.economicCalendarSnapshotId.has_value() !=
+            extended.economicCalendarSnapshotHash.has_value() ||
+        (extended.economicCalendarSnapshotId &&
+         *extended.economicCalendarSnapshotId <= 0) ||
+        (extended.economicCalendarSnapshotHash &&
+         !TaggedHash(*extended.economicCalendarSnapshotHash)))
+        Add(reasons, prefix + "economic_calendar_snapshot_identity_invalid");
     RequireText(value.symbol, prefix + "symbol", reasons);
     RequireText(value.trainStart, prefix + "train_start", reasons);
     RequireText(value.trainEnd, prefix + "train_end", reasons);
@@ -326,6 +333,10 @@ void ValidateExtendedPair(const ExtendedScientificConfiguration& control,
                         "configured_model_input_width_mismatch");
     EA_COMPARE_EXTENDED(configuredModelInputLayoutVersion,
                         "configured_model_input_layout_mismatch");
+    EA_COMPARE_EXTENDED(economicCalendarSnapshotId,
+                        "economic_calendar_snapshot_id_mismatch");
+    EA_COMPARE_EXTENDED(economicCalendarSnapshotHash,
+                        "economic_calendar_snapshot_hash_mismatch");
     EA_COMPARE_EXTENDED(baseLearningRate, "base_learning_rate_mismatch");
     EA_COMPARE_EXTENDED(batchSize, "batch_size_mismatch");
     EA_COMPARE_EXTENDED(freshInitializationSeed,
@@ -708,6 +719,12 @@ std::string EvaluationIdentityCanonical(
         optionalId(ablation.exactFinalInferenceResultId) +
         ";control_profitability_observation_id=" + observationId(control) +
         ";ablation_profitability_observation_id=" + observationId(ablation) +
+        ";control_economic_calendar_snapshot_id=" +
+        optionalId(control.extended.economicCalendarSnapshotId) +
+        ";ablation_economic_calendar_snapshot_id=" +
+        optionalId(ablation.extended.economicCalendarSnapshotId) +
+        ";economic_calendar_snapshot_hash=" +
+        control.extended.economicCalendarSnapshotHash.value_or("NULL") +
         ";disposition=" + DispositionText(result.disposition) + ";";
 }
 
