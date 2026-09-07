@@ -85,12 +85,13 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,target_epochs,
     train_start,train_end,status,phase,current_operation,worker_pid,
     worker_process_group_id,worker_process_start_identity,worker_executable,
-    worker_command_line,worker_started_at,duplicate_nonce
+    worker_command_line,worker_started_at,duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     :experiment_id,'reconcile-fixture',4,0.0008,20,
     '2020-01-01','2021-01-01','running','train','train',
     :pid,:pgid,:'start_identity',:'executable',:'command_line',
-    clock_timestamp(),:experiment_id
+    clock_timestamp(),:experiment_id,77,7
 );
 INSERT INTO experiment_scheduler_worker_attempt(
     worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
