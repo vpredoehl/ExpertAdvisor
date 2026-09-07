@@ -4366,6 +4366,7 @@ int RunPriorityQueueGlobalControl(
                 "globally_paused_experiment_queued_for_admission");
             const pqxx::result queued = transaction.exec_params(
                 "UPDATE experiment SET status='pending',resume_requested=true,"
+                "scheduler_resume_origin='operator',"
                 "worker_global_pause_request_id=NULL,updated_at=clock_timestamp() "
                 "WHERE experiment_id=$1 AND status='paused' "
                 "AND worker_global_pause_request_id=$2 "
@@ -4430,7 +4431,8 @@ int RunPriorityQueueGlobalControl(
                 "pending_experiment_paused_before_dispatch");
             const pqxx::result paused = transaction.exec_params(
                 "UPDATE experiment SET status='paused',resume_requested=false,"
-                "worker_control_state='paused',worker_global_pause_request_id=$1,"
+                "scheduler_resume_origin='none',worker_control_state='paused',"
+                "worker_global_pause_request_id=$1,"
                 "updated_at=clock_timestamp() WHERE experiment_id=$2 "
                 "AND status='pending' AND active_scheduler_worker_attempt_id IS NULL "
                 "RETURNING experiment_id;",
@@ -4487,7 +4489,8 @@ int RunPriorityQueueGlobalControl(
                 RequireAffectedRows(stopped, 1, "pause_all_stop_attempt");
                 const pqxx::result paused = transaction.exec_params(
                     "UPDATE experiment SET status='paused',resume_requested=false,"
-                    "worker_control_state='paused',worker_global_pause_request_id=$1,"
+                    "scheduler_resume_origin='none',worker_control_state='paused',"
+                    "worker_global_pause_request_id=$1,"
                     "updated_at=clock_timestamp() WHERE experiment_id=$2 "
                     "AND status IN ('running','pending') "
                     "AND active_scheduler_worker_attempt_id=$3 "
@@ -4512,7 +4515,8 @@ int RunPriorityQueueGlobalControl(
                 RequireAffectedRows(retired, 1, "pause_all_missing_attempt");
                 const pqxx::result paused = transaction.exec_params(
                     "UPDATE experiment SET status='paused',resume_requested=false,"
-                    "worker_control_state='paused',worker_global_pause_request_id=$1,"
+                    "scheduler_resume_origin='none',worker_control_state='paused',"
+                    "worker_global_pause_request_id=$1,"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
                     "worker_process_start_identity=NULL,worker_executable=NULL,"
                     "worker_command_line=NULL,active_scheduler_worker_attempt_id=NULL,"
@@ -6447,7 +6451,8 @@ void ApplyCampaignPauseMember(
                     retired, 1, "campaign_pause_missing_worker_attempt");
                 const pqxx::result paused = transaction->exec_params(
                     "UPDATE experiment SET status='paused',"
-                    "resume_requested=false,worker_control_state='paused',"
+                    "resume_requested=false,scheduler_resume_origin='none',"
+                    "worker_control_state='paused',"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
                     "worker_process_start_identity=NULL,worker_executable=NULL,"
                     "worker_command_line=NULL,worker_global_pause_request_id=NULL,"
@@ -6490,7 +6495,8 @@ void ApplyCampaignPauseMember(
                     stopped, 1, "campaign_pause_stop_worker_attempt");
                 const pqxx::result paused = transaction->exec_params(
                     "UPDATE experiment SET status='paused',"
-                    "resume_requested=false,worker_control_state='paused',"
+                    "resume_requested=false,scheduler_resume_origin='none',"
+                    "worker_control_state='paused',"
                     "worker_global_pause_request_id=NULL,"
                     "updated_at=clock_timestamp() WHERE experiment_id=$1 "
                     "AND active_scheduler_worker_attempt_id=$2 "
@@ -6516,7 +6522,8 @@ void ApplyCampaignPauseMember(
     {
         const pqxx::result paused = transaction->exec_params(
             "UPDATE experiment SET status='paused',resume_requested=false,"
-            "worker_control_state='paused',worker_global_pause_request_id=NULL,"
+            "scheduler_resume_origin='none',worker_control_state='paused',"
+            "worker_global_pause_request_id=NULL,"
             "updated_at=clock_timestamp() WHERE experiment_id=$1 "
             "AND status='pending' "
             "AND active_scheduler_worker_attempt_id IS NULL "
@@ -6584,7 +6591,8 @@ void ApplyCampaignResumeMember(
         }
         const pqxx::result resumed = transaction->exec_params(
             "UPDATE experiment SET status='pending',resume_requested=true,"
-            "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+            "scheduler_resume_origin='operator',updated_at=clock_timestamp() "
+            "WHERE experiment_id=$1 "
             "AND status='paused' RETURNING experiment_id;",
             *member.experimentId);
         RequireAffectedRows(resumed, 1, "campaign_resume_queue_experiment");
@@ -6992,7 +7000,8 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
             RequireAffectedRows(retired, 1, "pause_missing_worker_attempt");
             const pqxx::result paused = transaction.exec_params(
                 "UPDATE experiment SET status='paused',resume_requested=false,"
-                "worker_control_state='paused',worker_pid=NULL,"
+                "scheduler_resume_origin='none',worker_control_state='paused',"
+                "worker_pid=NULL,"
                 "worker_process_group_id=NULL,worker_process_start_identity=NULL,"
                 "worker_executable=NULL,worker_command_line=NULL,"
                 "worker_global_pause_request_id=NULL,"
@@ -7025,7 +7034,8 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
             RequireAffectedRows(stopped, 1, "pause_stop_worker_attempt");
             const pqxx::result paused = transaction.exec_params(
                 "UPDATE experiment SET status='paused',resume_requested=false,"
-                "worker_control_state='paused',worker_global_pause_request_id=NULL,"
+                "scheduler_resume_origin='none',worker_control_state='paused',"
+                "worker_global_pause_request_id=NULL,"
                 "updated_at=clock_timestamp() WHERE experiment_id=$1 "
                 "AND active_scheduler_worker_attempt_id=$2 "
                 "AND status IN ('pending','running','paused') "
@@ -7049,7 +7059,8 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
     {
         const pqxx::result paused = transaction.exec_params(
             "UPDATE experiment SET status='paused',resume_requested=false,"
-            "worker_control_state='paused',worker_global_pause_request_id=NULL,"
+            "scheduler_resume_origin='none',worker_control_state='paused',"
+            "worker_global_pause_request_id=NULL,"
             "updated_at=clock_timestamp() WHERE experiment_id=$1 "
             "AND status IN ('pending','paused') "
             "AND active_scheduler_worker_attempt_id IS NULL "
@@ -7194,7 +7205,8 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
     {
         const pqxx::result resumed = transaction.exec_params(
             "UPDATE experiment SET status='pending',resume_requested=true,"
-            "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+            "scheduler_resume_origin='operator',updated_at=clock_timestamp() "
+            "WHERE experiment_id=$1 "
             "AND status='paused' RETURNING experiment_id;",
             command.experimentId);
         RequireAffectedRows(resumed, 1, "queue_experiment_resume");

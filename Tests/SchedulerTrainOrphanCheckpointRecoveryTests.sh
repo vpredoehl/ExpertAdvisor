@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:-${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release}"
 test_db="ea_scheduler_train_orphan_test_${$}"
 test_dir="$(mktemp -d /tmp/ea_scheduler_train_orphan.XXXXXX)"
+export PGOPTIONS=
 
 cleanup() {
     dropdb --if-exists "${test_db}" >/dev/null 2>&1 || true
@@ -25,6 +26,10 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/071_resume_input_width_expansion.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment_global_control(singleton,desired_state)
 VALUES(true,'running') ON CONFLICT(singleton) DO NOTHING;

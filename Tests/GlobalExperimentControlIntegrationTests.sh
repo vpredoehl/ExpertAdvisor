@@ -14,6 +14,7 @@ migration_fixture_pid=""
 migration_fixture_pgid=""
 migration_fixture_start_identity=""
 migration_fixture_executable=""
+export PGOPTIONS=
 
 duplicate_migration_versions="$(
     for migration in "${repo_root}"/Database/migrations/*.sql; do
@@ -943,6 +944,8 @@ schema_psql gp_mig_selective \
     -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
 schema_psql gp_mig_selective \
     -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
+schema_psql gp_mig_selective \
+    -f "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql"
 schema_psql gp_mig_selective <<'SQL'
 UPDATE experiment_scheduler_protocol
 SET cutover_state='complete',
@@ -1102,6 +1105,8 @@ SQL
 
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql"
 
 "${process_test_binary}" --database-priority-control-tests \
     "dbname=${test_db}"
@@ -1257,8 +1262,8 @@ test "$(scalar "SELECT string_agg(
     WHERE experiment_id BETWEEN 909010 AND 909012")" = \
     '909010:pending:true:NULL,909011:pending:true:NULL,909012:paused:false:NULL'
 
-# Add older high-priority ordinary pending work. resume_requested must still
-# dominate scheduler_priority and updated_at for resumed admission ordering.
+# Add older high-priority ordinary pending work. Persistent priority must
+# dominate resume origin and updated_at for admission ordering.
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "INSERT INTO experiment(
          experiment_id,status,phase,scheduler_priority,resume_requested,updated_at
@@ -1270,9 +1275,9 @@ run_control --schedule-experiments --scheduler-once --dry-run \
     >"${test_tmp}/selective_global_released_scheduler.out"
 grep -q 'SCHEDULER_START.*global_desired_state=running' \
     "${test_tmp}/selective_global_released_scheduler.out"
-grep -q 'EXPERIMENT_CHILD_COMMAND,experiment_id=909010,phase=train,dry_run=1' \
+grep -q 'EXPERIMENT_CHILD_COMMAND,experiment_id=909013,phase=train,dry_run=1' \
     "${test_tmp}/selective_global_released_scheduler.out"
-! grep -q 'EXPERIMENT_CHILD_COMMAND,experiment_id=909013' \
+! grep -q 'EXPERIMENT_CHILD_COMMAND.*experiment_id=909010' \
     "${test_tmp}/selective_global_released_scheduler.out"
 test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
     WHERE experiment_id=909012")" = paused:false

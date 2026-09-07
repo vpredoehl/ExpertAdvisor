@@ -13,6 +13,7 @@ worker_executables=()
 scheduler_pid=""
 scheduler_start=""
 scheduler_executable=""
+export PGOPTIONS=
 
 case "${test_db}" in
     ea_scheduler_process_test_[0-9]*) ;;
@@ -80,6 +81,8 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment_global_control(singleton,desired_state)
 VALUES(true,'running') ON CONFLICT(singleton) DO NOTHING;

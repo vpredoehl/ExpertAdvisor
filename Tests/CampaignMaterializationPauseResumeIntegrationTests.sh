@@ -12,6 +12,7 @@ worker_pgids=()
 worker_starts=()
 worker_executables=()
 worker_commands=()
+export PGOPTIONS=
 
 case "${test_db}" in
     ea_campaign_materialization_control_[0-9]*) ;;
@@ -89,8 +90,13 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
+if [[ "$(psql -X -Atq -d "${test_db}" -c \
+    "SELECT to_regclass('public.experiment_campaign_materialization_control_operation') IS NOT NULL")" != "t" ]]; then
+    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+        -f "${repo_root}/Database/migrations/087_campaign_materialization_pause_resume.sql"
+fi
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/087_campaign_materialization_pause_resume.sql"
+    -f "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/CampaignMaterializationControlMigrationTests.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
@@ -166,11 +172,12 @@ insert_experiment() {
 INSERT INTO experiment(
  experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,
  head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,
- status,phase,current_operation,duplicate_nonce,scheduler_priority,updated_at)
+ status,phase,current_operation,duplicate_nonce,scheduler_priority,updated_at,
+ model_input_width,model_input_semantic_layout_version)
 VALUES(:experiment_id,'campaignfixture'||:experiment_id,1,0.0008,1,1,2,1,
  '2020-01-01','2020-02-01',:'status',:'phase',
  CASE WHEN :'phase' IN ('train','infer','analyze') THEN :'phase' ELSE NULL END,
- :experiment_id,:'priority',:'updated'::timestamptz);
+ :experiment_id,:'priority',:'updated'::timestamptz,77,6);
 SQL
 }
 
@@ -234,10 +241,11 @@ INSERT INTO experiment(
  head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,
  status,phase,current_operation,duplicate_nonce,scheduler_priority,
  worker_pid,worker_process_group_id,worker_process_start_identity,
- worker_executable,worker_command_line,worker_control_state)
+ worker_executable,worker_command_line,worker_control_state,
+ model_input_width,model_input_semantic_layout_version)
 VALUES(:experiment_id,'campaignworker'||:experiment_id,1,0.0008,1,1,2,1,
  '2020-01-01','2020-02-01','running','train','train',:experiment_id,'low',
- :pid,:pgid,:'start',:'executable',:'command','running');
+ :pid,:pgid,:'start',:'executable',:'command','running',77,6);
 INSERT INTO experiment_scheduler_worker_attempt(
  worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
  lifecycle_phase,capacity_class,ownership_origin,lifecycle_state,
@@ -291,8 +299,10 @@ run_control --resume-campaign-materialization=887001 --yes >"${test_dir}/resume-
 grep -q 'target_count=5,changed_count=2.*not_group_owned_count=3' "${test_dir}/resume-pending.out"
 test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||resume_requested||':'||scheduler_priority,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 887101 AND 887105")" = \
     '887101:pending:true:low,887102:pending:true:high,887103:paused:false:normal,887104:completed:false:high,887105:pending:false:normal'
+test "$(scalar "SELECT string_agg(experiment_id||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 887101 AND 887105")" = \
+    '887101:operator,887102:operator,887103:none,887104:none,887105:none'
 insert_experiment 887106 pending train high '2025-01-01 00:00:00+00'
-test "$(scalar "SELECT string_agg(experiment_id::text,',' ORDER BY resume_requested DESC,CASE scheduler_priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,updated_at,experiment_id) FROM experiment WHERE experiment_id IN (887101,887106)")" = '887101,887106'
+test "$(scalar "SELECT string_agg(experiment_id::text,',' ORDER BY CASE scheduler_priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,CASE scheduler_resume_origin WHEN 'operator' THEN 0 WHEN 'preemption' THEN 1 ELSE 2 END,updated_at,experiment_id) FROM experiment WHERE experiment_id IN (887101,887106)")" = '887106,887101'
 run_control --resume-campaign-materialization=887001 --yes >"${test_dir}/repeat-resume.out"
 grep -q 'changed_count=0.*not_group_owned_count=5' "${test_dir}/repeat-resume.out"
 

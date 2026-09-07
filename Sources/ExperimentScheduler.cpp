@@ -524,6 +524,7 @@ struct ExperimentRow
         EA::TrainingObjective::Legacy();
     std::string schedulerPriority = "normal";
     bool resumeRequested = false;
+    std::string schedulerResumeOrigin = "none";
     std::optional<long long> activeWorkerAttemptId;
 };
 
@@ -740,6 +741,7 @@ struct SchedulerControlExperimentRow
         EA::TrainingObjective::Legacy();
     std::optional<int> currentEpoch;
     std::string schedulerPriority = "normal";
+    std::string schedulerResumeOrigin = "none";
     std::optional<long long> activeWorkerAttemptId;
     std::optional<int> workerPid;
     std::optional<long long> workerProcessGroupId;
@@ -6204,6 +6206,9 @@ bool RequireSchedulerTables(pqxx::work& w)
     if (TableExists(w, "experiment") &&
         !ColumnExists(w, "experiment", "resume_requested"))
         missing.push_back("experiment.resume_requested");
+    if (TableExists(w, "experiment") &&
+        !ColumnExists(w, "experiment", "scheduler_resume_origin"))
+        missing.push_back("experiment.scheduler_resume_origin");
     if (TableExists(w, "experiment_checkpoint_eval") &&
         !ColumnExists(
             w,
@@ -8136,12 +8141,32 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     return experiment;
 }
 
+std::optional<ExperimentRow> LoadExperimentCheckpointIdentity(
+    pqxx::work& w,
+    long long experimentId)
+{
+    const pqxx::result rows = w.exec(
+        "SELECT experiment_id,symbol,prediction_horizon,c_next_threshold,"
+        "core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,"
+        "train_start::text,train_end::text,infer_start::text,infer_end::text,"
+        "last_model_id,resume_model_id,train_log_path,infer_log_path,"
+        "analysis_log_path,donchian20_mode,feature_warmup_scope,"
+        "donchian_lookback,feature_ablation_mask,resume_expand_input_width,"
+        "training_objective_canonical,training_objective_hash "
+        "FROM experiment WHERE experiment_id=" +
+        std::to_string(experimentId) + ";");
+    if (rows.size() != 1)
+        return std::nullopt;
+    return RowToExperiment(rows[0]);
+}
+
 ExperimentRow RowToPendingExperiment(const pqxx::row& row)
 {
     ExperimentRow experiment = RowToExperiment(row);
     experiment.schedulerPriority = row[24].as<std::string>();
     experiment.resumeRequested = row[25].as<bool>();
-    experiment.activeWorkerAttemptId = OptionalLongLongCell(row, 26);
+    experiment.schedulerResumeOrigin = row[26].as<std::string>();
+    experiment.activeWorkerAttemptId = OptionalLongLongCell(row, 27);
     return experiment;
 }
 
@@ -8156,7 +8181,8 @@ std::vector<ExperimentRow> LoadPendingExperiments(
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
         "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash,"
-        "scheduler_priority,resume_requested,active_scheduler_worker_attempt_id "
+        "scheduler_priority,resume_requested,scheduler_resume_origin,"
+        "active_scheduler_worker_attempt_id "
         "FROM experiment "
         "WHERE status = 'pending' AND phase = $1 ";
     if (cancellationOnly)
@@ -8166,9 +8192,10 @@ std::vector<ExperimentRow> LoadPendingExperiments(
             " WHERE singleton=true) "
             "AND cancel_after_checkpoint_epoch IS NOT NULL ";
     sql +=
-        "ORDER BY resume_requested DESC,"
-        "CASE scheduler_priority WHEN 'high' THEN 0 "
+        "ORDER BY CASE scheduler_priority WHEN 'high' THEN 0 "
         "WHEN 'normal' THEN 1 ELSE 2 END ASC,"
+        "CASE scheduler_resume_origin WHEN 'operator' THEN 0 "
+        "WHEN 'preemption' THEN 1 ELSE 2 END ASC,"
         "updated_at ASC,experiment_id ASC;";
     pqxx::result rows = w.exec_params(sql, phase);
 
@@ -8291,7 +8318,8 @@ std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx
     sql << "SELECT experiment_id, status, phase, last_model_id, resume_model_id, symbol, prediction_horizon, "
         << "c_next_threshold, core_lr_mult, head_lr_mult, target_epochs, "
         << "train_start::text, train_end::text, donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,training_objective_canonical,training_objective_hash,"
-        << "current_epoch,scheduler_priority,active_scheduler_worker_attempt_id,"
+        << "current_epoch,scheduler_priority,scheduler_resume_origin,"
+        << "active_scheduler_worker_attempt_id,"
         << "worker_pid,worker_process_group_id,worker_process_start_identity,"
         << "worker_executable,worker_command_line,"
         << "EXISTS (SELECT 1 FROM experiment_scheduler_worker_attempt a "
@@ -8332,14 +8360,15 @@ std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx
     if (!rows[0][19].is_null())
         row.currentEpoch = rows[0][19].as<int>();
     row.schedulerPriority = rows[0][20].as<std::string>();
-    row.activeWorkerAttemptId = OptionalLongLongCell(rows[0], 21);
-    if (!rows[0][22].is_null())
-        row.workerPid = rows[0][22].as<int>();
-    row.workerProcessGroupId = OptionalLongLongCell(rows[0], 23);
-    row.workerProcessStartIdentity = OptionalStringCell(rows[0], 24);
-    row.workerExecutable = OptionalStringCell(rows[0], 25);
-    row.workerCommandLine = OptionalStringCell(rows[0], 26);
-    row.hasAttachedWorkerAttempt = rows[0][27].as<bool>();
+    row.schedulerResumeOrigin = rows[0][21].as<std::string>();
+    row.activeWorkerAttemptId = OptionalLongLongCell(rows[0], 22);
+    if (!rows[0][23].is_null())
+        row.workerPid = rows[0][23].as<int>();
+    row.workerProcessGroupId = OptionalLongLongCell(rows[0], 24);
+    row.workerProcessStartIdentity = OptionalStringCell(rows[0], 25);
+    row.workerExecutable = OptionalStringCell(rows[0], 26);
+    row.workerCommandLine = OptionalStringCell(rows[0], 27);
+    row.hasAttachedWorkerAttempt = rows[0][28].as<bool>();
     return row;
 }
 
@@ -8364,6 +8393,7 @@ ExperimentRow SchedulerControlCheckpointExperiment(
     experiment.featureAblationMask = row.featureAblationMask;
     experiment.trainingObjective = row.trainingObjective;
     experiment.schedulerPriority = row.schedulerPriority;
+    experiment.schedulerResumeOrigin = row.schedulerResumeOrigin;
     experiment.activeWorkerAttemptId = row.activeWorkerAttemptId;
     return experiment;
 }
@@ -8683,7 +8713,9 @@ void ApplySchedulerControlTransition(pqxx::work& w,
 
     if (action == "cancel")
     {
-        sql << ", completed_at = now()";
+        sql << ", completed_at = now()"
+            << ", resume_requested = false"
+            << ", scheduler_resume_origin = 'none'";
     }
     else if (action == "retry_failed" ||
              action == "requeue_analysis" ||
@@ -8705,6 +8737,23 @@ void ApplySchedulerControlTransition(pqxx::work& w,
             << ", active_scheduler_worker_attempt_id = NULL";
         if (action != "requeue_training")
             sql << ", current_operation = NULL";
+        if (action == "retry_failed")
+        {
+            sql << ", resume_requested = false"
+                << ", scheduler_resume_origin = 'none'";
+        }
+        else if (action == "requeue_training")
+        {
+            // A same-ID checkpoint requeue is ordinary work. Persistent
+            // priority still applies, but it receives no resume-origin boost.
+            sql << ", resume_requested = false"
+                << ", scheduler_resume_origin = 'none'";
+        }
+        else
+        {
+            sql << ", resume_requested = true"
+                << ", scheduler_resume_origin = 'operator'";
+        }
     }
 
     if (action == "requeue_training")
@@ -8713,7 +8762,6 @@ void ApplySchedulerControlTransition(pqxx::work& w,
             throw std::invalid_argument(
                 "requeue_training_requires_selected_checkpoint");
         sql << ", current_operation = 'train'"
-            << ", resume_requested = true"
             << ", last_model_id = " << *promotedResumeModelId;
     }
 
@@ -8732,6 +8780,8 @@ void ApplySchedulerControlTransition(pqxx::work& w,
             << " AND phase = " << w.quote(row.phase)
             << " AND scheduler_priority = "
             << w.quote(row.schedulerPriority)
+            << " AND scheduler_resume_origin = "
+            << w.quote(row.schedulerResumeOrigin)
             << " AND active_scheduler_worker_attempt_id IS NULL"
             << " AND worker_pid IS NULL"
             << " AND worker_process_group_id IS NULL"
@@ -9972,6 +10022,294 @@ int CountGlobalWorkerCapacity(
         capacityClass).one_row()[0].as<int>();
 }
 
+int SchedulerPriorityRank(const std::string& priority)
+{
+    if (priority == "high")
+        return 0;
+    if (priority == "normal")
+        return 1;
+    if (priority == "low")
+        return 2;
+    throw std::runtime_error("invalid_scheduler_priority:" + priority);
+}
+
+EA::GlobalExperimentControl::ManagedWorker ManagedWorkerFromExactAttempt(
+    const EA::SchedulerOwnership::ExactAttemptSnapshot& exact)
+{
+    EA::GlobalExperimentControl::ManagedWorker worker;
+    worker.workerAttemptId = exact.workerAttemptId;
+    worker.workerKind = exact.workerKind;
+    worker.capacityClass = exact.capacityClass;
+    worker.attemptLifecycleState = exact.lifecycleState;
+    worker.launchAttemptIdentity = exact.launchAttemptIdentity;
+    worker.experimentId = exact.experimentId;
+    worker.phase = exact.lifecyclePhase;
+    worker.lifecycleStatus = exact.lifecycleStatus;
+    worker.pid = *exact.workerPid;
+    worker.processGroupId = exact.processGroupId;
+    worker.executable = exact.canonicalExecutablePath;
+    worker.commandLine = exact.commandLine;
+    worker.processStartIdentity = exact.processStartIdentity;
+    return worker;
+}
+
+void CompensateSchedulerPreemptionRollback(
+    const EA::GlobalExperimentControl::ManagedWorker& worker,
+    EA::GlobalExperimentControl::ProcessOperations& processes)
+{
+    const auto resumed =
+        EA::GlobalExperimentControl::ResumeWorker(worker, processes);
+    std::cerr << "SCHEDULER_PREEMPTION_ROLLBACK_COMPENSATION"
+              << ",experiment_id=" << worker.experimentId
+              << ",worker_attempt_id="
+              << worker.workerAttemptId.value_or(-1)
+              << ",result=" << resumed.result
+              << ",restored=" << (resumed.success ? 1 : 0)
+              << ",detail=" << resumed.detail
+              << std::endl;
+}
+
+bool PreemptOneLowerPriorityWorker(
+    const SchedulerOptions& options,
+    const ExperimentRow& candidate,
+    const std::string& phase,
+    int maximumCapacity)
+{
+    if (phase != "train" && phase != "infer")
+        return false;
+
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    if (!SchedulerLaunchAllowed(transaction, phase))
+    {
+        transaction.commit();
+        return false;
+    }
+
+    const pqxx::result pending = transaction.exec(
+        "SELECT status,phase,scheduler_priority,scheduler_resume_origin,"
+        "cancellation_request_id,active_scheduler_worker_attempt_id "
+        "FROM experiment WHERE experiment_id=$1;",
+        pqxx::params{candidate.experimentId});
+    if (pending.size() != 1 ||
+        pending[0][0].as<std::string>() != "pending" ||
+        pending[0][1].as<std::string>() != phase ||
+        pending[0][2].as<std::string>() != candidate.schedulerPriority ||
+        pending[0][3].as<std::string>() !=
+            candidate.schedulerResumeOrigin ||
+        !pending[0][4].is_null())
+    {
+        transaction.commit();
+        return false;
+    }
+    const int candidateRank =
+        SchedulerPriorityRank(candidate.schedulerPriority);
+    if (CountGlobalWorkerCapacity(transaction, phase) < maximumCapacity)
+    {
+        transaction.commit();
+        return false;
+    }
+
+    const pqxx::result victims = transaction.exec(
+        "SELECT e.experiment_id,e.scheduler_priority,"
+        "e.active_scheduler_worker_attempt_id "
+        "FROM experiment e "
+        "JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
+        "WHERE e.status='running' AND e.phase=$1 "
+        "AND a.worker_kind='experiment' "
+        "AND a.lifecycle_phase=$1 AND a.capacity_class=$1 "
+        "AND a.lifecycle_state IN ('spawned','running','observed') "
+        "AND e.cancellation_request_id IS NULL "
+        "AND e.cancel_after_checkpoint_epoch IS NULL "
+        "AND e.stop_after_checkpoint_epoch IS NULL "
+        "AND e.worker_global_pause_request_id IS NULL "
+        "AND e.worker_control_state='running' "
+        "AND CASE e.scheduler_priority WHEN 'high' THEN 0 "
+        "WHEN 'normal' THEN 1 ELSE 2 END > $2 "
+        "ORDER BY CASE e.scheduler_priority WHEN 'low' THEN 0 "
+        "WHEN 'normal' THEN 1 ELSE 2 END,"
+        "e.worker_started_at DESC NULLS LAST,e.experiment_id DESC LIMIT 1;",
+        pqxx::params{phase, candidateRank});
+    if (victims.empty())
+    {
+        std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
+                  << ",candidate_experiment_id="
+                  << candidate.experimentId
+                  << ",candidate_priority="
+                  << candidate.schedulerPriority
+                  << ",phase=" << phase
+                  << ",reason=no_strictly_lower_pause_safe_victim"
+                  << std::endl;
+        transaction.commit();
+        return false;
+    }
+
+    const long long victimExperimentId =
+        victims[0][0].as<long long>();
+    const std::string victimPriority =
+        victims[0][1].as<std::string>();
+    const long long workerAttemptId =
+        victims[0][2].as<long long>();
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId = workerAttemptId;
+    expected.experimentId = victimExperimentId;
+    expected.workerKind = "experiment";
+    expected.lifecyclePhase = phase;
+    expected.capacityClass = phase;
+    expected.requireSignalable = true;
+    expected.requireCompleteProcessIdentity = true;
+    const auto exact =
+        EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+            transaction, expected, true);
+    if (!exact || exact->lifecycleStatus != "running" ||
+        exact->lifecycleRowPhase != phase ||
+        exact->lifecycleState == "stopped")
+    {
+        std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
+                  << ",candidate_experiment_id="
+                  << candidate.experimentId
+                  << ",victim_experiment_id="
+                  << victimExperimentId
+                  << ",worker_attempt_id=" << workerAttemptId
+                  << ",phase=" << phase
+                  << ",reason=exact_attempt_verification_failed"
+                  << std::endl;
+        transaction.commit();
+        return false;
+    }
+
+    const pqxx::result reverified = transaction.exec(
+        "SELECT status,phase,scheduler_priority,cancellation_request_id,"
+        "cancel_after_checkpoint_epoch,stop_after_checkpoint_epoch,"
+        "worker_global_pause_request_id,worker_control_state "
+        "FROM experiment WHERE experiment_id=$1 "
+        "AND active_scheduler_worker_attempt_id=$2;",
+        pqxx::params{victimExperimentId, workerAttemptId});
+    if (reverified.size() != 1 ||
+        reverified[0][0].as<std::string>() != "running" ||
+        reverified[0][1].as<std::string>() != phase ||
+        SchedulerPriorityRank(reverified[0][2].as<std::string>()) <=
+            candidateRank ||
+        !reverified[0][3].is_null() ||
+        !reverified[0][4].is_null() ||
+        !reverified[0][5].is_null() ||
+        !reverified[0][6].is_null() ||
+        reverified[0][7].as<std::string>() != "running" ||
+        CountGlobalWorkerCapacity(transaction, phase) < maximumCapacity)
+    {
+        transaction.commit();
+        return false;
+    }
+
+    auto processes =
+        EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    const auto worker = ManagedWorkerFromExactAttempt(*exact);
+    bool newlyStopped = false;
+    bool commitAttempted = false;
+    try
+    {
+        const auto signal =
+            EA::GlobalExperimentControl::PauseWorker(worker, *processes);
+        newlyStopped =
+            signal.success &&
+            std::find(signal.signals.begin(), signal.signals.end(), SIGSTOP) !=
+                signal.signals.end();
+        if (!newlyStopped)
+        {
+            std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
+                      << ",candidate_experiment_id="
+                      << candidate.experimentId
+                      << ",victim_experiment_id="
+                      << victimExperimentId
+                      << ",worker_attempt_id=" << workerAttemptId
+                      << ",phase=" << phase
+                      << ",reason=" << signal.result
+                      << ",detail=" << signal.detail
+                      << std::endl;
+            transaction.commit();
+            return false;
+        }
+        if (SchedulerAuthorityTestFailpointEnabled(
+                "preemption_after_sigstop_before_db"))
+        {
+            throw std::runtime_error(
+                "injected_preemption_db_failure_after_sigstop");
+        }
+
+        const pqxx::result stopped = transaction.exec(
+            "UPDATE experiment_scheduler_worker_attempt SET "
+            "lifecycle_state='stopped',last_observed_at=clock_timestamp(),"
+            "observed_by_scheduler_invocation_id=$1,signal_number=$2,"
+            "reconciliation_result='scheduler_priority_preemption',"
+            "diagnostic='verified_process_group_stopped_for_higher_priority' "
+            "WHERE worker_attempt_id=$3 "
+            "AND lifecycle_state IN ('spawned','running','observed') "
+            "RETURNING worker_attempt_id;",
+            pqxx::params{
+                options.schedulerAuthority.schedulerInvocationId,
+                SIGSTOP,
+                workerAttemptId});
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            stopped, "preempt_exact_worker_attempt");
+        const pqxx::result queued = transaction.exec(
+            "UPDATE experiment SET status='pending',resume_requested=true,"
+            "scheduler_resume_origin='preemption',"
+            "worker_control_state='paused',updated_at=clock_timestamp() "
+            "WHERE experiment_id=$1 AND status='running' AND phase=$2 "
+            "AND scheduler_priority=$3 "
+            "AND active_scheduler_worker_attempt_id=$4 "
+            "AND cancellation_request_id IS NULL "
+            "AND cancel_after_checkpoint_epoch IS NULL "
+            "AND stop_after_checkpoint_epoch IS NULL "
+            "AND worker_global_pause_request_id IS NULL "
+            "RETURNING experiment_id;",
+            pqxx::params{
+                victimExperimentId,
+                phase,
+                victimPriority,
+                workerAttemptId});
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            queued, "preempt_exact_experiment_lifecycle");
+        commitAttempted = true;
+        transaction.commit();
+    }
+    catch (...)
+    {
+        if (!commitAttempted)
+        {
+            transaction.abort();
+            if (newlyStopped)
+                CompensateSchedulerPreemptionRollback(
+                    worker, *processes);
+        }
+        else
+        {
+            std::cerr << "SCHEDULER_PREEMPTION_COMMIT_OUTCOME_AMBIGUOUS"
+                      << ",victim_experiment_id="
+                      << victimExperimentId
+                      << ",worker_attempt_id=" << workerAttemptId
+                      << ",compensation=withheld"
+                      << std::endl;
+        }
+        throw;
+    }
+
+    std::cout << "SCHEDULER_PRIORITY_PREEMPTED"
+              << ",candidate_experiment_id=" << candidate.experimentId
+              << ",candidate_priority=" << candidate.schedulerPriority
+              << ",victim_experiment_id=" << victimExperimentId
+              << ",victim_priority=" << victimPriority
+              << ",worker_attempt_id=" << workerAttemptId
+              << ",phase=" << phase
+              << ",resume_origin=preemption"
+              << ",victim_order=lowest_priority_then_newest_worker_started_at_then_experiment_id"
+              << std::endl;
+    return true;
+}
+
 enum class StoppedWorkerAdmissionResult
 {
     NotApplicable,
@@ -10009,7 +10347,7 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
     }
 
     const pqxx::result lifecycle = transaction.exec_params(
-        "SELECT status,phase,resume_requested,"
+        "SELECT status,phase,resume_requested,scheduler_resume_origin,"
         "active_scheduler_worker_attempt_id "
         "FROM experiment WHERE experiment_id=$1;",
         experiment.experimentId);
@@ -10017,8 +10355,10 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
         lifecycle[0][0].as<std::string>() != "pending" ||
         lifecycle[0][1].as<std::string>() != phase ||
         !lifecycle[0][2].as<bool>() ||
-        lifecycle[0][3].is_null() ||
-        lifecycle[0][3].as<long long>() !=
+        lifecycle[0][3].as<std::string>() !=
+            experiment.schedulerResumeOrigin ||
+        lifecycle[0][4].is_null() ||
+        lifecycle[0][4].as<long long>() !=
             *experiment.activeWorkerAttemptId)
     {
         transaction.commit();
@@ -10073,6 +10413,15 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
     if (signal.identity ==
         EA::GlobalExperimentControl::IdentityResult::ProcessMissing)
     {
+        std::optional<QueueResumeMeta> restartCheckpoint;
+        if (phase == "train" &&
+            experiment.schedulerResumeOrigin == "preemption")
+        {
+            const TrainingCheckpointSelection selection =
+                SelectUsableTrainingCheckpoint(
+                    transaction, experiment, std::nullopt, false);
+            restartCheckpoint = selection.checkpoint;
+        }
         pqxx::result retired = transaction.exec_params(
             "UPDATE experiment_scheduler_worker_attempt SET "
             "lifecycle_state='abandoned',completed_at=clock_timestamp(),"
@@ -10088,20 +10437,66 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
             exact->workerAttemptId);
         EA::SchedulerOwnership::RequireAffectedExactlyOne(
             retired, "retire_missing_stopped_worker_attempt");
-        pqxx::result detached = transaction.exec_params(
-            "UPDATE experiment SET worker_pid=NULL,"
-            "worker_process_group_id=NULL,"
-            "worker_process_start_identity=NULL,worker_executable=NULL,"
-            "worker_command_line=NULL,worker_control_state='running',"
-            "active_scheduler_worker_attempt_id=NULL,"
-            "updated_at=clock_timestamp() "
-            "WHERE experiment_id=$1 AND status='pending' "
-            "AND phase=$2 AND resume_requested=true "
-            "AND active_scheduler_worker_attempt_id=$3 "
-            "RETURNING experiment_id;",
-            experiment.experimentId,
-            phase,
-            exact->workerAttemptId);
+        pqxx::result detached;
+        if (phase == "train" &&
+            experiment.schedulerResumeOrigin == "preemption" &&
+            !restartCheckpoint.has_value())
+        {
+            detached = transaction.exec(
+                "UPDATE experiment SET status='failed',"
+                "resume_requested=false,scheduler_resume_origin='none',"
+                "worker_pid=NULL,worker_process_group_id=NULL,"
+                "worker_process_start_identity=NULL,worker_executable=NULL,"
+                "worker_command_line=NULL,worker_control_state='running',"
+                "active_scheduler_worker_attempt_id=NULL,exit_code=-1,"
+                "error_message='preempted_worker_missing_no_valid_checkpoint',"
+                "completed_at=clock_timestamp(),updated_at=clock_timestamp() "
+                "WHERE experiment_id=$1 AND status='pending' AND phase='train' "
+                "AND resume_requested=true "
+                "AND scheduler_resume_origin='preemption' "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "RETURNING experiment_id;",
+                pqxx::params{
+                    experiment.experimentId,
+                    exact->workerAttemptId});
+        }
+        else if (restartCheckpoint.has_value())
+        {
+            detached = transaction.exec(
+                "UPDATE experiment SET worker_pid=NULL,"
+                "worker_process_group_id=NULL,"
+                "worker_process_start_identity=NULL,worker_executable=NULL,"
+                "worker_command_line=NULL,worker_control_state='running',"
+                "active_scheduler_worker_attempt_id=NULL,"
+                "last_model_id=$1,resume_model_id=$1,"
+                "current_operation='train',updated_at=clock_timestamp() "
+                "WHERE experiment_id=$2 AND status='pending' "
+                "AND phase='train' AND resume_requested=true "
+                "AND scheduler_resume_origin='preemption' "
+                "AND active_scheduler_worker_attempt_id=$3 "
+                "RETURNING experiment_id;",
+                pqxx::params{
+                    restartCheckpoint->modelId,
+                    experiment.experimentId,
+                    exact->workerAttemptId});
+        }
+        else
+        {
+            detached = transaction.exec_params(
+                "UPDATE experiment SET worker_pid=NULL,"
+                "worker_process_group_id=NULL,"
+                "worker_process_start_identity=NULL,worker_executable=NULL,"
+                "worker_command_line=NULL,worker_control_state='running',"
+                "active_scheduler_worker_attempt_id=NULL,"
+                "updated_at=clock_timestamp() "
+                "WHERE experiment_id=$1 AND status='pending' "
+                "AND phase=$2 AND resume_requested=true "
+                "AND active_scheduler_worker_attempt_id=$3 "
+                "RETURNING experiment_id;",
+                experiment.experimentId,
+                phase,
+                exact->workerAttemptId);
+        }
         EA::SchedulerOwnership::RequireAffectedExactlyOne(
             detached, "detach_missing_stopped_worker_attempt");
         transaction.commit();
@@ -10110,8 +10505,25 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
                   << ",worker_attempt_id=" << exact->workerAttemptId
                   << ",phase=" << phase
                   << ",resume_requested=true"
-                  << ",fallback=checkpoint_restart"
+                  << ",resume_origin="
+                  << experiment.schedulerResumeOrigin
+                  << ",fallback="
+                  << (phase == "train" &&
+                              experiment.schedulerResumeOrigin ==
+                                  "preemption"
+                          ? (restartCheckpoint.has_value()
+                                 ? "phase_a_checkpoint_restart"
+                                 : "failed_no_valid_checkpoint")
+                          : "checkpoint_restart")
                   << std::endl;
+        // A preempted train restart may have promoted an earlier checkpoint.
+        // Defer it to the next poll so command construction reloads that
+        // authoritative identity instead of using this turn's stale snapshot.
+        if (phase == "train" &&
+            experiment.schedulerResumeOrigin == "preemption")
+        {
+            return StoppedWorkerAdmissionResult::DeferredUnsafe;
+        }
         return StoppedWorkerAdmissionResult::MissingProcessFallbackReady;
     }
     if (!signal.success)
@@ -10151,7 +10563,8 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
         activated, "activate_admitted_stopped_worker_attempt");
     pqxx::result running = transaction.exec_params(
         "UPDATE experiment SET status='running',resume_requested=false,"
-        "worker_control_state='running',worker_global_pause_request_id=NULL,"
+        "scheduler_resume_origin='none',worker_control_state='running',"
+        "worker_global_pause_request_id=NULL,"
         "updated_at=clock_timestamp() WHERE experiment_id=$1 "
         "AND status='pending' AND phase=$2 AND resume_requested=true "
         "AND active_scheduler_worker_attempt_id=$3 "
@@ -10283,6 +10696,7 @@ ReserveExperimentWorkerAttempt(
     const std::string claimSql =
         std::string{
         "UPDATE experiment SET status='running',resume_requested=false,"
+        "scheduler_resume_origin='none',"
         "started_at=COALESCE(started_at,clock_timestamp()),"
         "worker_started_at=clock_timestamp(),worker_pid=NULL,"
         "worker_process_group_id=NULL,"
@@ -17638,6 +18052,7 @@ void RequeueTrainOrphanFromCheckpoint(pqxx::work& w,
     pqxx::result updated = w.exec_params(
         "UPDATE experiment "
         "SET status = 'pending', phase = 'train', last_model_id = $1, resume_model_id = $1, "
+        "resume_requested=false,scheduler_resume_origin='none',"
         "exit_code = NULL, error_message = NULL, updated_at = updated_at "
         "WHERE experiment_id = $2 "
         "AND ($3::bigint IS NULL OR "
@@ -18802,7 +19217,8 @@ int RecoverOrphanedRunningExperiments(
             {
                 transaction.exec_params(
                     "UPDATE experiment SET status='running',"
-                    "resume_requested=false,worker_control_state='running',"
+                    "resume_requested=false,scheduler_resume_origin='none',"
+                    "worker_control_state='running',"
                     "updated_at=clock_timestamp() "
                     "WHERE experiment_id=$1 AND phase=$2 "
                     "AND status IN ('paused','pending') "
@@ -18828,7 +19244,8 @@ int RecoverOrphanedRunningExperiments(
         {
             const pqxx::result stoppedLifecycle =
                 transaction.exec_params(
-                    "SELECT status,resume_requested FROM experiment "
+                    "SELECT status,resume_requested,scheduler_resume_origin "
+                    "FROM experiment "
                     "WHERE experiment_id=$1 AND phase=$2 "
                     "AND status IN ('paused','pending') "
                     "AND active_scheduler_worker_attempt_id=$3 "
@@ -18838,6 +19255,29 @@ int RecoverOrphanedRunningExperiments(
                     attemptId);
             if (stoppedLifecycle.size() == 1)
             {
+                const bool preemptedTrainRestart =
+                    phase == "train" &&
+                    stoppedLifecycle[0][0].as<std::string>() == "pending" &&
+                    stoppedLifecycle[0][1].as<bool>() &&
+                    stoppedLifecycle[0][2].as<std::string>() ==
+                        "preemption";
+                std::optional<QueueResumeMeta> restartCheckpoint;
+                if (preemptedTrainRestart)
+                {
+                    const auto checkpointExperiment =
+                        LoadExperimentCheckpointIdentity(
+                            transaction, experimentId);
+                    if (!checkpointExperiment.has_value())
+                        throw std::runtime_error(
+                            "missing_preempted_checkpoint_experiment");
+                    restartCheckpoint =
+                        SelectUsableTrainingCheckpoint(
+                            transaction,
+                            *checkpointExperiment,
+                            std::nullopt,
+                            false)
+                            .checkpoint;
+                }
                 pqxx::result retired = transaction.exec_params(
                     "UPDATE experiment_scheduler_worker_attempt SET "
                     "lifecycle_state='abandoned',"
@@ -18856,22 +19296,70 @@ int RecoverOrphanedRunningExperiments(
                 EA::SchedulerOwnership::RequireAffectedExactlyOne(
                     retired,
                     "reconcile_missing_stopped_worker_attempt");
-                pqxx::result detached = transaction.exec_params(
-                    "UPDATE experiment SET worker_pid=NULL,"
-                    "worker_process_group_id=NULL,"
-                    "worker_process_start_identity=NULL,"
-                    "worker_executable=NULL,worker_command_line=NULL,"
-                    "worker_control_state=CASE WHEN status='paused' "
-                    "THEN 'paused' ELSE 'running' END,"
-                    "active_scheduler_worker_attempt_id=NULL,"
-                    "updated_at=clock_timestamp() "
-                    "WHERE experiment_id=$1 AND phase=$2 "
-                    "AND status IN ('paused','pending') "
-                    "AND active_scheduler_worker_attempt_id=$3 "
-                    "RETURNING experiment_id;",
-                    experimentId,
-                    phase,
-                    attemptId);
+                pqxx::result detached;
+                if (preemptedTrainRestart && !restartCheckpoint.has_value())
+                {
+                    detached = transaction.exec(
+                        "UPDATE experiment SET status='failed',"
+                        "resume_requested=false,"
+                        "scheduler_resume_origin='none',worker_pid=NULL,"
+                        "worker_process_group_id=NULL,"
+                        "worker_process_start_identity=NULL,"
+                        "worker_executable=NULL,worker_command_line=NULL,"
+                        "worker_control_state='running',"
+                        "active_scheduler_worker_attempt_id=NULL,exit_code=-1,"
+                        "error_message="
+                        "'preempted_worker_missing_no_valid_checkpoint',"
+                        "completed_at=clock_timestamp(),"
+                        "updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$1 AND phase='train' "
+                        "AND status='pending' AND resume_requested=true "
+                        "AND scheduler_resume_origin='preemption' "
+                        "AND active_scheduler_worker_attempt_id=$2 "
+                        "RETURNING experiment_id;",
+                        pqxx::params{experimentId, attemptId});
+                }
+                else if (restartCheckpoint.has_value())
+                {
+                    detached = transaction.exec(
+                        "UPDATE experiment SET worker_pid=NULL,"
+                        "worker_process_group_id=NULL,"
+                        "worker_process_start_identity=NULL,"
+                        "worker_executable=NULL,worker_command_line=NULL,"
+                        "worker_control_state='running',"
+                        "active_scheduler_worker_attempt_id=NULL,"
+                        "last_model_id=$1,resume_model_id=$1,"
+                        "current_operation='train',"
+                        "updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$2 AND phase='train' "
+                        "AND status='pending' AND resume_requested=true "
+                        "AND scheduler_resume_origin='preemption' "
+                        "AND active_scheduler_worker_attempt_id=$3 "
+                        "RETURNING experiment_id;",
+                        pqxx::params{
+                            restartCheckpoint->modelId,
+                            experimentId,
+                            attemptId});
+                }
+                else
+                {
+                    detached = transaction.exec_params(
+                        "UPDATE experiment SET worker_pid=NULL,"
+                        "worker_process_group_id=NULL,"
+                        "worker_process_start_identity=NULL,"
+                        "worker_executable=NULL,worker_command_line=NULL,"
+                        "worker_control_state=CASE WHEN status='paused' "
+                        "THEN 'paused' ELSE 'running' END,"
+                        "active_scheduler_worker_attempt_id=NULL,"
+                        "updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$1 AND phase=$2 "
+                        "AND status IN ('paused','pending') "
+                        "AND active_scheduler_worker_attempt_id=$3 "
+                        "RETURNING experiment_id;",
+                        experimentId,
+                        phase,
+                        attemptId);
+                }
                 EA::SchedulerOwnership::RequireAffectedExactlyOne(
                     detached,
                     "detach_reconciled_missing_stopped_worker_attempt");
@@ -18883,7 +19371,14 @@ int RecoverOrphanedRunningExperiments(
                     << ",resume_requested="
                     << (stoppedLifecycle[0][1].as<bool>()
                             ? "true" : "false")
-                    << ",result=process_missing_restart_eligible"
+                    << ",resume_origin="
+                    << stoppedLifecycle[0][2].as<std::string>()
+                    << ",result="
+                    << (preemptedTrainRestart
+                            ? (restartCheckpoint.has_value()
+                                   ? "phase_a_checkpoint_restart"
+                                   : "failed_no_valid_checkpoint")
+                            : "process_missing_restart_eligible")
                     << std::endl;
                 ++reconciled;
                 continue;
@@ -21495,6 +21990,11 @@ int RunTrainJobs(
 
     for (const ExperimentRow& job : jobs)
     {
+        if (!options.dryRun && !cancellationOnly)
+        {
+            (void)PreemptOneLowerPriorityWorker(
+                options, job, "train", options.maxTrainProcs);
+        }
         if (!options.dryRun && job.activeWorkerAttemptId)
         {
             const StoppedWorkerAdmissionResult admission =
@@ -21673,6 +22173,11 @@ int RunInferJobs(
 
     for (const ExperimentRow& job : jobs)
     {
+        if (!options.dryRun)
+        {
+            (void)PreemptOneLowerPriorityWorker(
+                options, job, "infer", options.maxInferProcs);
+        }
         if (!options.dryRun && job.activeWorkerAttemptId)
         {
             const StoppedWorkerAdmissionResult admission =

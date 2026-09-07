@@ -25,7 +25,8 @@ diagnose_error() {
     psql -X -Atq -d "${test_db}" -c \
         "SELECT experiment_id,status,phase,current_epoch,target_epochs,
                 last_model_id,resume_model_id,resume_requested,
-                scheduler_priority,active_scheduler_worker_attempt_id
+                scheduler_resume_origin,scheduler_priority,
+                active_scheduler_worker_attempt_id
          FROM experiment ORDER BY experiment_id" >&2 || true
     return "${result}"
 }
@@ -39,7 +40,8 @@ for migration in \
     052_scheduler_protocol_and_exact_attempt_hardening.sql \
     071_resume_input_width_expansion.sql \
     078_operator_forced_final_inference_rerun.sql \
-    086_scheduler_pause_resume_priority.sql; do
+    086_scheduler_pause_resume_priority.sql \
+    093_scheduler_priority_preemption.sql; do
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
         -f "${repo_root}/Database/migrations/${migration}"
 done
@@ -180,7 +182,7 @@ success_model="$(insert_model 930001 successhigh 40)"
 experiment_count_before="$(scalar 'SELECT count(*) FROM experiment')"
 run_cli --requeue-training=930001 --yes >"${test_dir}/success.out"
 grep -q "SCHEDULER_REQUEUE_TRAINING_SELECTION,experiment_id=930001,resume_model_id=${success_model},completed_epoch=40,scheduler_priority=high" "${test_dir}/success.out"
-test "$(scalar "SELECT status||':'||phase||':'||current_operation||':'||last_model_id||':'||resume_model_id||':'||resume_requested||':'||scheduler_priority FROM experiment WHERE experiment_id=930001")" = "pending:train:train:${success_model}:${success_model}:true:high"
+test "$(scalar "SELECT status||':'||phase||':'||current_operation||':'||last_model_id||':'||resume_model_id||':'||resume_requested||':'||scheduler_resume_origin||':'||scheduler_priority FROM experiment WHERE experiment_id=930001")" = "pending:train:train:${success_model}:${success_model}:false:none:high"
 test "${experiment_count_before}" = "$(scalar 'SELECT count(*) FROM experiment')"
 
 # B2: an unusable newest candidate falls back through the Phase A selector.

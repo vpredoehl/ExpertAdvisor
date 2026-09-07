@@ -475,6 +475,16 @@ durable `checkpoint_analyze` attempts, exact administrative outcome attempt
 identity, active-attempt shape triggers, and supporting indexes/constraints.
 The migration is transactional and replay-idempotent.
 
+Migration 093 adds durable `scheduler_resume_origin` values (`none`,
+`operator`, `preemption`) and replaces the pending-admission index. Admission
+orders persistent `scheduler_priority` first, then operator resumes,
+preemption resumes, and ordinary work within the same priority tier. Only the
+scheduler may create `preemption` origin by identity-safe, capacity-class-local
+SIGSTOP; stopped attempts do not consume capacity and are resumed only after
+later scheduler admission. The migration deterministically classifies legacy
+`resume_requested=true` rows as operator intent and enforces consistent
+boolean/origin combinations.
+
 After applying 052, corrected scheduler startup is rejected without mutation
 until this explicit command succeeds:
 

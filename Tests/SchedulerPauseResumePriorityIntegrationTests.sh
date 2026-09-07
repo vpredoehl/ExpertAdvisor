@@ -11,6 +11,7 @@ worker_pgids=()
 worker_starts=()
 worker_executables=()
 worker_commands=()
+export PGOPTIONS=
 
 cleanup() {
     local index
@@ -63,6 +64,8 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql"
 
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment_global_control(singleton,desired_state)
@@ -140,14 +143,16 @@ insert_pending 860004 train low '2026-01-01 00:00:04+00'
 insert_pending 860005 infer normal '2026-01-01 00:00:03+00'
 insert_pending 860006 train normal '2026-01-01 00:00:03+00'
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
-    "UPDATE experiment SET resume_requested=true,scheduler_priority='low',
+    "UPDATE experiment SET resume_requested=true,
+     scheduler_resume_origin='preemption',scheduler_priority='low',
      updated_at='2026-01-01 00:00:05+00' WHERE experiment_id=860004"
 test "$(scalar "SELECT string_agg(experiment_id::text,',' ORDER BY
-        resume_requested DESC,
         CASE scheduler_priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+        CASE scheduler_resume_origin WHEN 'operator' THEN 0
+             WHEN 'preemption' THEN 1 ELSE 2 END,
         updated_at,experiment_id)
     FROM experiment WHERE experiment_id BETWEEN 860002 AND 860006")" = \
-    "860004,860002,860003,860005,860006"
+    "860002,860003,860005,860006,860004"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "DELETE FROM experiment WHERE experiment_id BETWEEN 860001 AND 860006"
 
@@ -260,7 +265,6 @@ run_cli --resume-experiment=861001 --yes |
     grep -q 'already_satisfied'
 [[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
 
-insert_pending 861003 train high '2025-01-01 00:00:00+00'
 run_cli --schedule-experiments --scheduler-once \
     --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/full-capacity-logs" \
@@ -307,8 +311,8 @@ run_cli --resume-experiment=861001 --yes |
 test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
     WHERE experiment_id=861001")" = "pending:true"
 
-# Release only the disposable capacity fixture, then prove the resumed low
-# priority worker gets the next slot ahead of an ordinary high-priority row.
+# Release only the disposable capacity fixture, then prove the exact stopped
+# low-priority worker gets the next available slot without a duplicate launch.
 kill -TERM -- "-${worker_pgids[1]}"
 wait "${worker_pids[1]}" || true
 run_cli --schedule-experiments --scheduler-once \
@@ -322,8 +326,6 @@ test "$(scalar "SELECT status||':'||resume_requested::text||':'||
     "running:false:low"
 test "$(scalar "SELECT worker_pid FROM experiment
     WHERE experiment_id=861001")" = "${worker_pids[0]}"
-test "$(scalar "SELECT status FROM experiment WHERE experiment_id=861003")" = \
-    pending
 [[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" != T* ]]
 run_cli --scheduler-status >"${test_dir}/managed-resumed-status.out"
 grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,authoritative=1,detected=1,execution_state=running,lifecycle_status=running,attempt_state=running,identity_result=validated,executable_identity_match=1" \
@@ -375,8 +377,9 @@ test "$(scalar "SELECT status FROM experiment WHERE experiment_id=861005")" = pa
 # A vanished stopped worker is detached without clearing resume priority. The
 # following dry-run proves it takes the ordinary restart command path.
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
-    "UPDATE experiment SET status='paused',resume_requested=false
-     WHERE experiment_id IN (861001,861003,861004)"
+    "UPDATE experiment SET status='paused',resume_requested=false,
+     scheduler_resume_origin='none'
+     WHERE experiment_id IN (861001,861004)"
 launch_worker 861006 9861006
 persist_worker 2 861006 9861006
 run_cli --pause-experiment=861006 --yes >/dev/null
@@ -410,6 +413,6 @@ grep -q 'EXPERIMENT_CHILD_COMMAND,experiment_id=861006,phase=train,dry_run=1' \
 
 printf '%s\n' \
     'SchedulerPauseResumePriorityIntegrationTests passed' \
-    'priority_order=resume_requested,high,normal,low,updated_at,experiment_id' \
+    'priority_order=high,normal,low,operator,preemption,ordinary,updated_at,experiment_id' \
     'phase_in_priority_order=false' \
     'production_processes_signaled=0'
