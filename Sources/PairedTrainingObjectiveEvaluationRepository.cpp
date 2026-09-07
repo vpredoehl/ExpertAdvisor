@@ -185,9 +185,49 @@ void LoadFinalModelConfiguration(pqxx::transaction_base& transaction,
         ContractFailure(experimentId, "final_model_ownership_mismatch");
     const std::optional<long long> finalParent = OptionalValue<long long>(
         ownership.one_row(), "parent_model_id");
-    if (finalParent != arm.configuration.resumeModelId)
-        ContractFailure(experimentId,
-                        "final_model_initialization_lineage_mismatch");
+
+    if (!arm.configuration.resumeModelId)
+    {
+        if (finalParent)
+            ContractFailure(
+                experimentId,
+                "final_model_initialization_lineage_mismatch");
+    }
+    else
+    {
+        const long long resumeModelId =
+            *arm.configuration.resumeModelId;
+        const pqxx::result initializationLineage = transaction.exec(
+            "WITH RECURSIVE ancestry("
+            "model_id,parent_model_id,experiment_id,depth,path_valid"
+            ") AS ("
+            " SELECT model_id,parent_model_id,experiment_id,0,"
+            "        experiment_id=$3 "
+            " FROM model WHERE model_id=$1 "
+            " UNION ALL "
+            " SELECT m.model_id,m.parent_model_id,m.experiment_id,"
+            "        a.depth+1,"
+            "        a.path_valid AND ("
+            "          m.model_id=$2 OR ("
+            "            m.experiment_id=$3 AND "
+            "            COALESCE(m.comment,'') ILIKE "
+            "              '%periodic training checkpoint%'"
+            "          )"
+            "        ) "
+            " FROM model m "
+            " JOIN ancestry a ON m.model_id=a.parent_model_id "
+            " WHERE a.depth < 100"
+            ") "
+            "SELECT 1 FROM ancestry "
+            "WHERE model_id=$2 AND path_valid "
+            "LIMIT 1;",
+            pqxx::params{modelId, resumeModelId, experimentId});
+
+        if (initializationLineage.empty())
+            ContractFailure(
+                experimentId,
+                "final_model_initialization_lineage_mismatch");
+    }
 
     auto& configuration = arm.configuration;
     const MatrixMetadata model = LoadMatrixMetadata(

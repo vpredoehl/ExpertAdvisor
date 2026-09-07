@@ -5937,13 +5937,21 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
     if (createdAtOrAfter.has_value())
     {
         sql += "AND m.created_at>=to_timestamp($2) ";
-        sql += "ORDER BY cfg.value DESC NULLS LAST,m.model_id DESC;";
+        sql +=
+            "ORDER BY cfg.value DESC NULLS LAST,"
+            "(COALESCE(m.comment,'') ILIKE "
+            "'%periodic training checkpoint%') ASC,"
+            "m.model_id DESC;";
         rows = w.exec_params(
             sql, experiment.experimentId, *createdAtOrAfter);
     }
     else
     {
-        sql += "ORDER BY cfg.value DESC NULLS LAST,m.model_id DESC;";
+        sql +=
+            "ORDER BY cfg.value DESC NULLS LAST,"
+            "(COALESCE(m.comment,'') ILIKE "
+            "'%periodic training checkpoint%') ASC,"
+            "m.model_id DESC;";
         rows = w.exec_params(sql, experiment.experimentId);
     }
 
@@ -5996,16 +6004,68 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
         {
             ++groupEnd;
         }
+        bool resolvedTerminalGroup = false;
         if (groupEnd - index > 1)
         {
-            std::cout << "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS"
-                      << ",experiment_id=" << experiment.experimentId
-                      << ",completed_epoch=" << *candidate.completedEpoch
-                      << ",candidate_count=" << (groupEnd - index)
-                      << ",result=epoch_skipped"
-                      << std::endl;
-            index = groupEnd;
-            continue;
+            const bool terminalEpoch =
+                allowFinalModel &&
+                *candidate.completedEpoch >= experiment.targetEpochs;
+
+            if (terminalEpoch)
+            {
+                size_t nonPeriodicCount = 0;
+                for (size_t candidateIndex = index;
+                     candidateIndex < groupEnd;
+                     ++candidateIndex)
+                {
+                    if (!candidates[candidateIndex].periodicCheckpoint)
+                        ++nonPeriodicCount;
+                }
+
+                if (nonPeriodicCount == 1 &&
+                    !candidate.periodicCheckpoint)
+                {
+                    resolvedTerminalGroup = true;
+                    std::cout
+                        << "SCHEDULER_CHECKPOINT_FINAL_CANDIDATE_RESOLVED"
+                        << ",experiment_id=" << experiment.experimentId
+                        << ",completed_epoch=" << *candidate.completedEpoch
+                        << ",candidate_count=" << (groupEnd - index)
+                        << ",model_id=" << candidate.modelId
+                        << ",reason=unique_non_periodic_target_model"
+                        << std::endl;
+                }
+                else
+                {
+                    std::cout
+                        << "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS"
+                        << ",experiment_id=" << experiment.experimentId
+                        << ",completed_epoch=" << *candidate.completedEpoch
+                        << ",candidate_count=" << (groupEnd - index)
+                        << ",non_periodic_count=" << nonPeriodicCount
+                        << ",result=terminal_epoch_not_regressed"
+                        << std::endl;
+                    std::cout
+                        << "SCHEDULER_CHECKPOINT_SELECTION_FAILED"
+                        << ",experiment_id=" << experiment.experimentId
+                        << ",candidate_count=" << candidates.size()
+                        << ",reason=terminal_model_ambiguous"
+                        << std::endl;
+                    return TrainingCheckpointSelection{
+                        std::nullopt, "terminal_model_ambiguous"};
+                }
+            }
+            else
+            {
+                std::cout << "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",completed_epoch=" << *candidate.completedEpoch
+                          << ",candidate_count=" << (groupEnd - index)
+                          << ",result=epoch_skipped"
+                          << std::endl;
+                index = groupEnd;
+                continue;
+            }
         }
 
         if (*candidate.completedEpoch > experiment.targetEpochs)
@@ -6081,6 +6141,17 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
                 candidate.modelId,
                 candidate.completedEpoch,
                 error.what());
+            if (resolvedTerminalGroup)
+            {
+                std::cout
+                    << "SCHEDULER_CHECKPOINT_SELECTION_FAILED"
+                    << ",experiment_id=" << experiment.experimentId
+                    << ",candidate_count=" << candidates.size()
+                    << ",reason=resolved_terminal_model_invalid"
+                    << std::endl;
+                return TrainingCheckpointSelection{
+                    std::nullopt, "resolved_terminal_model_invalid"};
+            }
         }
         index = groupEnd;
     }
@@ -10468,7 +10539,10 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
                 "worker_process_start_identity=NULL,worker_executable=NULL,"
                 "worker_command_line=NULL,worker_control_state='running',"
                 "active_scheduler_worker_attempt_id=NULL,"
-                "last_model_id=$1,resume_model_id=$1,"
+                "last_model_id=$1,"
+                "resume_model_id=CASE "
+                "WHEN continuation_source_model_id IS NULL THEN $1 "
+                "ELSE resume_model_id END,"
                 "current_operation='train',updated_at=clock_timestamp() "
                 "WHERE experiment_id=$2 AND status='pending' "
                 "AND phase='train' AND resume_requested=true "
@@ -11488,7 +11562,9 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     AddLstmProfileOptions(argv, options);
 
     const std::optional<long long> resumeFrom =
-        experiment.resumeModelId.has_value() ? experiment.resumeModelId : experiment.lastModelId;
+        experiment.lastModelId.has_value()
+            ? experiment.lastModelId
+            : experiment.resumeModelId;
     if (resumeFrom.has_value())
     {
         AddCliOption(argv, "--resume-model-id", std::to_string(*resumeFrom));
@@ -18051,7 +18127,10 @@ void RequeueTrainOrphanFromCheckpoint(pqxx::work& w,
 {
     pqxx::result updated = w.exec_params(
         "UPDATE experiment "
-        "SET status = 'pending', phase = 'train', last_model_id = $1, resume_model_id = $1, "
+        "SET status = 'pending', phase = 'train', last_model_id = $1, "
+        "resume_model_id = CASE "
+        "WHEN continuation_source_model_id IS NULL THEN $1 "
+        "ELSE resume_model_id END, "
         "resume_requested=false,scheduler_resume_origin='none',"
         "exit_code = NULL, error_message = NULL, updated_at = updated_at "
         "WHERE experiment_id = $2 "
@@ -18065,7 +18144,7 @@ void RequeueTrainOrphanFromCheckpoint(pqxx::work& w,
             updated, "requeue_train_orphan_exact_attempt");
     std::cout << "SCHEDULER_ORPHAN_RECOVERED"
               << ",experiment_id=" << experiment.experimentId
-              << ",resume_model_id=" << meta.modelId
+              << ",restart_model_id=" << meta.modelId
               << ",completed_epochs=" << meta.completedEpochs
               << ",target_epochs=" << experiment.targetEpochs
               << std::endl;
@@ -22054,7 +22133,7 @@ int RunTrainJobs(
         }
 
         const std::optional<long long> resumeFrom =
-            job.resumeModelId ? job.resumeModelId : job.lastModelId;
+            job.lastModelId ? job.lastModelId : job.resumeModelId;
         if (resumeFrom)
         {
             pqxx::connection connection{LstmDbConnectionString()};

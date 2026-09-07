@@ -202,6 +202,235 @@ insert_experiment 920078 unboundfixture 80
 unbound_model="$(insert_model 920078 unboundfixture 40)"
 unbound_attempt="$(insert_attempt 920078 orphan-attempt-920078 false)"
 
+# ----------------------------------------------------------------------
+# Continuation orphan regression fixtures.
+#
+# These deliberately use the production continuation lineage constraint:
+#
+#   parent_experiment_id = continuation_source_experiment_id
+#   resume_model_id = continuation_source_model_id
+#   target_epochs > continuation_source_epoch
+#
+# Operational recovery must therefore NEVER replace resume_model_id with an
+# own-experiment checkpoint.
+# ----------------------------------------------------------------------
+
+create_continuation_source() {
+    local source_experiment_id="$1"
+    local symbol="$2"
+    local source_epoch="$3"
+    local child_target_epoch="$4"
+
+    insert_experiment \
+        "${source_experiment_id}" \
+        "${symbol}" \
+        "${source_epoch}"
+
+    local source_model_id
+    source_model_id="$(
+        insert_model \
+            "${source_experiment_id}" \
+            "${symbol}" \
+            "${source_epoch}" \
+            "continuation source final model"
+    )"
+
+    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<SQL
+UPDATE experiment
+SET status='completed',
+    phase='done',
+    current_epoch=${source_epoch},
+    last_model_id=${source_model_id},
+    resume_model_id=NULL,
+    current_operation='analyze',
+    stop_after_checkpoint_epoch=NULL,
+    completed_at=clock_timestamp()
+WHERE experiment_id=${source_experiment_id};
+
+INSERT INTO experiment_analysis_result(
+    experiment_id,model_id,symbol,prediction_horizon,
+    target_epochs,completed_epochs,infer_accuracy,leader_score,
+    analysis_status,analysis_scope
+) VALUES(
+    ${source_experiment_id},${source_model_id},'${symbol}',4,
+    ${source_epoch},${source_epoch},0.90,0.80,
+    'completed','final'
+);
+SQL
+
+    local source_analysis_id
+    source_analysis_id="$(
+        scalar "
+            SELECT analysis_id
+            FROM experiment_analysis_result
+            WHERE experiment_id=${source_experiment_id}
+              AND model_id=${source_model_id}
+              AND analysis_scope='final'
+            ORDER BY analysis_id DESC
+            LIMIT 1
+        "
+    )"
+
+    local decision_id
+    decision_id="$(
+        psql -X -At -q -d "${test_db}" -c "
+            INSERT INTO experiment_continuation_decision(
+                source_experiment_id,
+                source_model_id,
+                source_analysis_id,
+                source_epoch,
+                target_epochs,
+                decision,
+                reason,
+                observed_eval_count,
+                patience_window,
+                policy_revision,
+                policy_hash,
+                evidence_watermark
+            ) VALUES(
+                ${source_experiment_id},
+                ${source_model_id},
+                ${source_analysis_id},
+                ${source_epoch},
+                ${child_target_epoch},
+                'eligible',
+                'scheduler_orphan_continuation_regression',
+                1,
+                1,
+                1,
+                '0123456789abcdef',
+                'fedcba9876543210'
+            )
+            RETURNING continuation_decision_id
+        "
+    )"
+
+    printf '%s:%s\n' "${source_model_id}" "${decision_id}"
+}
+
+bind_continuation_child() {
+    local child_experiment_id="$1"
+    local source_experiment_id="$2"
+    local source_model_id="$3"
+    local source_epoch="$4"
+    local decision_id="$5"
+
+    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<SQL
+UPDATE experiment
+SET resume_model_id=${source_model_id},
+    parent_experiment_id=${source_experiment_id},
+    continuation_source_experiment_id=${source_experiment_id},
+    continuation_source_model_id=${source_model_id},
+    continuation_source_epoch=${source_epoch},
+    continuation_generation=1,
+    continuation_decision_id=${decision_id}
+WHERE experiment_id=${child_experiment_id};
+SQL
+}
+
+# ----------------------------------------------------------------------
+# 920080: exact 584 failure shape.
+#
+# Original scientific source epoch = 60
+# child target                  = 120
+#
+# child artifacts:
+#   epoch 100 periodic checkpoint
+#   epoch 120 periodic checkpoint
+#   epoch 120 ordinary final model
+#
+# Old behavior rejected epoch 120 as ambiguous, selected epoch 100, then
+# attempted resume_model_id=<epoch100>, violating continuation lineage.
+#
+# Correct behavior selects the unique non-periodic target artifact and
+# advances directly to inference.
+# ----------------------------------------------------------------------
+
+source_584_fixture="$(
+    create_continuation_source \
+        920060 \
+        continuation584source \
+        60 \
+        120
+)"
+source_584_model="${source_584_fixture%%:*}"
+source_584_decision="${source_584_fixture##*:}"
+
+insert_experiment 920080 continuation584child 120
+bind_continuation_child \
+    920080 \
+    920060 \
+    "${source_584_model}" \
+    60 \
+    "${source_584_decision}"
+
+continuation_584_epoch100="$(
+    insert_model 920080 continuation584child 100
+)"
+continuation_584_epoch120_checkpoint="$(
+    insert_model 920080 continuation584child 120
+)"
+continuation_584_final="$(
+    insert_model \
+        920080 \
+        continuation584child \
+        120 \
+        "resumed trained parameters"
+)"
+
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<SQL
+UPDATE model
+SET parent_model_id=${source_584_model}
+WHERE model_id IN (
+    ${continuation_584_epoch100},
+    ${continuation_584_epoch120_checkpoint},
+    ${continuation_584_final}
+);
+SQL
+
+continuation_584_attempt="$(
+    insert_attempt 920080 orphan-attempt-920080 true
+)"
+
+# ----------------------------------------------------------------------
+# 920081: intermediate continuation orphan.
+#
+# Scientific source remains immutable in resume_model_id.
+# Operational epoch-100 checkpoint must be persisted only as last_model_id.
+# ----------------------------------------------------------------------
+
+source_intermediate_fixture="$(
+    create_continuation_source \
+        920061 \
+        continuationrecoverysource \
+        60 \
+        120
+)"
+source_intermediate_model="${source_intermediate_fixture%%:*}"
+source_intermediate_decision="${source_intermediate_fixture##*:}"
+
+insert_experiment 920081 continuationrecoverychild 120
+bind_continuation_child \
+    920081 \
+    920061 \
+    "${source_intermediate_model}" \
+    60 \
+    "${source_intermediate_decision}"
+
+continuation_intermediate_checkpoint="$(
+    insert_model 920081 continuationrecoverychild 100
+)"
+
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<SQL
+UPDATE model
+SET parent_model_id=${source_intermediate_model}
+WHERE model_id=${continuation_intermediate_checkpoint};
+SQL
+
+continuation_intermediate_attempt="$(
+    insert_attempt 920081 orphan-attempt-920081 true
+)"
+
 attempts_before="$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt")"
 dry_run_output="${test_dir}/dry-run.out"
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
@@ -215,7 +444,7 @@ recovery_output="${test_dir}/recovery.out"
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once --recover-orphans-only \
     >"${recovery_output}" 2>&1
-grep -q 'SCHEDULER_ORPHAN_RECOVERY_DONE,recovered_or_failed=9' "${recovery_output}"
+grep -q 'SCHEDULER_ORPHAN_RECOVERY_DONE,recovered_or_failed=11' "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920070,model_id=${newest_model},completed_epoch=40" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_REJECTED,experiment_id=920071,model_id=${invalid_newest_model}" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920071,model_id=${fallback_model},completed_epoch=40" "${recovery_output}"
@@ -223,8 +452,28 @@ grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920072,model_id=${third_mod
 grep -q "SCHEDULER_CHECKPOINT_SELECTION_FAILED,experiment_id=920073.*reason=no_valid_checkpoint" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS,experiment_id=920074,completed_epoch=40,candidate_count=2,result=epoch_skipped" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920074,model_id=${ambiguous_fallback_model},completed_epoch=20" "${recovery_output}"
-grep -q "SCHEDULER_ORPHAN_RECOVERED,experiment_id=920075,resume_model_id=${intermediate_model}" "${recovery_output}"
+grep -q "SCHEDULER_ORPHAN_RECOVERED,experiment_id=920075,restart_model_id=${intermediate_model}" "${recovery_output}"
 grep -q "SCHEDULER_ORPHAN_ADVANCED,experiment_id=920076,model_id=${final_model}" "${recovery_output}"
+
+grep -q \
+    "SCHEDULER_CHECKPOINT_FINAL_CANDIDATE_RESOLVED,experiment_id=920080,completed_epoch=120,candidate_count=2,model_id=${continuation_584_final},reason=unique_non_periodic_target_model" \
+    "${recovery_output}"
+
+grep -q \
+    "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920080,model_id=${continuation_584_final},completed_epoch=120,result=final_model" \
+    "${recovery_output}"
+
+grep -q \
+    "SCHEDULER_ORPHAN_ADVANCED,experiment_id=920080,model_id=${continuation_584_final},completed_epochs=120,target_epochs=120,next_phase=infer" \
+    "${recovery_output}"
+
+! grep -q \
+    "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920080,model_id=${continuation_584_epoch100}" \
+    "${recovery_output}"
+
+grep -q \
+    "SCHEDULER_ORPHAN_RECOVERED,experiment_id=920081,restart_model_id=${continuation_intermediate_checkpoint},completed_epochs=100,target_epochs=120" \
+    "${recovery_output}"
 
 test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920070")" = "${newest_model}"
 test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920071")" = "${fallback_model}"
@@ -235,6 +484,74 @@ test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||resume
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result||':'||(completed_at IS NOT NULL)::text FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${intermediate_attempt}")" = "completed:process_missing_result_recovered:true"
 test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||(resume_model_id IS NULL)::text||':'||current_operation FROM experiment WHERE experiment_id=920076")" = "pending:infer:${final_model}:true:train"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${final_attempt}")" = "completed:process_missing_result_recovered"
+
+# 584-equivalent target completion:
+# scientific continuation identity is unchanged and the final model advances.
+test "$(
+    scalar "
+        SELECT
+            status||':'||
+            phase||':'||
+            last_model_id::text||':'||
+            resume_model_id::text||':'||
+            continuation_source_model_id::text||':'||
+            continuation_source_epoch::text
+        FROM experiment
+        WHERE experiment_id=920080
+    "
+)" = "pending:infer:${continuation_584_final}:${source_584_model}:${source_584_model}:60"
+
+test "$(
+    scalar "
+        SELECT
+            lifecycle_state||':'||
+            reconciliation_result||':'||
+            (completed_at IS NOT NULL)::text
+        FROM experiment_scheduler_worker_attempt
+        WHERE worker_attempt_id=${continuation_584_attempt}
+    "
+)" = "completed:process_missing_result_recovered:true"
+
+# Intermediate continuation recovery:
+# resume_model_id is the immutable scientific source;
+# last_model_id is the newer operational restart checkpoint.
+test "$(
+    scalar "
+        SELECT
+            status||':'||
+            phase||':'||
+            last_model_id::text||':'||
+            resume_model_id::text||':'||
+            continuation_source_model_id::text||':'||
+            continuation_source_epoch::text
+        FROM experiment
+        WHERE experiment_id=920081
+    "
+)" = "pending:train:${continuation_intermediate_checkpoint}:${source_intermediate_model}:${source_intermediate_model}:60"
+
+test "$(
+    scalar "
+        SELECT
+            lifecycle_state||':'||
+            reconciliation_result||':'||
+            (completed_at IS NOT NULL)::text
+        FROM experiment_scheduler_worker_attempt
+        WHERE worker_attempt_id=${continuation_intermediate_attempt}
+    "
+)" = "completed:process_missing_result_recovered:true"
+
+# Explicitly prove PostgreSQL still considers both continuation rows valid
+# under the production constraint.
+test "$(
+    scalar "
+        SELECT count(*)
+        FROM experiment
+        WHERE experiment_id IN (920080,920081)
+          AND resume_model_id=continuation_source_model_id
+          AND parent_experiment_id=continuation_source_experiment_id
+          AND target_epochs>continuation_source_epoch
+    "
+)" = "2"
 
 test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text||':'||(resume_model_id IS NULL)::text FROM experiment WHERE experiment_id=920077")" = "failed:train:true:true"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${mismatch_attempt}")" = "failed:process_missing_no_result"
