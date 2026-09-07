@@ -13,6 +13,10 @@ namespace EA::FeatureAblationPairEvaluation
 
 namespace SharedEvidence = PairedTrainingObjectiveEvaluation;
 
+inline constexpr int kCausalSurpriseModelInputWidth = 77;
+inline constexpr int kPreFixCausalSurpriseSemanticLayoutVersion = 6;
+inline constexpr int kCorrectedCausalSurpriseSemanticLayoutVersion = 7;
+
 enum class Disposition
 {
     ComparableComplete,
@@ -22,6 +26,14 @@ enum class Disposition
     AmbiguousFinalInference,
     ProfitabilityEvidenceUnavailable,
     InvalidAblationPair
+};
+
+enum class EvidenceClassification
+{
+    GenericFeatureAblationEvidence,
+    PreFixCausalSurpriseEvidence,
+    CorrectedCausalSurprisePairEvidence,
+    IncompatibleOrInvalidEvidence
 };
 
 // Experiment-level scientific fields that are not currently part of the
@@ -128,8 +140,11 @@ struct MetricDelta
 struct ComparisonResult
 {
     Disposition disposition = Disposition::ComparableIncomplete;
+    EvidenceClassification evidenceClassification =
+        EvidenceClassification::GenericFeatureAblationEvidence;
     std::vector<std::string> invalidReasons;
     std::vector<std::string> incompleteReasons;
+    std::vector<std::string> classificationReasons;
     std::string canonicalAblatedFeatureSet;
     std::string ablationIdentityCanonical;
     std::string ablationIdentityHash;
@@ -174,6 +189,7 @@ std::string EvaluationIdentityHash(const ArmEvidence& control,
 
 std::pair<long long, long long> ParseExperimentIdPair(std::string_view text);
 std::string DispositionText(Disposition value);
+std::string EvidenceClassificationText(EvidenceClassification value);
 
 // Exit contract used by the CLI service. Database exceptions remain exit 2 in
 // the established scheduler top-level handler.

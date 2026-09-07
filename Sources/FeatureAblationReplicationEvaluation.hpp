@@ -14,7 +14,7 @@ namespace EA::FeatureAblationReplicationEvaluation
 
 namespace Pair = FeatureAblationPairEvaluation;
 
-inline constexpr int kReplicationEvaluationVersion = 2;
+inline constexpr int kReplicationEvaluationVersion = 3;
 inline constexpr int kReplicationPolicyVersion = 1;
 inline constexpr int kMinimumValidReplications = 3;
 inline constexpr std::string_view kEconomicEventSoftwareReadinessVersion =
@@ -26,7 +26,23 @@ enum class MemberEvidenceState
     Incomplete,
     Invalid,
     MissingEvidence,
-    ProfitabilityUnavailable
+    ProfitabilityUnavailable,
+    HistoricalPreFix
+};
+
+enum class EvidenceScope
+{
+    GenericFeatureAblation,
+    CorrectedCausalSurprise
+};
+
+enum class EvidenceClassification
+{
+    GenericFeatureAblationEvidence,
+    PreFixCausalSurpriseEvidence,
+    CorrectedCausalSurprisePairEvidence,
+    CorrectedCausalSurpriseReplicationEvidence,
+    IncompatibleOrInvalidEvidence
 };
 
 enum class ReplicationDecision
@@ -76,15 +92,22 @@ struct MemberEvaluation
     std::optional<int> predictionHorizon;
     MemberEvidenceState evidenceState = MemberEvidenceState::MissingEvidence;
     Pair::Disposition pairDisposition = Pair::Disposition::ComparableIncomplete;
+    Pair::EvidenceClassification evidenceClassification =
+        Pair::EvidenceClassification::GenericFeatureAblationEvidence;
     std::string pairEvaluationIdentityHash;
     std::string ablationIdentityHash;
     std::optional<long long> controlEconomicCalendarSnapshotId;
     std::optional<std::string> controlEconomicCalendarSnapshotHash;
     std::optional<long long> treatmentEconomicCalendarSnapshotId;
     std::optional<std::string> treatmentEconomicCalendarSnapshotHash;
+    std::optional<int> controlModelInputWidth;
+    std::optional<int> controlModelInputLayoutVersion;
+    std::optional<int> treatmentModelInputWidth;
+    std::optional<int> treatmentModelInputLayoutVersion;
     bool scientificallyValidComplete = false;
     std::vector<std::string> incompleteReasons;
     std::vector<std::string> invalidReasons;
+    std::vector<std::string> exclusionReasons;
     Pair::ComparisonResult comparison;
 };
 
@@ -111,6 +134,8 @@ struct PopulationSummary
     std::size_t profitabilityPositivePairCount = 0;
     std::size_t profitabilityNegativePairCount = 0;
     std::size_t profitabilityZeroPairCount = 0;
+    std::size_t correctedValidPairCount = 0;
+    std::size_t historicalPreFixPairCount = 0;
     std::size_t distinctSymbolCount = 0;
     std::size_t distinctHorizonCount = 0;
     std::size_t distinctEconomicCalendarCorpusCount = 0;
@@ -119,6 +144,9 @@ struct PopulationSummary
 struct ReplicationEvaluation
 {
     std::vector<MemberEvaluation> members;
+    EvidenceScope evidenceScope = EvidenceScope::GenericFeatureAblation;
+    EvidenceClassification evidenceClassification =
+        EvidenceClassification::GenericFeatureAblationEvidence;
     PopulationSummary population;
     MetricSummary aggregateProfitability;
     MetricSummary averageProfitability;
@@ -162,9 +190,12 @@ bool SoftwareReady(const SoftwareReadinessAudit& audit);
 ReplicationEvaluation Evaluate(
     std::vector<MemberEvaluation> members,
     const ReplicationPolicy& policy = {},
-    const SoftwareReadinessAudit& softwareAudit = {});
+    const SoftwareReadinessAudit& softwareAudit = {},
+    EvidenceScope evidenceScope = EvidenceScope::GenericFeatureAblation);
 
 std::string MemberEvidenceStateText(MemberEvidenceState value);
+std::string EvidenceScopeText(EvidenceScope value);
+std::string EvidenceClassificationText(EvidenceClassification value);
 std::string ReplicationDecisionText(ReplicationDecision value);
 std::string ProductionizationActionText(ProductionizationAction value);
 int ExitCode(const ReplicationEvaluation& result);

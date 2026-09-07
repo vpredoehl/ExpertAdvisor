@@ -292,7 +292,7 @@ std::string RenderComparisonOutput(const ArmEvidence& control,
 {
     std::ostringstream output;
     output << "FEATURE_ABLATION_PAIR_COMPARISON"
-           << ",version=2"
+           << ",version=3"
            << ",control_experiment_id="
            << control.authoritative.configuration.experimentId
            << ",ablation_experiment_id="
@@ -328,6 +328,8 @@ std::string RenderComparisonOutput(const ArmEvidence& control,
     PrintMetric(output, "leader_score", result.leaderScore);
     output << "FEATURE_ABLATION_PAIR_RESULT"
            << ",disposition=" << DispositionText(result.disposition)
+           << ",evidence_classification="
+           << EvidenceClassificationText(result.evidenceClassification)
            << ",pair_validity_state="
            << (result.disposition == Disposition::IncompatibleConfiguration ||
                        result.disposition == Disposition::AmbiguousFinalInference ||
@@ -343,6 +345,8 @@ std::string RenderComparisonOutput(const ArmEvidence& control,
            << ",delta_sign_convention=control_minus_ablation"
            << ",invalid_reasons=" << Reasons(result.invalidReasons)
            << ",incomplete_reasons=" << Reasons(result.incompleteReasons)
+           << ",classification_reasons="
+           << Reasons(result.classificationReasons)
            << ",evaluation_identity_hash="
            << EvaluationIdentityHash(control, ablation, result)
            << ",exit_code=" << ExitCode(result.disposition)

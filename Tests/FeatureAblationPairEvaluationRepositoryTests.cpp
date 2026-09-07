@@ -336,14 +336,17 @@ int main()
             fixture, accuracyMismatchTreatment, 0.6400004, 0.64);
         InsertProfitabilityEvidence(fixture, accuracyMismatchTreatment, 0.08);
 
+        // 622/623-style historical pair: physical width 77, semantic layout 6.
         InsertExperiment(fixture, surpriseControl, false, true,
-                         std::string{}, 77, 7);
+                         std::string{}, 77, 6, 1,
+                         "fnv1a64:67610f94f5c8e7cc");
         InsertExperiment(
             fixture, surpriseAblation, false, true,
             std::string(EA::kCausalEconomicEventSurpriseAblationMaskText),
-            77, 7);
+            77, 6, 1, "fnv1a64:67610f94f5c8e7cc");
         InsertFinalEvidence(fixture, surpriseControl, 0.64, 0.08);
         InsertFinalEvidence(fixture, surpriseAblation, 0.61, 0.05);
+        // 624/625-style corrected pair: width 77, layout 7, immutable snapshot.
         InsertExperiment(fixture, snapshotSurpriseControl, false, true,
                          std::string{}, 77, 7, 1,
                          "fnv1a64:67610f94f5c8e7cc");
@@ -403,12 +406,37 @@ int main()
                "causal_first_release_surprise") != std::string::npos);
     assert(output.str().find("model_input_width=77") != std::string::npos);
     assert(output.str().find(
-               "model_input_semantic_layout_version=7") !=
+               "model_input_semantic_layout_version=6") !=
+           std::string::npos);
+    assert(output.str().find(
+               "evidence_classification=pre_fix_causal_surprise_evidence") !=
            std::string::npos);
     assert(output.str().find(
                "delta_sign_convention=control_minus_ablation") !=
            std::string::npos);
-    assert(output.str().find("economic_calendar_snapshot_id=NULL") !=
+    assert(output.str().find("economic_calendar_snapshot_id=1") !=
+           std::string::npos);
+    assert(DatabaseDigest(connection) == before);
+
+    output.str("");
+    output.clear();
+    errors.str("");
+    errors.clear();
+    const int correctedSurpriseExit = Feature::RunComparisonCommand(
+        connectionString,
+        {{990671, 990672},
+         std::string(EA::kCausalEconomicEventSurpriseAblationMaskText)},
+        output, errors);
+    assert(correctedSurpriseExit == 0);
+    assert(errors.str().empty());
+    assert(output.str().find(
+               "evidence_classification=corrected_causal_surprise_pair_evidence") !=
+           std::string::npos);
+    assert(output.str().find(
+               "model_input_semantic_layout_version=7") !=
+           std::string::npos);
+    assert(output.str().find(
+               "economic_calendar_snapshot_hash=fnv1a64:67610f94f5c8e7cc") !=
            std::string::npos);
     assert(DatabaseDigest(connection) == before);
 
@@ -432,7 +460,7 @@ int main()
                "ordinal=1,control_experiment_id=990619,") !=
            std::string::npos);
     assert(output.str().find(
-               "control_economic_calendar_snapshot_id=NULL") !=
+               "evidence_classification=pre_fix_causal_surprise_evidence") !=
            std::string::npos);
     assert(output.str().find(
                "ordinal=2,control_experiment_id=990671,") !=
@@ -441,7 +469,14 @@ int main()
                "control_economic_calendar_snapshot_id=1") !=
            std::string::npos);
     assert(output.str().find(
-               "distinct_economic_calendar_corpus_count=2") !=
+               "distinct_economic_calendar_corpus_count=1") !=
+           std::string::npos);
+    assert(output.str().find("corrected_valid_pair_count=1") !=
+           std::string::npos);
+    assert(output.str().find("historical_pre_fix_pair_count=1") !=
+           std::string::npos);
+    assert(output.str().find(
+               "evidence_classification=corrected_causal_surprise_pair_evidence") !=
            std::string::npos);
     assert(output.str().find(
                "economic_calendar_snapshot_is_treatment=false") !=

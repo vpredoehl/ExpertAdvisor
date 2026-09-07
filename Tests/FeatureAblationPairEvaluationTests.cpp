@@ -190,7 +190,7 @@ int main()
     assert(!complete.ablationIdentityHash.empty());
     assert(Feature::EvaluationIdentityCanonical(
                control, ablation, complete)
-               .starts_with("feature_ablation_pair_evaluation_v2;"));
+               .starts_with("feature_ablation_pair_evaluation_v3;"));
     assert(complete.predictionCount.controlMinusAblation == 0.0);
     assert(complete.actionableCount.controlMinusAblation == 10.0);
     assert(std::fabs(*complete.aggregateProfitability.controlMinusAblation -
@@ -382,8 +382,7 @@ int main()
     assert(Has(EvaluatePair(control, checkpointOnly).invalidReasons,
                "ablation_classification_not_exact_final_scope"));
 
-    // Exact current first-release surprise profile: generic identity remains
-    // width/layout agnostic while requiring the arms to match at 77/6.
+    // Layout 6 is same-width historical evidence, never corrected evidence.
     auto surpriseControl = control;
     auto surpriseAblation = ablation;
     surpriseControl.authoritative.configuration.experimentId = 619;
@@ -397,6 +396,9 @@ int main()
     {
         arm->extended.configuredModelInputWidth = 77;
         arm->extended.configuredModelInputLayoutVersion = 6;
+        arm->extended.economicCalendarSnapshotId = 1;
+        arm->extended.economicCalendarSnapshotHash =
+            "fnv1a64:67610f94f5c8e7cc";
         arm->authoritative.configuration.inputWidth = 77;
         arm->authoritative.configuration.modelInputLayoutVersion = 6;
         arm->authoritative.classification->symbol = "eurusdrmp";
@@ -411,69 +413,173 @@ int main()
         "causal_first_release_surprise_available,"
         "causal_first_release_surprise");
     assert(surprise.disposition == Feature::Disposition::ComparableComplete);
+    assert(surprise.evidenceClassification ==
+           Feature::EvidenceClassification::PreFixCausalSurpriseEvidence);
     assert(surprise.canonicalAblatedFeatureSet ==
            EA::kCausalEconomicEventSurpriseAblationMaskText);
 
-    auto noncanonicalSurpriseAblation = surpriseAblation;
+    auto correctedControl = surpriseControl;
+    auto correctedAblation = surpriseAblation;
+    correctedControl.authoritative.configuration.experimentId = 624;
+    correctedAblation.authoritative.configuration.experimentId = 625;
+    for (auto* arm : {&correctedControl, &correctedAblation})
+    {
+        arm->extended.configuredModelInputLayoutVersion = 7;
+        arm->authoritative.configuration.modelInputLayoutVersion = 7;
+        arm->authoritative.classification->analysisExperimentId =
+            arm->authoritative.configuration.experimentId;
+        arm->authoritative.profitability->experimentId =
+            arm->authoritative.configuration.experimentId;
+    }
+    const auto corrected = EvaluatePair(
+        correctedControl, correctedAblation,
+        EA::kCausalEconomicEventSurpriseAblationMaskText);
+    assert(corrected.disposition == Feature::Disposition::ComparableComplete);
+    assert(corrected.evidenceClassification == Feature::EvidenceClassification::
+               CorrectedCausalSurprisePairEvidence);
+
+    auto missingInputIdentityControl = correctedControl;
+    auto missingInputIdentityAblation = correctedAblation;
+    missingInputIdentityControl.extended.configuredModelInputWidth.reset();
+    missingInputIdentityControl.extended.configuredModelInputLayoutVersion.reset();
+    missingInputIdentityAblation.extended.configuredModelInputWidth.reset();
+    missingInputIdentityAblation.extended.configuredModelInputLayoutVersion.reset();
+    assert(Has(EvaluatePair(
+                   missingInputIdentityControl, missingInputIdentityAblation,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "control_causal_surprise_model_input_identity_missing"));
+
+    auto wrongWidthControl = correctedControl;
+    auto wrongWidthAblation = correctedAblation;
+    for (auto* arm : {&wrongWidthControl, &wrongWidthAblation})
+    {
+        arm->extended.configuredModelInputWidth = 76;
+        arm->authoritative.configuration.inputWidth = 76;
+    }
+    assert(Has(EvaluatePair(
+                   wrongWidthControl, wrongWidthAblation,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "control_causal_surprise_model_input_width_not_77"));
+
+    auto correctedControlWithAblation = correctedControl;
+    correctedControlWithAblation.authoritative.configuration
+        .featureAblationMask = "relative_tick_volume";
+    assert(Has(EvaluatePair(
+                   correctedControlWithAblation, correctedAblation,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "control_feature_ablation_mask_not_empty"));
+
+    auto correctedScientificMismatch = correctedAblation;
+    correctedScientificMismatch.authoritative.configuration.threshold = 0.0009;
+    assert(Has(EvaluatePair(
+                   correctedControl, correctedScientificMismatch,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "threshold_mismatch"));
+    correctedScientificMismatch = correctedAblation;
+    correctedScientificMismatch.authoritative.configuration
+        .headLearningRateMultiplier = 24.0;
+    assert(Has(EvaluatePair(
+                   correctedControl, correctedScientificMismatch,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "head_lr_mismatch"));
+    correctedScientificMismatch = correctedAblation;
+    correctedScientificMismatch.authoritative.configuration.trainEnd =
+        "2024-12-31";
+    assert(Has(EvaluatePair(
+                   correctedControl, correctedScientificMismatch,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "train_end_mismatch"));
+    correctedScientificMismatch = correctedAblation;
+    correctedScientificMismatch.authoritative.configuration
+        .experimentObjective.canonical += "different=true;";
+    correctedScientificMismatch.authoritative.configuration
+        .experimentObjective.hash = Objective::DeterministicHash(
+            correctedScientificMismatch.authoritative.configuration
+                .experimentObjective.canonical);
+    assert(Has(EvaluatePair(
+                   correctedControl, correctedScientificMismatch,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "training_objective_mismatch"));
+
+    auto noncanonicalSurpriseAblation = correctedAblation;
     noncanonicalSurpriseAblation.authoritative.configuration
         .featureAblationMask =
             " causal_first_release_surprise,"
             "causal_first_release_surprise_available,"
             "causal_first_release_surprise ";
     const auto canonicalizedPersistedMask = EvaluatePair(
-        surpriseControl, noncanonicalSurpriseAblation,
+        correctedControl, noncanonicalSurpriseAblation,
         EA::kCausalEconomicEventSurpriseAblationMaskText);
     assert(canonicalizedPersistedMask.disposition ==
            Feature::Disposition::ComparableComplete);
     assert(canonicalizedPersistedMask.canonicalAblatedFeatureSet ==
            EA::kCausalEconomicEventSurpriseAblationMaskText);
 
-    auto oneChannel = surpriseAblation;
+    auto oneChannel = correctedAblation;
     oneChannel.authoritative.configuration.featureAblationMask =
         "causal_first_release_surprise";
-    assert(Has(EvaluatePair(surpriseControl, oneChannel,
+    assert(Has(EvaluatePair(correctedControl, oneChannel,
                        EA::kCausalEconomicEventSurpriseAblationMaskText)
                    .invalidReasons,
                "ablation_mask_does_not_match_expected"));
 
-    auto extraChannel = surpriseAblation;
+    auto extraChannel = correctedAblation;
     extraChannel.authoritative.configuration.featureAblationMask +=
         ",relative_tick_volume";
-    assert(Has(EvaluatePair(surpriseControl, extraChannel,
+    assert(Has(EvaluatePair(correctedControl, extraChannel,
                        EA::kCausalEconomicEventSurpriseAblationMaskText)
                    .invalidReasons,
                "ablation_mask_does_not_match_expected"));
 
-    auto widthMismatch = surpriseAblation;
+    auto widthMismatch = correctedAblation;
     widthMismatch.extended.configuredModelInputWidth = 75;
     widthMismatch.authoritative.configuration.inputWidth = 75;
-    assert(Has(EvaluatePair(surpriseControl, widthMismatch,
+    assert(Has(EvaluatePair(correctedControl, widthMismatch,
                        EA::kCausalEconomicEventSurpriseAblationMaskText)
                    .invalidReasons,
                "configured_model_input_width_mismatch"));
 
-    auto layoutMismatch = surpriseAblation;
-    layoutMismatch.extended.configuredModelInputLayoutVersion = 5;
-    layoutMismatch.authoritative.configuration.modelInputLayoutVersion = 5;
-    assert(Has(EvaluatePair(surpriseControl, layoutMismatch,
-                       EA::kCausalEconomicEventSurpriseAblationMaskText)
-                   .invalidReasons,
+    auto layoutMismatch = correctedAblation;
+    layoutMismatch.extended.configuredModelInputLayoutVersion = 6;
+    layoutMismatch.authoritative.configuration.modelInputLayoutVersion = 6;
+    const auto mixedLayouts = EvaluatePair(
+        correctedControl, layoutMismatch,
+        EA::kCausalEconomicEventSurpriseAblationMaskText);
+    assert(Has(mixedLayouts.invalidReasons,
                "configured_model_input_layout_mismatch"));
+    assert(mixedLayouts.evidenceClassification ==
+           Feature::EvidenceClassification::IncompatibleOrInvalidEvidence);
 
     // Snapshot identity is a matched within-pair reproducibility boundary,
-    // never the feature treatment. Legacy NULL/NULL and snapshot-bound pairs
-    // are each valid, but mixing those contracts inside one pair fails closed.
-    surpriseControl.extended.economicCalendarSnapshotId = 1;
-    surpriseControl.extended.economicCalendarSnapshotHash =
-        "fnv1a64:67610f94f5c8e7cc";
-    surpriseAblation.extended.economicCalendarSnapshotId = 1;
-    surpriseAblation.extended.economicCalendarSnapshotHash =
-        "fnv1a64:67610f94f5c8e7cc";
+    // never the feature treatment. Corrected layout-7 evidence requires a
+    // complete immutable identity and fails closed on any difference.
     assert(EvaluatePair(
-               surpriseControl, surpriseAblation,
+               correctedControl, correctedAblation,
                EA::kCausalEconomicEventSurpriseAblationMaskText)
                .disposition == Feature::Disposition::ComparableComplete);
-    auto mixedCorpus = surpriseAblation;
+    auto differentSnapshotId = correctedAblation;
+    differentSnapshotId.extended.economicCalendarSnapshotId = 2;
+    assert(Has(EvaluatePair(
+                   correctedControl, differentSnapshotId,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "economic_calendar_snapshot_id_mismatch"));
+    auto differentSnapshotHash = correctedAblation;
+    differentSnapshotHash.extended.economicCalendarSnapshotHash =
+        "fnv1a64:0000000000000001";
+    assert(Has(EvaluatePair(
+                   correctedControl, differentSnapshotHash,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "economic_calendar_snapshot_hash_mismatch"));
+    auto mixedCorpus = correctedAblation;
     mixedCorpus.extended.economicCalendarSnapshotId.reset();
     mixedCorpus.extended.economicCalendarSnapshotHash.reset();
     assert(Has(EvaluatePair(
@@ -481,27 +587,38 @@ int main()
                    EA::kCausalEconomicEventSurpriseAblationMaskText)
                    .invalidReasons,
                "economic_calendar_snapshot_id_mismatch"));
-    auto partialSnapshot = surpriseAblation;
+    auto missingSnapshotsControl = correctedControl;
+    auto missingSnapshotsAblation = correctedAblation;
+    missingSnapshotsControl.extended.economicCalendarSnapshotId.reset();
+    missingSnapshotsControl.extended.economicCalendarSnapshotHash.reset();
+    missingSnapshotsAblation.extended.economicCalendarSnapshotId.reset();
+    missingSnapshotsAblation.extended.economicCalendarSnapshotHash.reset();
+    assert(Has(EvaluatePair(
+                   missingSnapshotsControl, missingSnapshotsAblation,
+                   EA::kCausalEconomicEventSurpriseAblationMaskText)
+                   .invalidReasons,
+               "control_corrected_causal_surprise_snapshot_identity_missing"));
+    auto partialSnapshot = correctedAblation;
     partialSnapshot.extended.economicCalendarSnapshotHash.reset();
     assert(Has(EvaluatePair(
-                   surpriseControl, partialSnapshot,
+                   correctedControl, partialSnapshot,
                    EA::kCausalEconomicEventSurpriseAblationMaskText)
                    .invalidReasons,
                "ablation_economic_calendar_snapshot_identity_invalid"));
 
-    auto configuredFinalWidthMismatch = surpriseAblation;
+    auto configuredFinalWidthMismatch = correctedAblation;
     configuredFinalWidthMismatch.authoritative.configuration.inputWidth = 75;
     assert(Has(EvaluatePair(
-                   surpriseControl, configuredFinalWidthMismatch,
+                   correctedControl, configuredFinalWidthMismatch,
                    EA::kCausalEconomicEventSurpriseAblationMaskText)
                    .invalidReasons,
                "ablation_configured_final_model_input_width_mismatch"));
 
-    auto configuredFinalLayoutMismatch = surpriseAblation;
+    auto configuredFinalLayoutMismatch = correctedAblation;
     configuredFinalLayoutMismatch.authoritative.configuration
         .modelInputLayoutVersion = 5;
     assert(Has(EvaluatePair(
-                   surpriseControl, configuredFinalLayoutMismatch,
+                   correctedControl, configuredFinalLayoutMismatch,
                    EA::kCausalEconomicEventSurpriseAblationMaskText)
                    .invalidReasons,
                "ablation_configured_final_model_input_layout_mismatch"));

@@ -15,11 +15,14 @@ and use conventional control/ablation order:
 ```
 
 Within each generic pair, the control mask must be empty and the ablation mask
-must exactly match the request. Economic-calendar snapshot ID/hash must match
-within a pair, but may differ across replication members. Output retains those
-corpus contracts and explicitly classifies snapshot identity as reproducibility
-provenance, not treatment. Omitting the expected mask retains the historical
-consensus-specific argument convention below.
+must exactly match the request. For corrected causal-surprise evaluation, each
+pair must prove width 77, semantic layout 7, and the same non-null persisted
+economic-calendar snapshot ID/hash on both arms. Layout 6 is emitted as
+historical pre-fix evidence and never enters corrected counts or metric
+summaries. Output retains those corpus contracts and explicitly classifies
+snapshot identity as reproducibility provenance, not treatment. Omitting the
+expected mask retains the historical consensus-specific argument convention
+below.
 
 The declared order is authoritative and identity-significant. Every experiment
 ID must be positive and globally unique across the set; duplicate pairs or an
@@ -49,7 +52,9 @@ corroborating summaries only. They cannot override profitability. Exact zero
 is neutral; incomplete and invalid members do not enter any signed summary.
 The command emits the complete canonical policy and its tagged FNV-1a-64 hash.
 
-The membership identity includes every pair in declared order. The evaluation
+The membership identity includes every pair in declared order. Evaluation
+semantic version 3 includes each pair's persisted input width/layout evidence
+classification and corrected/historical counts. The evaluation
 identity includes that membership hash, every pair-evaluation identity/state,
 the common ablation identity and canonical treatment mask, policy identity,
 pair/replication semantic versions, per-pair validated input contracts, the

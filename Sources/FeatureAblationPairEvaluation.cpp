@@ -436,6 +436,73 @@ bool ValidateAblationIdentity(const ScientificConfiguration& control,
     }
 }
 
+EvidenceClassification ClassifyCausalSurpriseEvidence(
+    const FeatureAblationPairEvaluation::ArmEvidence& control,
+    const FeatureAblationPairEvaluation::ArmEvidence& ablation,
+    ComparisonResult& result)
+{
+    const auto validateIdentity = [&result](
+        const FeatureAblationPairEvaluation::ArmEvidence& arm,
+        std::string_view role)
+    {
+        const std::string prefix = std::string(role) + '_';
+        if (!arm.extended.configuredModelInputWidth ||
+            !arm.extended.configuredModelInputLayoutVersion)
+            Add(result.invalidReasons,
+                prefix + "causal_surprise_model_input_identity_missing");
+        if (arm.extended.configuredModelInputWidth &&
+            *arm.extended.configuredModelInputWidth !=
+                kCausalSurpriseModelInputWidth)
+            Add(result.invalidReasons,
+                prefix + "causal_surprise_model_input_width_not_77");
+    };
+    validateIdentity(control, "control");
+    validateIdentity(ablation, "ablation");
+
+    const auto controlLayout =
+        control.extended.configuredModelInputLayoutVersion;
+    const auto ablationLayout =
+        ablation.extended.configuredModelInputLayoutVersion;
+    if (!controlLayout || !ablationLayout)
+        return EvidenceClassification::IncompatibleOrInvalidEvidence;
+    if (*controlLayout != *ablationLayout)
+    {
+        Add(result.invalidReasons,
+            "causal_surprise_semantic_layout_mismatch");
+        return EvidenceClassification::IncompatibleOrInvalidEvidence;
+    }
+    if (*controlLayout == kPreFixCausalSurpriseSemanticLayoutVersion)
+    {
+        Add(result.classificationReasons,
+            "semantic_layout_6_uses_pre_fix_exact_cutoff_contract");
+        return EvidenceClassification::PreFixCausalSurpriseEvidence;
+    }
+    if (*controlLayout != kCorrectedCausalSurpriseSemanticLayoutVersion)
+    {
+        Add(result.invalidReasons,
+            "causal_surprise_semantic_layout_not_supported");
+        return EvidenceClassification::IncompatibleOrInvalidEvidence;
+    }
+
+    const auto requireSnapshot = [&result](
+        const ExtendedScientificConfiguration& extended,
+        std::string_view role)
+    {
+        if (!extended.economicCalendarSnapshotId ||
+            !extended.economicCalendarSnapshotHash)
+            Add(result.invalidReasons, std::string(role) +
+                "_corrected_causal_surprise_snapshot_identity_missing");
+    };
+    requireSnapshot(control.extended, "control");
+    requireSnapshot(ablation.extended, "ablation");
+    if (!result.invalidReasons.empty())
+        return EvidenceClassification::IncompatibleOrInvalidEvidence;
+
+    Add(result.classificationReasons,
+        "semantic_layout_7_uses_corrected_strict_cutoff_contract");
+    return EvidenceClassification::CorrectedCausalSurprisePairEvidence;
+}
+
 void ValidateClassification(const FeatureAblationPairEvaluation::ArmEvidence& arm,
                             std::string_view role,
                             std::vector<std::string>& invalid,
@@ -567,13 +634,25 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
     const bool validAblation = ValidateAblationIdentity(
         controlConfiguration, ablationConfiguration, expectedAblationMask,
         result);
+    const bool causalSurpriseEvaluation =
+        result.canonicalAblatedFeatureSet ==
+        kCausalEconomicEventSurpriseAblationMaskText;
+    if (causalSurpriseEvaluation)
+        result.evidenceClassification = ClassifyCausalSurpriseEvidence(
+            control, ablation, result);
     if (!validAblation)
     {
+        if (causalSurpriseEvaluation)
+            result.evidenceClassification =
+                EvidenceClassification::IncompatibleOrInvalidEvidence;
         result.disposition = Disposition::InvalidAblationPair;
         return result;
     }
     if (!result.invalidReasons.empty())
     {
+        if (causalSurpriseEvaluation)
+            result.evidenceClassification =
+                EvidenceClassification::IncompatibleOrInvalidEvidence;
         result.disposition = Disposition::IncompatibleConfiguration;
         return result;
     }
@@ -614,6 +693,9 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
         ablation, "ablation", result.invalidReasons);
     if (!result.invalidReasons.empty())
     {
+        if (causalSurpriseEvaluation)
+            result.evidenceClassification =
+                EvidenceClassification::IncompatibleOrInvalidEvidence;
         result.disposition = Disposition::IncompatibleConfiguration;
         return result;
     }
@@ -624,6 +706,9 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
                            result.incompleteReasons);
     if (!result.invalidReasons.empty())
     {
+        if (causalSurpriseEvaluation)
+            result.evidenceClassification =
+                EvidenceClassification::IncompatibleOrInvalidEvidence;
         result.disposition = Disposition::IncompatibleConfiguration;
         return result;
     }
@@ -662,6 +747,9 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
                           result.incompleteReasons);
     if (!result.invalidReasons.empty())
     {
+        if (causalSurpriseEvaluation)
+            result.evidenceClassification =
+                EvidenceClassification::IncompatibleOrInvalidEvidence;
         result.disposition = Disposition::IncompatibleConfiguration;
         return result;
     }
@@ -708,7 +796,11 @@ std::string EvaluationIdentityCanonical(
             ? std::to_string(arm.authoritative.profitability->observationId)
             : std::string("NULL");
     };
-    return "feature_ablation_pair_evaluation_v2;control_experiment_id=" +
+    const auto optionalInt = [](const std::optional<int>& value)
+    {
+        return value ? std::to_string(*value) : std::string("NULL");
+    };
+    return "feature_ablation_pair_evaluation_v3;control_experiment_id=" +
         std::to_string(control.authoritative.configuration.experimentId) +
         ";ablation_experiment_id=" +
         std::to_string(ablation.authoritative.configuration.experimentId) +
@@ -725,6 +817,16 @@ std::string EvaluationIdentityCanonical(
         optionalId(ablation.extended.economicCalendarSnapshotId) +
         ";economic_calendar_snapshot_hash=" +
         control.extended.economicCalendarSnapshotHash.value_or("NULL") +
+        ";control_model_input_width=" +
+        optionalInt(control.extended.configuredModelInputWidth) +
+        ";control_model_input_layout=" +
+        optionalInt(control.extended.configuredModelInputLayoutVersion) +
+        ";ablation_model_input_width=" +
+        optionalInt(ablation.extended.configuredModelInputWidth) +
+        ";ablation_model_input_layout=" +
+        optionalInt(ablation.extended.configuredModelInputLayoutVersion) +
+        ";evidence_classification=" +
+        EvidenceClassificationText(result.evidenceClassification) +
         ";disposition=" + DispositionText(result.disposition) + ";";
 }
 
@@ -777,6 +879,23 @@ std::string DispositionText(Disposition value)
         case Disposition::InvalidAblationPair: return "invalid_ablation_pair";
     }
     throw std::invalid_argument("unknown_feature_ablation_pair_disposition");
+}
+
+std::string EvidenceClassificationText(EvidenceClassification value)
+{
+    switch (value)
+    {
+        case EvidenceClassification::GenericFeatureAblationEvidence:
+            return "generic_feature_ablation_evidence";
+        case EvidenceClassification::PreFixCausalSurpriseEvidence:
+            return "pre_fix_causal_surprise_evidence";
+        case EvidenceClassification::CorrectedCausalSurprisePairEvidence:
+            return "corrected_causal_surprise_pair_evidence";
+        case EvidenceClassification::IncompatibleOrInvalidEvidence:
+            return "incompatible_or_invalid_evidence";
+    }
+    throw std::invalid_argument(
+        "unknown_feature_ablation_evidence_classification");
 }
 
 int ExitCode(Disposition value)

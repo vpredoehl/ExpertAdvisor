@@ -65,9 +65,10 @@ semantics. Layout 6 used the same width and columns but exposed a first-release
 actual at an exact completed-bar cutoff; it is an incompatible pre-fix sibling
 of layout 7, not a resume-compatible predecessor.
 
-Economic-calendar snapshot ID/hash is a separate corpus identity. Both arms
-within a controlled pair must be either legacy NULL/NULL or bound to the same
-snapshot ID/hash. Snapshot identity must never stand in for the feature
+Economic-calendar snapshot ID/hash is a separate corpus identity. Corrected
+layout-7 evidence requires both arms to carry the same non-null persisted
+snapshot ID and tagged hash. A missing, partial, or mismatched snapshot
+identity fails closed. Snapshot identity must never stand in for the feature
 treatment.
 
 ## Replication interpretation
@@ -81,12 +82,19 @@ Use the modern read-only comparison form:
 
 For multiple pairs, use the same expected mask with
 `--compare-feature-ablation-replications`. The output preserves each pair's
-snapshot ID/hash and reports the number of distinct corpus contracts.
+snapshot and model-input identities and reports corrected-valid and historical
+pre-fix counts separately.
 
-Experiments 619/620 are a legacy live-corpus, NULL-bound pair. Experiments
-622/623 are an immutable-snapshot-1 pair. They test the same channel-ablation
-hypothesis under two corpus execution contracts, so they may be reported as
-two provenance-stratified replications. They are not exchangeable exact
-repeats: 619/620 cannot prove a frozen byte-identical economic-calendar corpus,
-whereas 622/623 can. Interpret pair deltas first and any cross-pair aggregate
-as heterogeneous replication evidence, retaining this distinction.
+Layout 6 evidence is classified as `pre_fix_causal_surprise_evidence`; it is
+historical evidence and contributes zero to the corrected replication count.
+Experiments 622/623 are the protected production layout-6 pair. Layout 7 is
+classified as `corrected_causal_surprise_pair_evidence`. Experiments 624/625
+are the first protected production corrected pair while their persisted
+identities remain width 77, layout 7, and snapshot 1 with the expected hash.
+They must complete before a performance conclusion is drawn.
+
+The corrected replication minimum remains three complete, valid layout-7
+pairs. Reaching it produces
+`corrected_causal_surprise_replication_evidence`; a single corrected pair is
+not replicated evidence. Additional independent corrected replications are a
+separate scientific step and are not launched by the evaluation commands.

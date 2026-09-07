@@ -67,6 +67,40 @@ void AppendReason(std::vector<std::string>& reasons, std::string value)
         reasons.push_back(std::move(value));
 }
 
+bool TaggedHash(const std::optional<std::string>& value)
+{
+    if (!value || value->size() != 24 || !value->starts_with("fnv1a64:"))
+        return false;
+    for (std::size_t index = 8; index < value->size(); ++index)
+        if (!((*value)[index] >= '0' && (*value)[index] <= '9') &&
+            !((*value)[index] >= 'a' && (*value)[index] <= 'f'))
+            return false;
+    return true;
+}
+
+bool HasInputIdentity(const MemberEvaluation& member,
+                      int requiredLayoutVersion)
+{
+    return member.controlModelInputWidth == Pair::kCausalSurpriseModelInputWidth &&
+        member.treatmentModelInputWidth ==
+            Pair::kCausalSurpriseModelInputWidth &&
+        member.controlModelInputLayoutVersion == requiredLayoutVersion &&
+        member.treatmentModelInputLayoutVersion == requiredLayoutVersion;
+}
+
+bool HasCorrectedSnapshotIdentity(const MemberEvaluation& member)
+{
+    return member.controlEconomicCalendarSnapshotId &&
+        member.treatmentEconomicCalendarSnapshotId &&
+        *member.controlEconomicCalendarSnapshotId > 0 &&
+        member.controlEconomicCalendarSnapshotId ==
+            member.treatmentEconomicCalendarSnapshotId &&
+        TaggedHash(member.controlEconomicCalendarSnapshotHash) &&
+        TaggedHash(member.treatmentEconomicCalendarSnapshotHash) &&
+        member.controlEconomicCalendarSnapshotHash ==
+            member.treatmentEconomicCalendarSnapshotHash;
+}
+
 } // namespace
 
 std::vector<std::pair<long long, long long>> ParseExperimentIdPairs(
@@ -116,6 +150,7 @@ MemberEvaluation MakeMemberEvaluation(
     member.predictionHorizon =
         control.authoritative.configuration.predictionHorizon;
     member.pairDisposition = comparison.disposition;
+    member.evidenceClassification = comparison.evidenceClassification;
     member.pairEvaluationIdentityHash = evidenceOrderIsControlThenAblation
         ? Pair::EvaluationIdentityHash(control, treatment, comparison)
         : Pair::EvaluationIdentityHash(treatment, control, comparison);
@@ -128,9 +163,31 @@ MemberEvaluation MakeMemberEvaluation(
         treatment.extended.economicCalendarSnapshotId;
     member.treatmentEconomicCalendarSnapshotHash =
         treatment.extended.economicCalendarSnapshotHash;
+    member.controlModelInputWidth =
+        control.extended.configuredModelInputWidth;
+    member.controlModelInputLayoutVersion =
+        control.extended.configuredModelInputLayoutVersion;
+    member.treatmentModelInputWidth =
+        treatment.extended.configuredModelInputWidth;
+    member.treatmentModelInputLayoutVersion =
+        treatment.extended.configuredModelInputLayoutVersion;
     member.incompleteReasons = comparison.incompleteReasons;
     member.invalidReasons = comparison.invalidReasons;
     member.comparison = comparison;
+    if (comparison.evidenceClassification ==
+        Pair::EvidenceClassification::PreFixCausalSurpriseEvidence)
+    {
+        member.evidenceState = MemberEvidenceState::HistoricalPreFix;
+        member.exclusionReasons.push_back(
+            "semantic_layout_6_excluded_from_corrected_replication");
+        return member;
+    }
+    if (comparison.evidenceClassification ==
+        Pair::EvidenceClassification::IncompatibleOrInvalidEvidence)
+    {
+        member.evidenceState = MemberEvidenceState::Invalid;
+        return member;
+    }
     switch (comparison.disposition)
     {
         case Pair::Disposition::ComparableComplete:
@@ -218,9 +275,11 @@ bool SoftwareReady(const SoftwareReadinessAudit& audit)
 ReplicationEvaluation Evaluate(
     std::vector<MemberEvaluation> members,
     const ReplicationPolicy& policy,
-    const SoftwareReadinessAudit& softwareAudit)
+    const SoftwareReadinessAudit& softwareAudit,
+    EvidenceScope evidenceScope)
 {
     ReplicationEvaluation result;
+    result.evidenceScope = evidenceScope;
     result.policyCanonical = PolicyCanonicalText(policy);
     result.policyHash = TrainingObjective::DeterministicHash(
         result.policyCanonical);
@@ -253,6 +312,58 @@ ReplicationEvaluation Evaluate(
                 member.scientificallyValidComplete = false;
                 AppendReason(member.invalidReasons,
                              "replication_ablation_identity_mismatch");
+            }
+        }
+        if (evidenceScope == EvidenceScope::CorrectedCausalSurprise)
+        {
+            if (member.evidenceClassification ==
+                Pair::EvidenceClassification::PreFixCausalSurpriseEvidence)
+            {
+                if (!HasInputIdentity(
+                        member,
+                        Pair::kPreFixCausalSurpriseSemanticLayoutVersion))
+                {
+                    member.evidenceState = MemberEvidenceState::Invalid;
+                    member.scientificallyValidComplete = false;
+                    AppendReason(member.invalidReasons,
+                        "pre_fix_causal_surprise_input_identity_invalid");
+                }
+                else
+                {
+                    member.evidenceState =
+                        MemberEvidenceState::HistoricalPreFix;
+                    member.scientificallyValidComplete = false;
+                    AppendReason(member.exclusionReasons,
+                        "semantic_layout_6_excluded_from_corrected_replication");
+                }
+            }
+            else if (member.evidenceClassification ==
+                     Pair::EvidenceClassification::
+                         CorrectedCausalSurprisePairEvidence)
+            {
+                if (!HasInputIdentity(
+                        member,
+                        Pair::kCorrectedCausalSurpriseSemanticLayoutVersion))
+                {
+                    member.evidenceState = MemberEvidenceState::Invalid;
+                    member.scientificallyValidComplete = false;
+                    AppendReason(member.invalidReasons,
+                        "corrected_causal_surprise_input_identity_invalid");
+                }
+                if (!HasCorrectedSnapshotIdentity(member))
+                {
+                    member.evidenceState = MemberEvidenceState::Invalid;
+                    member.scientificallyValidComplete = false;
+                    AppendReason(member.invalidReasons,
+                        "corrected_causal_surprise_snapshot_identity_invalid");
+                }
+            }
+            else
+            {
+                member.evidenceState = MemberEvidenceState::Invalid;
+                member.scientificallyValidComplete = false;
+                AppendReason(member.invalidReasons,
+                    "corrected_causal_surprise_classification_missing_or_invalid");
             }
         }
     }
@@ -294,6 +405,10 @@ ReplicationEvaluation Evaluate(
             case MemberEvidenceState::Complete:
                 ++result.population.completeComparablePairCount;
                 ++result.population.profitabilityAvailablePairCount;
+                if (member.evidenceClassification ==
+                    Pair::EvidenceClassification::
+                        CorrectedCausalSurprisePairEvidence)
+                    ++result.population.correctedValidPairCount;
                 break;
             case MemberEvidenceState::Incomplete:
                 ++result.population.incompletePairCount;
@@ -312,6 +427,9 @@ ReplicationEvaluation Evaluate(
                 break;
             case MemberEvidenceState::ProfitabilityUnavailable:
                 ++result.population.profitabilityUnavailablePairCount;
+                break;
+            case MemberEvidenceState::HistoricalPreFix:
+                ++result.population.historicalPreFixPairCount;
                 break;
         }
     }
@@ -383,6 +501,25 @@ ReplicationEvaluation Evaluate(
     else
         result.action = ProductionizationAction::DoNotEnable;
 
+    if (result.population.invalidPairCount != 0 ||
+        result.population.missingEvidencePairCount != 0)
+        result.evidenceClassification =
+            EvidenceClassification::IncompatibleOrInvalidEvidence;
+    else if (evidenceScope == EvidenceScope::CorrectedCausalSurprise)
+    {
+        if (result.population.correctedValidPairCount >=
+            static_cast<std::size_t>(policy.minimumValidReplications))
+            result.evidenceClassification = EvidenceClassification::
+                CorrectedCausalSurpriseReplicationEvidence;
+        else if (result.population.correctedValidPairCount != 0 ||
+                 result.population.historicalPreFixPairCount == 0)
+            result.evidenceClassification = EvidenceClassification::
+                CorrectedCausalSurprisePairEvidence;
+        else
+            result.evidenceClassification =
+                EvidenceClassification::PreFixCausalSurpriseEvidence;
+    }
+
     result.members = std::move(members);
     for (const auto& member : result.members)
     {
@@ -394,13 +531,20 @@ ReplicationEvaluation Evaluate(
         }
     }
     std::ostringstream identity;
-    identity << "feature_ablation_replication_evaluation_v2;"
+    identity << "feature_ablation_replication_evaluation_v3;"
              << "membership_identity_hash=" << result.membershipIdentityHash << ';'
              << "policy_hash=" << result.policyHash << ';'
              << "ablation_identity_hash="
              << (expectedAblationIdentity.empty() ? "NULL" : expectedAblationIdentity)
              << ';'
-             << "pair_evaluation_semantic_version=2;"
+             << "pair_evaluation_semantic_version=3;"
+             << "evidence_scope=" << EvidenceScopeText(evidenceScope) << ';'
+             << "evidence_classification="
+             << EvidenceClassificationText(result.evidenceClassification) << ';'
+             << "corrected_valid_pair_count="
+             << result.population.correctedValidPairCount << ';'
+             << "historical_pre_fix_pair_count="
+             << result.population.historicalPreFixPairCount << ';'
              << "replication_evaluation_semantic_version="
              << kReplicationEvaluationVersion << ';'
              << "expected_ablation_mask="
@@ -432,8 +576,41 @@ std::string MemberEvidenceStateText(MemberEvidenceState value)
         case MemberEvidenceState::MissingEvidence: return "missing_evidence";
         case MemberEvidenceState::ProfitabilityUnavailable:
             return "profitability_unavailable";
+        case MemberEvidenceState::HistoricalPreFix:
+            return "historical_pre_fix";
     }
     throw std::invalid_argument("unknown_replication_member_evidence_state");
+}
+
+std::string EvidenceScopeText(EvidenceScope value)
+{
+    switch (value)
+    {
+        case EvidenceScope::GenericFeatureAblation:
+            return "generic_feature_ablation";
+        case EvidenceScope::CorrectedCausalSurprise:
+            return "corrected_causal_surprise";
+    }
+    throw std::invalid_argument("unknown_replication_evidence_scope");
+}
+
+std::string EvidenceClassificationText(EvidenceClassification value)
+{
+    switch (value)
+    {
+        case EvidenceClassification::GenericFeatureAblationEvidence:
+            return "generic_feature_ablation_evidence";
+        case EvidenceClassification::PreFixCausalSurpriseEvidence:
+            return "pre_fix_causal_surprise_evidence";
+        case EvidenceClassification::CorrectedCausalSurprisePairEvidence:
+            return "corrected_causal_surprise_pair_evidence";
+        case EvidenceClassification::CorrectedCausalSurpriseReplicationEvidence:
+            return "corrected_causal_surprise_replication_evidence";
+        case EvidenceClassification::IncompatibleOrInvalidEvidence:
+            return "incompatible_or_invalid_evidence";
+    }
+    throw std::invalid_argument(
+        "unknown_replication_evidence_classification");
 }
 
 std::string ReplicationDecisionText(ReplicationDecision value)

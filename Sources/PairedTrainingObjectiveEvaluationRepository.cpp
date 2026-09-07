@@ -58,6 +58,25 @@ struct MatrixMetadata
     std::vector<double> values;
 };
 
+bool IsRegisteredPersistedModelInputIdentity(int layoutVersion,
+                                             std::size_t inputWidth)
+{
+    const EA::ModelInputSemanticLayoutRegistryEntry* layout = nullptr;
+    for (const auto& candidate : EA::kModelInputSemanticLayoutRegistry)
+    {
+        if (candidate.layoutVersion != layoutVersion) continue;
+        if (layout != nullptr) return false;
+        layout = &candidate;
+    }
+    if (layout == nullptr || inputWidth > layout->maximumInputWidth)
+        return false;
+
+    std::size_t matchingWidths = 0;
+    for (const std::size_t registered : EA::kRegisteredModelInputWidths)
+        if (registered == inputWidth) ++matchingWidths;
+    return matchingWidths == 1;
+}
+
 MatrixMetadata LoadMatrixMetadata(pqxx::transaction_base& transaction,
                                   long long experimentId,
                                   long long modelId,
@@ -260,13 +279,14 @@ void LoadFinalModelConfiguration(pqxx::transaction_base& transaction,
         EA::ParseModelInputSemanticMetadata(
             static_cast<std::size_t>(input.rows),
             static_cast<std::size_t>(input.columns), input.values);
-    if (!EA::IsModelInputSemanticLayoutWidthCompatible(
+    // This repository only loads immutable evidence for read-only analysis.
+    // Prove that the persisted width/layout was a registered identity, but do
+    // not require it to be execution-compatible with the current binary.
+    // Resume and inference paths retain their stricter ancestry checks; this
+    // distinction lets layout-6 evidence reach the historical classifier.
+    if (!IsRegisteredPersistedModelInputIdentity(
             inputMetadata.layoutVersion,
-            static_cast<std::size_t>(configuration.inputWidth),
-            EA::kModelInputSemanticLayoutRegistry,
-            EA::kRegisteredModelInputWidths,
-            EA::kModelInputSemanticLayoutVersion,
-            EA::kCurrentModelInputWidth, false))
+            static_cast<std::size_t>(configuration.inputWidth)))
         ContractFailure(experimentId, "model_input_semantics_incompatible");
     configuration.modelInputMetadataSchemaVersion =
         inputMetadata.schemaVersion;

@@ -1,6 +1,7 @@
 #include "FeatureAblationReplicationEvaluationService.hpp"
 
 #include "FeatureAblationPairEvaluationRepository.hpp"
+#include "FeatureAblation.hpp"
 #include "PairedTrainingObjectiveEvaluationRepository.hpp"
 
 #include <iomanip>
@@ -197,6 +198,9 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
                << MemberEvidenceStateText(member.evidenceState)
                << ",pair_disposition="
                << Pair::DispositionText(member.pairDisposition)
+               << ",evidence_classification="
+               << Pair::EvidenceClassificationText(
+                      member.evidenceClassification)
                << ",pair_evaluation_identity_hash="
                << (member.pairEvaluationIdentityHash.empty()
                        ? "NULL" : member.pairEvaluationIdentityHash)
@@ -217,6 +221,20 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
                        : "NULL")
                << ",treatment_economic_calendar_snapshot_hash="
                << member.treatmentEconomicCalendarSnapshotHash.value_or("NULL")
+               << ",control_model_input_width="
+               << (member.controlModelInputWidth
+                       ? std::to_string(*member.controlModelInputWidth) : "NULL")
+               << ",control_model_input_semantic_layout_version="
+               << (member.controlModelInputLayoutVersion
+                       ? std::to_string(*member.controlModelInputLayoutVersion)
+                       : "NULL")
+               << ",treatment_model_input_width="
+               << (member.treatmentModelInputWidth
+                       ? std::to_string(*member.treatmentModelInputWidth) : "NULL")
+               << ",treatment_model_input_semantic_layout_version="
+               << (member.treatmentModelInputLayoutVersion
+                       ? std::to_string(*member.treatmentModelInputLayoutVersion)
+                       : "NULL")
                << ",corpus_contract="
                << (member.controlEconomicCalendarSnapshotId
                        ? "immutable_snapshot" : "legacy_live_unbound")
@@ -224,6 +242,7 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
                << Boolean(member.scientificallyValidComplete)
                << ",incomplete_reasons=" << Reasons(member.incompleteReasons)
                << ",invalid_reasons=" << Reasons(member.invalidReasons)
+               << ",exclusion_reasons=" << Reasons(member.exclusionReasons)
                << '\n';
     }
     const auto& p = result.population;
@@ -244,6 +263,12 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
            << p.profitabilityNegativePairCount
            << ",profitability_zero_pair_count="
            << p.profitabilityZeroPairCount
+           << ",corrected_valid_pair_count=" << p.correctedValidPairCount
+           << ",historical_pre_fix_pair_count=" << p.historicalPreFixPairCount
+           << ",minimum_valid_replications=" << kMinimumValidReplications
+           << ",corrected_replication_minimum_satisfied="
+           << Boolean(p.correctedValidPairCount >=
+                      static_cast<std::size_t>(kMinimumValidReplications))
            << ",profitability_positive_pair_fraction="
            << (p.profitabilityAvailablePairCount == 0
                    ? "NULL"
@@ -264,6 +289,9 @@ std::string RenderComparisonOutput(const ReplicationEvaluation& result)
     PrintMetric(output, "neutral_proportion_delta", result.neutralProportion);
     PrintMetric(output, "actionable_count_delta", result.actionableCount);
     output << "FEATURE_ABLATION_REPLICATION_DECISION"
+           << ",evidence_scope=" << EvidenceScopeText(result.evidenceScope)
+           << ",evidence_classification="
+           << EvidenceClassificationText(result.evidenceClassification)
            << ",replication_decision="
            << ReplicationDecisionText(result.decision)
            << ",evidence_integrity_failure="
@@ -301,8 +329,15 @@ int RunComparisonCommand(const std::string& connectionString,
         members.push_back(LoadMember(transaction, index + 1,
                                      command.experimentIdPairs[index],
                                      command.expectedAblationMask));
+    EvidenceScope evidenceScope = EvidenceScope::GenericFeatureAblation;
+    if (command.expectedAblationMask &&
+        EA::FeatureAblationMask::Parse(*command.expectedAblationMask)
+                .CanonicalText() ==
+            EA::kCausalEconomicEventSurpriseAblationMaskText)
+        evidenceScope = EvidenceScope::CorrectedCausalSurprise;
     const ReplicationEvaluation result = Evaluate(
-        std::move(members), command.policy, command.softwareAudit);
+        std::move(members), command.policy, command.softwareAudit,
+        evidenceScope);
     output << RenderComparisonOutput(result);
     return ExitCode(result);
 }

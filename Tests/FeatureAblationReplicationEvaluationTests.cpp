@@ -64,6 +64,46 @@ Replication::MemberEvaluation Incomplete(std::size_t ordinal)
     return member;
 }
 
+Replication::MemberEvaluation Corrected(std::size_t ordinal,
+                                        double aggregate,
+                                        double average)
+{
+    auto member = Complete(ordinal, aggregate, average);
+    member.evidenceClassification = Pair::EvidenceClassification::
+        CorrectedCausalSurprisePairEvidence;
+    member.comparison.evidenceClassification =
+        member.evidenceClassification;
+    member.controlModelInputWidth = 77;
+    member.controlModelInputLayoutVersion = 7;
+    member.treatmentModelInputWidth = 77;
+    member.treatmentModelInputLayoutVersion = 7;
+    member.controlEconomicCalendarSnapshotId = 1;
+    member.controlEconomicCalendarSnapshotHash =
+        "fnv1a64:67610f94f5c8e7cc";
+    member.treatmentEconomicCalendarSnapshotId = 1;
+    member.treatmentEconomicCalendarSnapshotHash =
+        "fnv1a64:67610f94f5c8e7cc";
+    return member;
+}
+
+Replication::MemberEvaluation PreFix(std::size_t ordinal)
+{
+    auto member = Complete(ordinal, 0.5, 0.05);
+    member.evidenceClassification =
+        Pair::EvidenceClassification::PreFixCausalSurpriseEvidence;
+    member.comparison.evidenceClassification =
+        member.evidenceClassification;
+    member.evidenceState = Replication::MemberEvidenceState::HistoricalPreFix;
+    member.scientificallyValidComplete = false;
+    member.controlModelInputWidth = 77;
+    member.controlModelInputLayoutVersion = 6;
+    member.treatmentModelInputWidth = 77;
+    member.treatmentModelInputLayoutVersion = 6;
+    member.exclusionReasons = {
+        "semantic_layout_6_excluded_from_corrected_replication"};
+    return member;
+}
+
 template <typename Function>
 void AssertInvalid(Function&& function)
 {
@@ -105,7 +145,7 @@ int main()
     assert(early.population.incompletePairCount == 3);
     assert(early.population.distinctEconomicCalendarCorpusCount == 2);
     assert(early.evaluationIdentityCanonical.find(
-               "pair_evaluation_semantic_version=2;") !=
+               "pair_evaluation_semantic_version=3;") !=
            std::string::npos);
     assert(early.evaluationIdentityCanonical.find(
                "economic_calendar_snapshot=provenance_not_treatment;") !=
@@ -189,6 +229,45 @@ int main()
         {Complete(1, 0.1, 0.01)}, {}, notReadyAudit);
     assert(!blocked.softwareReady);
     assert(blocked.action == Action::BlockedSoftwareReadiness);
+
+    const auto correctedReplicated = Replication::Evaluate(
+        {Corrected(1, 0.1, 0.01), Corrected(2, 0.2, 0.02),
+         Corrected(3, 0.3, 0.03)}, {}, {},
+        Replication::EvidenceScope::CorrectedCausalSurprise);
+    assert(correctedReplicated.population.correctedValidPairCount == 3);
+    assert(correctedReplicated.population.historicalPreFixPairCount == 0);
+    assert(correctedReplicated.evidenceClassification ==
+           Replication::EvidenceClassification::
+               CorrectedCausalSurpriseReplicationEvidence);
+
+    const auto twoCorrectedOneHistorical = Replication::Evaluate(
+        {Corrected(1, 0.1, 0.01), Corrected(2, 0.2, 0.02), PreFix(3)},
+        {}, {}, Replication::EvidenceScope::CorrectedCausalSurprise);
+    assert(twoCorrectedOneHistorical.population.correctedValidPairCount == 2);
+    assert(twoCorrectedOneHistorical.population.historicalPreFixPairCount == 1);
+    assert(twoCorrectedOneHistorical.decision == Decision::InsufficientEvidence);
+    assert(twoCorrectedOneHistorical.evidenceClassification ==
+           Replication::EvidenceClassification::
+               CorrectedCausalSurprisePairEvidence);
+
+    const auto oneCorrectedTwoHistorical = Replication::Evaluate(
+        {Corrected(1, 0.1, 0.01), PreFix(2), PreFix(3)}, {}, {},
+        Replication::EvidenceScope::CorrectedCausalSurprise);
+    assert(oneCorrectedTwoHistorical.population.correctedValidPairCount == 1);
+    assert(oneCorrectedTwoHistorical.population.historicalPreFixPairCount == 2);
+
+    auto invalidCorrected = Corrected(3, 0.3, 0.03);
+    invalidCorrected.treatmentModelInputLayoutVersion = 6;
+    const auto invalidCorrectedSet = Replication::Evaluate(
+        {Corrected(1, 0.1, 0.01), Corrected(2, 0.2, 0.02),
+         invalidCorrected}, {}, {},
+        Replication::EvidenceScope::CorrectedCausalSurprise);
+    assert(invalidCorrectedSet.population.correctedValidPairCount == 2);
+    assert(invalidCorrectedSet.population.invalidPairCount == 1);
+    assert(invalidCorrectedSet.evidenceClassification ==
+           Replication::EvidenceClassification::IncompatibleOrInvalidEvidence);
+    assert(invalidCorrectedSet.members[2].invalidReasons.front() ==
+           "corrected_causal_surprise_input_identity_invalid");
 
     // Every action is advisory. No state represents automatic activation.
     for (const Action action : {
