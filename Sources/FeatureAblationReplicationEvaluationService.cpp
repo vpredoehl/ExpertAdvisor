@@ -323,6 +323,16 @@ int RunComparisonCommand(const std::string& connectionString,
     pqxx::connection connection{connectionString};
     pqxx::read_transaction transaction{connection};
     transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    const ReplicationEvaluation result = EvaluateComparison(
+        transaction, command);
+    output << RenderComparisonOutput(result);
+    return ExitCode(result);
+}
+
+ReplicationEvaluation EvaluateComparison(
+    pqxx::transaction_base& transaction,
+    const ComparisonCommand& command)
+{
     std::vector<MemberEvaluation> members;
     members.reserve(command.experimentIdPairs.size());
     for (std::size_t index = 0; index < command.experimentIdPairs.size(); ++index)
@@ -335,11 +345,9 @@ int RunComparisonCommand(const std::string& connectionString,
                 .CanonicalText() ==
             EA::kCausalEconomicEventSurpriseAblationMaskText)
         evidenceScope = EvidenceScope::CorrectedCausalSurprise;
-    const ReplicationEvaluation result = Evaluate(
+    return Evaluate(
         std::move(members), command.policy, command.softwareAudit,
         evidenceScope);
-    output << RenderComparisonOutput(result);
-    return ExitCode(result);
 }
 
 } // namespace EA::FeatureAblationReplicationEvaluation

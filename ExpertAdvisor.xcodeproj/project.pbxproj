@@ -69,6 +69,10 @@
 		0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
 		0E7E000631E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
 		0E7E000731E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
+		0E8200043360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */; };
+		0E8200053360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */; };
+		0E8200063360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */; };
+		0E8200073360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */; };
 		0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
 		0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
 		0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
@@ -638,6 +642,10 @@
 		0E7E000131E0000100AAA001 /* FeatureAblationReplicationEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluation.hpp; path = Sources/FeatureAblationReplicationEvaluation.hpp; sourceTree = SOURCE_ROOT; };
 		0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluationService.cpp; path = Sources/FeatureAblationReplicationEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
 		0E7E000331E0000100AAA001 /* FeatureAblationReplicationEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluationService.hpp; path = Sources/FeatureAblationReplicationEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
+		0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CorrectedCausalSurpriseReplicationContinuation.cpp; path = Sources/CorrectedCausalSurpriseReplicationContinuation.cpp; sourceTree = SOURCE_ROOT; };
+		0E8200013360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CorrectedCausalSurpriseReplicationContinuation.hpp; path = Sources/CorrectedCausalSurpriseReplicationContinuation.hpp; sourceTree = SOURCE_ROOT; };
+		0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CorrectedCausalSurpriseReplicationContinuationService.cpp; path = Sources/CorrectedCausalSurpriseReplicationContinuationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E8200033360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CorrectedCausalSurpriseReplicationContinuationService.hpp; path = Sources/CorrectedCausalSurpriseReplicationContinuationService.hpp; sourceTree = SOURCE_ROOT; };
 		0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PostPairReplicationPolicy.cpp; path = Sources/PostPairReplicationPolicy.cpp; sourceTree = SOURCE_ROOT; };
 		0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PostPairReplicationPolicy.hpp; path = Sources/PostPairReplicationPolicy.hpp; sourceTree = SOURCE_ROOT; };
 		0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReplicationCandidatePlanning.cpp; path = Sources/ReplicationCandidatePlanning.cpp; sourceTree = SOURCE_ROOT; };
@@ -781,6 +789,10 @@
 				0E7E000131E0000100AAA001 /* FeatureAblationReplicationEvaluation.hpp */,
 				0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */,
 				0E7E000331E0000100AAA001 /* FeatureAblationReplicationEvaluationService.hpp */,
+				0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */,
+				0E8200013360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.hpp */,
+				0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */,
+				0E8200033360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.hpp */,
 				0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */,
 				0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */,
 				0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */,
@@ -1205,6 +1217,8 @@
 				0E81000A3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */,
 				0E7E000431E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */,
 				0E7E000631E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */,
+				0E8200043360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */,
+				0E8200063360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */,
 				0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
 				0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
@@ -1344,6 +1358,8 @@
 				0E81000B3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */,
 				0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */,
 				0E7E000731E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */,
+				0E8200053360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */,
+				0E8200073360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */,
 				0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
 				0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
