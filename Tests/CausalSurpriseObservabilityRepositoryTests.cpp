@@ -58,9 +58,9 @@ CREATE TABLE experiment (
 );
 INSERT INTO experiment VALUES
 (619,'EURUSDRMP',4,'2010-01-01','2025-01-01','2025-01-01','2026-01-01',
- 77,6,'enabled','full_history_warmup',20,''),
+ 77,7,'enabled','full_history_warmup',20,''),
 (620,'EURUSDRMP',4,'2010-01-01','2025-01-01','2025-01-01','2026-01-01',
- 77,6,'enabled','full_history_warmup',20,
+ 77,7,'enabled','full_history_warmup',20,
  'causal_first_release_surprise_available,causal_first_release_surprise'),
 (500,'eurusdrmp',4,'2010-01-01','2025-01-01',NULL,NULL,
  75,5,'zero_ablation','legacy_cold_boundary',30,''),
@@ -77,7 +77,7 @@ INSERT INTO experiment VALUES
         assert(current.symbol == "eurusdrmp");
         assert(current.predictionHorizon == 4);
         assert(current.modelInputWidth == 77);
-        assert(current.modelInputSemanticLayoutVersion == 6);
+        assert(current.modelInputSemanticLayoutVersion == 7);
         assert(current.featureAblationMask.empty());
         assert(current.featureWarmupScope ==
                EA::FeatureWarmupScope::FullHistoryWarmup);
@@ -117,7 +117,7 @@ INSERT INTO experiment VALUES
         const std::string rendered = Observability::Render(result);
         assert(rendered.find("model_input_width=77") != std::string::npos);
         assert(rendered.find(
-            "model_input_semantic_layout_version=6") !=
+            "model_input_semantic_layout_version=7") !=
             std::string::npos);
         assert(rendered.find("total_feature_rows=0") != std::string::npos);
         assert(rendered.find("read_only=true,software_success=true") !=

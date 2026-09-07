@@ -337,20 +337,20 @@ int main()
         InsertProfitabilityEvidence(fixture, accuracyMismatchTreatment, 0.08);
 
         InsertExperiment(fixture, surpriseControl, false, true,
-                         std::string{}, 77, 6);
+                         std::string{}, 77, 7);
         InsertExperiment(
             fixture, surpriseAblation, false, true,
             std::string(EA::kCausalEconomicEventSurpriseAblationMaskText),
-            77, 6);
+            77, 7);
         InsertFinalEvidence(fixture, surpriseControl, 0.64, 0.08);
         InsertFinalEvidence(fixture, surpriseAblation, 0.61, 0.05);
         InsertExperiment(fixture, snapshotSurpriseControl, false, true,
-                         std::string{}, 77, 6, 1,
+                         std::string{}, 77, 7, 1,
                          "fnv1a64:67610f94f5c8e7cc");
         InsertExperiment(
             fixture, snapshotSurpriseAblation, false, true,
             std::string(EA::kCausalEconomicEventSurpriseAblationMaskText),
-            77, 6, 1, "fnv1a64:67610f94f5c8e7cc");
+            77, 7, 1, "fnv1a64:67610f94f5c8e7cc");
         InsertFinalEvidence(fixture, snapshotSurpriseControl, 0.63, 0.07);
         InsertFinalEvidence(fixture, snapshotSurpriseAblation, 0.60, 0.04);
         fixture.commit();
@@ -403,7 +403,7 @@ int main()
                "causal_first_release_surprise") != std::string::npos);
     assert(output.str().find("model_input_width=77") != std::string::npos);
     assert(output.str().find(
-               "model_input_semantic_layout_version=6") !=
+               "model_input_semantic_layout_version=7") !=
            std::string::npos);
     assert(output.str().find(
                "delta_sign_convention=control_minus_ablation") !=

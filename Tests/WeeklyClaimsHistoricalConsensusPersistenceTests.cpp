@@ -73,10 +73,20 @@ int main()
     assert(publishedWeeklyClaims.firstReleaseActualState ==
            EconomicEventFirstReleaseActualState::provenFirstRelease);
     EconomicEventFeatureEngine atPublicationEngine{atPublication};
-    const auto zero =
+
+    // The repository may expose the proven first release at its exact
+    // publication timestamp, but a completed feature row uses the half-open
+    // information interval [barStart, informationCutoff). Evidence published
+    // exactly at the cutoff is first usable by the following completed bar.
+    const auto atCutoff =
         atPublicationEngine.AdvanceCompletedBar(At(1749126000));
-    assert(zero.causalFirstReleaseSurpriseAvailable == 1.0F);
-    assert(zero.causalFirstReleaseSurprise == 0.0F);
+    assert(atCutoff.causalFirstReleaseSurpriseAvailable == 0.0F);
+    assert(atCutoff.causalFirstReleaseSurprise == 0.0F);
+
+    const auto followingBar =
+        atPublicationEngine.AdvanceCompletedBar(At(1749126900));
+    assert(followingBar.causalFirstReleaseSurpriseAvailable == 1.0F);
+    assert(followingBar.causalFirstReleaseSurprise == 0.0F);
 
     const auto missing = LoadEconomicEventsForFeatureRange(
         read, "USD", "2025-06-12 12:20:00+00",
@@ -85,7 +95,7 @@ int main()
     assert(!missingWeeklyClaims.selectedConsensus);
     EconomicEventFeatureEngine missingEngine{missing};
     const auto missingValues =
-        missingEngine.AdvanceCompletedBar(At(1749730800));
+        missingEngine.AdvanceCompletedBar(At(1749731700));
     assert(missingValues.causalFirstReleaseSurpriseAvailable == 0.0F);
     assert(missingValues.causalFirstReleaseSurprise == 0.0F);
     assert(missingEngine.LastCausalSurpriseObservation().disposition ==

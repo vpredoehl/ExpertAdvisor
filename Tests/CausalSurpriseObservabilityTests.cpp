@@ -123,7 +123,7 @@ bool HasReason(const Observability::ParityResult& result,
 
 void TestAuthoritativeDispositionsAndBoundary()
 {
-    const auto positive = ObservationAt(ConsensusEvent(0.2, 0.5, 2), 1);
+    const auto positive = ObservationAt(ConsensusEvent(0.2, 0.5, 2), 2);
     assert(positive.disposition ==
            Economic::CausalSurpriseDisposition::available);
     assert(std::abs(positive.surprise - 0.03F) < 1e-7F);
@@ -131,12 +131,12 @@ void TestAuthoritativeDispositionsAndBoundary()
     assert(positive.consensusSource == "fixture_consensus");
     assert(positive.eventFamily == "CPI");
 
-    const auto negative = ObservationAt(ConsensusEvent(0.7, 0.2, 2), 1);
+    const auto negative = ObservationAt(ConsensusEvent(0.7, 0.2, 2), 2);
     assert(negative.disposition ==
            Economic::CausalSurpriseDisposition::available);
     assert(negative.surprise < 0.0F);
 
-    const auto zero = ObservationAt(ConsensusEvent(0.2, 0.2, 2), 1);
+    const auto zero = ObservationAt(ConsensusEvent(0.2, 0.2, 2), 2);
     assert(zero.disposition ==
            Economic::CausalSurpriseDisposition::available);
     assert(zero.surprise == 0.0F);
@@ -146,15 +146,17 @@ void TestAuthoritativeDispositionsAndBoundary()
            Economic::CausalSurpriseDisposition::notYetAvailable);
     assert(before.surprise == 0.0F);
 
-    // The completed cutoff for Bar(1) is exactly Bar(2), proving the Phase-1
-    // inclusive proven_available_at boundary. A later bar remains available.
+    // The completed cutoff for Bar(1) is exactly Bar(2). Completed feature
+    // rows represent [barStart, informationCutoff), so evidence published
+    // exactly at that cutoff is unavailable until the following bar.
     const auto exactly = ObservationAt(ConsensusEvent(0.2, 0.5, 2), 1);
     const auto after = ObservationAt(ConsensusEvent(0.2, 0.5, 2), 2);
     assert(exactly.disposition ==
-           Economic::CausalSurpriseDisposition::available);
+           Economic::CausalSurpriseDisposition::notYetAvailable);
+    assert(exactly.surprise == 0.0F);
     assert(after.disposition ==
            Economic::CausalSurpriseDisposition::available);
-    assert(exactly.surprise == after.surprise);
+    assert(std::abs(after.surprise - 0.03F) < 1e-7F);
 
     auto provenance = ConsensusEvent(0.2, 0.5, 2);
     provenance.firstReleaseActual.reset();
@@ -178,12 +180,12 @@ void TestAuthoritativeDispositionsAndBoundary()
 
     auto missingConsensus = ConsensusEvent(0.2, 0.5, 2);
     missingConsensus.selectedConsensus.reset();
-    assert(ObservationAt(missingConsensus, 1).disposition ==
+    assert(ObservationAt(missingConsensus, 2).disposition ==
            Economic::CausalSurpriseDisposition::missingForecast);
 
     auto incompatible = ConsensusEvent(0.2, 0.5, 2);
     incompatible.firstReleaseActual->actual.scale = 100.0;
-    assert(ObservationAt(incompatible, 1).disposition ==
+    assert(ObservationAt(incompatible, 2).disposition ==
            Economic::CausalSurpriseDisposition::incompatible);
 
     Economic::EconomicEventFeatureEngine empty{
@@ -253,8 +255,8 @@ void TestCoveragePartitionsStatisticsAndClamp()
     assert(coverage.consensusSourceCounts.at("fixture_consensus") == 3);
     assert(coverage.eventFamilyCounts.at("CPI") == 3);
 
-    const auto upper = ObservationAt(ConsensusEvent(0.0, 200.0, 2), 1);
-    const auto lower = ObservationAt(ConsensusEvent(0.0, -200.0, 2), 1);
+    const auto upper = ObservationAt(ConsensusEvent(0.0, 200.0, 2), 2);
+    const auto lower = ObservationAt(ConsensusEvent(0.0, -200.0, 2), 2);
     assert(upper.upperClamped && !upper.lowerClamped &&
            upper.surprise == 10.0F);
     assert(lower.lowerClamped && !lower.upperClamped &&
@@ -278,9 +280,9 @@ void TestWarmupDenominatorAndIdentity()
     assert(result.sourceRowCount == 3);
     assert(result.warmupRowCount == 1);
     assert(result.coverage.totalFeatureRows == 2);
-    assert(result.coverage.surpriseAvailableCount == 2);
+    assert(result.coverage.surpriseAvailableCount == 1);
     assert(result.experiment.modelInputWidth == 77);
-    assert(result.experiment.modelInputSemanticLayoutVersion == 6);
+    assert(result.experiment.modelInputSemanticLayoutVersion == 7);
     assert(!result.upstreamFeatureIdentity.empty());
     assert(!result.coverageIdentity.empty());
     assert(!result.diagnosticIdentity.empty());
@@ -378,17 +380,17 @@ void TestExactCompatibilityReasons()
 
     auto unit = event;
     unit.firstReleaseActual->actual.unit = "count";
-    assert(ObservationAt(unit, 1).incompatibilityReason == Economic::
+    assert(ObservationAt(unit, 2).incompatibilityReason == Economic::
         CausalSurpriseIncompatibilityReason::unitMismatch);
 
     auto scale = event;
     scale.firstReleaseActual->actual.scale = 100.0;
-    assert(ObservationAt(scale, 1).incompatibilityReason == Economic::
+    assert(ObservationAt(scale, 2).incompatibilityReason == Economic::
         CausalSurpriseIncompatibilityReason::scaleMismatch);
 
     auto qualifier = event;
     qualifier.firstReleaseActual->actual.qualifier = "seasonally_adjusted";
-    assert(ObservationAt(qualifier, 1).incompatibilityReason == Economic::
+    assert(ObservationAt(qualifier, 2).incompatibilityReason == Economic::
         CausalSurpriseIncompatibilityReason::qualifierMismatch);
 
     auto invalidForecast = event;
@@ -404,7 +406,7 @@ void TestExactCompatibilityReasons()
     bool invalidShapeFailedClosed = false;
     try
     {
-        (void)ObservationAt(invalidActual, 1);
+        (void)ObservationAt(invalidActual, 2);
     }
     catch (const std::invalid_argument& error)
     {
@@ -474,7 +476,7 @@ void TestAllTerminalGapStatesAndClassifications()
     {
         return Observability::Evaluate(
             context, Observability::Scope::train,
-            {{range, {Bar(0)}, 0, {std::move(event)}}});
+            {{range, {Bar(1)}, 0, {std::move(event)}}});
     };
 
     auto ambiguous = ConsensusEvent(0.2, 0.5, 2);

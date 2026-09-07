@@ -88,8 +88,9 @@ struct EconomicEventFeatureValues
     float authoritativeInitialSurpriseAbs = 0.0F;
     float authoritativeInitialSurpriseDirection = 0.0F;
 
-    // Semantic-layout-v6 append. Availability is distinct from numeric zero;
-    // the value is sourced only from the Phase-1 PIT first-release API.
+    // Semantic-layout-v6 append, corrected by layout v7 to use the strict
+    // completed-bar cutoff. Availability is distinct from numeric zero; the
+    // value is sourced only from the Phase-1 PIT first-release API.
     float causalFirstReleaseSurpriseAvailable = 0.0F;
     float causalFirstReleaseSurprise = 0.0F;
 

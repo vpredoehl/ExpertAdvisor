@@ -2,8 +2,9 @@
 
 ## Contract
 
-Semantic layout 6 appends two point-in-time first-release surprise channels to
-the complete layout-5 Tensor prefix:
+Semantic layout 7 is the corrected production contract for the two
+point-in-time first-release surprise channels appended to the complete
+layout-5 Tensor prefix:
 
 | Zero-based Tensor column | Stable feature name | Encoding |
 | ---: | --- | --- |
@@ -12,9 +13,10 @@ the complete layout-5 Tensor prefix:
 
 The model input includes four return features, so the total width changes from
 75 to 77. Width 75 remains registered as semantic layout 5 and projects the
-unchanged Tensor prefix at columns 0 through 70. Layout 6 has append-only
-predecessor 5. Resume expansion from width 75 to 77 zero-initializes exactly
-Tensor columns 71 through 72 and records:
+unchanged Tensor prefix at columns 0 through 70. Layout 7 has append-only
+predecessor 5. Layout 6 is retained as an incompatible pre-fix sibling whose
+exact-cutoff behavior was inclusive. Resume expansion from width 75 to 77
+zero-initializes exactly Tensor columns 71 through 72 and records:
 
 ```text
 new_tensor_features=causal_first_release_surprise_available|causal_first_release_surprise
@@ -22,9 +24,10 @@ new_tensor_columns=71:73
 ```
 
 Migration 089 already supplies the durable experiment columns for model input
-width and semantic layout. Phase 2 does not change that schema: new experiments
-persist width 77/layout 6, while historical width 75/layout 5 identities remain
-immutable. Migration 090 supplies the first-release actual provenance API.
+width and semantic layout. New experiments persist width 77/layout 7, while
+historical width 75/layout 5 and pre-fix width 77/layout 6 identities remain
+immutable. A layout-6 checkpoint cannot be loaded or resumed by a layout-7
+runtime. Migration 090 supplies the first-release actual provenance API.
 
 ## Surprise calculation
 
@@ -63,17 +66,18 @@ The feature engine then gates each bulk-loaded value for every completed bar:
 
 ```text
 state == proven_first_release
-AND proven_available_at <= information_cutoff
+AND proven_available_at < information_cutoff
 ```
 
-The inclusive boundary means the channel is unavailable immediately before
-proved publication and available exactly at publication. A later revision can
-change the audit-only canonical actual but cannot replace the selected first
-release. An unproved late backfill remains `provenance_unavailable`. A directly
-proved historical backfill becomes visible at its exact source publication
-instant, not its observation or ingestion time. Conflicting possible earliest
-values are `ambiguous` and unavailable; same-value earliest corroboration is
-usable and deterministically selected.
+The strict boundary matches the Tensor row's half-open completed information
+interval `[barStart, information_cutoff)`: evidence published exactly at the
+cutoff first becomes visible on the next bar. A later revision can change the
+audit-only canonical actual but cannot replace the selected first release. An
+unproved late backfill remains `provenance_unavailable`. A directly proved
+historical backfill is gated by its exact source publication instant, not its
+observation or ingestion time. Conflicting possible earliest values are
+`ambiguous` and unavailable; same-value earliest corroboration is usable and
+deterministically selected.
 
 The query retains the existing currency filter, event range/seed behavior,
 same-timestamp importance and event-ID ordering, and relevant-event selection.

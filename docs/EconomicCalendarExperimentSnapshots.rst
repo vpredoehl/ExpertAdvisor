@@ -107,9 +107,10 @@ a fail-closed diagnostic.
 Point-in-time and range behavior
 --------------------------------
 
-Snapshotting changes the evidence source, not causality.  First-release actuals
-remain unavailable before ``proven_available_at`` and become visible at the
-existing inclusive boundary.  Migration-088 release actuals retain their
+Snapshotting changes the evidence source, not causality. First-release actuals
+remain unavailable until ``proven_available_at`` is strictly earlier than the
+completed-bar cutoff. Evidence exactly at the cutoff becomes visible on the
+next bar. Migration-088 release actuals retain their
 existing strict upper-bound behavior.  Historical consensus remains associated
 with its pre-release ``forecast_available_at`` proof and is not exposed before
 the canonical event becomes the relevant event.
@@ -147,7 +148,9 @@ Phase-7 authoritative Weekly Claims actual imports and Phase-8 historical
 Weekly Claims consensus imports are separate operational changes and are not
 performed by Phase 9.
 
-Phase 9 does not change model width 77, semantic layout version 6, Tensor's 73
-physical features, causal-surprise columns 71/72, normalization, the
+Phase 9 did not change model width 77, then-current semantic layout version 6,
+Tensor's 73 physical features, causal-surprise columns 71/72, normalization, the
 ``[-10,+10]`` clamp, PIT boundaries, warmup behavior, ablation masks,
 first-release selection, selected-consensus semantics, or per-bar query count.
+The later exact-cutoff correction is identified separately by semantic layout
+version 7; width-77/layout-6 models are pre-fix and incompatible with it.

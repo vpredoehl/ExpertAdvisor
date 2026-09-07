@@ -212,7 +212,7 @@ int main()
             "train_end,status,phase,duplicate_nonce,model_input_width,"
             "model_input_semantic_layout_version) VALUES "
             "('eurusdrmp',1,0.0,1,0,'2020-01-01','2021-01-01',"
-            "'pending','train',2090001,77,6) RETURNING experiment_id;")
+            "'pending','train',2090001,77,7) RETURNING experiment_id;")
             .one_row()[0].as<long long>();
         freshWidth77ModelId = DBIO::PgModelIO::createModel(
             transaction, "phase2-fresh-width77-event-smoke",

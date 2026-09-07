@@ -1,6 +1,6 @@
 # Causal first-release surprise contract
 
-The layout-v6 pair is:
+The layout-v7 pair is:
 
 ```text
 causal_first_release_surprise_available
@@ -60,7 +60,10 @@ zeros those two columns. It does not remove columns or change model width; all
 other Tensor-derived inputs remain byte-identical. The canonical mask is part
 of experiment identity and model lineage. Resume, checkpoint retry, and
 inference reload the mask from that lineage and reject mismatches. Width 77 and
-semantic layout 6 independently identify the channel layout.
+semantic layout 7 independently identify the corrected half-open channel
+semantics. Layout 6 used the same width and columns but exposed a first-release
+actual at an exact completed-bar cutoff; it is an incompatible pre-fix sibling
+of layout 7, not a resume-compatible predecessor.
 
 Economic-calendar snapshot ID/hash is a separate corpus identity. Both arms
 within a controlled pair must be either legacy NULL/NULL or bound to the same

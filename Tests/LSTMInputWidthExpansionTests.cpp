@@ -326,11 +326,13 @@ int main()
         EA::kModelInputSemanticLayoutVersion, EA::kCurrentModelInputWidth);
     assert(v5Provenance.expandedInputWidth == sourceWidth);
 
-    // Simulate two further append-only generations. The compiled V6 event
-    // remains immutable and can itself be a source for a later expansion.
-    constexpr std::size_t v7Width = expandedWidth + 1;
-    constexpr std::size_t v8Width = v7Width + 1;
-    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 8>
+    // Simulate two further append-only generations from the corrected
+    // current layout 7. Layouts 6 and 7 are same-width siblings descending
+    // from layout 5, so the pre-fix layout 6 is not an append-only
+    // predecessor of layout 7 or of these future generations.
+    constexpr std::size_t v8Width = expandedWidth + 1;
+    constexpr std::size_t v9Width = v8Width + 1;
+    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 9>
         futureRegistry{{
             {1, EA::kHistoricalLevelProximityModelInputWidth, 0},
             {2, EA::kPreEconomicEventModelInputWidth, 1},
@@ -338,50 +340,51 @@ int main()
             {4, EA::kEconomicEventConsensusModelInputWidth, 3},
             {5, sourceWidth, 4},
             {6, expandedWidth, 5},
-            {7, v7Width, 6},
+            {7, expandedWidth, 5},
             {8, v8Width, 7},
+            {9, v9Width, 8},
         }};
     std::vector<std::size_t> futureWidths{
         EA::kRegisteredModelInputWidths.begin(),
         EA::kRegisteredModelInputWidths.end()};
-    futureWidths.push_back(v7Width);
     futureWidths.push_back(v8Width);
+    futureWidths.push_back(v9Width);
     std::vector<EA::AppendedTensorFeatureSemantic> futureSemantics{
         EA::kAppendedTensorFeatureSemantics.begin(),
         EA::kAppendedTensorFeatureSemantics.end()};
     futureSemantics.push_back({expandedWidth - EA::kModelReturnFeatureCount,
-                               "synthetic_v7_feature"});
-    futureSemantics.push_back({v7Width - EA::kModelReturnFeatureCount,
                                "synthetic_v8_feature"});
+    futureSemantics.push_back({v8Width - EA::kModelReturnFeatureCount,
+                               "synthetic_v9_feature"});
 
-    const auto historicalUnderV7 =
-        EA::ParseInputWidthExpansionProvenance(
-            encoded, futureRegistry, futureWidths, futureSemantics, 7,
-            v7Width);
-    const auto historicalUnderV8 =
+    const auto currentUnderV8 =
         EA::ParseInputWidthExpansionProvenance(
             encoded, futureRegistry, futureWidths, futureSemantics, 8,
             v8Width);
-    assert(historicalUnderV7.semanticLayoutVersion == 6);
-    assert(historicalUnderV8.semanticLayoutVersion == 6);
-    assert(historicalUnderV8.expandedInputWidth == expandedWidth);
+    const auto currentUnderV9 =
+        EA::ParseInputWidthExpansionProvenance(
+            encoded, futureRegistry, futureWidths, futureSemantics, 9,
+            v9Width);
+    assert(currentUnderV8.semanticLayoutVersion == 7);
+    assert(currentUnderV9.semanticLayoutVersion == 7);
+    assert(currentUnderV9.expandedInputWidth == expandedWidth);
 
-    const EA::InputWidthExpansionPlan v7Plan =
+    const EA::InputWidthExpansionPlan v8Plan =
         EA::BuildRegisteredInputWidthExpansionPlan(
-            expandedWidth, v7Width, futureWidths, futureSemantics);
-    const auto v7Provenance = EA::MakeInputWidthExpansionProvenance(
-        9876543213LL, v7Plan, 7, futureRegistry, futureWidths,
-        futureSemantics, 7, v7Width);
-    assert(v7Provenance.sourceInputWidth == expandedWidth);
-    assert(v7Provenance.expandedInputWidth == v7Width);
-    assert(v7Provenance.semanticLayoutVersion == 7);
-    assert(v7Provenance.newlyIntroducedTensorFeatures ==
-           std::vector<std::string>{"synthetic_v7_feature"});
-    assert(provenance.CanonicalText() == encoded);
-    const auto v7UnderV8 = EA::ParseInputWidthExpansionProvenance(
-        v7Provenance.CanonicalText(), futureRegistry, futureWidths,
+            expandedWidth, v8Width, futureWidths, futureSemantics);
+    const auto v8Provenance = EA::MakeInputWidthExpansionProvenance(
+        9876543213LL, v8Plan, 8, futureRegistry, futureWidths,
         futureSemantics, 8, v8Width);
-    assert(v7UnderV8.semanticLayoutVersion == 7);
+    assert(v8Provenance.sourceInputWidth == expandedWidth);
+    assert(v8Provenance.expandedInputWidth == v8Width);
+    assert(v8Provenance.semanticLayoutVersion == 8);
+    assert(v8Provenance.newlyIntroducedTensorFeatures ==
+           std::vector<std::string>{"synthetic_v8_feature"});
+    assert(provenance.CanonicalText() == encoded);
+    const auto v8UnderV9 = EA::ParseInputWidthExpansionProvenance(
+        v8Provenance.CanonicalText(), futureRegistry, futureWidths,
+        futureSemantics, 9, v9Width);
+    assert(v8UnderV9.semanticLayoutVersion == 8);
 
     ExpectFailureContaining(
         [] { (void)EA::BuildInputWidthExpansionPlan(37); },
@@ -403,27 +406,27 @@ int main()
         },
         "PARAMETER_SHAPE_MISMATCH");
     EA::ValidateModelInputSemanticMetadataForExpansion(
-        1, 6, expandedWidth, futureRegistry, futureWidths, 7, v7Width);
+        1, 7, expandedWidth, futureRegistry, futureWidths, 8, v8Width);
     EA::ValidateModelInputSemanticMetadataForExpansion(
-        1, 6, expandedWidth, futureRegistry, futureWidths, 8,
-        v8Width);
+        1, 7, expandedWidth, futureRegistry, futureWidths, 9,
+        v9Width);
 
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                1, 999, expandedWidth, futureRegistry, futureWidths, 7,
-                v7Width);
+                1, 999, expandedWidth, futureRegistry, futureWidths, 8,
+                v8Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                1, 1, expandedWidth, futureRegistry, futureWidths, 7,
-                v7Width);
+                1, 1, expandedWidth, futureRegistry, futureWidths, 8,
+                v8Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
 
-    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 7>
+    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 8>
         incompatibleFutureRegistry{{
             {1, EA::kHistoricalLevelProximityModelInputWidth, 0},
             {2, EA::kPreEconomicEventModelInputWidth, 1},
@@ -431,13 +434,14 @@ int main()
             {4, EA::kEconomicEventConsensusModelInputWidth, 3},
             {5, sourceWidth, 4},
             {6, expandedWidth, 5},
-            {7, v7Width, 0},
+            {7, expandedWidth, 5},
+            {8, v8Width, 0},
         }};
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                1, 6, expandedWidth, incompatibleFutureRegistry,
-                futureWidths, 7, v7Width);
+                1, 7, expandedWidth, incompatibleFutureRegistry,
+                futureWidths, 8, v8Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
 
@@ -462,37 +466,37 @@ int main()
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                999, 6, expandedWidth, futureRegistry, futureWidths, 7,
-                v7Width);
+                999, 7, expandedWidth, futureRegistry, futureWidths, 8,
+                v8Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             std::string unknownLayout = encoded;
-            const std::string needle = "semantic_layout=6";
+            const std::string needle = "semantic_layout=7";
             unknownLayout.replace(unknownLayout.find(needle), needle.size(),
                                   "semantic_layout=999");
             (void)EA::ParseInputWidthExpansionProvenance(
                 unknownLayout, futureRegistry, futureWidths, futureSemantics,
-                7, v7Width);
+                8, v8Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             std::string impossibleWidth = encoded;
-            const std::string needle = "semantic_layout=6";
+            const std::string needle = "semantic_layout=7";
             impossibleWidth.replace(impossibleWidth.find(needle), needle.size(),
                                     "semantic_layout=1");
             (void)EA::ParseInputWidthExpansionProvenance(
                 impossibleWidth, futureRegistry, futureWidths,
-                futureSemantics, 7, v7Width);
+                futureSemantics, 8, v8Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             (void)EA::ParseInputWidthExpansionProvenance(
                 encoded, incompatibleFutureRegistry, futureWidths,
-                futureSemantics, 7, v7Width);
+                futureSemantics, 8, v8Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
@@ -503,7 +507,7 @@ int main()
                                 "initialization=random");
             (void)EA::ParseInputWidthExpansionProvenance(
                 wrongPolicy, futureRegistry, futureWidths, futureSemantics,
-                7, v7Width);
+                8, v8Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
@@ -514,7 +518,7 @@ int main()
                                  "new_tensor_columns=70:73");
             (void)EA::ParseInputWidthExpansionProvenance(
                 wrongColumns, futureRegistry, futureWidths, futureSemantics,
-                7, v7Width);
+                8, v8Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
@@ -527,7 +531,7 @@ int main()
                 "new_tensor_features=wrong_feature");
             (void)EA::ParseInputWidthExpansionProvenance(
                 wrongFeatures, futureRegistry, futureWidths, futureSemantics,
-                7, v7Width);
+                8, v8Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(

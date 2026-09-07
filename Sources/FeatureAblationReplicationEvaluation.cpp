@@ -212,7 +212,7 @@ bool SoftwareReady(const SoftwareReadinessAudit& audit)
         audit.availabilityDiagnosticsPresent && audit.readOnlyEvaluation &&
         audit.activationMutationPathAbsent &&
         EA::kCurrentModelInputWidth == 77 &&
-        EA::kModelInputSemanticLayoutVersion == 6;
+        EA::kModelInputSemanticLayoutVersion == 7;
 }
 
 ReplicationEvaluation Evaluate(
