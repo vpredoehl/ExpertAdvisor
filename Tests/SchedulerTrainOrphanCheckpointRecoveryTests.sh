@@ -56,20 +56,22 @@ INSERT INTO experiment(
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
     train_start,train_end,infer_start,infer_end,status,phase,
     current_epoch,current_operation,stop_after_checkpoint_epoch,
-    duplicate_nonce
+    duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     ${experiment_id},'${symbol}',4,0.0008,1.0,1.0,${target_epochs},20,
     '2020-01-01','2021-01-01','2021-01-01','2022-01-01',
-    'running','train',57,'train',60,${experiment_id}
+    'running','train',57,'train',60,${experiment_id},36,5
 );
 SQL
 }
 
 insert_model() {
-    local experiment_id="$1" symbol="$2" completed_epochs="$3" model_id
+    local experiment_id="$1" symbol="$2" completed_epochs="$3"
+    local comment="${4:-periodic training checkpoint}" model_id
     model_id="$(psql -X -At -q -d "${test_db}" -c \
         "INSERT INTO model(experiment_id,name,comment)
-         VALUES(${experiment_id},'orphan-${experiment_id}','recovery fixture')
+         VALUES(${experiment_id},'orphan-${experiment_id}','${comment}')
          RETURNING model_id")"
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<SQL
 INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
@@ -86,6 +88,34 @@ INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
 SELECT ${model_id},'train_range_meta',1,length('2020-01-01|2021-01-01'),0,
        position - 1,ascii(substr('2020-01-01|2021-01-01',position,1))
 FROM generate_series(1,length('2020-01-01|2021-01-01')) AS chars(position);
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+SELECT ${model_id},'model_meta',1,3,0,i-1,v[i]
+FROM (SELECT ARRAY[1.0,36.0,1.0] v) data,
+     generate_series(1,3) i;
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+SELECT ${model_id},'param',37,4,(i-1)/4,(i-1)%4,0.0
+FROM generate_series(1,148) i;
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+SELECT ${model_id},'bias',1,4,0,i-1,0.0
+FROM generate_series(1,4) i;
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+VALUES
+    (${model_id},'returnHeadWeight',1,1,0,0,0.0),
+    (${model_id},'returnHeadBias',1,1,0,0,0.0);
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+SELECT ${model_id},'returnHeadDirWeight',1,3,0,i-1,0.0
+FROM generate_series(1,3) i;
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+SELECT ${model_id},'returnHeadDirBias',1,3,0,i-1,0.0
+FROM generate_series(1,3) i;
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+SELECT ${model_id},'target_meta',1,6,0,i-1,v[i]
+FROM (SELECT ARRAY[2.0,1.0,0.0,0.0,0.0,1.0] v) data,
+     generate_series(1,6) i;
+INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
+SELECT ${model_id},'optimizer_meta',1,5,0,i-1,v[i]
+FROM (SELECT ARRAY[1.0,1.0,${completed_epochs}::double precision,0.0,0.0] v) data,
+     generate_series(1,5) i;
 SQL
     echo "${model_id}"
 }
@@ -117,18 +147,55 @@ insert_attempt() {
     echo "${attempt_id}"
 }
 
-insert_experiment 920070 orphanfixture 80
-intermediate_model="$(insert_model 920070 orphanfixture 40)"
-intermediate_attempt="$(insert_attempt 920070 orphan-attempt-920070 true)"
-insert_experiment 920071 finalfixture 80
-final_model="$(insert_model 920071 finalfixture 80)"
-final_attempt="$(insert_attempt 920071 orphan-attempt-920071 true)"
-insert_experiment 920072 mismatchfixture 80
-mismatch_model="$(insert_model 920072 wrongfixture 40)"
-mismatch_attempt="$(insert_attempt 920072 orphan-attempt-920072 true)"
-insert_experiment 920073 unboundfixture 80
-unbound_model="$(insert_model 920073 unboundfixture 40)"
-unbound_attempt="$(insert_attempt 920073 orphan-attempt-920073 false)"
+insert_experiment 920070 newestvalidfixture 80
+older_model="$(insert_model 920070 newestvalidfixture 20)"
+newest_model="$(insert_model 920070 newestvalidfixture 40)"
+newest_attempt="$(insert_attempt 920070 orphan-attempt-920070 true)"
+
+insert_experiment 920071 fallbackfixture 80
+fallback_model="$(insert_model 920071 fallbackfixture 40)"
+invalid_newest_model="$(insert_model 920071 fallbackfixture 60)"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "DELETE FROM matrix WHERE model_id=${invalid_newest_model} AND param_name='optimizer_meta'"
+fallback_attempt="$(insert_attempt 920071 orphan-attempt-920071 true)"
+
+insert_experiment 920072 thirdfixture 80
+third_model="$(insert_model 920072 thirdfixture 20)"
+invalid_second_model="$(insert_model 920072 thirdfixture 40)"
+invalid_first_model="$(insert_model 920072 thirdfixture 60)"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "DELETE FROM matrix WHERE model_id=${invalid_second_model} AND param_name='returnHeadDirWeight'"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "DELETE FROM matrix WHERE model_id=${invalid_first_model} AND param_name='returnHeadDirBias'"
+third_attempt="$(insert_attempt 920072 orphan-attempt-920072 true)"
+
+insert_experiment 920073 unusablefixture 80
+unusable_model="$(insert_model 920073 unusablefixture 40)"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "DELETE FROM matrix WHERE model_id=${unusable_model} AND param_name='param'"
+unusable_attempt="$(insert_attempt 920073 orphan-attempt-920073 true)"
+
+insert_experiment 920074 ambiguousfixture 80
+ambiguous_fallback_model="$(insert_model 920074 ambiguousfixture 20)"
+ambiguous_model_one="$(insert_model 920074 ambiguousfixture 40)"
+ambiguous_model_two="$(insert_model 920074 ambiguousfixture 40)"
+ambiguous_attempt="$(insert_attempt 920074 orphan-attempt-920074 true)"
+
+insert_experiment 920075 intermediatefixture 80
+intermediate_model="$(insert_model 920075 intermediatefixture 40)"
+intermediate_attempt="$(insert_attempt 920075 orphan-attempt-920075 true)"
+
+insert_experiment 920076 finalfixture 80
+final_model="$(insert_model 920076 finalfixture 80 'final training model')"
+final_attempt="$(insert_attempt 920076 orphan-attempt-920076 true)"
+
+insert_experiment 920077 mismatchfixture 80
+mismatch_model="$(insert_model 920077 wrongfixture 40)"
+mismatch_attempt="$(insert_attempt 920077 orphan-attempt-920077 true)"
+
+insert_experiment 920078 unboundfixture 80
+unbound_model="$(insert_model 920078 unboundfixture 40)"
+unbound_attempt="$(insert_attempt 920078 orphan-attempt-920078 false)"
 
 attempts_before="$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt")"
 dry_run_output="${test_dir}/dry-run.out"
@@ -143,18 +210,30 @@ recovery_output="${test_dir}/recovery.out"
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once --recover-orphans-only \
     >"${recovery_output}" 2>&1
-grep -q 'SCHEDULER_ORPHAN_RECOVERY_DONE,recovered_or_failed=4' "${recovery_output}"
-grep -q "SCHEDULER_ORPHAN_RECOVERED,experiment_id=920070,resume_model_id=${intermediate_model}" "${recovery_output}"
-grep -q "SCHEDULER_ORPHAN_ADVANCED,experiment_id=920071,model_id=${final_model}" "${recovery_output}"
+grep -q 'SCHEDULER_ORPHAN_RECOVERY_DONE,recovered_or_failed=9' "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920070,model_id=${newest_model},completed_epoch=40" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_REJECTED,experiment_id=920071,model_id=${invalid_newest_model}" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920071,model_id=${fallback_model},completed_epoch=40" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920072,model_id=${third_model},completed_epoch=20" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTION_FAILED,experiment_id=920073.*reason=no_valid_checkpoint" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS,experiment_id=920074,completed_epoch=40,candidate_count=2,result=epoch_skipped" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920074,model_id=${ambiguous_fallback_model},completed_epoch=20" "${recovery_output}"
+grep -q "SCHEDULER_ORPHAN_RECOVERED,experiment_id=920075,resume_model_id=${intermediate_model}" "${recovery_output}"
+grep -q "SCHEDULER_ORPHAN_ADVANCED,experiment_id=920076,model_id=${final_model}" "${recovery_output}"
 
-test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||resume_model_id::text||':'||current_epoch::text||':'||stop_after_checkpoint_epoch::text||':'||current_operation FROM experiment WHERE experiment_id=920070")" = "pending:train:${intermediate_model}:${intermediate_model}:57:60:train"
+test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920070")" = "${newest_model}"
+test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920071")" = "${fallback_model}"
+test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920072")" = "${third_model}"
+test "$(scalar "SELECT status||':'||phase FROM experiment WHERE experiment_id=920073")" = "failed:train"
+test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920074")" = "${ambiguous_fallback_model}"
+test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||resume_model_id::text||':'||current_epoch::text||':'||stop_after_checkpoint_epoch::text||':'||current_operation FROM experiment WHERE experiment_id=920075")" = "pending:train:${intermediate_model}:${intermediate_model}:57:60:train"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result||':'||(completed_at IS NOT NULL)::text FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${intermediate_attempt}")" = "completed:process_missing_result_recovered:true"
-test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||(resume_model_id IS NULL)::text||':'||current_operation FROM experiment WHERE experiment_id=920071")" = "pending:infer:${final_model}:true:train"
+test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||(resume_model_id IS NULL)::text||':'||current_operation FROM experiment WHERE experiment_id=920076")" = "pending:infer:${final_model}:true:train"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${final_attempt}")" = "completed:process_missing_result_recovered"
 
-test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text||':'||(resume_model_id IS NULL)::text FROM experiment WHERE experiment_id=920072")" = "failed:train:true:true"
+test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text||':'||(resume_model_id IS NULL)::text FROM experiment WHERE experiment_id=920077")" = "failed:train:true:true"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${mismatch_attempt}")" = "failed:process_missing_no_result"
-test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text||':'||(resume_model_id IS NULL)::text FROM experiment WHERE experiment_id=920073")" = "running:train:true:true"
+test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text||':'||(resume_model_id IS NULL)::text FROM experiment WHERE experiment_id=920078")" = "running:train:true:true"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${unbound_attempt}")" = "failed:lifecycle_predicate_changed"
 
 snapshot="$(scalar "SELECT string_agg(worker_attempt_id::text||':'||lifecycle_state||':'||COALESCE(reconciliation_result,'NULL'),',' ORDER BY worker_attempt_id) FROM experiment_scheduler_worker_attempt")"

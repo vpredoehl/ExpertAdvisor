@@ -5578,12 +5578,23 @@ struct QueueResumeCompatibilityRequirements
         EA::TrainingObjective::Legacy();
 };
 
+std::optional<std::string> QueueResumeConfigurationFailure(
+    const QueueResumeMeta& meta,
+    const QueueResumeCompatibilityRequirements& requirements);
+
 std::optional<std::string> QueueResumeCompatibilityFailure(
     const QueueResumeMeta& meta,
     const QueueResumeCompatibilityRequirements& requirements)
 {
     if (requirements.targetEpochs <= meta.completedEpochs)
         return "target_epochs_not_greater_than_completed_epoch";
+    return QueueResumeConfigurationFailure(meta, requirements);
+}
+
+std::optional<std::string> QueueResumeConfigurationFailure(
+    const QueueResumeMeta& meta,
+    const QueueResumeCompatibilityRequirements& requirements)
+{
     if (requirements.symbol.has_value() &&
         EA::CanonicalSymbol::Normalize(*requirements.symbol) != meta.symbol)
         return "symbol_mismatch";
@@ -5832,6 +5843,234 @@ std::optional<QueueResumeMeta> TryLoadRecoverableModelMeta(pqxx::work& w, long l
                   << std::endl;
         return std::nullopt;
     }
+}
+
+struct TrainingCheckpointSelection
+{
+    std::optional<QueueResumeMeta> checkpoint;
+    std::string reason;
+};
+
+struct TrainingCheckpointCandidate
+{
+    long long modelId = -1;
+    std::optional<int> completedEpoch;
+    bool periodicCheckpoint = false;
+    std::optional<std::size_t> experimentInputWidth;
+};
+
+QueueResumeCompatibilityRequirements TrainingCheckpointRequirements(
+    const ExperimentRow& experiment)
+{
+    return QueueResumeCompatibilityRequirements{
+        experiment.targetEpochs,
+        experiment.symbol,
+        experiment.predictionHorizon,
+        experiment.cNextThreshold,
+        experiment.trainStart,
+        experiment.trainEnd,
+        experiment.coreLrMult.value_or(default_core_lr_mult),
+        experiment.headLrMult.value_or(default_head_weight_lr_mult),
+        experiment.donchian20Mode,
+        experiment.featureWarmupScope,
+        experiment.donchianLookback,
+        experiment.featureAblationMask,
+        experiment.trainingObjective
+    };
+}
+
+void PrintTrainingCheckpointCandidateRejected(
+    long long experimentId,
+    long long modelId,
+    const std::optional<int>& completedEpoch,
+    const std::string& reason)
+{
+    std::cout << "SCHEDULER_CHECKPOINT_CANDIDATE_REJECTED"
+              << ",experiment_id=" << experimentId
+              << ",model_id=" << modelId
+              << ",completed_epoch="
+              << (completedEpoch.has_value()
+                      ? std::to_string(*completedEpoch)
+                      : "NULL")
+              << ",reason=" << reason
+              << std::endl;
+}
+
+TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
+    pqxx::work& w,
+    const ExperimentRow& experiment,
+    const std::optional<double>& createdAtOrAfter = std::nullopt,
+    bool allowFinalModel = true)
+{
+    std::string sql =
+        "SELECT m.model_id,cfg.value,"
+        "COALESCE(m.comment,'') ILIKE '%periodic training checkpoint%',"
+        "e.model_input_width "
+        "FROM model m JOIN experiment e "
+        "ON e.experiment_id=m.experiment_id "
+        "LEFT JOIN matrix cfg ON cfg.model_id=m.model_id "
+        "AND cfg.param_name='train_config_meta' "
+        "AND cfg.row_idx=0 AND cfg.col_idx=10 "
+        "WHERE m.experiment_id=$1 ";
+    pqxx::result rows;
+    if (createdAtOrAfter.has_value())
+    {
+        sql += "AND m.created_at>=to_timestamp($2) ";
+        sql += "ORDER BY cfg.value DESC NULLS LAST,m.model_id DESC;";
+        rows = w.exec_params(
+            sql, experiment.experimentId, *createdAtOrAfter);
+    }
+    else
+    {
+        sql += "ORDER BY cfg.value DESC NULLS LAST,m.model_id DESC;";
+        rows = w.exec_params(sql, experiment.experimentId);
+    }
+
+    std::vector<TrainingCheckpointCandidate> candidates;
+    candidates.reserve(rows.size());
+    for (const pqxx::row& row : rows)
+    {
+        TrainingCheckpointCandidate candidate;
+        candidate.modelId = row[0].as<long long>();
+        candidate.periodicCheckpoint = row[2].as<bool>();
+        if (!row[3].is_null())
+            candidate.experimentInputWidth = row[3].as<std::size_t>();
+        if (!row[1].is_null())
+        {
+            const double persistedEpoch = row[1].as<double>();
+            const double roundedEpoch = std::round(persistedEpoch);
+            if (std::isfinite(persistedEpoch) &&
+                std::fabs(persistedEpoch - roundedEpoch) <= 1e-7 &&
+                roundedEpoch >= 0.0 &&
+                roundedEpoch <=
+                    static_cast<double>(std::numeric_limits<int>::max()))
+            {
+                candidate.completedEpoch =
+                    static_cast<int>(roundedEpoch);
+            }
+        }
+        candidates.push_back(candidate);
+    }
+
+    const QueueResumeCompatibilityRequirements requirements =
+        TrainingCheckpointRequirements(experiment);
+    for (size_t index = 0; index < candidates.size();)
+    {
+        const TrainingCheckpointCandidate& candidate = candidates[index];
+        if (!candidate.completedEpoch.has_value())
+        {
+            PrintTrainingCheckpointCandidateRejected(
+                experiment.experimentId,
+                candidate.modelId,
+                std::nullopt,
+                "missing_or_invalid_completed_epoch");
+            ++index;
+            continue;
+        }
+
+        size_t groupEnd = index + 1;
+        while (groupEnd < candidates.size() &&
+               candidates[groupEnd].completedEpoch ==
+                   candidate.completedEpoch)
+        {
+            ++groupEnd;
+        }
+        if (groupEnd - index > 1)
+        {
+            std::cout << "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",completed_epoch=" << *candidate.completedEpoch
+                      << ",candidate_count=" << (groupEnd - index)
+                      << ",result=epoch_skipped"
+                      << std::endl;
+            index = groupEnd;
+            continue;
+        }
+
+        if (*candidate.completedEpoch > experiment.targetEpochs)
+        {
+            PrintTrainingCheckpointCandidateRejected(
+                experiment.experimentId,
+                candidate.modelId,
+                candidate.completedEpoch,
+                "completed_epoch_exceeds_target");
+            index = groupEnd;
+            continue;
+        }
+        if (!allowFinalModel &&
+            *candidate.completedEpoch >= experiment.targetEpochs)
+        {
+            PrintTrainingCheckpointCandidateRejected(
+                experiment.experimentId,
+                candidate.modelId,
+                candidate.completedEpoch,
+                "no_remaining_training");
+            index = groupEnd;
+            continue;
+        }
+        if (*candidate.completedEpoch < experiment.targetEpochs &&
+            !candidate.periodicCheckpoint)
+        {
+            PrintTrainingCheckpointCandidateRejected(
+                experiment.experimentId,
+                candidate.modelId,
+                candidate.completedEpoch,
+                "intermediate_model_not_checkpoint");
+            index = groupEnd;
+            continue;
+        }
+
+        try
+        {
+            DBIO::PgModelIO::validateTrainingResumeState(
+                w, candidate.modelId);
+            (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
+                w, candidate.modelId);
+            const QueueResumeMeta meta =
+                LoadQueueResumeMeta(w, candidate.modelId);
+            if (meta.completedEpochs != *candidate.completedEpoch)
+                throw std::runtime_error("completed_epoch_mismatch");
+            if (const auto failure =
+                    QueueResumeConfigurationFailure(meta, requirements);
+                failure.has_value())
+            {
+                throw std::runtime_error(*failure);
+            }
+            if (candidate.experimentInputWidth.has_value() &&
+                meta.modelInputWidth != *candidate.experimentInputWidth)
+            {
+                throw std::runtime_error("model_input_width_mismatch");
+            }
+
+            std::cout << "SCHEDULER_CHECKPOINT_SELECTED"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",model_id=" << meta.modelId
+                      << ",completed_epoch=" << meta.completedEpochs
+                      << ",result="
+                      << (meta.completedEpochs >= experiment.targetEpochs
+                              ? "final_model"
+                              : "resume_checkpoint")
+                      << std::endl;
+            return TrainingCheckpointSelection{meta, "selected"};
+        }
+        catch (const std::exception& error)
+        {
+            PrintTrainingCheckpointCandidateRejected(
+                experiment.experimentId,
+                candidate.modelId,
+                candidate.completedEpoch,
+                error.what());
+        }
+        index = groupEnd;
+    }
+
+    std::cout << "SCHEDULER_CHECKPOINT_SELECTION_FAILED"
+              << ",experiment_id=" << experiment.experimentId
+              << ",candidate_count=" << candidates.size()
+              << ",reason=no_valid_checkpoint"
+              << std::endl;
+    return TrainingCheckpointSelection{
+        std::nullopt, "no_valid_checkpoint"};
 }
 
 std::optional<long long> FindLatestModelForExperiment(pqxx::work& w, long long experimentId)
@@ -18653,18 +18892,19 @@ int RecoverOrphanedRunningExperiments(
                 }
                 else if (phase == "train")
                 {
-                    const auto modelId =
-                        FindLatestModelForExperimentSince(
+                    const TrainingCheckpointSelection selection =
+                        SelectUsableTrainingCheckpoint(
                             transaction,
-                            experimentId,
-                            attemptStartedEpoch);
-                    if (modelId)
+                            experiment,
+                            attemptStartedEpoch,
+                            true);
+                    if (selection.checkpoint.has_value())
                     {
                         completedEvidence =
                             RecoverTrainOrphanFromModel(
                                 transaction,
                                 experiment,
-                                *modelId,
+                                selection.checkpoint->modelId,
                                 attemptId);
                     }
                 }
