@@ -202,6 +202,41 @@ insert_experiment 920078 unboundfixture 80
 unbound_model="$(insert_model 920078 unboundfixture 40)"
 unbound_attempt="$(insert_attempt 920078 orphan-attempt-920078 false)"
 
+# Exact-attempt and durable-start fencing. The epoch-60 model predates the
+# current attempt and must lose to the attributable epoch-40 checkpoint.
+insert_experiment 920082 attemptfencefixture 80
+stale_attempt_model="$(insert_model 920082 attemptfencefixture 60)"
+current_attempt_model="$(insert_model 920082 attemptfencefixture 40)"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "UPDATE model SET created_at=clock_timestamp()-interval '5 minutes'
+     WHERE model_id=${stale_attempt_model}"
+attempt_fence_attempt="$(insert_attempt 920082 orphan-attempt-920082 true)"
+
+# All evidence before the durable attempt-start boundary is ineligible.
+insert_experiment 920083 boundaryfixture 80
+pre_attempt_model="$(insert_model 920083 boundaryfixture 60)"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "UPDATE model SET created_at=clock_timestamp()-interval '5 minutes'
+     WHERE model_id=${pre_attempt_model}"
+boundary_attempt="$(insert_attempt 920083 orphan-attempt-920083 true)"
+
+# A higher model from another experiment is never a candidate.
+insert_experiment 920084 experimentfencefixture 80
+experiment_fence_model="$(insert_model 920084 experimentfencefixture 40)"
+insert_experiment 920085 otherexperimentfixture 80
+wrong_experiment_model="$(insert_model 920085 otherexperimentfixture 80 'final training model')"
+experiment_fence_attempt="$(insert_attempt 920084 orphan-attempt-920084 true)"
+
+# A uniquely identified final artifact can itself be invalid. Qualification
+# must not mutate, and fallback continues at the earlier valid checkpoint.
+insert_experiment 920086 invalidfinalfallbackfixture 80
+invalid_final_fallback_model="$(insert_model 920086 invalidfinalfallbackfixture 40)"
+invalid_final_model="$(insert_model 920086 invalidfinalfallbackfixture 80 'final training model')"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "DELETE FROM matrix WHERE model_id=${invalid_final_model}
+     AND param_name='optimizer_meta'"
+invalid_final_attempt="$(insert_attempt 920086 orphan-attempt-920086 true)"
+
 # ----------------------------------------------------------------------
 # Continuation orphan regression fixtures.
 #
@@ -444,16 +479,23 @@ recovery_output="${test_dir}/recovery.out"
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once --recover-orphans-only \
     >"${recovery_output}" 2>&1
-grep -q 'SCHEDULER_ORPHAN_RECOVERY_DONE,recovered_or_failed=11' "${recovery_output}"
+grep -q 'SCHEDULER_ORPHAN_RECOVERY_DONE,recovered_or_failed=15' "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920070,model_id=${newest_model},completed_epoch=40" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_REJECTED,experiment_id=920071,model_id=${invalid_newest_model}" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920071,model_id=${fallback_model},completed_epoch=40" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920072,model_id=${third_model},completed_epoch=20" "${recovery_output}"
 grep -q "SCHEDULER_CHECKPOINT_SELECTION_FAILED,experiment_id=920073.*reason=no_valid_checkpoint" "${recovery_output}"
-grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS,experiment_id=920074,completed_epoch=40,candidate_count=2,result=epoch_skipped" "${recovery_output}"
-grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920074,model_id=${ambiguous_fallback_model},completed_epoch=20" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_TIE_BREAK,experiment_id=920074,completed_epoch=40,candidate_count=2,candidate_order=periodic_flag_asc_model_id_desc,selected_model_id=${ambiguous_model_two}" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920074,model_id=${ambiguous_model_two},completed_epoch=40" "${recovery_output}"
 grep -q "SCHEDULER_ORPHAN_RECOVERED,experiment_id=920075,restart_model_id=${intermediate_model}" "${recovery_output}"
 grep -q "SCHEDULER_ORPHAN_ADVANCED,experiment_id=920076,model_id=${final_model}" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920082,model_id=${current_attempt_model},completed_epoch=40" "${recovery_output}"
+! grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920082,model_id=${stale_attempt_model}" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTION_FAILED,experiment_id=920083,candidate_count=0,reason=no_valid_checkpoint" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920084,model_id=${experiment_fence_model},completed_epoch=40" "${recovery_output}"
+! grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920084,model_id=${wrong_experiment_model}" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_REJECTED,experiment_id=920086,model_id=${invalid_final_model},completed_epoch=80" "${recovery_output}"
+grep -q "SCHEDULER_CHECKPOINT_SELECTED,experiment_id=920086,model_id=${invalid_final_fallback_model},completed_epoch=40" "${recovery_output}"
 
 grep -q \
     "SCHEDULER_CHECKPOINT_FINAL_CANDIDATE_RESOLVED,experiment_id=920080,completed_epoch=120,candidate_count=2,model_id=${continuation_584_final},reason=unique_non_periodic_target_model" \
@@ -479,7 +521,7 @@ test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920070"
 test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920071")" = "${fallback_model}"
 test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920072")" = "${third_model}"
 test "$(scalar "SELECT status||':'||phase FROM experiment WHERE experiment_id=920073")" = "failed:train"
-test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920074")" = "${ambiguous_fallback_model}"
+test "$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=920074")" = "${ambiguous_model_two}"
 test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||resume_model_id::text||':'||current_epoch::text||':'||stop_after_checkpoint_epoch::text||':'||current_operation FROM experiment WHERE experiment_id=920075")" = "pending:train:${intermediate_model}:${intermediate_model}:57:60:train"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result||':'||(completed_at IS NOT NULL)::text FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${intermediate_attempt}")" = "completed:process_missing_result_recovered:true"
 test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text||':'||(resume_model_id IS NULL)::text||':'||current_operation FROM experiment WHERE experiment_id=920076")" = "pending:infer:${final_model}:true:train"
@@ -557,6 +599,17 @@ test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text||'
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${mismatch_attempt}")" = "failed:process_missing_no_result"
 test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text||':'||(resume_model_id IS NULL)::text FROM experiment WHERE experiment_id=920078")" = "running:train:true:true"
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${unbound_attempt}")" = "failed:lifecycle_predicate_changed"
+test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text FROM experiment WHERE experiment_id=920082")" = "pending:train:${current_attempt_model}"
+test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${attempt_fence_attempt}")" = "completed:process_missing_result_recovered"
+test "$(scalar "SELECT status||':'||phase||':'||(last_model_id IS NULL)::text FROM experiment WHERE experiment_id=920083")" = "failed:train:true"
+test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${boundary_attempt}")" = "failed:process_missing_no_result"
+test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text FROM experiment WHERE experiment_id=920084")" = "pending:train:${experiment_fence_model}"
+test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${experiment_fence_attempt}")" = "completed:process_missing_result_recovered"
+test "$(scalar "SELECT status||':'||phase||':'||last_model_id::text FROM experiment WHERE experiment_id=920086")" = "pending:train:${invalid_final_fallback_model}"
+test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=${invalid_final_attempt}")" = "completed:process_missing_result_recovered"
+
+# Rejected candidates never become durable restart state.
+test "$(scalar "SELECT count(*) FROM experiment WHERE last_model_id IN (${invalid_newest_model},${unusable_model},${stale_attempt_model},${pre_attempt_model},${wrong_experiment_model},${invalid_final_model}) OR resume_model_id IN (${invalid_newest_model},${unusable_model},${stale_attempt_model},${pre_attempt_model},${wrong_experiment_model},${invalid_final_model})")" = "0"
 
 snapshot="$(scalar "SELECT string_agg(worker_attempt_id::text||':'||lifecycle_state||':'||COALESCE(reconciliation_result,'NULL'),',' ORDER BY worker_attempt_id) FROM experiment_scheduler_worker_attempt")"
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \

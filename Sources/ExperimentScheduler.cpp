@@ -82,6 +82,7 @@
 #include "PairedTrainingObjectiveEvaluationService.hpp"
 #include "FeatureAblationPairEvaluationService.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
+#include "CorrectedCausalSurpriseReplicationContinuationService.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
 #include "EconomicEventRepository.hpp"
 
@@ -216,6 +217,13 @@ struct SchedulerOptions
     std::optional<std::string> expectedFeatureAblationMask;
     std::optional<std::vector<std::pair<long long, long long>>>
         compareFeatureAblationReplications;
+    std::optional<std::vector<std::pair<long long, long long>>>
+        correctedCausalSurpriseReplicationStatus;
+    std::optional<std::vector<std::pair<long long, long long>>>
+        materializeCorrectedCausalSurpriseReplication;
+    std::optional<std::pair<long long, long long>>
+        correctedCausalSurpriseAnchorPair;
+    std::optional<std::string> expectedCorrectedReplicationPlanHash;
     std::optional<long long> causalSurpriseObservabilityExperimentId;
     EA::CausalSurpriseObservability::Scope causalSurpriseObservabilityScope =
         EA::CausalSurpriseObservability::Scope::combined;
@@ -431,6 +439,7 @@ struct SchedulerOptions
     EA::TrainingObjective::Configuration trainingObjective =
         EA::TrainingObjective::Legacy();
     bool trainingObjectiveSpecified = false;
+    std::optional<std::string> queueInvocationMode;
 
     std::optional<std::string> leaderboardSymbol;
     std::optional<int> leaderboardHorizon;
@@ -1030,6 +1039,19 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--expected-ablation-mask=", 0) == 0 ||
             arg == "--compare-feature-ablation-replications" ||
             arg.rfind("--compare-feature-ablation-replications=", 0) == 0)
+            return true;
+        if (arg == "--corrected-causal-surprise-replication-status" ||
+            arg.rfind(
+                "--corrected-causal-surprise-replication-status=", 0) == 0 ||
+            arg == "--materialize-corrected-causal-surprise-replication" ||
+            arg.rfind(
+                "--materialize-corrected-causal-surprise-replication=", 0) == 0 ||
+            arg == "--corrected-causal-surprise-anchor-pair" ||
+            arg.rfind(
+                "--corrected-causal-surprise-anchor-pair=", 0) == 0 ||
+            arg == "--expected-corrected-replication-plan-hash" ||
+            arg.rfind(
+                "--expected-corrected-replication-plan-hash=", 0) == 0)
             return true;
         if (arg == "--causal-surprise-observability" ||
             arg.rfind("--causal-surprise-observability=", 0) == 0 ||
@@ -2166,6 +2188,22 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareFeatureAblationReplications =
                 EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
                     RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--corrected-causal-surprise-replication-status")
+            options.correctedCausalSurpriseReplicationStatus =
+                EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
+                    RequireNextArg(argc, argv, i, arg));
+        else if (arg ==
+                 "--materialize-corrected-causal-surprise-replication")
+            options.materializeCorrectedCausalSurpriseReplication =
+                EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
+                    RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--corrected-causal-surprise-anchor-pair")
+            options.correctedCausalSurpriseAnchorPair =
+                EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(
+                    RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--expected-corrected-replication-plan-hash")
+            options.expectedCorrectedReplicationPlanHash =
+                RequireNextArg(argc, argv, i, arg);
         else if (arg == "--causal-surprise-observability")
             options.causalSurpriseObservabilityExperimentId =
                 ParsePositiveLongLong(
@@ -3925,6 +3963,29 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
                     value);
         else if (SplitOptionWithValue(
+                     arg,
+                     "--corrected-causal-surprise-replication-status",
+                     value))
+            options.correctedCausalSurpriseReplicationStatus =
+                EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
+                    value);
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--materialize-corrected-causal-surprise-replication",
+                     value))
+            options.materializeCorrectedCausalSurpriseReplication =
+                EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
+                    value);
+        else if (SplitOptionWithValue(
+                     arg, "--corrected-causal-surprise-anchor-pair", value))
+            options.correctedCausalSurpriseAnchorPair =
+                EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(value);
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--expected-corrected-replication-plan-hash",
+                     value))
+            options.expectedCorrectedReplicationPlanHash = value;
+        else if (SplitOptionWithValue(
                      arg, "--causal-surprise-observability", value))
             options.causalSurpriseObservabilityExperimentId =
                 ParsePositiveLongLong(
@@ -4246,6 +4307,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareTrainingObjectivePair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationPair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
+        (options.correctedCausalSurpriseReplicationStatus.has_value()
+             ? 1 : 0) +
+        (options.materializeCorrectedCausalSurpriseReplication.has_value()
+             ? 1 : 0) +
         (options.causalSurpriseObservabilityExperimentId.has_value()
              ? 1 : 0) +
         (options.causalSurpriseCoverageGapsExperimentId.has_value()
@@ -4374,6 +4439,24 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.expectedFeatureAblationMask->empty())
         throw std::invalid_argument(
             "--expected-ablation-mask must not be empty");
+    const bool correctedReplicationCommand =
+        options.correctedCausalSurpriseReplicationStatus.has_value() ||
+        options.materializeCorrectedCausalSurpriseReplication.has_value();
+    if (correctedReplicationCommand !=
+        options.correctedCausalSurpriseAnchorPair.has_value())
+        throw std::invalid_argument(
+            "corrected causal-surprise replication commands require "
+            "--corrected-causal-surprise-anchor-pair");
+    if (options.expectedCorrectedReplicationPlanHash &&
+        !options.materializeCorrectedCausalSurpriseReplication)
+        throw std::invalid_argument(
+            "--expected-corrected-replication-plan-hash requires "
+            "--materialize-corrected-causal-surprise-replication");
+    if (options.materializeCorrectedCausalSurpriseReplication &&
+        !options.expectedCorrectedReplicationPlanHash)
+        throw std::invalid_argument(
+            "materialization requires "
+            "--expected-corrected-replication-plan-hash");
     if (options.causalSurpriseObservabilityScopeSpecified &&
         !options.causalSurpriseObservabilityExperimentId)
         throw std::invalid_argument(
@@ -6057,14 +6140,13 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
             }
             else
             {
-                std::cout << "SCHEDULER_CHECKPOINT_CANDIDATE_AMBIGUOUS"
+                std::cout << "SCHEDULER_CHECKPOINT_CANDIDATE_TIE_BREAK"
                           << ",experiment_id=" << experiment.experimentId
                           << ",completed_epoch=" << *candidate.completedEpoch
                           << ",candidate_count=" << (groupEnd - index)
-                          << ",result=epoch_skipped"
+                          << ",candidate_order=periodic_flag_asc_model_id_desc"
+                          << ",selected_model_id=" << candidate.modelId
                           << std::endl;
-                index = groupEnd;
-                continue;
             }
         }
 
@@ -6075,7 +6157,7 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
                 candidate.modelId,
                 candidate.completedEpoch,
                 "completed_epoch_exceeds_target");
-            index = groupEnd;
+            ++index;
             continue;
         }
         if (!allowFinalModel &&
@@ -6086,7 +6168,7 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
                 candidate.modelId,
                 candidate.completedEpoch,
                 "no_remaining_training");
-            index = groupEnd;
+            ++index;
             continue;
         }
         if (*candidate.completedEpoch < experiment.targetEpochs &&
@@ -6097,7 +6179,7 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
                 candidate.modelId,
                 candidate.completedEpoch,
                 "intermediate_model_not_checkpoint");
-            index = groupEnd;
+            ++index;
             continue;
         }
 
@@ -6141,19 +6223,15 @@ TrainingCheckpointSelection SelectUsableTrainingCheckpoint(
                 candidate.modelId,
                 candidate.completedEpoch,
                 error.what());
+            // Candidate qualification is side-effect free. For a uniquely
+            // resolved but invalid final artifact, skip the remaining target-
+            // epoch periodic sibling and continue at the next lower epoch.
             if (resolvedTerminalGroup)
-            {
-                std::cout
-                    << "SCHEDULER_CHECKPOINT_SELECTION_FAILED"
-                    << ",experiment_id=" << experiment.experimentId
-                    << ",candidate_count=" << candidates.size()
-                    << ",reason=resolved_terminal_model_invalid"
-                    << std::endl;
-                return TrainingCheckpointSelection{
-                    std::nullopt, "resolved_terminal_model_invalid"};
-            }
+                index = groupEnd;
+            else
+                ++index;
+            continue;
         }
-        index = groupEnd;
     }
 
     std::cout << "SCHEDULER_CHECKPOINT_SELECTION_FAILED"
@@ -7341,9 +7419,11 @@ long long InsertExperimentRecord(pqxx::work& w,
     }
     if (options.queueContinuationCandidateExcluded && !hasContinuationCandidateExcluded)
         throw std::runtime_error("continuation policy migration required; run ./migrate_lstm_db.sh");
-    const std::string invocationMode = options.queueSweep
-        ? "queue_sweep"
-        : (options.queueExperiment ? "queue_experiment" : "enqueue_experiment");
+    const std::string invocationMode = options.queueInvocationMode.value_or(
+        options.queueSweep
+            ? "queue_sweep"
+            : (options.queueExperiment
+                   ? "queue_experiment" : "enqueue_experiment"));
     const EA::RunMetadata::Snapshot runMetadata =
         EA::RunMetadata::Capture(options.selfPath, invocationMode);
     const std::string schemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
@@ -7796,6 +7876,226 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
               << ",duplicates=" << duplicates
               << std::endl;
     return created > 0 ? 0 : (duplicates > 0 ? 3 : 0);
+}
+
+EA::CorrectedCausalSurpriseReplicationContinuation::Command
+CorrectedReplicationCommand(const SchedulerOptions& options,
+                            bool materialize)
+{
+    EA::CorrectedCausalSurpriseReplicationContinuation::Command command;
+    command.evidencePairs = materialize
+        ? *options.materializeCorrectedCausalSurpriseReplication
+        : *options.correctedCausalSurpriseReplicationStatus;
+    command.anchorPair = *options.correctedCausalSurpriseAnchorPair;
+    return command;
+}
+
+SchedulerOptions CorrectedReplicationQueueOptions(
+    const SchedulerOptions& commandOptions,
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Plan& plan,
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Pair& pair,
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Arm& arm)
+{
+    const auto& configured = plan.configuration;
+    SchedulerOptions options;
+    options.selfPath = commandOptions.selfPath;
+    options.queueExperiment = true;
+    options.symbol = pair.symbol;
+    options.predictionHorizon = pair.predictionHorizon;
+    options.cNextThreshold = configured.threshold;
+    options.coreLrMult = configured.coreLearningRateMultiplier;
+    options.headLrMult = configured.headLearningRateMultiplier;
+    options.targetEpochs = configured.targetEpochs;
+    options.checkpointInterval = configured.checkpointInterval;
+    options.trainStart = configured.trainStart;
+    options.trainEnd = configured.trainEnd;
+    options.inferStart = configured.inferenceStart;
+    options.inferEnd = configured.inferenceEnd;
+    options.donchian20Mode = ParseDonchian20Mode(configured.donchianMode);
+    options.featureWarmupScope =
+        EA::ParseFeatureWarmupScope(configured.featureWarmupScope);
+    options.donchianLookback =
+        static_cast<std::size_t>(configured.donchianLookback);
+    options.featureAblationMask = arm.featureAblationMask;
+    options.featureAblationMaskSpecified = true;
+    options.trainingObjective =
+        EA::TrainingObjective::ParseSupportedCanonicalText(
+            configured.trainingObjectiveCanonical);
+    options.trainingObjectiveSpecified = true;
+    options.economicCalendarSnapshot =
+        EA::EconomicCalendar::EconomicCalendarSnapshotIdentity{
+            configured.economicCalendarSnapshotId,
+            configured.economicCalendarSnapshotHash};
+    options.queueInvocationMode =
+        "corrected_causal_surprise_replication_plan_v1:" + plan.hash +
+        ":pair_ordinal=" + std::to_string(pair.ordinal);
+    return options;
+}
+
+struct ExistingCorrectedReplicationArm
+{
+    std::optional<long long> experimentId;
+    bool exactPlanProvenance = false;
+};
+
+ExistingCorrectedReplicationArm FindExistingCorrectedReplicationArm(
+    pqxx::work& transaction,
+    const SchedulerOptions& options,
+    const std::string& canonicalSymbol)
+{
+    const pqxx::result rows = transaction.exec(
+        "SELECT experiment_id,invocation_mode FROM experiment WHERE " +
+        DuplicateWhereClause(transaction, options, canonicalSymbol) +
+        " ORDER BY experiment_id;");
+    if (rows.size() > 1)
+        throw std::runtime_error(
+            "corrected_replication_duplicate_identity_ambiguous");
+    if (rows.empty()) return {};
+    ExistingCorrectedReplicationArm result;
+    result.experimentId = rows[0][0].as<long long>();
+    result.exactPlanProvenance = !rows[0][1].is_null() &&
+        rows[0][1].as<std::string>() == *options.queueInvocationMode;
+    return result;
+}
+
+int RunCorrectedReplicationMaterializationCommand(
+    const SchedulerOptions& options)
+{
+    namespace Continuation =
+        EA::CorrectedCausalSurpriseReplicationContinuation;
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;");
+    if (options.dryRun)
+        SetTransactionReadOnly(transaction);
+    else
+        SetTransactionReadWrite(transaction);
+
+    const Continuation::Assessment assessment =
+        Continuation::EvaluateCommand(
+            transaction, CorrectedReplicationCommand(options, true));
+    std::cout << Continuation::RenderAssessment(assessment);
+    if (*options.expectedCorrectedReplicationPlanHash != assessment.plan.hash)
+    {
+        std::cerr
+            << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZATION_REJECTED"
+            << ",reason=stale_or_changed_plan_identity"
+            << ",expected_plan_hash="
+            << *options.expectedCorrectedReplicationPlanHash
+            << ",actual_plan_hash=" << assessment.plan.hash << std::endl;
+        return 3;
+    }
+    if (assessment.gate.nextAction !=
+        Continuation::NextAction::PrepareAdditionalReplications)
+    {
+        std::cerr
+            << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZATION_REJECTED"
+            << ",reason=continuation_gate_closed"
+            << ",next_action="
+            << Continuation::NextActionText(assessment.gate.nextAction)
+            << std::endl;
+        return assessment.gate.nextAction ==
+                   Continuation::NextAction::AwaitPairCompletion
+            ? 4 : 3;
+    }
+    const auto& pair = assessment.plan.pairs.at(
+        *assessment.gate.nextPlanPairOrdinal - 1);
+    const SchedulerOptions control = CorrectedReplicationQueueOptions(
+        options, assessment.plan, pair, pair.control);
+    const SchedulerOptions treatment = CorrectedReplicationQueueOptions(
+        options, assessment.plan, pair, pair.treatment);
+
+    if (options.dryRun)
+    {
+        PrintQueueConfig("CORRECTED_REPLICATION_CONTROL_DRY_RUN", control,
+                         pair.symbol);
+        PrintQueueConfig("CORRECTED_REPLICATION_TREATMENT_DRY_RUN", treatment,
+                         pair.symbol);
+        std::cout
+            << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZATION_PREVIEW"
+            << ",plan_hash=" << assessment.plan.hash
+            << ",pair_ordinal=" << pair.ordinal
+            << ",experiment_rows_created=0"
+            << ",campaign_rows_modified=0"
+            << ",scheduler_state_modified=false"
+            << ",read_only=true" << std::endl;
+        return 0;
+    }
+    if (!options.yes)
+    {
+        std::cerr
+            << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZATION_REJECTED"
+            << ",reason=explicit_confirmation_required"
+            << ",required_flag=--yes" << std::endl;
+        return 1;
+    }
+
+    transaction.exec(
+        "LOCK TABLE economic_calendar_snapshot IN SHARE ROW EXCLUSIVE MODE;");
+    transaction.exec("LOCK TABLE experiment IN SHARE ROW EXCLUSIVE MODE;");
+    if (!RequireSchedulerTables(transaction)) return 2;
+    const auto existingControl = FindExistingCorrectedReplicationArm(
+        transaction, control, pair.symbol);
+    const auto existingTreatment = FindExistingCorrectedReplicationArm(
+        transaction, treatment, pair.symbol);
+    if (existingControl.experimentId || existingTreatment.experimentId)
+    {
+        if (existingControl.experimentId && existingTreatment.experimentId &&
+            existingControl.exactPlanProvenance &&
+            existingTreatment.exactPlanProvenance)
+        {
+            transaction.commit();
+            std::cout
+                << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_ALREADY_MATERIALIZED"
+                << ",plan_hash=" << assessment.plan.hash
+                << ",pair_ordinal=" << pair.ordinal
+                << ",control_experiment_id="
+                << *existingControl.experimentId
+                << ",treatment_experiment_id="
+                << *existingTreatment.experimentId
+                << ",experiment_rows_created=0" << std::endl;
+            return 0;
+        }
+        std::cerr
+            << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZATION_REJECTED"
+            << ",reason="
+            << ((existingControl.experimentId &&
+                 existingTreatment.experimentId)
+                    ? "scientific_identity_owned_by_other_plan"
+                    : "partial_pair_exists_requires_review")
+            << ",control_experiment_id="
+            << (existingControl.experimentId
+                    ? std::to_string(*existingControl.experimentId) : "NULL")
+            << ",treatment_experiment_id="
+            << (existingTreatment.experimentId
+                    ? std::to_string(*existingTreatment.experimentId) : "NULL")
+            << std::endl;
+        return 3;
+    }
+
+    const long long controlExperimentId = InsertExperimentRecord(
+        transaction, control, pair.symbol, 0);
+    const long long treatmentExperimentId = InsertExperimentRecord(
+        transaction, treatment, pair.symbol, 0);
+    const pqxx::result prioritized = transaction.exec_params(
+        "UPDATE experiment SET scheduler_priority='high',updated_at=now() "
+        "WHERE experiment_id IN ($1,$2) RETURNING experiment_id;",
+        controlExperimentId,
+        treatmentExperimentId);
+    if (prioritized.size() != 2)
+        throw std::runtime_error(
+            "corrected_replication_pair_priority_assignment_failed");
+    transaction.commit();
+    std::cout
+        << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZED"
+        << ",plan_hash=" << assessment.plan.hash
+        << ",pair_ordinal=" << pair.ordinal
+        << ",control_experiment_id=" << controlExperimentId
+        << ",treatment_experiment_id=" << treatmentExperimentId
+        << ",scheduler_priority=high"
+        << ",atomic_pair=true"
+        << ",experiment_rows_created=2" << std::endl;
+    return 0;
 }
 
 std::string FormatOptionalMetadataString(const pqxx::row& row, int index)
@@ -26786,6 +27086,25 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "2 database/tool error. Omitting --expected-ablation-mask retains "
         << "the legacy consensus ABLATED_ID:ENABLED_ID mode.\n"
         << "Usage: " << exe
+        << " --corrected-causal-surprise-replication-status="
+           "CONTROL_ID:TREATMENT_ID[,CONTROL_ID:TREATMENT_ID...] "
+        << "--corrected-causal-surprise-anchor-pair="
+           "CONTROL_ID:TREATMENT_ID\n"
+        << "Evaluates corrected evidence and renders the immutable, outcome-"
+           "blind follow-on plan in one repeatable-read transaction. It never "
+           "creates experiments or changes scheduler state.\n"
+        << "Usage: " << exe
+        << " --materialize-corrected-causal-surprise-replication="
+           "CONTROL_ID:TREATMENT_ID[,CONTROL_ID:TREATMENT_ID...] "
+        << "--corrected-causal-surprise-anchor-pair="
+           "CONTROL_ID:TREATMENT_ID "
+        << "--expected-corrected-replication-plan-hash=HASH "
+           "[--dry-run | --yes]\n"
+        << "Materialization re-evaluates the validity-only continuation gate, "
+           "requires the exact previewed plan hash and explicit --yes, and "
+           "creates one control/treatment pair atomically. --dry-run performs "
+           "no writes.\n"
+        << "Usage: " << exe
         << " --compare-training-objective-pair=CONTROL_ID:TREATMENT_ID "
         << "--pair-primary-profitability-metric=aggregate|average "
         << "--pair-min-profitability-improvement=VALUE "
@@ -28309,6 +28628,14 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
                     LstmDbConnectionString(), command,
                     std::cout, std::cerr);
         }
+        if (options.correctedCausalSurpriseReplicationStatus)
+            return EA::CorrectedCausalSurpriseReplicationContinuation::
+                RunStatusCommand(
+                    LstmDbConnectionString(),
+                    CorrectedReplicationCommand(options, false),
+                    std::cout, std::cerr);
+        if (options.materializeCorrectedCausalSurpriseReplication)
+            return RunCorrectedReplicationMaterializationCommand(options);
         if (options.compareTrainingObjectivePair)
         {
             EA::PairedTrainingObjectiveEvaluation::ComparisonCommand command;
