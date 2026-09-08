@@ -231,6 +231,8 @@ CREATE TABLE experiment_recommendation_conversion_activation(
 );
 GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA public TO "${test_user}";
 \i '${repo_root}/Database/migrations/073_inference_profitability_observation.sql'
+ALTER TABLE inference_profitability_observation
+    ALTER COLUMN created_at SET DEFAULT '2026-08-01 00:00:00+00';
 GRANT SELECT ON campaign_read_sentinel TO "${test_user}";
 SQL
 
