@@ -286,6 +286,9 @@
 		0F1700073370000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
 		0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
 		0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
+		0F1800073380000100AAA001 /* StrategyEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800103380000100AAA001 /* StrategyEvaluation.cpp */; };
+		0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
+		0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -353,6 +356,27 @@
 			remoteInfo = ProfitabilityCore;
 		};
 		0F17000D3370000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F1700003370000100AAA001;
+			remoteInfo = ProfitabilityCore;
+		};
+		0F18000C3380000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F1800003380000100AAA001;
+			remoteInfo = StrategyEvaluationCore;
+		};
+		0F18000D3380000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F1800003380000100AAA001;
+			remoteInfo = StrategyEvaluationCore;
+		};
+		0F18000F3380000100AAA001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 084505512047962100A0B88F /* Project object */;
 			proxyType = 1;
@@ -666,6 +690,9 @@
 		0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReplicationCandidatePlanning.cpp; path = Sources/ReplicationCandidatePlanning.cpp; sourceTree = SOURCE_ROOT; };
 		0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ReplicationCandidatePlanning.hpp; path = Sources/ReplicationCandidatePlanning.hpp; sourceTree = SOURCE_ROOT; };
 		0F1700013370000100AAA001 /* libProfitabilityCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libProfitabilityCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libStrategyEvaluationCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F1800103380000100AAA001 /* StrategyEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = StrategyEvaluation.cpp; path = Sources/StrategyEvaluation.cpp; sourceTree = SOURCE_ROOT; };
+		0F1800113380000100AAA001 /* StrategyEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = StrategyEvaluation.hpp; path = Sources/StrategyEvaluation.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -673,6 +700,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
 				0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
 				08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */,
 				08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */,
@@ -686,6 +714,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
 				0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
 				0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */,
 				0A1000082F70000100AAA001 /* Metal.framework in Frameworks */,
@@ -696,6 +725,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0F1700033370000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0F1800033380000100AAA001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -731,6 +767,7 @@
 		0845055A2047962100A0B88F /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */,
 				0F1700013370000100AAA001 /* libProfitabilityCore.a */,
 				084426802ED8DD46002DEB21 /* LSTM_Debug */,
 				0A10000B2F70000100AAA001 /* LSTM_Release */,
@@ -784,6 +821,8 @@
 				0E73000130E0000100AAA001 /* InferenceProfitability.hpp */,
 				0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */,
 				0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */,
+				0F1800103380000100AAA001 /* StrategyEvaluation.cpp */,
+				0F1800113380000100AAA001 /* StrategyEvaluation.hpp */,
 				0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */,
 				0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */,
 				0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */,
@@ -1072,6 +1111,7 @@
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				0F17000A3370000100AAA001 /* PBXTargetDependency */,
+				0F18000A3380000100AAA001 /* PBXTargetDependency */,
 			);
 			name = "LSTM Debug";
 			productName = LSTM_Debug;
@@ -1093,6 +1133,7 @@
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				0F17000B3370000100AAA001 /* PBXTargetDependency */,
+				0F18000B3380000100AAA001 /* PBXTargetDependency */,
 			);
 			name = "LSTM Release";
 			productName = LSTM_Release;
@@ -1113,6 +1154,23 @@
 			name = ProfitabilityCore;
 			productName = ProfitabilityCore;
 			productReference = 0F1700013370000100AAA001 /* libProfitabilityCore.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+		0F1800003380000100AAA001 /* StrategyEvaluationCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0F1800043380000100AAA001 /* Build configuration list for PBXNativeTarget "StrategyEvaluationCore" */;
+			buildPhases = (
+				0F1800023380000100AAA001 /* Sources */,
+				0F1800033380000100AAA001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0F18000E3380000100AAA001 /* PBXTargetDependency */,
+			);
+			name = StrategyEvaluationCore;
+			productName = StrategyEvaluationCore;
+			productReference = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */;
 			productType = "com.apple.product-type.library.static";
 		};
 /* End PBXNativeTarget section */
@@ -1176,6 +1234,7 @@
 				084426722ED8DD46002DEB21 /* LSTM Debug */,
 				0A10000F2F70000100AAA001 /* LSTM Release */,
 				0F1700003370000100AAA001 /* ProfitabilityCore */,
+				0F1800003380000100AAA001 /* StrategyEvaluationCore */,
 			);
 		};
 /* End PBXProject section */
@@ -1514,6 +1573,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F1800023380000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F1800073380000100AAA001 /* StrategyEvaluation.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1538,6 +1605,24 @@
 			name = ProfitabilityCore;
 			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
 			targetProxy = 0F17000D3370000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F18000A3380000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = StrategyEvaluationCore;
+			target = 0F1800003380000100AAA001 /* StrategyEvaluationCore */;
+			targetProxy = 0F18000C3380000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F18000B3380000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = StrategyEvaluationCore;
+			target = 0F1800003380000100AAA001 /* StrategyEvaluationCore */;
+			targetProxy = 0F18000D3380000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F18000E3380000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ProfitabilityCore;
+			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
+			targetProxy = 0F18000F3380000100AAA001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1957,6 +2042,26 @@
 			};
 			name = Release;
 		};
+		0F1800053380000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = StrategyEvaluationCore;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		0F1800063380000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = StrategyEvaluationCore;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1992,6 +2097,15 @@
 			buildConfigurations = (
 				0F1700053370000100AAA001 /* Debug */,
 				0F1700063370000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0F1800043380000100AAA001 /* Build configuration list for PBXNativeTarget "StrategyEvaluationCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F1800053380000100AAA001 /* Debug */,
+				0F1800063380000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
