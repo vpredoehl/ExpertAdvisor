@@ -81,6 +81,7 @@
 #include "TrainingObjective.hpp"
 #include "PairedTrainingObjectiveEvaluationService.hpp"
 #include "FeatureAblationPairEvaluationService.hpp"
+#include "FeatureAblationPairEvaluationRepository.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
 #include "CorrectedCausalSurpriseReplicationContinuationService.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
@@ -7922,14 +7923,75 @@ SchedulerOptions CorrectedReplicationQueueOptions(
         EA::TrainingObjective::ParseSupportedCanonicalText(
             configured.trainingObjectiveCanonical);
     options.trainingObjectiveSpecified = true;
+    options.queueCheckpointInfer = configured.checkpointInferenceEnabled;
+    options.queueCheckpointInferMinEpoch =
+        configured.checkpointInferenceMinimumEpoch;
+    options.queueCheckpointInferInterval =
+        configured.checkpointInferenceInterval;
+    options.queueCheckpointPolicy = configured.checkpointPolicyEnabled;
+    options.checkpointPolicyMinLeaderScore =
+        configured.checkpointPolicyMinimumLeaderScore;
+    options.checkpointPolicyMinInferAccuracy =
+        configured.checkpointPolicyMinimumInferenceAccuracy;
+    options.checkpointPolicyTopN = configured.checkpointPolicyTopN;
+    options.checkpointPolicyScope = configured.checkpointPolicyScope;
+    options.checkpointPolicyStopMode = configured.checkpointPolicyStopMode;
+    options.checkpointPolicyGraceEvals =
+        configured.checkpointPolicyGraceEvaluations;
+    options.queueContinuationCandidateExcluded = false;
     options.economicCalendarSnapshot =
         EA::EconomicCalendar::EconomicCalendarSnapshotIdentity{
             configured.economicCalendarSnapshotId,
             configured.economicCalendarSnapshotHash};
     options.queueInvocationMode =
-        "corrected_causal_surprise_replication_plan_v1:" + plan.hash +
-        ":pair_ordinal=" + std::to_string(pair.ordinal);
+        EA::CorrectedCausalSurpriseReplicationContinuation::
+            MaterializationProvenance(plan, pair, arm);
     return options;
+}
+
+void ValidateCorrectedReplicationRuntimeContract(
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Plan& plan)
+{
+    const auto& configured = plan.configuration;
+    if (configured.modelInputWidth !=
+            static_cast<int>(EA::kCurrentModelInputWidth) ||
+        configured.semanticLayoutVersion !=
+            EA::kModelInputSemanticLayoutVersion ||
+        configured.batchSize != static_cast<int>(batch_size) ||
+        configured.baseLearningRate != 1.0e-3 / 3.0 ||
+        configured.freshInitializationSeed !=
+            std::optional<unsigned int>{42U})
+        throw std::runtime_error(
+            "corrected_replication_runtime_scientific_contract_mismatch");
+}
+
+void LockCorrectedReplicationEvidence(
+    pqxx::work& transaction,
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Command& command)
+{
+    std::set<long long> experimentIds;
+    for (const auto& pair : command.evidencePairs)
+    {
+        experimentIds.insert(pair.first);
+        experimentIds.insert(pair.second);
+    }
+    if (experimentIds.empty())
+        throw std::invalid_argument(
+            "corrected_replication_evidence_empty");
+    std::ostringstream ids;
+    bool first = true;
+    for (const long long experimentId : experimentIds)
+    {
+        if (!first) ids << ',';
+        first = false;
+        ids << experimentId;
+    }
+    const pqxx::result locked = transaction.exec(
+        "SELECT experiment_id FROM experiment WHERE experiment_id IN (" +
+        ids.str() + ") ORDER BY experiment_id FOR SHARE;");
+    if (locked.size() != experimentIds.size())
+        throw std::invalid_argument(
+            "corrected_replication_evidence_membership_missing");
 }
 
 struct ExistingCorrectedReplicationArm
@@ -7937,6 +7999,44 @@ struct ExistingCorrectedReplicationArm
     std::optional<long long> experimentId;
     bool exactPlanProvenance = false;
 };
+
+std::optional<long long> FindCorrectedReplicationArmByProvenance(
+    pqxx::work& transaction,
+    const SchedulerOptions& options)
+{
+    const pqxx::result rows = transaction.exec(
+        "SELECT experiment_id FROM experiment WHERE invocation_mode=$1 "
+        "ORDER BY experiment_id;",
+        pqxx::params{*options.queueInvocationMode});
+    if (rows.size() > 1)
+        throw std::runtime_error(
+            "corrected_replication_materialization_provenance_ambiguous");
+    if (rows.empty()) return std::nullopt;
+    return rows.one_row()[0].as<long long>();
+}
+
+void ValidateCorrectedReplicationArm(
+    pqxx::work& transaction,
+    long long experimentId,
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Plan& plan,
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Pair& pair,
+    const EA::CorrectedCausalSurpriseReplicationContinuation::Arm& arm)
+{
+    const auto evidence =
+        EA::FeatureAblationPairEvaluation::LoadAuthoritativeArmEvidence(
+            transaction, experimentId);
+    EA::CorrectedCausalSurpriseReplicationContinuation::
+        ValidatePlannedArmEvidence(plan, pair, arm, evidence);
+    const pqxx::result provenance = transaction.exec(
+        "SELECT invocation_mode FROM experiment WHERE experiment_id=$1;",
+        pqxx::params{experimentId});
+    if (provenance.size() != 1 || provenance.one_row()[0].is_null() ||
+        provenance.one_row()[0].as<std::string>() !=
+            EA::CorrectedCausalSurpriseReplicationContinuation::
+                MaterializationProvenance(plan, pair, arm))
+        throw std::runtime_error(
+            "corrected_replication_materialized_provenance_mismatch");
+}
 
 ExistingCorrectedReplicationArm FindExistingCorrectedReplicationArm(
     pqxx::work& transaction,
@@ -7958,7 +8058,7 @@ ExistingCorrectedReplicationArm FindExistingCorrectedReplicationArm(
     return result;
 }
 
-int RunCorrectedReplicationMaterializationCommand(
+int RunCorrectedReplicationMaterializationAttempt(
     const SchedulerOptions& options)
 {
     namespace Continuation =
@@ -7971,9 +8071,13 @@ int RunCorrectedReplicationMaterializationCommand(
     else
         SetTransactionReadWrite(transaction);
 
+    const Continuation::Command command =
+        CorrectedReplicationCommand(options, true);
+    if (!options.dryRun)
+        LockCorrectedReplicationEvidence(transaction, command);
     const Continuation::Assessment assessment =
-        Continuation::EvaluateCommand(
-            transaction, CorrectedReplicationCommand(options, true));
+        Continuation::EvaluateCommand(transaction, command);
+    ValidateCorrectedReplicationRuntimeContract(assessment.plan);
     std::cout << Continuation::RenderAssessment(assessment);
     if (*options.expectedCorrectedReplicationPlanHash != assessment.plan.hash)
     {
@@ -8015,6 +8119,10 @@ int RunCorrectedReplicationMaterializationCommand(
             << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZATION_PREVIEW"
             << ",plan_hash=" << assessment.plan.hash
             << ",pair_ordinal=" << pair.ordinal
+            << ",scientific_policy_version="
+            << assessment.plan.scientificPolicyVersion
+            << ",replication_unit_hash=" << pair.replicationUnitHash
+            << ",outcome_blind=true"
             << ",experiment_rows_created=0"
             << ",campaign_rows_modified=0"
             << ",scheduler_state_modified=false"
@@ -8038,17 +8146,35 @@ int RunCorrectedReplicationMaterializationCommand(
         transaction, control, pair.symbol);
     const auto existingTreatment = FindExistingCorrectedReplicationArm(
         transaction, treatment, pair.symbol);
+    const auto provenanceControl = FindCorrectedReplicationArmByProvenance(
+        transaction, control);
+    const auto provenanceTreatment = FindCorrectedReplicationArmByProvenance(
+        transaction, treatment);
+    if (provenanceControl != existingControl.experimentId ||
+        provenanceTreatment != existingTreatment.experimentId)
+        throw std::runtime_error(
+            "corrected_replication_provenance_identity_disagreement");
     if (existingControl.experimentId || existingTreatment.experimentId)
     {
         if (existingControl.experimentId && existingTreatment.experimentId &&
             existingControl.exactPlanProvenance &&
             existingTreatment.exactPlanProvenance)
         {
+            ValidateCorrectedReplicationArm(
+                transaction, *existingControl.experimentId,
+                assessment.plan, pair, pair.control);
+            ValidateCorrectedReplicationArm(
+                transaction, *existingTreatment.experimentId,
+                assessment.plan, pair, pair.treatment);
             transaction.commit();
             std::cout
                 << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_ALREADY_MATERIALIZED"
                 << ",plan_hash=" << assessment.plan.hash
                 << ",pair_ordinal=" << pair.ordinal
+                << ",scientific_policy_version="
+                << assessment.plan.scientificPolicyVersion
+                << ",replication_unit_hash=" << pair.replicationUnitHash
+                << ",outcome_blind=true"
                 << ",control_experiment_id="
                 << *existingControl.experimentId
                 << ",treatment_experiment_id="
@@ -8078,24 +8204,67 @@ int RunCorrectedReplicationMaterializationCommand(
     const long long treatmentExperimentId = InsertExperimentRecord(
         transaction, treatment, pair.symbol, 0);
     const pqxx::result prioritized = transaction.exec_params(
-        "UPDATE experiment SET scheduler_priority='high',updated_at=now() "
+        "UPDATE experiment SET scheduler_priority=$3,"
+        "checkpoint_policy_revision=$4,checkpoint_policy_hash=$5,"
+        "continuation_policy_enabled=false,updated_at=now() "
         "WHERE experiment_id IN ($1,$2) RETURNING experiment_id;",
         controlExperimentId,
-        treatmentExperimentId);
+        treatmentExperimentId,
+        assessment.plan.configuration.schedulerPriority,
+        assessment.plan.configuration.checkpointPolicyRevision,
+        assessment.plan.configuration.checkpointPolicyHash);
     if (prioritized.size() != 2)
         throw std::runtime_error(
             "corrected_replication_pair_priority_assignment_failed");
+    ValidateCorrectedReplicationArm(
+        transaction, controlExperimentId, assessment.plan, pair,
+        pair.control);
+    ValidateCorrectedReplicationArm(
+        transaction, treatmentExperimentId, assessment.plan, pair,
+        pair.treatment);
     transaction.commit();
     std::cout
         << "CORRECTED_CAUSAL_SURPRISE_REPLICATION_MATERIALIZED"
         << ",plan_hash=" << assessment.plan.hash
         << ",pair_ordinal=" << pair.ordinal
+        << ",scientific_policy_version="
+        << assessment.plan.scientificPolicyVersion
+        << ",replication_unit_hash=" << pair.replicationUnitHash
+        << ",outcome_blind=true"
         << ",control_experiment_id=" << controlExperimentId
         << ",treatment_experiment_id=" << treatmentExperimentId
         << ",scheduler_priority=high"
         << ",atomic_pair=true"
         << ",experiment_rows_created=2" << std::endl;
     return 0;
+}
+
+int RunCorrectedReplicationMaterializationCommand(
+    const SchedulerOptions& options)
+{
+    constexpr int kMaximumTransactionAttempts = 3;
+    if (options.dryRun)
+        return RunCorrectedReplicationMaterializationAttempt(options);
+
+    for (int attempt = 1; attempt <= kMaximumTransactionAttempts; ++attempt)
+    {
+        try
+        {
+            // Every attempt constructs a new connection and serializable
+            // transaction, then repeats the complete authoritative
+            // materialization workflow above.  A PostgreSQL transaction that
+            // reports a serialization failure is aborted and is never reused.
+            return RunCorrectedReplicationMaterializationAttempt(options);
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            if (error.sqlstate() != "40001" ||
+                attempt == kMaximumTransactionAttempts)
+                throw;
+        }
+    }
+    throw std::logic_error(
+        "corrected_replication_materialization_retry_unreachable");
 }
 
 std::string FormatOptionalMetadataString(const pqxx::row& row, int index)

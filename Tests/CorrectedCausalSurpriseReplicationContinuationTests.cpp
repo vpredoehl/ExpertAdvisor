@@ -128,6 +128,70 @@ void AssertInvalid(Function&& function)
     assert(threw);
 }
 
+Pair::ArmEvidence PlannedEvidence(
+    const Continuation::Plan& plan,
+    const Continuation::Pair& pair,
+    const Continuation::Arm& arm)
+{
+    Pair::ArmEvidence evidence;
+    const auto& configured = plan.configuration;
+    auto& actual = evidence.authoritative.configuration;
+    actual.experimentId = arm.role == "control" ? 7001 : 7002;
+    actual.symbol = pair.symbol;
+    actual.predictionHorizon = pair.predictionHorizon;
+    actual.targetEpochs = configured.targetEpochs;
+    actual.threshold = configured.threshold;
+    actual.coreLearningRateMultiplier = configured.coreLearningRateMultiplier;
+    actual.headLearningRateMultiplier = configured.headLearningRateMultiplier;
+    actual.checkpointInterval = configured.checkpointInterval;
+    actual.trainStart = configured.trainStart;
+    actual.trainEnd = configured.trainEnd;
+    actual.inferenceStart = configured.inferenceStart;
+    actual.inferenceEnd = configured.inferenceEnd;
+    actual.donchianMode = configured.donchianMode;
+    actual.featureWarmupScope = configured.featureWarmupScope;
+    actual.donchianLookback = configured.donchianLookback;
+    actual.featureAblationMask = arm.featureAblationMask;
+    actual.experimentObjective = {
+        configured.trainingObjectiveCanonical,
+        configured.trainingObjectiveHash};
+    auto& extended = evidence.extended;
+    extended.configuredModelInputWidth = configured.modelInputWidth;
+    extended.configuredModelInputLayoutVersion =
+        configured.semanticLayoutVersion;
+    extended.economicCalendarSnapshotId =
+        configured.economicCalendarSnapshotId;
+    extended.economicCalendarSnapshotHash =
+        configured.economicCalendarSnapshotHash;
+    extended.baseLearningRate = configured.baseLearningRate;
+    extended.batchSize = configured.batchSize;
+    extended.freshInitializationSeed = configured.freshInitializationSeed;
+    extended.checkpointInferenceEnabled =
+        configured.checkpointInferenceEnabled;
+    extended.checkpointInferenceMinimumEpoch =
+        configured.checkpointInferenceMinimumEpoch;
+    extended.checkpointInferenceInterval =
+        configured.checkpointInferenceInterval;
+    extended.checkpointPolicyEnabled = configured.checkpointPolicyEnabled;
+    extended.checkpointPolicyMinimumLeaderScore =
+        configured.checkpointPolicyMinimumLeaderScore;
+    extended.checkpointPolicyMinimumInferenceAccuracy =
+        configured.checkpointPolicyMinimumInferenceAccuracy;
+    extended.checkpointPolicyTopN = configured.checkpointPolicyTopN;
+    extended.checkpointPolicyScope = configured.checkpointPolicyScope;
+    extended.checkpointPolicyStopMode = configured.checkpointPolicyStopMode;
+    extended.checkpointPolicyGraceEvaluations =
+        configured.checkpointPolicyGraceEvaluations;
+    extended.checkpointPolicyRevision = configured.checkpointPolicyRevision;
+    extended.checkpointPolicyHash = configured.checkpointPolicyHash;
+    extended.continuationPolicyEnabled =
+        configured.continuationPolicyEnabled;
+    extended.continuationPolicyScientificIdentity =
+        configured.continuationPolicyScientificIdentity;
+    evidence.operational.schedulerPriority = configured.schedulerPriority;
+    return evidence;
+}
+
 } // namespace
 
 int main()
@@ -144,6 +208,19 @@ int main()
     assert(plan.pairs[1].ordinal == 2);
     assert(plan.pairs[1].symbol == "usdcadrmp");
     assert(plan.pairs[1].predictionHorizon == 6);
+    assert(plan.hash == Continuation::kPredeclaredPlanHash);
+    assert(plan.pairs[0].replicationUnitHash ==
+           Continuation::kFirstReplicationUnitHash);
+    assert(plan.pairs[0].control.scientificIdentityHash ==
+           Continuation::kFirstControlIdentityHash);
+    assert(plan.pairs[0].treatment.scientificIdentityHash ==
+           Continuation::kFirstTreatmentIdentityHash);
+    assert(plan.pairs[1].replicationUnitHash ==
+           Continuation::kSecondReplicationUnitHash);
+    assert(plan.pairs[1].control.scientificIdentityHash ==
+           Continuation::kSecondControlIdentityHash);
+    assert(plan.pairs[1].treatment.scientificIdentityHash ==
+           Continuation::kSecondTreatmentIdentityHash);
     assert(plan.pairs[0].control.role == "control");
     assert(plan.pairs[0].control.featureAblationMask.empty());
     assert(plan.pairs[0].treatment.role == "treatment");
@@ -156,6 +233,66 @@ int main()
         "corrected_causal_surprise_replication_plan_v2;" + plan.canonical;
     assert(EA::TrainingObjective::DeterministicHash(hypotheticalVersion2) !=
            plan.hash);
+    const std::string controlProvenance =
+        Continuation::MaterializationProvenance(
+            plan, plan.pairs[0], plan.pairs[0].control);
+    assert(controlProvenance.find("plan_hash=" + plan.hash) !=
+           std::string::npos);
+    assert(controlProvenance.find("pair_ordinal=1") != std::string::npos);
+    assert(controlProvenance.find(
+               "replication_unit_hash=" + plan.pairs[0].replicationUnitHash) !=
+           std::string::npos);
+    assert(controlProvenance.find("arm_role=control") != std::string::npos);
+    assert(controlProvenance.find("outcome_blind=true") != std::string::npos);
+
+    const auto plannedControl = PlannedEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control);
+    const auto plannedTreatment = PlannedEvidence(
+        plan, plan.pairs[0], plan.pairs[0].treatment);
+    Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, plannedControl);
+    Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].treatment, plannedTreatment);
+    auto tamperedArm = plannedControl;
+    tamperedArm.authoritative.configuration.symbol = "usdcadrmp";
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.authoritative.configuration.predictionHorizon = 4;
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.authoritative.configuration.featureAblationMask = "close";
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.extended.configuredModelInputWidth = 75;
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.extended.configuredModelInputLayoutVersion = 6;
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.extended.economicCalendarSnapshotId = 2;
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.extended.economicCalendarSnapshotHash =
+        "fnv1a64:0000000000000000";
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.authoritative.configuration.experimentObjective.hash =
+        "fnv1a64:0000000000000000";
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    tamperedArm = plannedControl;
+    tamperedArm.authoritative.configuration.trainEnd = "2024-12-31";
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, tamperedArm); });
+    AssertInvalid([&] { Continuation::ValidatePlannedArmEvidence(
+        plan, plan.pairs[0], plan.pairs[0].control, plannedTreatment); });
 
     // Planning accepts scientific identity only. Favorable, unfavorable,
     // mixed, and absent metrics therefore cannot alter membership or hashes.
@@ -264,6 +401,24 @@ int main()
     AssertInvalid([&] { Continuation::ValidatePlan(invalidPlan); });
     invalidPlan = plan;
     invalidPlan.hash = "fnv1a64:0000000000000000";
+    AssertInvalid([&] { Continuation::ValidatePlan(invalidPlan); });
+    invalidPlan = plan;
+    invalidPlan.pairs[0].control.scientificIdentityCanonical +=
+        "tampered=true;";
+    invalidPlan.pairs[0].control.scientificIdentityHash =
+        EA::TrainingObjective::DeterministicHash(
+            invalidPlan.pairs[0].control.scientificIdentityCanonical);
+    AssertInvalid([&] { Continuation::ValidatePlan(invalidPlan); });
+    invalidPlan = plan;
+    invalidPlan.pairs[0].replicationUnitCanonical += "tampered=true;";
+    invalidPlan.pairs[0].replicationUnitHash =
+        EA::TrainingObjective::DeterministicHash(
+            invalidPlan.pairs[0].replicationUnitCanonical);
+    AssertInvalid([&] { Continuation::ValidatePlan(invalidPlan); });
+    invalidPlan = plan;
+    invalidPlan.canonical += "tampered=true;";
+    invalidPlan.hash = EA::TrainingObjective::DeterministicHash(
+        invalidPlan.canonical);
     AssertInvalid([&] { Continuation::ValidatePlan(invalidPlan); });
 
     const std::string rendered = Continuation::RenderPlan(plan);

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace EA::CorrectedCausalSurpriseReplicationContinuation
@@ -15,6 +16,22 @@ namespace Replication = FeatureAblationReplicationEvaluation;
 inline constexpr int kPlanSemanticVersion = 1;
 inline constexpr int kScientificPolicyVersion = 1;
 inline constexpr std::size_t kFollowOnPairCount = 2;
+inline constexpr long long kAnchorControlExperimentId = 624;
+inline constexpr long long kAnchorTreatmentExperimentId = 625;
+inline constexpr std::string_view kPredeclaredPlanHash =
+    "fnv1a64:cbbf9367c12dd722";
+inline constexpr std::string_view kFirstReplicationUnitHash =
+    "fnv1a64:5ffbab7aec47d361";
+inline constexpr std::string_view kFirstControlIdentityHash =
+    "fnv1a64:7ef5cbe8b77a9d80";
+inline constexpr std::string_view kFirstTreatmentIdentityHash =
+    "fnv1a64:028e04da36b5bf55";
+inline constexpr std::string_view kSecondReplicationUnitHash =
+    "fnv1a64:b974d35c20ff14e4";
+inline constexpr std::string_view kSecondControlIdentityHash =
+    "fnv1a64:9ed70a5a5ed205d2";
+inline constexpr std::string_view kSecondTreatmentIdentityHash =
+    "fnv1a64:cb13e163c8dea12b";
 
 struct ScientificConfiguration
 {
@@ -117,6 +134,14 @@ struct Gate
 
 Plan MakePlan(const ScientificConfiguration& configuration);
 void ValidatePlan(const Plan& plan);
+std::string MaterializationProvenance(const Plan& plan,
+                                      const Pair& pair,
+                                      const Arm& arm);
+void ValidatePlannedArmEvidence(
+    const Plan& plan,
+    const Pair& pair,
+    const Arm& arm,
+    const FeatureAblationPairEvaluation::ArmEvidence& evidence);
 Gate EvaluateGate(const Replication::ReplicationEvaluation& evaluation,
                   const Replication::MemberEvaluation& anchorPair);
 

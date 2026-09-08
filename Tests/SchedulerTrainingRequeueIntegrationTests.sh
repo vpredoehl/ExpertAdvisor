@@ -210,16 +210,25 @@ expect_rejected_unchanged() {
     test "${before}" = "$(scalar "SELECT row_to_json(e)::text FROM experiment e WHERE experiment_id=${experiment_id}")"
 }
 
-# B3/B5/B6: no candidate, incompatible contents, and ambiguous epochs fail closed.
+# B3/B5: no candidate and incompatible contents fail closed.
 insert_experiment 930003 nocheckpoint pending infer 10 normal
 expect_rejected_unchanged 930003 no_valid_checkpoint no-checkpoint --requeue-training=930003 --yes
 insert_experiment 930005 compatible pending infer 10 normal
 insert_model 930005 wrongsymbol 20 >/dev/null
 expect_rejected_unchanged 930005 no_valid_checkpoint incompatible --requeue-training=930005 --yes
+
+# B6: equal-epoch intermediate checkpoints use the authoritative deterministic
+# ordering and requeue the same experiment ID without creating a new row.
 insert_experiment 930006 ambiguous pending infer 10 normal
-insert_model 930006 ambiguous 20 >/dev/null
-insert_model 930006 ambiguous 20 >/dev/null
-expect_rejected_unchanged 930006 no_valid_checkpoint ambiguous --requeue-training=930006 --yes
+older_tied_model="$(insert_model 930006 ambiguous 20)"
+newer_tied_model="$(insert_model 930006 ambiguous 20)"
+tied_count_before="$(scalar 'SELECT count(*) FROM experiment')"
+run_cli --requeue-training=930006 --yes >"${test_dir}/tied-checkpoints.out"
+grep -q "SCHEDULER_CHECKPOINT_CANDIDATE_TIE_BREAK,experiment_id=930006,completed_epoch=20,candidate_count=2,candidate_order=periodic_flag_asc_model_id_desc,selected_model_id=${newer_tied_model}" "${test_dir}/tied-checkpoints.out"
+grep -q "SCHEDULER_REQUEUE_TRAINING_SELECTION,experiment_id=930006,resume_model_id=${newer_tied_model},completed_epoch=20,scheduler_priority=normal" "${test_dir}/tied-checkpoints.out"
+test "$(scalar "SELECT status||':'||phase||':'||current_operation||':'||resume_model_id FROM experiment WHERE experiment_id=930006")" = "pending:train:train:${newer_tied_model}"
+test "${tied_count_before}" = "$(scalar 'SELECT count(*) FROM experiment')"
+test "${older_tied_model}" -lt "${newer_tied_model}"
 
 # B4: completed/final work never reopens.
 insert_experiment 930004 final completed done 80 normal

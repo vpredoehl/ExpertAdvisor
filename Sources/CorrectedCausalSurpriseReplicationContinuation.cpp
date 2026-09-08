@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <locale>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -77,6 +78,7 @@ bool SupportedSymbol(std::string_view value)
 std::string ConfigurationCanonical(const ScientificConfiguration& value)
 {
     std::ostringstream out;
+    out.imbue(std::locale::classic());
     out << "initial_symbol=" << value.initialSymbol << ';'
         << "initial_prediction_horizon="
         << value.initialPredictionHorizon << ';'
@@ -148,6 +150,7 @@ std::string ArmCanonical(const Pair& pair,
                          std::string_view configurationHash)
 {
     std::ostringstream out;
+    out.imbue(std::locale::classic());
     out << "corrected_causal_surprise_replication_arm_v1;"
         << "pair_ordinal=" << pair.ordinal << ';'
         << "role=" << role << ';'
@@ -162,6 +165,21 @@ void Add(std::vector<std::string>& reasons, std::string reason)
 {
     if (std::find(reasons.begin(), reasons.end(), reason) == reasons.end())
         reasons.push_back(std::move(reason));
+}
+
+[[noreturn]] void PlannedArmMismatch(std::string_view field)
+{
+    throw std::invalid_argument(
+        "corrected_replication_planned_arm_" + std::string{field} +
+        "_mismatch");
+}
+
+template <typename Left, typename Right>
+void RequireEqual(const Left& actual,
+                  const Right& expected,
+                  std::string_view field)
+{
+    if (actual != expected) PlannedArmMismatch(field);
 }
 
 } // namespace
@@ -230,6 +248,7 @@ Plan MakePlan(const ScientificConfiguration& input)
     }
 
     std::ostringstream canonical;
+    canonical.imbue(std::locale::classic());
     canonical << "corrected_causal_surprise_replication_plan_v1;"
               << "plan_semantic_version=" << plan.semanticVersion << ';'
               << "scientific_policy=" << kPolicyName << ';'
@@ -313,6 +332,9 @@ void ValidatePlan(const Plan& plan)
     if (plan.pairs.size() != kFollowOnPairCount)
         throw std::invalid_argument("corrected_replication_pair_count_invalid");
 
+    const std::string configurationCanonical = ConfigurationCanonical(value);
+    const std::string configurationHash =
+        TrainingObjective::DeterministicHash(configurationCanonical);
     std::set<std::string> units;
     std::set<std::string> arms;
     for (std::size_t index = 0; index < plan.pairs.size(); ++index)
@@ -329,6 +351,20 @@ void ValidatePlan(const Plan& plan)
                 pair.replicationUnitCanonical) != pair.replicationUnitHash ||
             !units.insert(pair.replicationUnitHash).second)
             throw std::invalid_argument("corrected_replication_unit_invalid");
+        std::ostringstream expectedUnit;
+        expectedUnit.imbue(std::locale::classic());
+        expectedUnit
+            << "corrected_causal_surprise_replication_unit_v1;"
+            << "symbol=" << pair.symbol << ';'
+            << "prediction_horizon=" << pair.predictionHorizon << ';'
+            << "configuration_hash=" << configurationHash << ';'
+            << "fresh_initialization_seed="
+            << (value.freshInitializationSeed
+                    ? std::to_string(*value.freshInitializationSeed)
+                    : "NULL") << ';';
+        if (pair.replicationUnitCanonical != expectedUnit.str())
+            throw std::invalid_argument(
+                "corrected_replication_unit_canonical_mismatch");
         if (pair.control.role != "control" ||
             !pair.control.featureAblationMask.empty() ||
             pair.treatment.role != "treatment" ||
@@ -338,7 +374,11 @@ void ValidatePlan(const Plan& plan)
             throw std::invalid_argument("corrected_replication_arm_mask_invalid");
         for (const Arm* arm : {&pair.control, &pair.treatment})
         {
+            const std::string expectedCanonical = ArmCanonical(
+                pair, arm->role, arm->featureAblationMask,
+                configurationHash);
             if (arm->scientificIdentityCanonical.empty() ||
+                arm->scientificIdentityCanonical != expectedCanonical ||
                 !TaggedHash(arm->scientificIdentityHash) ||
                 TrainingObjective::DeterministicHash(
                     arm->scientificIdentityCanonical) !=
@@ -352,9 +392,165 @@ void ValidatePlan(const Plan& plan)
         plan.pairs[1].symbol != "usdcadrmp" ||
         plan.pairs[1].predictionHorizon != 6)
         throw std::invalid_argument("corrected_replication_fixed_order_invalid");
+    std::ostringstream expectedPlanCanonical;
+    expectedPlanCanonical.imbue(std::locale::classic());
+    expectedPlanCanonical
+        << "corrected_causal_surprise_replication_plan_v1;"
+        << "plan_semantic_version=" << plan.semanticVersion << ';'
+        << "scientific_policy=" << kPolicyName << ';'
+        << "scientific_policy_version=" << plan.scientificPolicyVersion << ';'
+        << "minimum_valid_replications="
+        << Replication::kMinimumValidReplications << ';'
+        << "independent_dimension=" << kIndependence << ';'
+        << "configuration=" << configurationCanonical
+        << "configuration_hash=" << configurationHash << ';'
+        << "follow_on_pair_count=" << plan.pairs.size() << ';';
+    for (const Pair& pair : plan.pairs)
+        expectedPlanCanonical
+            << "pair_ordinal=" << pair.ordinal
+            << ",replication_unit_hash=" << pair.replicationUnitHash
+            << ",control_identity_hash="
+            << pair.control.scientificIdentityHash
+            << ",treatment_identity_hash="
+            << pair.treatment.scientificIdentityHash << ';';
+    if (plan.canonical != expectedPlanCanonical.str())
+        throw std::invalid_argument(
+            "corrected_replication_plan_canonical_mismatch");
     if (plan.canonical.empty() || !TaggedHash(plan.hash) ||
         TrainingObjective::DeterministicHash(plan.canonical) != plan.hash)
         throw std::invalid_argument("corrected_replication_plan_identity_invalid");
+    if (plan.hash != kPredeclaredPlanHash ||
+        plan.pairs[0].replicationUnitHash != kFirstReplicationUnitHash ||
+        plan.pairs[0].control.scientificIdentityHash !=
+            kFirstControlIdentityHash ||
+        plan.pairs[0].treatment.scientificIdentityHash !=
+            kFirstTreatmentIdentityHash ||
+        plan.pairs[1].replicationUnitHash != kSecondReplicationUnitHash ||
+        plan.pairs[1].control.scientificIdentityHash !=
+            kSecondControlIdentityHash ||
+        plan.pairs[1].treatment.scientificIdentityHash !=
+            kSecondTreatmentIdentityHash)
+        throw std::invalid_argument(
+            "corrected_replication_predeclared_plan_mismatch");
+}
+
+std::string MaterializationProvenance(const Plan& plan,
+                                      const Pair& pair,
+                                      const Arm& arm)
+{
+    ValidatePlan(plan);
+    if (arm != pair.control && arm != pair.treatment)
+        throw std::invalid_argument(
+            "corrected_replication_arm_not_owned_by_pair");
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    out << "corrected_causal_surprise_replication_materialization_v1;"
+        << "plan_hash=" << plan.hash << ';'
+        << "plan_semantic_version=" << plan.semanticVersion << ';'
+        << "scientific_policy_version=" << plan.scientificPolicyVersion << ';'
+        << "outcome_blind=true;"
+        << "pair_ordinal=" << pair.ordinal << ';'
+        << "replication_unit_hash=" << pair.replicationUnitHash << ';'
+        << "arm_role=" << arm.role << ';'
+        << "arm_identity_hash=" << arm.scientificIdentityHash << ';';
+    return out.str();
+}
+
+void ValidatePlannedArmEvidence(
+    const Plan& plan,
+    const Pair& pair,
+    const Arm& arm,
+    const FeatureAblationPairEvaluation::ArmEvidence& evidence)
+{
+    ValidatePlan(plan);
+    const auto& expected = plan.configuration;
+    const auto& actual = evidence.authoritative.configuration;
+    const auto& extended = evidence.extended;
+    RequireEqual(actual.symbol, pair.symbol, "symbol");
+    RequireEqual(actual.predictionHorizon, pair.predictionHorizon, "horizon");
+    RequireEqual(actual.targetEpochs, expected.targetEpochs, "target_epochs");
+    RequireEqual(actual.threshold, expected.threshold, "threshold");
+    RequireEqual(actual.coreLearningRateMultiplier,
+                 expected.coreLearningRateMultiplier, "core_lr");
+    RequireEqual(actual.headLearningRateMultiplier,
+                 expected.headLearningRateMultiplier, "head_lr");
+    RequireEqual(actual.checkpointInterval, expected.checkpointInterval,
+                 "checkpoint_interval");
+    RequireEqual(actual.trainStart, expected.trainStart, "train_start");
+    RequireEqual(actual.trainEnd, expected.trainEnd, "train_end");
+    RequireEqual(actual.inferenceStart, expected.inferenceStart,
+                 "inference_start");
+    RequireEqual(actual.inferenceEnd, expected.inferenceEnd, "inference_end");
+    RequireEqual(actual.donchianMode, expected.donchianMode, "donchian_mode");
+    RequireEqual(actual.featureWarmupScope, expected.featureWarmupScope,
+                 "feature_warmup_scope");
+    RequireEqual(actual.donchianLookback, expected.donchianLookback,
+                 "donchian_lookback");
+    RequireEqual(actual.featureAblationMask, arm.featureAblationMask, "mask");
+    RequireEqual(actual.resumeModelId, std::optional<long long>{},
+                 "resume_model_id");
+    RequireEqual(actual.resumeExpandInputWidth, false,
+                 "resume_expand_input_width");
+    RequireEqual(actual.experimentObjective.canonical,
+                 expected.trainingObjectiveCanonical, "objective_canonical");
+    RequireEqual(actual.experimentObjective.hash,
+                 expected.trainingObjectiveHash, "objective_hash");
+    RequireEqual(extended.configuredModelInputWidth,
+                 std::optional<int>{expected.modelInputWidth}, "input_width");
+    RequireEqual(extended.configuredModelInputLayoutVersion,
+                 std::optional<int>{expected.semanticLayoutVersion}, "layout");
+    RequireEqual(extended.economicCalendarSnapshotId,
+                 std::optional<long long>{expected.economicCalendarSnapshotId},
+                 "snapshot_id");
+    RequireEqual(extended.economicCalendarSnapshotHash,
+                 std::optional<std::string>{expected.economicCalendarSnapshotHash},
+                 "snapshot_hash");
+    RequireEqual(extended.baseLearningRate, expected.baseLearningRate,
+                 "base_learning_rate");
+    RequireEqual(extended.batchSize, expected.batchSize, "batch_size");
+    RequireEqual(extended.freshInitializationSeed,
+                 expected.freshInitializationSeed, "seed");
+    RequireEqual(extended.checkpointInferenceEnabled,
+                 expected.checkpointInferenceEnabled,
+                 "checkpoint_inference_enabled");
+    RequireEqual(extended.checkpointInferenceMinimumEpoch,
+                 expected.checkpointInferenceMinimumEpoch,
+                 "checkpoint_inference_minimum_epoch");
+    RequireEqual(extended.checkpointInferenceInterval,
+                 expected.checkpointInferenceInterval,
+                 "checkpoint_inference_interval");
+    RequireEqual(extended.checkpointPolicyEnabled,
+                 expected.checkpointPolicyEnabled,
+                 "checkpoint_policy_enabled");
+    RequireEqual(extended.checkpointPolicyMinimumLeaderScore,
+                 expected.checkpointPolicyMinimumLeaderScore,
+                 "checkpoint_policy_minimum_leader_score");
+    RequireEqual(extended.checkpointPolicyMinimumInferenceAccuracy,
+                 expected.checkpointPolicyMinimumInferenceAccuracy,
+                 "checkpoint_policy_minimum_inference_accuracy");
+    RequireEqual(extended.checkpointPolicyTopN,
+                 expected.checkpointPolicyTopN, "checkpoint_policy_top_n");
+    RequireEqual(extended.checkpointPolicyScope,
+                 expected.checkpointPolicyScope, "checkpoint_policy_scope");
+    RequireEqual(extended.checkpointPolicyStopMode,
+                 expected.checkpointPolicyStopMode,
+                 "checkpoint_policy_stop_mode");
+    RequireEqual(extended.checkpointPolicyGraceEvaluations,
+                 expected.checkpointPolicyGraceEvaluations,
+                 "checkpoint_policy_grace_evaluations");
+    RequireEqual(extended.checkpointPolicyRevision,
+                 expected.checkpointPolicyRevision,
+                 "checkpoint_policy_revision");
+    RequireEqual(extended.checkpointPolicyHash,
+                 expected.checkpointPolicyHash, "checkpoint_policy_hash");
+    RequireEqual(extended.continuationPolicyEnabled,
+                 expected.continuationPolicyEnabled,
+                 "continuation_policy_enabled");
+    RequireEqual(extended.continuationPolicyScientificIdentity,
+                 expected.continuationPolicyScientificIdentity,
+                 "continuation_policy_identity");
+    RequireEqual(evidence.operational.schedulerPriority,
+                 expected.schedulerPriority, "scheduler_priority");
 }
 
 Gate EvaluateGate(const Replication::ReplicationEvaluation& evaluation,

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-test_root="${EA_PHASE15_TEST_ROOT:-${repo_root}/DerivedData/Validation/Phase15CorrectedCausalSurpriseReplicationPreparation/Tests}"
+test_root="${EA_PHASE16_TEST_ROOT:-${repo_root}/DerivedData/Validation/Phase16CorrectedCausalSurpriseReplicationMaterializationHardening/Tests}"
 build_dir="${test_root}/CorrectedCausalSurpriseReplicationContinuation"
 mkdir -p "${build_dir}"
 
