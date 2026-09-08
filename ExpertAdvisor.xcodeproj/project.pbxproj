@@ -33,8 +33,6 @@
 		0EC2002532E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001B32E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp */; };
 		0EC2002D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */; };
 		0EC200323300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */; };
-		0E73000430E0000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
-		0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
 		0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
 		0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
 		0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
@@ -285,6 +283,9 @@
 		0B6500053090000100AAA001 /* CampaignOperationsManager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500003090000100AAA001 /* CampaignOperationsManager.cpp */; };
 		0B6500063090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */; };
 		0B6500073090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */; };
+		0F1700073370000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
+		0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
+		0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -343,6 +344,20 @@
 			proxyType = 2;
 			remoteGlobalIDString = 08095D862DFCBECB008D6698;
 			remoteInfo = OtherTests;
+		};
+		0F17000C3370000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F1700003370000100AAA001;
+			remoteInfo = ProfitabilityCore;
+		};
+		0F17000D3370000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F1700003370000100AAA001;
+			remoteInfo = ProfitabilityCore;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -650,6 +665,7 @@
 		0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PostPairReplicationPolicy.hpp; path = Sources/PostPairReplicationPolicy.hpp; sourceTree = SOURCE_ROOT; };
 		0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReplicationCandidatePlanning.cpp; path = Sources/ReplicationCandidatePlanning.cpp; sourceTree = SOURCE_ROOT; };
 		0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ReplicationCandidatePlanning.hpp; path = Sources/ReplicationCandidatePlanning.hpp; sourceTree = SOURCE_ROOT; };
+		0F1700013370000100AAA001 /* libProfitabilityCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libProfitabilityCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -657,6 +673,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
 				08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */,
 				08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */,
 				08A334E12F5FCBD700BE2DCE /* MetalPerformanceShaders.framework in Frameworks */,
@@ -669,11 +686,19 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
 				0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */,
 				0A1000082F70000100AAA001 /* Metal.framework in Frameworks */,
 				0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */,
 				0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */,
 				0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0F1700033370000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -706,6 +731,7 @@
 		0845055A2047962100A0B88F /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				0F1700013370000100AAA001 /* libProfitabilityCore.a */,
 				084426802ED8DD46002DEB21 /* LSTM_Debug */,
 				0A10000B2F70000100AAA001 /* LSTM_Release */,
 			);
@@ -1045,6 +1071,7 @@
 			dependencies = (
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+				0F17000A3370000100AAA001 /* PBXTargetDependency */,
 			);
 			name = "LSTM Debug";
 			productName = LSTM_Debug;
@@ -1065,11 +1092,28 @@
 			dependencies = (
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+				0F17000B3370000100AAA001 /* PBXTargetDependency */,
 			);
 			name = "LSTM Release";
 			productName = LSTM_Release;
 			productReference = 0A10000B2F70000100AAA001 /* LSTM_Release */;
 			productType = "com.apple.product-type.tool";
+		};
+		0F1700003370000100AAA001 /* ProfitabilityCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0F1700043370000100AAA001 /* Build configuration list for PBXNativeTarget "ProfitabilityCore" */;
+			buildPhases = (
+				0F1700023370000100AAA001 /* Sources */,
+				0F1700033370000100AAA001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ProfitabilityCore;
+			productName = ProfitabilityCore;
+			productReference = 0F1700013370000100AAA001 /* libProfitabilityCore.a */;
+			productType = "com.apple.product-type.library.static";
 		};
 /* End PBXNativeTarget section */
 
@@ -1131,6 +1175,7 @@
 			targets = (
 				084426722ED8DD46002DEB21 /* LSTM Debug */,
 				0A10000F2F70000100AAA001 /* LSTM Release */,
+				0F1700003370000100AAA001 /* ProfitabilityCore */,
 			);
 		};
 /* End PBXProject section */
@@ -1199,7 +1244,6 @@
 				0EC2003A3311000100AAA001 /* EconomicEventRepository.cpp in Sources */,
 				084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */,
 				0844268A2ED8E755002DEB21 /* main.cpp in Sources */,
-				0E73000430E0000100AAA001 /* InferenceProfitability.cpp in Sources */,
 				0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
 				0E7F00103330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
@@ -1340,7 +1384,6 @@
 				0EC2003B3311000100AAA001 /* EconomicEventRepository.cpp in Sources */,
 				0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */,
 				0A1000022F70000100AAA001 /* main.cpp in Sources */,
-				0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */,
 				0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
 				0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
@@ -1463,6 +1506,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F1700023370000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F1700073370000100AAA001 /* InferenceProfitability.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1475,6 +1526,18 @@
 			isa = PBXTargetDependency;
 			name = libMetaNN;
 			targetProxy = 08A334CD2F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
+		};
+		0F17000A3370000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ProfitabilityCore;
+			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
+			targetProxy = 0F17000C3370000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F17000B3370000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ProfitabilityCore;
+			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
+			targetProxy = 0F17000D3370000100AAA001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1874,6 +1937,26 @@
 			};
 			name = Release;
 		};
+		0F1700053370000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = ProfitabilityCore;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		0F1700063370000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = ProfitabilityCore;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1900,6 +1983,15 @@
 			buildConfigurations = (
 				0A1000102F70000100AAA001 /* Debug */,
 				0A1000112F70000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0F1700043370000100AAA001 /* Build configuration list for PBXNativeTarget "ProfitabilityCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F1700053370000100AAA001 /* Debug */,
+				0F1700063370000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
