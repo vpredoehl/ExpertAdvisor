@@ -51,6 +51,7 @@
 #include "ModelInputExpansion.hpp"
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
+#include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
 #include "ProfitabilityVerificationRepository.hpp"
 #include "EconomicEventImportService.hpp"
 #include "EconomicEventConsensusImport.hpp"
@@ -2843,8 +2844,9 @@ static PredictionStats ProcessBatchPredict(
             auto w = Window{it, it + static_cast<std::ptrdiff_t>(evalConfig.windowSize)};
 
             const auto probs = l.PredictNextDirectionProbs(w, /*resetState=*/true);
-            const int pred = (probs[0] > probs[1] && probs[0] > probs[2]) ? 0
-                           : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
+            const int pred =
+                EA::StrategyEvaluation::PredictedClassForProbabilities(
+                    EA::StrategyEvaluation::PredictionProbabilities{probs});
             const float maxProb = std::max(probs[0], std::max(probs[1], probs[2]));
 
             const auto labelInfo = BuildLookaheadClassInfo(tensor,

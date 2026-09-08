@@ -289,6 +289,8 @@
 		0F1800073380000100AAA001 /* StrategyEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800103380000100AAA001 /* StrategyEvaluation.cpp */; };
 		0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 		0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
+		0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
+		0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -691,8 +693,10 @@
 		0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ReplicationCandidatePlanning.hpp; path = Sources/ReplicationCandidatePlanning.hpp; sourceTree = SOURCE_ROOT; };
 		0F1700013370000100AAA001 /* libProfitabilityCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libProfitabilityCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libStrategyEvaluationCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
-		0F1800103380000100AAA001 /* StrategyEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = StrategyEvaluation.cpp; path = Sources/StrategyEvaluation.cpp; sourceTree = SOURCE_ROOT; };
-		0F1800113380000100AAA001 /* StrategyEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = StrategyEvaluation.hpp; path = Sources/StrategyEvaluation.hpp; sourceTree = SOURCE_ROOT; };
+		0F1800103380000100AAA001 /* StrategyEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = StrategyEvaluation.cpp; path = Sources/StrategyEvaluationCore/StrategyEvaluation.cpp; sourceTree = SOURCE_ROOT; };
+		0F1800113380000100AAA001 /* StrategyEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = StrategyEvaluation.hpp; path = Sources/StrategyEvaluationCore/StrategyEvaluation.hpp; sourceTree = SOURCE_ROOT; };
+		0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorMarketPathAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.cpp; sourceTree = SOURCE_ROOT; };
+		0F1900113390000100AAA001 /* TensorMarketPathAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorMarketPathAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -821,8 +825,8 @@
 				0E73000130E0000100AAA001 /* InferenceProfitability.hpp */,
 				0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */,
 				0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */,
-				0F1800103380000100AAA001 /* StrategyEvaluation.cpp */,
-				0F1800113380000100AAA001 /* StrategyEvaluation.hpp */,
+				0F1900003390000100AAA001 /* StrategyEvaluationCore */,
+				0F1900013390000100AAA001 /* StrategyEvaluationAdapters */,
 				0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */,
 				0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */,
 				0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */,
@@ -1094,6 +1098,24 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		0F1900003390000100AAA001 /* StrategyEvaluationCore */ = {
+			isa = PBXGroup;
+			children = (
+				0F1800103380000100AAA001 /* StrategyEvaluation.cpp */,
+				0F1800113380000100AAA001 /* StrategyEvaluation.hpp */,
+			);
+			name = StrategyEvaluationCore;
+			sourceTree = "<group>";
+		};
+		0F1900013390000100AAA001 /* StrategyEvaluationAdapters */ = {
+			isa = PBXGroup;
+			children = (
+				0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */,
+				0F1900113390000100AAA001 /* TensorMarketPathAdapter.hpp */,
+			);
+			name = StrategyEvaluationAdapters;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -1325,6 +1347,7 @@
 				0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
 				0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
+				0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
@@ -1465,6 +1488,7 @@
 				0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
 				0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
+				0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */,

@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "../Sources/InferenceProfitability.hpp"
-#include "../Sources/StrategyEvaluation.hpp"
+#include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
 
 namespace Profitability = EA::InferenceProfitability;
 namespace Strategy = EA::StrategyEvaluation;
@@ -166,10 +166,10 @@ int main()
         Profitability::kUpClass, 100.0f, 105.0f};
     enriched.probabilities = Strategy::PredictionProbabilities{
         {0.1f, 0.2f, 0.7f}};
-    enriched.decisionTimestamp = "2025-01-01T00:00:00Z";
-    enriched.terminalTimestamp = "2025-01-01T01:00:00Z";
+    enriched.decisionTimestampUnixSeconds = 1735689600;
+    enriched.terminalTimestampUnixSeconds = 1735693200;
     enriched.marketPath.push_back(
-        {"2025-01-01T00:05:00Z", 100.0f, 101.0f, 99.0f, 100.5f});
+        {1, 1735689900, 100.0f, 101.0f, 99.0f, 100.5f});
     AssertBaselineParity({enriched});
 
     Strategy::StrategyEvaluationInput invalidClassInput{{

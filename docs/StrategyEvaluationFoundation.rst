@@ -28,12 +28,10 @@ aggregate inference/profitability data, the inference period, metric identity,
 and terminal source-content hash. They do not persist per-window probabilities,
 timestamps, or ordered intrahorizon OHLC paths.
 
-Consequently, later stop, trailing, exit, and re-entry strategies will require
-deterministic access to an immutable ordered market-data snapshot (or an
-equivalently immutable per-window path artifact) plus per-window inference
-outputs. That future input must bind symbol, bar interval, timestamps, ordering,
-price-field semantics, inference identity, and a content hash. This phase does
-not select or persist that representation.
+Phase 17C supplies that boundary through the content-addressed immutable
+``AuthoritativeMarketPath`` and the production ``TensorMarketPathAdapter``.
+The representation remains deliberately unpersisted; see
+``Phase17CAuthoritativeMarketPathFixedStopLoss.rst`` for its exact contract.
 
 Component and policy boundary
 -----------------------------
@@ -45,10 +43,10 @@ preserves exact arithmetic ordering, actionability, source-content hashing, and
 metric identity.
 
 ``TradingStrategy`` is the intentionally small polymorphic policy boundary.
-Evaluation inputs are value types. They carry the three historical terminal
-fields and optional probabilities, timestamps, and market paths for future
-policies. The baseline ignores optional fields. A future path-dependent policy
-must fail closed when required inputs or provenance are absent or incompatible.
+Evaluation inputs are value types. Legacy input carries the three historical
+terminal fields. Path-aware input owns an immutable validated market path.
+The baseline ignores path enrichment. A path-dependent policy fails closed
+when required input or provenance is absent or incompatible.
 ``PositionDirection`` establishes only the current flat/short/long mapping; no
 position state machine or trading engine is introduced.
 
