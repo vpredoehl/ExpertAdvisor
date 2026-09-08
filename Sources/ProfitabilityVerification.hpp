@@ -28,6 +28,7 @@ inline constexpr const char* kPhase12ArtifactPath =
     "docs/archive/phase11/forward-validation/"
     "LSTM_ProfitabilityForwardValidation_Snapshot5_20260831_20260930.txt";
 inline constexpr const char* kPhase12PreparationArtifactPath =
+    "docs/archive/phase12/prospective-outcome/"
     "LSTM_CampaignManager_ProfitabilityFrozenModel_"
     "ProspectiveOutcomeJobs_Phase12.txt";
 inline constexpr const char* kPhase12PreparationArtifactSha256 =
