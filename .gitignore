@@ -56,3 +56,6 @@ __pycache__/
 EconomicCalendar/raw/dol_eta/**/*.pdf
 
 
+
+# Xcode per-user state
+*.xcuserdatad/
