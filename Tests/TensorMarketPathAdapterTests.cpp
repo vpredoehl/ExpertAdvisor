@@ -106,6 +106,7 @@ int main()
     assert(observations[0].decisionClose == 102.0f);
     assert(observations[0].terminalClose == 104.0f);
     assert(observations[0].predictedClass == Profitability::kUpClass);
+    assert(observations[0].probabilities == decisions[0].probabilities);
     assert(observations[0].marketPath.size() == 2);
     assert(observations[0].marketPath[0].sourceRow == 3);
     assert(observations[0].marketPath[0].timestampUnixSeconds == 3700);
@@ -117,6 +118,7 @@ int main()
     assert(observations[1].decisionRow == 3);
     assert(observations[1].terminalRow == 5);
     assert(observations[1].predictedClass == Profitability::kDownClass);
+    assert(observations[1].probabilities == decisions[1].probabilities);
 
     auto reversed = decisions;
     std::reverse(reversed.begin(), reversed.end());

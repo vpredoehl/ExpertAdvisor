@@ -505,6 +505,136 @@ std::string CanonicalExecutionResults(
     return canonical;
 }
 
+double InitialStopPriceForDistance(int predictedClass,
+                                   float entryPrice,
+                                   double logarithmicDistance)
+{
+    const PositionDirection direction =
+        DirectionForPredictedClass(predictedClass);
+    if (direction == PositionDirection::flat)
+        throw std::invalid_argument("fixed_stop_no_action_has_no_stop");
+    if (!std::isfinite(entryPrice) || entryPrice <= 0.0f)
+        throw std::invalid_argument("invalid_fixed_stop_entry_price");
+    if (!std::isfinite(logarithmicDistance) ||
+        logarithmicDistance <= 0.0)
+        throw std::invalid_argument("invalid_fixed_stop_logarithmic_distance");
+
+    const double exponent = direction == PositionDirection::longPosition
+        ? -logarithmicDistance : logarithmicDistance;
+    const double stop = static_cast<double>(entryPrice) * std::exp(exponent);
+    if (!std::isfinite(stop) || stop <= 0.0)
+        throw std::invalid_argument("invalid_fixed_stop_price");
+    return stop;
+}
+
+template <typename DistanceResolver>
+StrategyEvaluationResult EvaluateSingleInitialFixedStop(
+    const StrategyIdentity& identity,
+    const StrategyEvaluationInput& input,
+    DistanceResolver&& distanceResolver,
+    const char* nonfiniteResultError)
+{
+    const AuthoritativeMarketPath* marketPath = input.MarketPath();
+    if (marketPath == nullptr)
+        throw std::invalid_argument("fixed_stop_requires_authoritative_market_path");
+    if (marketPath->Provenance().metricDefinitionCanonical !=
+            kFixedStopMetricDefinitionCanonical ||
+        marketPath->Provenance().metricDefinitionHash !=
+            FixedStopMetricDefinitionHash())
+    {
+        throw std::invalid_argument("fixed_stop_metric_identity_mismatch");
+    }
+
+    StrategyEvaluationResult result;
+    result.strategyIdentity = identity;
+    result.sourceContentHash = marketPath->Hash();
+    result.metricDefinitionCanonical = kFixedStopMetricDefinitionCanonical;
+    result.metricDefinitionHash = FixedStopMetricDefinitionHash();
+    result.evaluationIdentity = BuildStrategyEvaluationIdentity(
+        identity, BuildStrategyEvaluationProvenance(*marketPath));
+    result.executionResults.reserve(input.Observations().size());
+
+    for (const auto& observation : input.Observations())
+    {
+        StrategyExecutionResult execution;
+        execution.observationOrdinal = observation.observationOrdinal;
+        execution.direction =
+            DirectionForPredictedClass(observation.predictedClass);
+        if (execution.direction == PositionDirection::flat)
+        {
+            ObserveDirectionalResult(
+                result.statistics, observation.predictedClass, 0.0);
+            result.executionResults.push_back(std::move(execution));
+            continue;
+        }
+
+        execution.entryTimestampUnixSeconds =
+            observation.decisionTimestampUnixSeconds;
+        execution.entryPrice = static_cast<double>(observation.decisionClose);
+        const double logarithmicDistance = distanceResolver(observation);
+        execution.initialStopPrice = InitialStopPriceForDistance(
+            observation.predictedClass, observation.decisionClose,
+            logarithmicDistance);
+
+        for (std::size_t pathOrdinal = 0;
+             pathOrdinal < observation.marketPath.size(); ++pathOrdinal)
+        {
+            const auto& point = observation.marketPath[pathOrdinal];
+            const bool gapBeyondStop =
+                execution.direction == PositionDirection::longPosition
+                ? static_cast<double>(point.open) <=
+                    *execution.initialStopPrice
+                : static_cast<double>(point.open) >=
+                    *execution.initialStopPrice;
+            const bool touchedStop =
+                execution.direction == PositionDirection::longPosition
+                ? static_cast<double>(point.low) <=
+                    *execution.initialStopPrice
+                : static_cast<double>(point.high) >=
+                    *execution.initialStopPrice;
+            if (!touchedStop)
+                continue;
+
+            execution.reason = StrategyExitReason::fixedStopExit;
+            execution.exitTimestampUnixSeconds = point.timestampUnixSeconds;
+            execution.exitPrice = gapBeyondStop
+                ? static_cast<double>(point.open)
+                : *execution.initialStopPrice;
+            execution.triggeringPathPointOrdinal = pathOrdinal;
+            execution.triggeringSourceRow = point.sourceRow;
+            break;
+        }
+
+        if (!execution.exitPrice)
+        {
+            execution.reason = StrategyExitReason::terminalExit;
+            execution.exitTimestampUnixSeconds =
+                observation.terminalTimestampUnixSeconds;
+            execution.exitPrice =
+                static_cast<double>(observation.terminalClose);
+        }
+
+        const double terminalLogReturn =
+            std::log(*execution.exitPrice / *execution.entryPrice);
+        execution.directionalLogReturn =
+            execution.direction == PositionDirection::longPosition
+            ? terminalLogReturn : -terminalLogReturn;
+        if (!std::isfinite(*execution.directionalLogReturn))
+            throw std::invalid_argument(nonfiniteResultError);
+        ObserveDirectionalResult(result.statistics,
+                                 observation.predictedClass,
+                                 *execution.directionalLogReturn);
+        result.executionResults.push_back(std::move(execution));
+    }
+
+    result.resultCanonical = CanonicalExecutionResults(
+        result.strategyIdentity, *result.evaluationIdentity, *marketPath,
+        result.metricDefinitionHash, result.executionResults);
+    result.resultHash = InferenceProfitability::DeterministicHash(
+        result.resultCanonical);
+    return result;
+}
+
 } // namespace
 
 std::string CanonicalConfiguration(
@@ -871,20 +1001,8 @@ const StrategyIdentity& FixedStopLossStrategy::Identity() const noexcept
 double FixedStopLossStrategy::InitialStopPrice(int predictedClass,
                                                float entryPrice) const
 {
-    const PositionDirection direction =
-        DirectionForPredictedClass(predictedClass);
-    if (direction == PositionDirection::flat)
-        throw std::invalid_argument("fixed_stop_no_action_has_no_stop");
-    if (!std::isfinite(entryPrice) || entryPrice <= 0.0f)
-        throw std::invalid_argument("invalid_fixed_stop_entry_price");
-
-    const double exponent = direction == PositionDirection::longPosition
-        ? -configuration_.logarithmicDistance
-        : configuration_.logarithmicDistance;
-    const double stop = static_cast<double>(entryPrice) * std::exp(exponent);
-    if (!std::isfinite(stop) || stop <= 0.0)
-        throw std::invalid_argument("invalid_fixed_stop_price");
-    return stop;
+    return InitialStopPriceForDistance(
+        predictedClass, entryPrice, configuration_.logarithmicDistance);
 }
 
 std::string FixedStopMetricDefinitionHash()
@@ -896,104 +1014,157 @@ std::string FixedStopMetricDefinitionHash()
 StrategyEvaluationResult FixedStopLossStrategy::Evaluate(
     const StrategyEvaluationInput& input) const
 {
-    const AuthoritativeMarketPath* marketPath = input.MarketPath();
-    if (marketPath == nullptr)
-        throw std::invalid_argument("fixed_stop_requires_authoritative_market_path");
-    if (marketPath->Provenance().metricDefinitionCanonical !=
-            kFixedStopMetricDefinitionCanonical ||
-        marketPath->Provenance().metricDefinitionHash !=
-            FixedStopMetricDefinitionHash())
+    return EvaluateSingleInitialFixedStop(
+        identity_, input,
+        [this](const StrategyEvaluationObservation&) {
+            return configuration_.logarithmicDistance;
+        },
+        "nonfinite_fixed_stop_result");
+}
+
+ProbabilityConditionedStopLossStrategy::
+ProbabilityConditionedStopLossStrategy(
+    ProbabilityConditionedStopLossConfiguration configuration)
+    : configuration_(configuration)
+{
+    if (configuration_.schemaVersion !=
+        kProbabilityConditionedStopLossConfigurationSchemaVersion)
     {
-        throw std::invalid_argument("fixed_stop_metric_identity_mismatch");
+        throw std::invalid_argument(
+            "unsupported_probability_conditioned_stop_configuration_schema_version");
+    }
+    if (!std::isfinite(configuration_.baseStopLogarithmicDistance) ||
+        configuration_.baseStopLogarithmicDistance <= 0.0 ||
+        !std::isfinite(configuration_.minimumStopMultiplier) ||
+        !std::isfinite(configuration_.maximumStopMultiplier) ||
+        configuration_.minimumStopMultiplier <= 0.0 ||
+        configuration_.maximumStopMultiplier <= 0.0 ||
+        configuration_.minimumStopMultiplier >
+            configuration_.maximumStopMultiplier)
+    {
+        throw std::invalid_argument(
+            "invalid_probability_conditioned_stop_configuration");
+    }
+    const double maximumDistance =
+        configuration_.baseStopLogarithmicDistance *
+        configuration_.maximumStopMultiplier;
+    if (!std::isfinite(maximumDistance) || maximumDistance <= 0.0 ||
+        !std::isfinite(std::exp(maximumDistance)) ||
+        std::exp(-maximumDistance) <= 0.0)
+    {
+        throw std::invalid_argument(
+            "invalid_probability_conditioned_stop_configuration");
     }
 
-    StrategyEvaluationResult result;
-    result.strategyIdentity = identity_;
-    result.sourceContentHash = marketPath->Hash();
-    result.metricDefinitionCanonical = kFixedStopMetricDefinitionCanonical;
-    result.metricDefinitionHash = FixedStopMetricDefinitionHash();
-    result.evaluationIdentity = BuildStrategyEvaluationIdentity(
-        identity_, BuildStrategyEvaluationProvenance(*marketPath));
-    result.executionResults.reserve(input.Observations().size());
+    StrategyConfiguration identityConfiguration;
+    identityConfiguration.entries = {
+        {"base_stop_logarithmic_distance_binary64",
+         CanonicalDouble(configuration_.baseStopLogarithmicDistance)},
+        {"configuration_schema_version",
+         std::to_string(configuration_.schemaVersion)},
+        {"execution_rule", kFixedStopExecutionRule},
+        {"execution_rule_version",
+         std::to_string(kFixedStopExecutionRuleVersion)},
+        {"mapping_identity", kDirectionalProbabilityMappingIdentity},
+        {"maximum_stop_multiplier_binary64",
+         CanonicalDouble(configuration_.maximumStopMultiplier)},
+        {"minimum_stop_multiplier_binary64",
+         CanonicalDouble(configuration_.minimumStopMultiplier)}};
+    identity_ = BuildStrategyIdentity(
+        kProbabilityConditionedStopLossStrategyFamily,
+        kProbabilityConditionedStopLossStrategyVersion,
+        identityConfiguration);
+}
 
-    for (const auto& observation : input.Observations())
+const StrategyIdentity&
+ProbabilityConditionedStopLossStrategy::Identity() const noexcept
+{
+    return identity_;
+}
+
+const ProbabilityConditionedStopLossConfiguration&
+ProbabilityConditionedStopLossStrategy::Configuration() const noexcept
+{
+    return configuration_;
+}
+
+double ProbabilityConditionedStopLossStrategy::
+NormalizedDirectionalConfidence(double directionalProbability) const
+{
+    if (!std::isfinite(directionalProbability) ||
+        directionalProbability < 0.0 || directionalProbability > 1.0)
     {
-        StrategyExecutionResult execution;
-        execution.observationOrdinal = observation.observationOrdinal;
-        execution.direction =
-            DirectionForPredictedClass(observation.predictedClass);
-        if (execution.direction == PositionDirection::flat)
-        {
-            ObserveDirectionalResult(
-                result.statistics, observation.predictedClass, 0.0);
-            result.executionResults.push_back(std::move(execution));
-            continue;
-        }
-
-        execution.entryTimestampUnixSeconds =
-            observation.decisionTimestampUnixSeconds;
-        execution.entryPrice = static_cast<double>(observation.decisionClose);
-        execution.initialStopPrice = InitialStopPrice(
-            observation.predictedClass, observation.decisionClose);
-
-        for (std::size_t pathOrdinal = 0;
-             pathOrdinal < observation.marketPath.size(); ++pathOrdinal)
-        {
-            const auto& point = observation.marketPath[pathOrdinal];
-            const bool gapBeyondStop =
-                execution.direction == PositionDirection::longPosition
-                ? static_cast<double>(point.open) <=
-                    *execution.initialStopPrice
-                : static_cast<double>(point.open) >=
-                    *execution.initialStopPrice;
-            const bool touchedStop =
-                execution.direction == PositionDirection::longPosition
-                ? static_cast<double>(point.low) <=
-                    *execution.initialStopPrice
-                : static_cast<double>(point.high) >=
-                    *execution.initialStopPrice;
-            if (!touchedStop)
-                continue;
-
-            execution.reason = StrategyExitReason::fixedStopExit;
-            execution.exitTimestampUnixSeconds = point.timestampUnixSeconds;
-            execution.exitPrice = gapBeyondStop
-                ? static_cast<double>(point.open)
-                : *execution.initialStopPrice;
-            execution.triggeringPathPointOrdinal = pathOrdinal;
-            execution.triggeringSourceRow = point.sourceRow;
-            break;
-        }
-
-        if (!execution.exitPrice)
-        {
-            execution.reason = StrategyExitReason::terminalExit;
-            execution.exitTimestampUnixSeconds =
-                observation.terminalTimestampUnixSeconds;
-            execution.exitPrice =
-                static_cast<double>(observation.terminalClose);
-        }
-
-        const double terminalLogReturn =
-            std::log(*execution.exitPrice / *execution.entryPrice);
-        execution.directionalLogReturn =
-            execution.direction == PositionDirection::longPosition
-            ? terminalLogReturn
-            : -terminalLogReturn;
-        if (!std::isfinite(*execution.directionalLogReturn))
-            throw std::invalid_argument("nonfinite_fixed_stop_result");
-        ObserveDirectionalResult(result.statistics,
-                                 observation.predictedClass,
-                                 *execution.directionalLogReturn);
-        result.executionResults.push_back(std::move(execution));
+        throw std::invalid_argument(
+            "invalid_probability_conditioned_directional_probability");
     }
+    constexpr double chanceFloor = 1.0 / 3.0;
+    constexpr double chanceRange = 2.0 / 3.0;
+    return std::clamp(
+        (directionalProbability - chanceFloor) / chanceRange, 0.0, 1.0);
+}
 
-    result.resultCanonical = CanonicalExecutionResults(
-        result.strategyIdentity, *result.evaluationIdentity, *marketPath,
-        result.metricDefinitionHash, result.executionResults);
-    result.resultHash = InferenceProfitability::DeterministicHash(
-        result.resultCanonical);
-    return result;
+double ProbabilityConditionedStopLossStrategy::
+StopMultiplierForNormalizedConfidence(
+    double normalizedDirectionalConfidence) const
+{
+    if (!std::isfinite(normalizedDirectionalConfidence) ||
+        normalizedDirectionalConfidence < 0.0 ||
+        normalizedDirectionalConfidence > 1.0)
+    {
+        throw std::invalid_argument(
+            "invalid_probability_conditioned_normalized_confidence");
+    }
+    const double multiplier = configuration_.minimumStopMultiplier +
+        (configuration_.maximumStopMultiplier -
+         configuration_.minimumStopMultiplier) *
+        normalizedDirectionalConfidence;
+    return std::clamp(multiplier,
+                      configuration_.minimumStopMultiplier,
+                      configuration_.maximumStopMultiplier);
+}
+
+ProbabilityConditionedStopDecision
+ProbabilityConditionedStopLossStrategy::StopDecision(
+    const StrategyEvaluationObservation& observation) const
+{
+    const PositionDirection direction =
+        DirectionForPredictedClass(observation.predictedClass);
+    if (direction == PositionDirection::flat)
+        throw std::invalid_argument(
+            "probability_conditioned_stop_no_action_has_no_stop");
+    if (!observation.probabilities)
+        throw std::invalid_argument(
+            "probability_conditioned_stop_probabilities_missing");
+    ValidateProbabilityVector(observation);
+
+    ProbabilityConditionedStopDecision decision;
+    const std::size_t directionIndex =
+        direction == PositionDirection::shortPosition ? 0U : 2U;
+    decision.directionalProbability = static_cast<double>(
+        observation.probabilities->downNeutralUp[directionIndex]);
+    decision.normalizedDirectionalConfidence =
+        NormalizedDirectionalConfidence(decision.directionalProbability);
+    decision.stopMultiplier = StopMultiplierForNormalizedConfidence(
+        decision.normalizedDirectionalConfidence);
+    decision.effectiveStopLogarithmicDistance =
+        configuration_.baseStopLogarithmicDistance *
+        decision.stopMultiplier;
+    decision.initialStopPrice = InitialStopPriceForDistance(
+        observation.predictedClass, observation.decisionClose,
+        decision.effectiveStopLogarithmicDistance);
+    return decision;
+}
+
+StrategyEvaluationResult ProbabilityConditionedStopLossStrategy::Evaluate(
+    const StrategyEvaluationInput& input) const
+{
+    return EvaluateSingleInitialFixedStop(
+        identity_, input,
+        [this](const StrategyEvaluationObservation& observation) {
+            return StopDecision(observation).
+                effectiveStopLogarithmicDistance;
+        },
+        "nonfinite_probability_conditioned_stop_result");
 }
 
 StrategyEvaluationResult EvaluateStrategy(

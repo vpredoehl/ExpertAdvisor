@@ -288,6 +288,7 @@
 		0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
 		0F1800073380000100AAA001 /* StrategyEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800103380000100AAA001 /* StrategyEvaluation.cpp */; };
 		0F1800133380000100AAA001 /* ControlledFixedStopExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800123380000100AAA001 /* ControlledFixedStopExperiment.cpp */; };
+		0F1800153380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */; };
 		0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 		0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 		0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
@@ -697,6 +698,7 @@
 		0F1800103380000100AAA001 /* StrategyEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = StrategyEvaluation.cpp; path = Sources/StrategyEvaluationCore/StrategyEvaluation.cpp; sourceTree = SOURCE_ROOT; };
 		0F1800113380000100AAA001 /* StrategyEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = StrategyEvaluation.hpp; path = Sources/StrategyEvaluationCore/StrategyEvaluation.hpp; sourceTree = SOURCE_ROOT; };
 		0F1800123380000100AAA001 /* ControlledFixedStopExperiment.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ControlledFixedStopExperiment.cpp; path = Sources/StrategyEvaluationCore/ControlledFixedStopExperiment.cpp; sourceTree = SOURCE_ROOT; };
+		0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ControlledProbabilityConditionedStopExperiment.cpp; path = Sources/StrategyEvaluationCore/ControlledProbabilityConditionedStopExperiment.cpp; sourceTree = SOURCE_ROOT; };
 		0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorMarketPathAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.cpp; sourceTree = SOURCE_ROOT; };
 		0F1900113390000100AAA001 /* TensorMarketPathAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorMarketPathAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerSemanticAdmission.hpp; path = Sources/SchedulerCore/SchedulerSemanticAdmission.hpp; sourceTree = SOURCE_ROOT; };
@@ -1106,6 +1108,7 @@
 		0F1900003390000100AAA001 /* StrategyEvaluationCore */ = {
 			isa = PBXGroup;
 			children = (
+				0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */,
 				0F1800123380000100AAA001 /* ControlledFixedStopExperiment.cpp */,
 				0F1800103380000100AAA001 /* StrategyEvaluation.cpp */,
 				0F1800113380000100AAA001 /* StrategyEvaluation.hpp */,
@@ -1616,6 +1619,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1800153380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp in Sources */,
 				0F1800133380000100AAA001 /* ControlledFixedStopExperiment.cpp in Sources */,
 				0F1800073380000100AAA001 /* StrategyEvaluation.cpp in Sources */,
 			);

@@ -27,6 +27,22 @@ inline constexpr int kFixedStopLossConfigurationSchemaVersion = 1;
 inline constexpr const char* kFixedStopExecutionRule =
     "single_fixed_protective_stop_ohlc_v1";
 inline constexpr int kFixedStopExecutionRuleVersion = 1;
+inline constexpr const char* kProbabilityConditionedStopLossStrategyFamily =
+    "probability_conditioned_stop_loss";
+inline constexpr int kProbabilityConditionedStopLossStrategyVersion = 1;
+inline constexpr int
+    kProbabilityConditionedStopLossConfigurationSchemaVersion = 1;
+inline constexpr const char* kDirectionalProbabilityMappingIdentity =
+    "directional_probability_linear_bounded_v1";
+inline constexpr double kPhase18ADefaultBaseStopLogarithmicDistance = 0.0010;
+inline constexpr double kPhase18ADefaultMinimumStopMultiplier = 0.75;
+inline constexpr double kPhase18ADefaultMaximumStopMultiplier = 1.25;
+inline constexpr const char* kBaselineTerminalOutputIdentity =
+    "baseline_terminal_v1";
+inline constexpr const char* kFixedStopLossOutputIdentity =
+    "fixed_stop_loss_v1";
+inline constexpr const char* kProbabilityConditionedStopLossOutputIdentity =
+    "probability_conditioned_stop_loss_v1";
 inline constexpr std::array<double, 3> kControlledFixedStopDistanceGrid{{
     0.0005, 0.0010, 0.0020}};
 inline constexpr const char* kFixedStopMetricDefinitionCanonical =
@@ -344,6 +360,54 @@ private:
     StrategyIdentity identity_;
 };
 
+struct ProbabilityConditionedStopLossConfiguration
+{
+    int schemaVersion =
+        kProbabilityConditionedStopLossConfigurationSchemaVersion;
+    double baseStopLogarithmicDistance =
+        kPhase18ADefaultBaseStopLogarithmicDistance;
+    double minimumStopMultiplier =
+        kPhase18ADefaultMinimumStopMultiplier;
+    double maximumStopMultiplier =
+        kPhase18ADefaultMaximumStopMultiplier;
+};
+
+struct ProbabilityConditionedStopDecision
+{
+    double directionalProbability = 0.0;
+    double normalizedDirectionalConfidence = 0.0;
+    double stopMultiplier = 0.0;
+    double effectiveStopLogarithmicDistance = 0.0;
+    double initialStopPrice = 0.0;
+
+    bool operator==(const ProbabilityConditionedStopDecision&) const = default;
+};
+
+// Phase 18A v1 conditions only the immutable initial stop. Its probability is
+// the decision-time probability assigned to the entered Down/Up direction.
+class ProbabilityConditionedStopLossStrategy final : public TradingStrategy
+{
+public:
+    explicit ProbabilityConditionedStopLossStrategy(
+        ProbabilityConditionedStopLossConfiguration configuration = {});
+
+    const StrategyIdentity& Identity() const noexcept override;
+    const ProbabilityConditionedStopLossConfiguration& Configuration() const
+        noexcept;
+    double NormalizedDirectionalConfidence(
+        double directionalProbability) const;
+    double StopMultiplierForNormalizedConfidence(
+        double normalizedDirectionalConfidence) const;
+    ProbabilityConditionedStopDecision StopDecision(
+        const StrategyEvaluationObservation& observation) const;
+    StrategyEvaluationResult Evaluate(
+        const StrategyEvaluationInput& input) const override;
+
+private:
+    ProbabilityConditionedStopLossConfiguration configuration_;
+    StrategyIdentity identity_;
+};
+
 std::string FixedStopMetricDefinitionHash();
 
 struct ControlledStrategyVariantResult
@@ -378,6 +442,109 @@ ControlledFixedStopExperimentResult EvaluateControlledFixedStopExperiment(
     const std::vector<double>& fixedStopLogarithmicDistances = {
         kControlledFixedStopDistanceGrid.begin(),
         kControlledFixedStopDistanceGrid.end()});
+
+struct Phase18AConfidenceBucketMetrics
+{
+    double lowerInclusive = 0.0;
+    double upperExclusive = 0.0;
+    bool includesUpperBound = false;
+    std::uint64_t actionableCount = 0;
+    std::uint64_t winningCount = 0;
+    std::uint64_t losingCount = 0;
+    std::uint64_t zeroOutcomeCount = 0;
+    std::uint64_t stopHitCount = 0;
+    std::uint64_t terminalExitCount = 0;
+    double aggregateDirectionalLogReturn = 0.0;
+    std::optional<double> averageDirectionalLogReturn;
+};
+
+struct Phase18AStrategyMetrics
+{
+    std::uint64_t observationCount = 0;
+    std::uint64_t actionableCount = 0;
+    std::uint64_t nonActionableCount = 0;
+    std::uint64_t winningCount = 0;
+    std::uint64_t losingCount = 0;
+    std::uint64_t zeroOutcomeCount = 0;
+    std::uint64_t stopHitCount = 0;
+    std::uint64_t terminalExitCount = 0;
+    double aggregateDirectionalLogReturn = 0.0;
+    std::optional<double> averageDirectionalLogReturn;
+    std::optional<double> winningRate;
+    std::optional<double> losingRate;
+    std::optional<double> stopHitRate;
+    std::optional<double> terminalExitRate;
+    std::optional<double> averageHoldingDurationSeconds;
+    std::optional<double> medianHoldingDurationSeconds;
+    std::optional<double> maximumAdverseExcursion;
+    std::optional<double> maximumFavorableExcursion;
+    double maximumDrawdown = 0.0;
+    std::optional<double> averageEffectiveStopLogarithmicDistance;
+    std::optional<double> averageStopMultiplier;
+};
+
+struct Phase18AObservationEvidence
+{
+    std::string strategyOutputIdentity;
+    std::uint64_t observationOrdinal = 0;
+    int predictedClass = InferenceProfitability::kNeutralClass;
+    PositionDirection direction = PositionDirection::flat;
+    bool actionable = false;
+    std::int64_t decisionTimestampUnixSeconds = 0;
+    double decisionPrice = 0.0;
+    PredictionProbabilities probabilities;
+    std::optional<double> directionalProbability;
+    std::optional<double> normalizedDirectionalConfidence;
+    std::optional<double> baseStopLogarithmicDistance;
+    std::optional<double> appliedStopMultiplier;
+    std::optional<double> effectiveStopLogarithmicDistance;
+    StrategyExecutionResult execution;
+    std::optional<double> holdingDurationSeconds;
+    std::optional<double> maximumAdverseExcursion;
+    std::optional<double> maximumFavorableExcursion;
+};
+
+struct Phase18AStrategyVariantResult
+{
+    std::string strategyOutputIdentity;
+    StrategyEvaluationResult evaluation;
+    Phase18AStrategyMetrics metrics;
+    std::array<Phase18AConfidenceBucketMetrics, 4> confidenceBuckets;
+};
+
+struct Phase18APairwiseDelta
+{
+    std::string candidateStrategyOutputIdentity;
+    std::string referenceStrategyOutputIdentity;
+    double aggregateDirectionalLogReturnDelta = 0.0;
+    double averageDirectionalLogReturnDelta = 0.0;
+    double winningRateDelta = 0.0;
+    double losingRateDelta = 0.0;
+    double stopHitRateDelta = 0.0;
+    double terminalExitRateDelta = 0.0;
+    double averageHoldingDurationSecondsDelta = 0.0;
+    double maximumDrawdownDelta = 0.0;
+};
+
+struct ControlledProbabilityConditionedStopExperimentResult
+{
+    std::string experimentIdentityCanonical;
+    std::string experimentIdentityHash;
+    ProbabilityConditionedStopLossConfiguration configuration;
+    std::vector<Phase18AStrategyVariantResult> variants;
+    std::vector<Phase18APairwiseDelta> pairwiseDeltas;
+    std::vector<Phase18AObservationEvidence> observationEvidence;
+    std::string canonicalLines;
+    std::string resultHash;
+};
+
+// Runs baseline, the exact same-base-distance fixed-stop control, and the
+// predeclared Phase 18A v1 probability-conditioned strategy on one immutable
+// observation population. It performs no persistence or scheduler mutation.
+ControlledProbabilityConditionedStopExperimentResult
+EvaluateControlledProbabilityConditionedStopExperiment(
+    const AuthoritativeMarketPath& marketPath,
+    ProbabilityConditionedStopLossConfiguration configuration = {});
 
 StrategyEvaluationResult EvaluateStrategy(
     const TradingStrategy& strategy,
