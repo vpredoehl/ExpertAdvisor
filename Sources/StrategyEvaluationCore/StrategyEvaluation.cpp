@@ -1091,6 +1091,13 @@ ProbabilityConditionedStopLossStrategy::Configuration() const noexcept
 double ProbabilityConditionedStopLossStrategy::
 NormalizedDirectionalConfidence(double directionalProbability) const
 {
+    return NormalizedDirectionalConfidenceForProbability(
+        directionalProbability);
+}
+
+double NormalizedDirectionalConfidenceForProbability(
+    double directionalProbability)
+{
     if (!std::isfinite(directionalProbability) ||
         directionalProbability < 0.0 || directionalProbability > 1.0)
     {
@@ -1165,6 +1172,156 @@ StrategyEvaluationResult ProbabilityConditionedStopLossStrategy::Evaluate(
                 effectiveStopLogarithmicDistance;
         },
         "nonfinite_probability_conditioned_stop_result");
+}
+
+ProbabilityConditionedStopExtensionStrategy::
+ProbabilityConditionedStopExtensionStrategy(
+    ProbabilityConditionedStopExtensionConfiguration configuration)
+    : configuration_(configuration)
+{
+    if (configuration_.schemaVersion !=
+        kProbabilityConditionedStopExtensionConfigurationSchemaVersion)
+    {
+        throw std::invalid_argument(
+            "unsupported_probability_conditioned_stop_extension_configuration_schema_version");
+    }
+    if (!std::isfinite(configuration_.baseStopLogarithmicDistance) ||
+        configuration_.baseStopLogarithmicDistance <= 0.0 ||
+        !std::isfinite(configuration_.activationConfidence) ||
+        configuration_.activationConfidence < 0.0 ||
+        configuration_.activationConfidence >= 1.0 ||
+        !std::isfinite(configuration_.minimumStopMultiplier) ||
+        configuration_.minimumStopMultiplier !=
+            kPhase18BMinimumStopMultiplier ||
+        !std::isfinite(configuration_.maximumStopMultiplier) ||
+        configuration_.maximumStopMultiplier <
+            configuration_.minimumStopMultiplier)
+    {
+        throw std::invalid_argument(
+            "invalid_probability_conditioned_stop_extension_configuration");
+    }
+    const double maximumDistance =
+        configuration_.baseStopLogarithmicDistance *
+        configuration_.maximumStopMultiplier;
+    if (!std::isfinite(maximumDistance) || maximumDistance <= 0.0 ||
+        !std::isfinite(std::exp(maximumDistance)) ||
+        std::exp(-maximumDistance) <= 0.0)
+    {
+        throw std::invalid_argument(
+            "invalid_probability_conditioned_stop_extension_configuration");
+    }
+
+    StrategyConfiguration identityConfiguration;
+    identityConfiguration.entries = {
+        {"activation_confidence_binary64",
+         CanonicalDouble(configuration_.activationConfidence)},
+        {"base_stop_logarithmic_distance_binary64",
+         CanonicalDouble(configuration_.baseStopLogarithmicDistance)},
+        {"configuration_schema_version",
+         std::to_string(configuration_.schemaVersion)},
+        {"execution_rule", kFixedStopExecutionRule},
+        {"execution_rule_version",
+         std::to_string(kFixedStopExecutionRuleVersion)},
+        {"mapping_identity", kOneSidedStopExtensionMappingIdentity},
+        {"maximum_stop_multiplier_binary64",
+         CanonicalDouble(configuration_.maximumStopMultiplier)},
+        {"minimum_stop_multiplier_binary64",
+         CanonicalDouble(configuration_.minimumStopMultiplier)}};
+    identity_ = BuildStrategyIdentity(
+        kProbabilityConditionedStopExtensionStrategyFamily,
+        kProbabilityConditionedStopExtensionStrategyVersion,
+        identityConfiguration);
+}
+
+const StrategyIdentity&
+ProbabilityConditionedStopExtensionStrategy::Identity() const noexcept
+{
+    return identity_;
+}
+
+const ProbabilityConditionedStopExtensionConfiguration&
+ProbabilityConditionedStopExtensionStrategy::Configuration() const noexcept
+{
+    return configuration_;
+}
+
+double ProbabilityConditionedStopExtensionStrategy::
+NormalizedDirectionalConfidence(double directionalProbability) const
+{
+    return NormalizedDirectionalConfidenceForProbability(
+        directionalProbability);
+}
+
+double ProbabilityConditionedStopExtensionStrategy::
+StopMultiplierForNormalizedConfidence(
+    double normalizedDirectionalConfidence) const
+{
+    if (!std::isfinite(normalizedDirectionalConfidence) ||
+        normalizedDirectionalConfidence < 0.0 ||
+        normalizedDirectionalConfidence > 1.0)
+    {
+        throw std::invalid_argument(
+            "invalid_probability_conditioned_stop_extension_normalized_confidence");
+    }
+    if (normalizedDirectionalConfidence <=
+        configuration_.activationConfidence)
+        return configuration_.minimumStopMultiplier;
+
+    const double extensionFraction = std::clamp(
+        (normalizedDirectionalConfidence - configuration_.activationConfidence) /
+            (1.0 - configuration_.activationConfidence),
+        0.0, 1.0);
+    const double multiplier = configuration_.minimumStopMultiplier +
+        (configuration_.maximumStopMultiplier -
+         configuration_.minimumStopMultiplier) * extensionFraction;
+    return std::clamp(multiplier,
+                      configuration_.minimumStopMultiplier,
+                      configuration_.maximumStopMultiplier);
+}
+
+ProbabilityConditionedStopDecision
+ProbabilityConditionedStopExtensionStrategy::StopDecision(
+    const StrategyEvaluationObservation& observation) const
+{
+    const PositionDirection direction =
+        DirectionForPredictedClass(observation.predictedClass);
+    if (direction == PositionDirection::flat)
+        throw std::invalid_argument(
+            "probability_conditioned_stop_extension_no_action_has_no_stop");
+    if (!observation.probabilities)
+        throw std::invalid_argument(
+            "probability_conditioned_stop_extension_probabilities_missing");
+    ValidateProbabilityVector(observation);
+
+    ProbabilityConditionedStopDecision decision;
+    const std::size_t directionIndex =
+        direction == PositionDirection::shortPosition ? 0U : 2U;
+    decision.directionalProbability = static_cast<double>(
+        observation.probabilities->downNeutralUp[directionIndex]);
+    decision.normalizedDirectionalConfidence =
+        NormalizedDirectionalConfidence(decision.directionalProbability);
+    decision.stopMultiplier = StopMultiplierForNormalizedConfidence(
+        decision.normalizedDirectionalConfidence);
+    decision.effectiveStopLogarithmicDistance =
+        configuration_.baseStopLogarithmicDistance *
+        decision.stopMultiplier;
+    decision.initialStopPrice = InitialStopPriceForDistance(
+        observation.predictedClass, observation.decisionClose,
+        decision.effectiveStopLogarithmicDistance);
+    return decision;
+}
+
+StrategyEvaluationResult
+ProbabilityConditionedStopExtensionStrategy::Evaluate(
+    const StrategyEvaluationInput& input) const
+{
+    return EvaluateSingleInitialFixedStop(
+        identity_, input,
+        [this](const StrategyEvaluationObservation& observation) {
+            return StopDecision(observation).
+                effectiveStopLogarithmicDistance;
+        },
+        "nonfinite_probability_conditioned_stop_extension_result");
 }
 
 StrategyEvaluationResult EvaluateStrategy(

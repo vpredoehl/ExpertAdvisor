@@ -3795,6 +3795,8 @@ struct LaunchArgs
     std::optional<std::string> controlledFixedStopEvaluationPath;
     std::optional<std::string>
         probabilityConditionedStopEvaluationPath;
+    std::optional<std::string>
+        probabilityConditionedStopExtensionEvaluationPath;
     struct FrozenOutcomeSpec
     {
         std::string cohortHash;
@@ -3806,6 +3808,14 @@ struct LaunchArgs
     };
     std::optional<FrozenOutcomeSpec> frozenOutcome;
 };
+
+bool HasControlledStrategyEvaluation(const LaunchArgs& launchArgs)
+{
+    return launchArgs.controlledFixedStopEvaluationPath.has_value() ||
+        launchArgs.probabilityConditionedStopEvaluationPath.has_value() ||
+        launchArgs.probabilityConditionedStopExtensionEvaluationPath.
+            has_value();
+}
 
 std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
 ResolveRuntimeEconomicCalendarSnapshot(
@@ -4192,8 +4202,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         }
         else if (arg == "--controlled-fixed-stop-evaluation")
         {
-            if (parsed.controlledFixedStopEvaluationPath ||
-                parsed.probabilityConditionedStopEvaluationPath)
+            if (HasControlledStrategyEvaluation(parsed))
                 throw std::invalid_argument(
                     "strategy evaluation artifact option specified more than once");
             if (i + 1 >= argc || std::string{argv[i + 1]}.empty())
@@ -4203,14 +4212,25 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         }
         else if (arg == "--probability-conditioned-stop-evaluation")
         {
-            if (parsed.probabilityConditionedStopEvaluationPath ||
-                parsed.controlledFixedStopEvaluationPath)
+            if (HasControlledStrategyEvaluation(parsed))
                 throw std::invalid_argument(
                     "strategy evaluation artifact option specified more than once");
             if (i + 1 >= argc || std::string{argv[i + 1]}.empty())
                 throw std::invalid_argument(
                     "--probability-conditioned-stop-evaluation requires an output path");
             parsed.probabilityConditionedStopEvaluationPath = argv[++i];
+        }
+        else if (arg ==
+                 "--probability-conditioned-stop-extension-evaluation")
+        {
+            if (HasControlledStrategyEvaluation(parsed))
+                throw std::invalid_argument(
+                    "strategy evaluation artifact option specified more than once");
+            if (i + 1 >= argc || std::string{argv[i + 1]}.empty())
+                throw std::invalid_argument(
+                    "--probability-conditioned-stop-extension-evaluation requires an output path");
+            parsed.probabilityConditionedStopExtensionEvaluationPath =
+                argv[++i];
         }
         else if (arg == "--infer-all")
         {
@@ -4254,9 +4274,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             else if (SplitOptionWithValue(
                          arg, "--controlled-fixed-stop-evaluation", value))
             {
-                if (parsed.controlledFixedStopEvaluationPath ||
-                    parsed.probabilityConditionedStopEvaluationPath ||
-                    value.empty())
+                if (HasControlledStrategyEvaluation(parsed) || value.empty())
                     throw std::invalid_argument(
                         "invalid or duplicate --controlled-fixed-stop-evaluation");
                 parsed.controlledFixedStopEvaluationPath = value;
@@ -4265,11 +4283,21 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                          arg, "--probability-conditioned-stop-evaluation",
                          value))
             {
-                if (parsed.probabilityConditionedStopEvaluationPath ||
-                    parsed.controlledFixedStopEvaluationPath || value.empty())
+                if (HasControlledStrategyEvaluation(parsed) || value.empty())
                     throw std::invalid_argument(
                         "invalid or duplicate --probability-conditioned-stop-evaluation");
                 parsed.probabilityConditionedStopEvaluationPath = value;
+            }
+            else if (SplitOptionWithValue(
+                         arg,
+                         "--probability-conditioned-stop-extension-evaluation",
+                         value))
+            {
+                if (HasControlledStrategyEvaluation(parsed) || value.empty())
+                    throw std::invalid_argument(
+                        "invalid or duplicate --probability-conditioned-stop-extension-evaluation");
+                parsed.probabilityConditionedStopExtensionEvaluationPath =
+                    value;
             }
             else if (SplitOptionWithValue(arg, "--core-lr-mult", value))
             {
@@ -4411,6 +4439,8 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             parsed.donchianLookback.has_value() ||
             parsed.controlledFixedStopEvaluationPath.has_value() ||
             parsed.probabilityConditionedStopEvaluationPath.has_value() ||
+            parsed.probabilityConditionedStopExtensionEvaluationPath.
+                has_value() ||
             !positional.empty();
         if (hasOverride)
             throw std::invalid_argument(
@@ -4512,9 +4542,21 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 "--infer with one explicit --model and no scheduler context");
         }
     }
+    if (parsed.probabilityConditionedStopExtensionEvaluationPath)
+    {
+        EA::StrategyEvaluation::
+            ValidateControlledOneSidedStopExtensionInvocation({
+                parsed.inferenceMode.has_value() && *parsed.inferenceMode,
+                parsed.modelId.has_value(),
+                parsed.inferAll,
+                parsed.schedulerExperimentId.has_value(),
+                parsed.schedulerCheckpointEvalId.has_value(),
+                parsed.schedulerWorkerAttemptId.has_value(),
+                parsed.frozenOutcome.has_value()});
+    }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 18A controlled evaluation: --infer --model=<model_id> --probability-conditioned-stop-evaluation=<artifact_path> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 18B controlled evaluation: --infer --model=<model_id> --probability-conditioned-stop-extension-evaluation=<artifact_path> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -6913,8 +6955,7 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
             const auto predictionStats =
                 ProcessBatchPredict(
                     lstm, tensor, b, profitability,
-                    (launchArgs.controlledFixedStopEvaluationPath ||
-                     launchArgs.probabilityConditionedStopEvaluationPath)
+                    HasControlledStrategyEvaluation(launchArgs)
                         ? &strategyDecisions : nullptr);
             totalCorrectLog += predictionStats.correctLog;
             totalActedLog += predictionStats.actedLog;
@@ -7095,6 +7136,73 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
                 << ",observation_count=" << strategyDecisions.size()
                 << ",artifact_path="
                 << *launchArgs.probabilityConditionedStopEvaluationPath
+                << ",production_rows_modified=false"
+                << std::endl;
+        }
+        else if (launchArgs.probabilityConditionedStopExtensionEvaluationPath)
+        {
+            if (!loadedModelId)
+                throw std::runtime_error(
+                    "probability_conditioned_stop_extension_model_identity_missing");
+            std::ostringstream scientificIdentity;
+            scientificIdentity
+                << std::setprecision(std::numeric_limits<double>::max_digits10)
+                << "phase18b_inference_scientific_identity_v1;model_id="
+                << *loadedModelId << ";symbol=" << rawPriceTableName
+                << ";prediction_horizon=" << prediction_horizon
+                << ";threshold_logret=" << c_next_threshold
+                << ";window_size=" << window_size
+                << ";label_rule_id=" << DirectionLabelRuleId()
+                << ";target_type=" << static_cast<int>(requestedTargetType)
+                << ";evaluation_start=" << fromDate
+                << ";evaluation_end=" << toDate << ';';
+            EA::StrategyEvaluationAdapters::TensorMarketPathAdapterContext
+                context;
+            context.modelId = *loadedModelId;
+            context.inferenceScientificIdentityCanonical =
+                scientificIdentity.str();
+            context.inferenceScientificIdentityHash =
+                EA::InferenceProfitability::DeterministicHash(
+                    context.inferenceScientificIdentityCanonical);
+            context.evaluationStart = fromDate;
+            context.evaluationEnd = toDate;
+            context.inferenceWindowSize = window_size;
+            context.predictionHorizon = prediction_horizon;
+            context.metricDefinitionCanonical =
+                EA::StrategyEvaluation::kFixedStopMetricDefinitionCanonical;
+            context.metricDefinitionHash =
+                EA::StrategyEvaluation::FixedStopMetricDefinitionHash();
+            const auto marketPath = EA::StrategyEvaluationAdapters::
+                AdaptTensorMarketPath(tensor, context, strategyDecisions);
+            const auto experiment = EA::StrategyEvaluation::
+                EvaluateControlledOneSidedStopExtensionExperiment(marketPath);
+            std::ofstream artifact{
+                *launchArgs.
+                    probabilityConditionedStopExtensionEvaluationPath,
+                std::ios::binary | std::ios::trunc};
+            if (!artifact)
+                throw std::runtime_error(
+                    "probability_conditioned_stop_extension_artifact_open_failed");
+            artifact.write(experiment.canonicalLines.data(),
+                           static_cast<std::streamsize>(
+                               experiment.canonicalLines.size()));
+            artifact.close();
+            if (!artifact)
+                throw std::runtime_error(
+                    "probability_conditioned_stop_extension_artifact_write_failed");
+            std::cout
+                << "PROBABILITY_CONDITIONED_STOP_EXTENSION_EVALUATION"
+                << ",experiment_identity_hash="
+                << experiment.experimentIdentityHash
+                << ",result_hash=" << experiment.resultHash
+                << ",market_path_hash=" << marketPath.Hash()
+                << ",inference_identity_hash="
+                << context.inferenceScientificIdentityHash
+                << ",observation_count=" << strategyDecisions.size()
+                << ",artifact_path="
+                << *launchArgs.
+                    probabilityConditionedStopExtensionEvaluationPath
+                << ",read_only_transaction=true"
                 << ",production_rows_modified=false"
                 << std::endl;
         }
@@ -7953,8 +8061,9 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
+                  << "Preferred Phase 18B controlled evaluation: " << argv[0] << " --infer --model=<model_id> --probability-conditioned-stop-extension-evaluation=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
     }
@@ -8506,8 +8615,7 @@ int main(int argc, const char * argv[])
 
             pqxx::work runtimeDatabaseWork { c_LSTM };
             runtimeDatabaseWork.exec(
-                (launchArgs.controlledFixedStopEvaluationPath ||
-                 launchArgs.probabilityConditionedStopEvaluationPath)
+                HasControlledStrategyEvaluation(launchArgs)
                     ? "SET TRANSACTION READ ONLY;"
                     : "SET TRANSACTION READ WRITE;");
   
@@ -8662,8 +8770,7 @@ int main(int argc, const char * argv[])
                                            toDate,
                                            logicalOutputStartIndex,
                                            false);
-                if (launchArgs.controlledFixedStopEvaluationPath ||
-                    launchArgs.probabilityConditionedStopEvaluationPath)
+                if (HasControlledStrategyEvaluation(launchArgs))
                 {
                     // This transaction was declared READ ONLY before any model
                     // or evaluation work. Commit it here so this application

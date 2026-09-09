@@ -37,12 +37,27 @@ inline constexpr const char* kDirectionalProbabilityMappingIdentity =
 inline constexpr double kPhase18ADefaultBaseStopLogarithmicDistance = 0.0010;
 inline constexpr double kPhase18ADefaultMinimumStopMultiplier = 0.75;
 inline constexpr double kPhase18ADefaultMaximumStopMultiplier = 1.25;
+inline constexpr const char*
+    kProbabilityConditionedStopExtensionStrategyFamily =
+        "probability_conditioned_stop_extension";
+inline constexpr int kProbabilityConditionedStopExtensionStrategyVersion = 1;
+inline constexpr int
+    kProbabilityConditionedStopExtensionConfigurationSchemaVersion = 1;
+inline constexpr const char* kOneSidedStopExtensionMappingIdentity =
+    "directional_probability_one_sided_stop_extension_v1";
+inline constexpr double kPhase18BDefaultBaseStopLogarithmicDistance = 0.0010;
+inline constexpr double kPhase18BDefaultActivationConfidence = 0.50;
+inline constexpr double kPhase18BMinimumStopMultiplier = 1.00;
+inline constexpr double kPhase18BDefaultMaximumStopMultiplier = 1.25;
 inline constexpr const char* kBaselineTerminalOutputIdentity =
     "baseline_terminal_v1";
 inline constexpr const char* kFixedStopLossOutputIdentity =
     "fixed_stop_loss_v1";
 inline constexpr const char* kProbabilityConditionedStopLossOutputIdentity =
     "probability_conditioned_stop_loss_v1";
+inline constexpr const char*
+    kProbabilityConditionedStopExtensionOutputIdentity =
+        "probability_conditioned_stop_extension_v1";
 inline constexpr std::array<double, 3> kControlledFixedStopDistanceGrid{{
     0.0005, 0.0010, 0.0020}};
 inline constexpr const char* kFixedStopMetricDefinitionCanonical =
@@ -408,6 +423,49 @@ private:
     StrategyIdentity identity_;
 };
 
+// Shared Phase 18 normalization. Valid probabilities outside the chance-to-one
+// confidence interval are clamped to its endpoints.
+double NormalizedDirectionalConfidenceForProbability(
+    double directionalProbability);
+
+struct ProbabilityConditionedStopExtensionConfiguration
+{
+    int schemaVersion =
+        kProbabilityConditionedStopExtensionConfigurationSchemaVersion;
+    double baseStopLogarithmicDistance =
+        kPhase18BDefaultBaseStopLogarithmicDistance;
+    double activationConfidence = kPhase18BDefaultActivationConfidence;
+    double minimumStopMultiplier = kPhase18BMinimumStopMultiplier;
+    double maximumStopMultiplier =
+        kPhase18BDefaultMaximumStopMultiplier;
+};
+
+// Phase 18B preserves the fixed stop as an exact floor through the activation
+// threshold and widens only above that threshold.
+class ProbabilityConditionedStopExtensionStrategy final
+    : public TradingStrategy
+{
+public:
+    explicit ProbabilityConditionedStopExtensionStrategy(
+        ProbabilityConditionedStopExtensionConfiguration configuration = {});
+
+    const StrategyIdentity& Identity() const noexcept override;
+    const ProbabilityConditionedStopExtensionConfiguration& Configuration()
+        const noexcept;
+    double NormalizedDirectionalConfidence(
+        double directionalProbability) const;
+    double StopMultiplierForNormalizedConfidence(
+        double normalizedDirectionalConfidence) const;
+    ProbabilityConditionedStopDecision StopDecision(
+        const StrategyEvaluationObservation& observation) const;
+    StrategyEvaluationResult Evaluate(
+        const StrategyEvaluationInput& input) const override;
+
+private:
+    ProbabilityConditionedStopExtensionConfiguration configuration_;
+    StrategyIdentity identity_;
+};
+
 std::string FixedStopMetricDefinitionHash();
 
 struct ControlledStrategyVariantResult
@@ -472,6 +530,7 @@ struct Phase18AStrategyMetrics
     std::optional<double> averageDirectionalLogReturn;
     std::optional<double> winningRate;
     std::optional<double> losingRate;
+    std::optional<double> zeroOutcomeRate;
     std::optional<double> stopHitRate;
     std::optional<double> terminalExitRate;
     std::optional<double> averageHoldingDurationSeconds;
@@ -545,6 +604,76 @@ ControlledProbabilityConditionedStopExperimentResult
 EvaluateControlledProbabilityConditionedStopExperiment(
     const AuthoritativeMarketPath& marketPath,
     ProbabilityConditionedStopLossConfiguration configuration = {});
+
+struct Phase18BMechanismMetrics
+{
+    std::uint64_t fixedFloorMultiplierCount = 0;
+    std::uint64_t extendedStopMultiplierCount = 0;
+    std::optional<double> fixedFloorMultiplierRate;
+    std::optional<double> extendedStopMultiplierRate;
+    std::optional<double> averageExtendedStopMultiplier;
+};
+
+struct Phase18BConfidenceBucketDelta
+{
+    std::uint64_t actionableCount = 0;
+    std::int64_t stopHitCountDifferenceVersusFixed = 0;
+    double stopHitRateDifferenceVersusFixed = 0.0;
+    double aggregateDirectionalLogReturnDifferenceVersusFixed = 0.0;
+};
+
+struct Phase18BStrategyVariantResult
+{
+    std::string strategyOutputIdentity;
+    StrategyEvaluationResult evaluation;
+    Phase18AStrategyMetrics metrics;
+    std::array<Phase18AConfidenceBucketMetrics, 4> confidenceBuckets;
+    Phase18BMechanismMetrics mechanismMetrics;
+};
+
+struct Phase18BPairwiseDelta
+{
+    std::string comparisonRole;
+    Phase18APairwiseDelta values;
+};
+
+struct ControlledOneSidedStopExtensionExperimentResult
+{
+    std::string experimentIdentityCanonical;
+    std::string experimentIdentityHash;
+    ProbabilityConditionedStopLossConfiguration phase18AConfiguration;
+    ProbabilityConditionedStopExtensionConfiguration phase18BConfiguration;
+    std::vector<Phase18BStrategyVariantResult> variants;
+    std::vector<Phase18BPairwiseDelta> pairwiseDeltas;
+    std::array<Phase18BConfidenceBucketDelta, 4>
+        extensionDeltasVersusFixedByConfidenceBucket;
+    std::vector<Phase18AObservationEvidence> observationEvidence;
+    bool requiresReadOnlyTransaction = true;
+    bool productionRowsModified = false;
+    std::string canonicalLines;
+    std::string resultHash;
+};
+
+struct ControlledOneSidedStopExtensionInvocationContext
+{
+    bool inferenceMode = false;
+    bool hasExplicitModel = false;
+    bool inferAll = false;
+    bool schedulerExperiment = false;
+    bool schedulerCheckpointEvaluation = false;
+    bool schedulerWorkerAttempt = false;
+    bool frozenOutcome = false;
+};
+
+void ValidateControlledOneSidedStopExtensionInvocation(
+    const ControlledOneSidedStopExtensionInvocationContext& context);
+
+// Runs exactly baseline, fixed-stop attribution control, unchanged Phase 18A,
+// and Phase 18B one-sided extension on one immutable observation population.
+ControlledOneSidedStopExtensionExperimentResult
+EvaluateControlledOneSidedStopExtensionExperiment(
+    const AuthoritativeMarketPath& marketPath,
+    ProbabilityConditionedStopExtensionConfiguration configuration = {});
 
 StrategyEvaluationResult EvaluateStrategy(
     const TradingStrategy& strategy,
