@@ -790,6 +790,43 @@ StrategyEvaluationResult BaselineTerminalStrategy::Evaluate(
         InferenceProfitability::kMetricDefinitionCanonical;
     result.metricDefinitionHash =
         InferenceProfitability::MetricDefinitionHash();
+    if (const AuthoritativeMarketPath* marketPath = input.MarketPath())
+    {
+        result.sourceContentHash = marketPath->Hash();
+        result.evaluationIdentity = BuildStrategyEvaluationIdentity(
+            identity_, BuildStrategyEvaluationProvenance(*marketPath));
+        result.executionResults.reserve(input.Observations().size());
+        for (const auto& observation : input.Observations())
+        {
+            StrategyExecutionResult execution;
+            execution.observationOrdinal = observation.observationOrdinal;
+            execution.direction =
+                DirectionForPredictedClass(observation.predictedClass);
+            if (execution.direction != PositionDirection::flat)
+            {
+                execution.reason = StrategyExitReason::terminalExit;
+                execution.entryTimestampUnixSeconds =
+                    observation.decisionTimestampUnixSeconds;
+                execution.exitTimestampUnixSeconds =
+                    observation.terminalTimestampUnixSeconds;
+                execution.entryPrice =
+                    static_cast<double>(observation.decisionClose);
+                execution.exitPrice =
+                    static_cast<double>(observation.terminalClose);
+                const double value = std::log(
+                    *execution.exitPrice / *execution.entryPrice);
+                execution.directionalLogReturn =
+                    execution.direction == PositionDirection::longPosition
+                        ? value : -value;
+            }
+            result.executionResults.push_back(std::move(execution));
+        }
+        result.resultCanonical = CanonicalExecutionResults(
+            result.strategyIdentity, *result.evaluationIdentity, *marketPath,
+            result.metricDefinitionHash, result.executionResults);
+        result.resultHash = InferenceProfitability::DeterministicHash(
+            result.resultCanonical);
+    }
     return result;
 }
 

@@ -52,6 +52,7 @@
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
 #include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
+#include "../Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp"
 #include "ProfitabilityVerificationRepository.hpp"
 #include "EconomicEventImportService.hpp"
 #include "EconomicEventConsensusImport.hpp"
@@ -2776,7 +2777,9 @@ static PredictionStats ProcessBatchPredict(
     EA::LSTM& l,
     const Tensor& tensor,
     const Window& b,
-    EA::InferenceProfitability::Accumulator& profitability)
+    EA::InferenceProfitability::Accumulator& profitability,
+    std::vector<EA::StrategyEvaluationAdapters::TensorInferenceDecision>*
+        strategyDecisions = nullptr)
 {
     auto stats = [](const auto& v)
     {
@@ -2844,6 +2847,12 @@ static PredictionStats ProcessBatchPredict(
             auto w = Window{it, it + static_cast<std::ptrdiff_t>(evalConfig.windowSize)};
 
             const auto probs = l.PredictNextDirectionProbs(w, /*resetState=*/true);
+            if (strategyDecisions != nullptr)
+            {
+                strategyDecisions->push_back({
+                    static_cast<std::size_t>(it - tensor.begin()),
+                    EA::StrategyEvaluation::PredictionProbabilities{probs}});
+            }
             const int pred =
                 EA::StrategyEvaluation::PredictedClassForProbabilities(
                     EA::StrategyEvaluation::PredictionProbabilities{probs});
@@ -3783,6 +3792,7 @@ struct LaunchArgs
     bool forceInfer = false;
     bool lstmProfileHotspots = false;
     bool resumeExpandInputWidth = false;
+    std::optional<std::string> controlledFixedStopEvaluationPath;
     struct FrozenOutcomeSpec
     {
         std::string cohortHash;
@@ -4178,6 +4188,16 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         {
             parsed.evalTrading = true;
         }
+        else if (arg == "--controlled-fixed-stop-evaluation")
+        {
+            if (parsed.controlledFixedStopEvaluationPath)
+                throw std::invalid_argument(
+                    "--controlled-fixed-stop-evaluation specified more than once");
+            if (i + 1 >= argc || std::string{argv[i + 1]}.empty())
+                throw std::invalid_argument(
+                    "--controlled-fixed-stop-evaluation requires an output path");
+            parsed.controlledFixedStopEvaluationPath = argv[++i];
+        }
         else if (arg == "--infer-all")
         {
             parsed.inferAll = true;
@@ -4216,6 +4236,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             else if (SplitOptionWithValue(arg, "--epochs", value))
             {
                 parsed.epochs = ParsePositiveIntArg("--epochs", value);
+            }
+            else if (SplitOptionWithValue(
+                         arg, "--controlled-fixed-stop-evaluation", value))
+            {
+                if (parsed.controlledFixedStopEvaluationPath || value.empty())
+                    throw std::invalid_argument(
+                        "invalid or duplicate --controlled-fixed-stop-evaluation");
+                parsed.controlledFixedStopEvaluationPath = value;
             }
             else if (SplitOptionWithValue(arg, "--core-lr-mult", value))
             {
@@ -4354,7 +4382,9 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             parsed.forceInfer || parsed.evalTrading ||
             parsed.resumeExpandInputWidth || parsed.featureWarmupScope.has_value() ||
             parsed.donchian20Mode.has_value() ||
-            parsed.donchianLookback.has_value() || !positional.empty();
+            parsed.donchianLookback.has_value() ||
+            parsed.controlledFixedStopEvaluationPath.has_value() ||
+            !positional.empty();
         if (hasOverride)
             throw std::invalid_argument(
                 "--run-frozen-model-outcome-inference rejects training, model, "
@@ -4431,9 +4461,21 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         if (parsed.modelId.has_value() && parsed.inferStartAfterModelId.has_value())
             throw std::invalid_argument("--infer-all cannot combine --model anchor with --infer-start-after-model-id");
     }
+    if (parsed.controlledFixedStopEvaluationPath)
+    {
+        if (!parsed.inferenceMode.has_value() || !*parsed.inferenceMode ||
+            !parsed.modelId.has_value() || parsed.inferAll ||
+            parsed.schedulerExperimentId || parsed.schedulerCheckpointEvalId ||
+            parsed.schedulerWorkerAttemptId || parsed.frozenOutcome)
+        {
+            throw std::invalid_argument(
+                "--controlled-fixed-stop-evaluation requires standalone "
+                "--infer with one explicit --model and no scheduler context");
+        }
+    }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred controlled evaluation: --infer --model=<model_id> --controlled-fixed-stop-evaluation=<artifact_path> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -6822,13 +6864,18 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
     size_t totalActedDir = 0;
     size_t totalConfusion[direction_output_size][direction_output_size] = {};
     EA::InferenceProfitability::Accumulator profitability;
+    std::vector<EA::StrategyEvaluationAdapters::TensorInferenceDecision>
+        strategyDecisions;
 
     {
         ScopedDiagnosticCoutSilencer silence;
         tensor.ForEachBatchFrom(logicalOutputStartIndex, [&](auto b)
         {
             const auto predictionStats =
-                ProcessBatchPredict(lstm, tensor, b, profitability);
+                ProcessBatchPredict(
+                    lstm, tensor, b, profitability,
+                    launchArgs.controlledFixedStopEvaluationPath
+                        ? &strategyDecisions : nullptr);
             totalCorrectLog += predictionStats.correctLog;
             totalActedLog += predictionStats.actedLog;
             totalWindows += predictionStats.windows;
@@ -6881,6 +6928,71 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
 
         if (launchArgs.evalTrading)
             PrintEvalTradingMetrics(profitability.statistics(), totalConfusion);
+
+        if (launchArgs.controlledFixedStopEvaluationPath)
+        {
+            if (!loadedModelId)
+                throw std::runtime_error(
+                    "controlled_fixed_stop_model_identity_missing");
+            std::ostringstream scientificIdentity;
+            scientificIdentity
+                << std::setprecision(std::numeric_limits<double>::max_digits10)
+                << "phase17d_inference_scientific_identity_v1;model_id="
+                << *loadedModelId << ";symbol=" << rawPriceTableName
+                << ";prediction_horizon=" << prediction_horizon
+                << ";threshold_logret=" << c_next_threshold
+                << ";window_size=" << window_size
+                << ";label_rule_id=" << DirectionLabelRuleId()
+                << ";target_type=" << static_cast<int>(requestedTargetType)
+                << ";evaluation_start=" << fromDate
+                << ";evaluation_end=" << toDate << ';';
+            EA::StrategyEvaluationAdapters::TensorMarketPathAdapterContext
+                context;
+            context.modelId = *loadedModelId;
+            context.inferenceScientificIdentityCanonical =
+                scientificIdentity.str();
+            context.inferenceScientificIdentityHash =
+                EA::InferenceProfitability::DeterministicHash(
+                    context.inferenceScientificIdentityCanonical);
+            context.evaluationStart = fromDate;
+            context.evaluationEnd = toDate;
+            context.inferenceWindowSize = window_size;
+            context.predictionHorizon = prediction_horizon;
+            context.metricDefinitionCanonical =
+                EA::StrategyEvaluation::kFixedStopMetricDefinitionCanonical;
+            context.metricDefinitionHash =
+                EA::StrategyEvaluation::FixedStopMetricDefinitionHash();
+            const auto marketPath = EA::StrategyEvaluationAdapters::
+                AdaptTensorMarketPath(tensor, context, strategyDecisions);
+            const auto experiment = EA::StrategyEvaluation::
+                EvaluateControlledFixedStopExperiment(marketPath);
+            std::ofstream artifact{
+                *launchArgs.controlledFixedStopEvaluationPath,
+                std::ios::binary | std::ios::trunc};
+            if (!artifact)
+                throw std::runtime_error(
+                    "controlled_fixed_stop_artifact_open_failed");
+            artifact.write(experiment.canonicalCsv.data(),
+                           static_cast<std::streamsize>(
+                               experiment.canonicalCsv.size()));
+            artifact.close();
+            if (!artifact)
+                throw std::runtime_error(
+                    "controlled_fixed_stop_artifact_write_failed");
+            std::cout
+                << "CONTROLLED_FIXED_STOP_EVALUATION"
+                << ",experiment_identity_hash="
+                << experiment.experimentIdentityHash
+                << ",result_hash=" << experiment.resultHash
+                << ",market_path_hash=" << marketPath.Hash()
+                << ",inference_identity_hash="
+                << context.inferenceScientificIdentityHash
+                << ",observation_count=" << strategyDecisions.size()
+                << ",artifact_path="
+                << *launchArgs.controlledFixedStopEvaluationPath
+                << ",production_rows_modified=false"
+                << std::endl;
+        }
     }
     else
     {
@@ -8288,7 +8400,10 @@ int main(int argc, const char * argv[])
             }
 
             pqxx::work runtimeDatabaseWork { c_LSTM };
-            runtimeDatabaseWork.exec("SET TRANSACTION READ WRITE;");
+            runtimeDatabaseWork.exec(
+                launchArgs.controlledFixedStopEvaluationPath
+                    ? "SET TRANSACTION READ ONLY;"
+                    : "SET TRANSACTION READ WRITE;");
   
             const auto requestedTargetType = resumeConfig.has_value()
                 ? resumeConfig->targetType
@@ -8441,6 +8556,19 @@ int main(int argc, const char * argv[])
                                            toDate,
                                            logicalOutputStartIndex,
                                            false);
+                if (launchArgs.controlledFixedStopEvaluationPath)
+                {
+                    // This transaction was declared READ ONLY before any model
+                    // or evaluation work. Commit it here so this application
+                    // path cannot fall through into any persistence workflow.
+                    runtimeDatabaseWork.commit();
+                    DiagnosticOut()
+                        << "controlled_fixed_stop_evaluation=true; "
+                           "read_only_transaction_committed=true; skipping "
+                           "all inference persistence and model save"
+                        << std::endl;
+                    break;
+                }
                 if (frozenOutcomeJob)
                 {
                     try

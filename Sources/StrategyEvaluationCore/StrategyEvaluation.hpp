@@ -27,6 +27,8 @@ inline constexpr int kFixedStopLossConfigurationSchemaVersion = 1;
 inline constexpr const char* kFixedStopExecutionRule =
     "single_fixed_protective_stop_ohlc_v1";
 inline constexpr int kFixedStopExecutionRuleVersion = 1;
+inline constexpr std::array<double, 3> kControlledFixedStopDistanceGrid{{
+    0.0005, 0.0010, 0.0020}};
 inline constexpr const char* kFixedStopMetricDefinitionCanonical =
     "fixed_stop_directional_log_return_v1;"
     "entry=decision_bar_close;"
@@ -343,6 +345,39 @@ private:
 };
 
 std::string FixedStopMetricDefinitionHash();
+
+struct ControlledStrategyVariantResult
+{
+    std::optional<double> fixedStopLogarithmicDistance;
+    StrategyEvaluationResult evaluation;
+    std::uint64_t noActionCount = 0;
+    std::uint64_t fixedStopExitCount = 0;
+    std::uint64_t terminalExitCount = 0;
+    std::uint64_t zeroOutcomeCount = 0;
+    double aggregateReturnDeltaVersusBaseline = 0.0;
+    double averageActionableReturnDeltaVersusBaseline = 0.0;
+    std::string profitabilityComparisonVersusBaseline;
+};
+
+struct ControlledFixedStopExperimentResult
+{
+    std::string experimentIdentityCanonical;
+    std::string experimentIdentityHash;
+    std::string comparisonMetricDefinitionCanonical;
+    std::string comparisonMetricDefinitionHash;
+    std::string canonicalCsv;
+    std::string resultHash;
+    std::vector<ControlledStrategyVariantResult> variants;
+};
+
+// Evaluates the baseline followed by the pre-registered, ordered fixed-stop
+// grid against one immutable path. Invalid, duplicate, or altered distances
+// and every population/accounting mismatch fail closed.
+ControlledFixedStopExperimentResult EvaluateControlledFixedStopExperiment(
+    const AuthoritativeMarketPath& marketPath,
+    const std::vector<double>& fixedStopLogarithmicDistances = {
+        kControlledFixedStopDistanceGrid.begin(),
+        kControlledFixedStopDistanceGrid.end()});
 
 StrategyEvaluationResult EvaluateStrategy(
     const TradingStrategy& strategy,

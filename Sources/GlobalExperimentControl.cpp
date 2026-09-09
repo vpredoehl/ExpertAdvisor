@@ -1,4 +1,5 @@
 #include "GlobalExperimentControl.hpp"
+#include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
 #include "ExperimentCurrentOperation.hpp"
 #include "SchedulerOwnershipRepository.hpp"
 
@@ -3353,16 +3354,100 @@ int RunWorkerAttemptReconciliationCommandImpl(
             // ProcessMissing is admitted only after Observe positively proved
             // absence (inspectionSucceeded=true). All other incomplete or
             // uncertain observations remain on the fail-closed live path
-            // below. The existing scheduler orphan contract defines the
-            // no-result terminal outcome for this exact case.
-            constexpr const char* kAbsentReason =
-                "exact_process_absent_no_result";
+            // below. Final inference uses the same authoritative persisted
+            // result contract as scheduler-owned orphan reconciliation.
+            const auto completedInference =
+                exact->lifecyclePhase == "infer"
+                    ? EA::Scheduler::
+                          FindAuthoritativeFinalInferenceResultForWorkerAttempt(
+                              transaction,
+                              exact->experimentId,
+                              exact->workerAttemptId)
+                    : std::nullopt;
+            const bool recoverCompletedInference =
+                completedInference.has_value();
+            const char* kAbsentReason = recoverCompletedInference
+                ? "exact_process_absent_completed_inference_result"
+                : "exact_process_absent_no_result";
             PrintWorkerAttemptReconciliationResult(
                 output, command.dryRun ? "eligible" : "applying", &*exact,
-                &validated, "failed", kAbsentReason);
+                &validated,
+                recoverCompletedInference ? "completed" : "failed",
+                kAbsentReason);
             if (command.dryRun)
             {
                 transaction.commit();
+                return 0;
+            }
+
+            if (recoverCompletedInference)
+            {
+                const pqxx::result terminalized = transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt a SET "
+                    "lifecycle_state='completed',"
+                    "completed_at=clock_timestamp(),"
+                    "last_observed_at=clock_timestamp(),exit_code=0,"
+                    "reconciliation_result="
+                    "'process_missing_result_recovered',"
+                    "diagnostic='exact_process_identity_absent' "
+                    "WHERE a.worker_attempt_id=$1 "
+                    "AND a.experiment_id=$2 "
+                    "AND a.checkpoint_eval_id IS NULL "
+                    "AND a.worker_kind='experiment' "
+                    "AND a.lifecycle_phase='infer' "
+                    "AND a.capacity_class='infer' "
+                    "AND a.lifecycle_state='identity_ambiguous' "
+                    "AND a.scheduler_invocation_id IS NOT DISTINCT FROM $3 "
+                    "AND a.scheduler_fencing_token IS NOT DISTINCT FROM $4 "
+                    "AND a.worker_pid=$5 AND a.worker_process_group_id=$6 "
+                    "AND a.worker_process_start_identity=$7 "
+                    "AND a.canonical_executable_path=$8 "
+                    "AND a.command_line=$9 AND a.command_identity=$10 "
+                    "RETURNING a.worker_attempt_id;",
+                    exact->workerAttemptId, exact->experimentId,
+                    exact->schedulerInvocationId,
+                    exact->schedulerFencingToken, *exact->workerPid,
+                    *exact->processGroupId, *exact->processStartIdentity,
+                    *exact->canonicalExecutablePath, *exact->commandLine,
+                    exact->commandIdentity);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    terminalized,
+                    "recover_exact_absent_inference_worker_attempt");
+
+                const pqxx::result recoveredLifecycle =
+                    transaction.exec_params(
+                        "UPDATE experiment SET status='pending',"
+                        "phase='analyze',worker_pid=NULL,"
+                        "worker_process_group_id=NULL,"
+                        "worker_process_start_identity=NULL,"
+                        "worker_executable=NULL,worker_command_line=NULL,"
+                        "worker_control_state='paused',"
+                        "current_operation=NULL,completed_at=NULL,"
+                        "exit_code=0,error_message=NULL,"
+                        "operator_forced_final_inference_rerun_requested=false,"
+                        "active_scheduler_worker_attempt_id=NULL,"
+                        "updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$1 "
+                        "AND active_scheduler_worker_attempt_id=$2 "
+                        "AND status='running' AND phase='infer' "
+                        "AND worker_pid=$3 "
+                        "AND worker_process_group_id=$4 "
+                        "AND worker_process_start_identity=$5 "
+                        "AND worker_executable=$6 "
+                        "AND worker_command_line=$7 "
+                        "RETURNING experiment_id;",
+                        exact->experimentId, exact->workerAttemptId,
+                        *exact->workerPid, *exact->processGroupId,
+                        *exact->processStartIdentity,
+                        *exact->canonicalExecutablePath,
+                        *exact->commandLine);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    recoveredLifecycle,
+                    "advance_exact_absent_inference_to_analyze");
+                transaction.commit();
+                PrintWorkerAttemptReconciliationResult(
+                    output, "applied", &*exact, &validated, "completed",
+                    kAbsentReason);
                 return 0;
             }
 
@@ -3410,6 +3495,9 @@ int RunWorkerAttemptReconciliationCommandImpl(
             const pqxx::result failedLifecycle = transaction.exec_params(
                 "UPDATE experiment SET status='failed',"
                 "worker_pid=NULL,worker_process_group_id=NULL,"
+                "worker_process_start_identity=NULL,"
+                "worker_executable=NULL,worker_command_line=NULL,"
+                "worker_control_state='paused',current_operation=NULL,"
                 "completed_at=clock_timestamp(),exit_code=-1,"
                 "error_message='worker_process_missing_no_result',"
                 "active_scheduler_worker_attempt_id=NULL,"

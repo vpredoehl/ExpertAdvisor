@@ -72,6 +72,8 @@
 #include "SchedulerExecutablePath.hpp"
 #include "SchedulerOwnershipPolicy.hpp"
 #include "SchedulerOwnershipRepository.hpp"
+#include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
+#include "SchedulerCore/SchedulerSemanticAdmission.hpp"
 #include "SupportedSymbols.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
 #include "Donchian20Mode.hpp"
@@ -10268,6 +10270,72 @@ void LogSkip(const std::string& phase,
               << std::endl;
 }
 
+EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
+    pqxx::transaction_base& transaction,
+    long long experimentId,
+    const std::string& phase,
+    EA::Scheduler::PersistedWorkerSemanticIdentity* loaded = nullptr)
+{
+    const pqxx::result rows = transaction.exec_params(
+        "SELECT model_input_width,model_input_semantic_layout_version,"
+        "last_model_id,resume_model_id "
+        "FROM experiment WHERE experiment_id=$1;",
+        experimentId);
+    if (rows.size() != 1)
+        return {false, "semantic_worker_identity_unavailable"};
+    EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
+    if (!rows[0][0].is_null())
+        persisted.inputWidth = rows[0][0].as<std::size_t>();
+    if (!rows[0][1].is_null())
+        persisted.layoutVersion = rows[0][1].as<int>();
+    persisted.modelIdentityExpected =
+        !rows[0][2].is_null() || !rows[0][3].is_null();
+    if (loaded != nullptr) *loaded = persisted;
+    return EA::Scheduler::EvaluateSemanticWorkerAdmission(phase, persisted);
+}
+
+bool SemanticWorkerPreflight(
+    long long experimentId,
+    const std::string& phase,
+    SchedulerEventLogState* logState,
+    bool verbose)
+{
+    if (phase == "analyze") return true;
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::read_transaction transaction{connection};
+    EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
+    const auto decision = LoadSemanticWorkerAdmission(
+        transaction, experimentId, phase, &persisted);
+    if (decision.admissible) return true;
+
+    const std::string reason = decision.diagnostic;
+    LogSkip(phase, experimentId, reason, logState, verbose);
+    if (verbose || logState == nullptr ||
+        logState->previousSkipKeys.find(
+            phase + "|" + std::to_string(experimentId) + "|" + reason) ==
+            logState->previousSkipKeys.end())
+    {
+        std::cout << "SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE"
+                  << ",experiment_id=" << experimentId
+                  << ",phase=" << phase
+                  << ",model_input_width="
+                  << (persisted.inputWidth
+                          ? std::to_string(*persisted.inputWidth) : "NULL")
+                  << ",model_input_semantic_layout_version="
+                  << (persisted.layoutVersion
+                          ? std::to_string(*persisted.layoutVersion) : "NULL")
+                  << ",worker_maximum_input_width="
+                  << EA::kCurrentModelInputWidth
+                  << ",worker_semantic_layout_version="
+                  << EA::kModelInputSemanticLayoutVersion
+                  << ",diagnostic=" << reason
+                  << ",capacity_consumed=0,child_launched=0,"
+                     "experiment_status_changed=false"
+                  << std::endl;
+    }
+    return false;
+}
+
 std::string PhaseSchedulingStatsKey(const PhaseSchedulingStats& stats)
 {
     std::ostringstream key;
@@ -11160,6 +11228,21 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
+    const auto semanticAdmission = LoadSemanticWorkerAdmission(
+        transaction, experiment.experimentId, phase);
+    if (!semanticAdmission.admissible)
+    {
+        std::cout << "SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",phase=" << phase
+                  << ",diagnostic=" << semanticAdmission.diagnostic
+                  << ",capacity_consumed=0,child_launched=0,"
+                     "experiment_status_changed=false"
+                  << std::endl;
+        transaction.commit();
+        return std::nullopt;
+    }
+
     const int used =
         CountGlobalWorkerCapacity(transaction, phase);
     if (!SchedulerWorkerCapacityHasSlot(maximumCapacity, used))
@@ -11245,6 +11328,7 @@ ReserveExperimentWorkerAttempt(
         "worker_process_group_id=NULL,"
         "worker_process_start_identity=NULL,"
         "worker_executable=$1,current_operation=$2,"
+        "worker_control_state='running',"
         "active_scheduler_worker_attempt_id=$3,"} +
         logColumn + "=$4,updated_at=clock_timestamp() "
         "WHERE experiment_id=$5 AND status='pending' AND phase=$6 "
@@ -11279,6 +11363,21 @@ ReserveCheckpointWorkerAttempt(
     if (!SchedulerLaunchAllowed(
             transaction, "checkpoint_infer", true, false))
     {
+        transaction.commit();
+        return std::nullopt;
+    }
+    const auto semanticAdmission = LoadSemanticWorkerAdmission(
+        transaction, eval.experiment.experimentId, "infer");
+    if (!semanticAdmission.admissible)
+    {
+        std::cout << "SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE"
+                  << ",experiment_id=" << eval.experiment.experimentId
+                  << ",checkpoint_eval_id=" << eval.checkpointEvalId
+                  << ",phase=infer,diagnostic="
+                  << semanticAdmission.diagnostic
+                  << ",capacity_consumed=0,child_launched=0,"
+                     "experiment_status_changed=false"
+                  << std::endl;
         transaction.commit();
         return std::nullopt;
     }
@@ -12840,6 +12939,22 @@ bool HasCompletedInferenceResultForAttempt(
     return !rows.empty();
 }
 
+bool HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
+    pqxx::work& w,
+    const ExperimentRow& experiment,
+    long long workerAttemptId,
+    bool useThresholdTolerance = false)
+{
+    const auto result = EA::Scheduler::
+        FindAuthoritativeFinalInferenceResultForWorkerAttempt(
+            w, experiment.experimentId, workerAttemptId);
+    if (!result) return false;
+    if (result->forcedFinalInferenceRerun != useThresholdTolerance)
+        throw std::runtime_error(
+            "forced_final_inference_recovery_state_changed");
+    return true;
+}
+
 std::optional<long long> FindCompletedCheckpointInferenceResultId(
     pqxx::work& w,
     const CheckpointEvalRow& eval)
@@ -12884,6 +12999,35 @@ std::optional<long long> FindCompletedCheckpointInferenceResultIdForAttempt(
         attemptStartedEpoch);
     if (rows.empty())
         return std::nullopt;
+    return rows[0][0].as<long long>();
+}
+
+std::optional<long long>
+FindAuthoritativeCompletedCheckpointInferenceResultForWorkerAttempt(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval,
+    long long workerAttemptId)
+{
+    if (!TableExists(w, "inference_eval_result") ||
+        !ColumnExists(w, "inference_eval_result", "checkpoint_eval_id"))
+        return std::nullopt;
+    const pqxx::result rows = w.exec_params(
+        "SELECT r.id FROM inference_eval_result r "
+        "JOIN model m ON m.model_id=r.model_id "
+        "JOIN experiment_scheduler_worker_attempt a "
+        " ON a.worker_attempt_id=$3 AND a.experiment_id=$4 "
+        " AND a.checkpoint_eval_id=$1 "
+        " AND a.worker_kind='checkpoint_infer' "
+        " AND a.lifecycle_phase='infer' "
+        "WHERE r.checkpoint_eval_id=$1 AND r.model_id=$2 "
+        "AND m.experiment_id=$4 AND r.inference_scope='checkpoint' "
+        "AND r.status='completed' AND r.completed_at>=a.reserved_at "
+        "LIMIT 1;",
+        eval.checkpointEvalId,
+        eval.checkpointModelId,
+        workerAttemptId,
+        eval.experiment.experimentId);
+    if (rows.empty()) return std::nullopt;
     return rows[0][0].as<long long>();
 }
 
@@ -20011,10 +20155,8 @@ int RecoverOrphanedRunningExperiments(
             if (evaluation != evaluations.end())
             {
                 const auto resultId =
-                    FindCompletedCheckpointInferenceResultIdForAttempt(
-                        transaction,
-                        *evaluation,
-                        attemptStartedEpoch);
+                    FindAuthoritativeCompletedCheckpointInferenceResultForWorkerAttempt(
+                        transaction, *evaluation, attemptId);
                 if (resultId)
                 {
                     AdvanceCheckpointEvalToAnalyze(
@@ -20066,10 +20208,8 @@ int RecoverOrphanedRunningExperiments(
                 ExperimentRow experiment =
                     RowToExperiment(experimentRows[0]);
                 if (phase == "infer" &&
-                    HasCompletedInferenceResultForAttempt(
-                        transaction,
-                        experiment,
-                        attemptStartedEpoch,
+                    HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
+                        transaction, experiment, attemptId,
                         forcedFinalInferenceRerun))
                 {
                     TransitionRecoveredInferenceToAnalyze(
@@ -20136,6 +20276,33 @@ int RecoverOrphanedRunningExperiments(
                         ? "forced_final_inference_rerun_missing_attempt_result;worker_process_missing_no_result"
                         : "worker_process_missing_no_result");
             }
+        }
+
+        // This exact attempt no longer has a process. Mark the process-control
+        // dimension non-running before detaching it; the next reservation, if
+        // any, restores running for the newly admitted worker.
+        if (checkpointEvalId)
+        {
+            transaction.exec_params(
+                "UPDATE experiment_checkpoint_eval SET "
+                "worker_pid=NULL,worker_process_group_id=NULL,"
+                "worker_process_start_identity=NULL,worker_executable=NULL,"
+                "worker_command_line=NULL,worker_control_state='paused' "
+                "WHERE checkpoint_eval_id=$1 "
+                "AND active_scheduler_worker_attempt_id=$2;",
+                *checkpointEvalId, attemptId);
+        }
+        else
+        {
+            transaction.exec_params(
+                "UPDATE experiment SET worker_pid=NULL,"
+                "worker_process_group_id=NULL,"
+                "worker_process_start_identity=NULL,worker_executable=NULL,"
+                "worker_command_line=NULL,current_operation=NULL,"
+                "worker_control_state='paused' "
+                "WHERE experiment_id=$1 "
+                "AND active_scheduler_worker_attempt_id=$2;",
+                experimentId, attemptId);
         }
 
         pqxx::result terminal = transaction.exec_params(
@@ -22538,6 +22705,13 @@ int RunTrainJobs(
 
     for (const ExperimentRow& job : jobs)
     {
+        if (!SemanticWorkerPreflight(
+                job.experimentId, "train", logState,
+                options.schedulerVerbose))
+        {
+            ++stats.skipped;
+            continue;
+        }
         if (!options.dryRun && !cancellationOnly)
         {
             (void)PreemptOneLowerPriorityWorker(
@@ -22721,6 +22895,13 @@ int RunInferJobs(
 
     for (const ExperimentRow& job : jobs)
     {
+        if (!SemanticWorkerPreflight(
+                job.experimentId, "infer", logState,
+                options.schedulerVerbose))
+        {
+            ++stats.skipped;
+            continue;
+        }
         if (!options.dryRun)
         {
             (void)PreemptOneLowerPriorityWorker(
@@ -23050,6 +23231,10 @@ int RunCheckpointEvalInferJobs(
             continue;
         if (!eval.experiment.inferStart ||
             !eval.experiment.inferEnd)
+            continue;
+        if (!SemanticWorkerPreflight(
+                eval.experiment.experimentId, "infer", nullptr,
+                options.schedulerVerbose))
             continue;
         if (options.dryRun)
             continue;
