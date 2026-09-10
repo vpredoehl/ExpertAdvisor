@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import tempfile
 
 
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
@@ -51,30 +50,15 @@ def header_text(commit: str) -> str:
     )
 
 
-def write_atomically(output: Path, content: str) -> None:
+def write_output(output: Path, content: str) -> None:
+    # Xcode's user-script sandbox grants this phase its declared output path,
+    # but not undeclared sibling temporary files.  Write and fsync the exact
+    # declared output so arbitrary DerivedData roots remain supported.
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=output.parent,
-            prefix=f".{output.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary.write(content)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-            temporary_name = temporary.name
-        os.replace(temporary_name, output)
-        temporary_name = None
-    finally:
-        if temporary_name is not None:
-            try:
-                os.unlink(temporary_name)
-            except FileNotFoundError:
-                pass
+    with output.open(mode="w", encoding="utf-8") as generated:
+        generated.write(content)
+        generated.flush()
+        os.fsync(generated.fileno())
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -91,7 +75,7 @@ def main() -> int:
         commit = release_commit(arguments.repository_root.resolve())
     else:
         commit = ""
-    write_atomically(arguments.output.resolve(), header_text(commit))
+    write_output(arguments.output.resolve(), header_text(commit))
     return 0
 
 
