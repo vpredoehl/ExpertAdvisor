@@ -391,6 +391,13 @@
 			remoteGlobalIDString = 0F1700003370000100AAA001;
 			remoteInfo = ProfitabilityCore;
 		};
+		0C0A000330524C260005882D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0A10000F2F70000100AAA001;
+			remoteInfo = "LSTM Release";
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -1150,6 +1157,21 @@
 		};
 /* End PBXGroup section */
 
+/* Begin PBXAggregateTarget section */
+		0C0A000230524C260005882D /* Publish LSTM Canonical */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 0C0A000730524C260005882D /* Build configuration list for PBXAggregateTarget "Publish LSTM Canonical" */;
+			buildPhases = (
+				0C0A000130524C260005882D /* Publish Canonical LSTM Binary */,
+			);
+			dependencies = (
+				0C0A000430524C260005882D /* PBXTargetDependency */,
+			);
+			name = "Publish LSTM Canonical";
+			productName = "Publish LSTM Canonical";
+		};
+/* End PBXAggregateTarget section */
+
 /* Begin PBXNativeTarget section */
 		084426722ED8DD46002DEB21 /* LSTM Debug */ = {
 			isa = PBXNativeTarget;
@@ -1230,6 +1252,21 @@
 /* End PBXNativeTarget section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		0C0A000130524C260005882D /* Publish Canonical LSTM Binary */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Publish Canonical LSTM Binary";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n    exit 0\nfi\n\nif [ \"$PUBLISH_CANONICAL_BINARY\" != \"YES\" ]; then\n    echo \"Skipping canonical LSTM binary publish\"\n    exit 0\nfi\n\nCANONICAL_DIR=\"$PROJECT_DIR/DerivedData/Canonical\"\nCANONICAL_BIN=\"$CANONICAL_DIR/LSTM_Release\"\nBUILT_BIN=\"$CONFIGURATION_BUILD_DIR/LSTM_Release\"\n\nif [ ! -x \"$BUILT_BIN\" ]; then\n    echo \"error: built LSTM executable not found or not executable: $BUILT_BIN\"\n    exit 1\nfi\n\nmkdir -p \"$CANONICAL_DIR\"\n\nif ! ln -sfn \"$BUILT_BIN\" \"$CANONICAL_BIN\"; then\n    echo \"error: failed to publish canonical LSTM binary\"\n    exit 1\nfi\n\necho \"Canonical LSTM binary updated:\"\necho \"$CANONICAL_BIN -> $BUILT_BIN\"\n";
+		};
 		0A10000A2F70000100AAA002 /* Generate build provenance */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -1287,6 +1324,7 @@
 			targets = (
 				084426722ED8DD46002DEB21 /* LSTM Debug */,
 				0A10000F2F70000100AAA001 /* LSTM Release */,
+				0C0A000230524C260005882D /* Publish LSTM Canonical */,
 				0F1700003370000100AAA001 /* ProfitabilityCore */,
 				0F1800003380000100AAA001 /* StrategyEvaluationCore */,
 			);
@@ -1685,6 +1723,12 @@
 			name = ProfitabilityCore;
 			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
 			targetProxy = 0F18000F3380000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0C0A000430524C260005882D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "LSTM Release";
+			target = 0A10000F2F70000100AAA001 /* LSTM Release */;
+			targetProxy = 0C0A000330524C260005882D /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2124,6 +2168,22 @@
 			};
 			name = Release;
 		};
+		0C0A000530524C260005882D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				PUBLISH_CANONICAL_BINARY = NO;
+			};
+			name = Debug;
+		};
+		0C0A000630524C260005882D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				PUBLISH_CANONICAL_BINARY = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2168,6 +2228,15 @@
 			buildConfigurations = (
 				0F1800053380000100AAA001 /* Debug */,
 				0F1800063380000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0C0A000730524C260005882D /* Build configuration list for PBXAggregateTarget "Publish LSTM Canonical" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0C0A000530524C260005882D /* Debug */,
+				0C0A000630524C260005882D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
