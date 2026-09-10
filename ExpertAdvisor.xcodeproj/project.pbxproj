@@ -290,10 +290,13 @@
 		0F1800133380000100AAA001 /* ControlledFixedStopExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800123380000100AAA001 /* ControlledFixedStopExperiment.cpp */; };
 		0F1800153380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */; };
 		0F18001733B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */; };
+		0F18001A33C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */; };
 		0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 		0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 		0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 		0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
+		0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
+		0F19002533C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -701,8 +704,12 @@
 		0F1800123380000100AAA001 /* ControlledFixedStopExperiment.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ControlledFixedStopExperiment.cpp; path = Sources/StrategyEvaluationCore/ControlledFixedStopExperiment.cpp; sourceTree = SOURCE_ROOT; };
 		0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ControlledProbabilityConditionedStopExperiment.cpp; path = Sources/StrategyEvaluationCore/ControlledProbabilityConditionedStopExperiment.cpp; sourceTree = SOURCE_ROOT; };
 		0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ControlledOneSidedStopExtensionExperiment.cpp; path = Sources/StrategyEvaluationCore/ControlledOneSidedStopExtensionExperiment.cpp; sourceTree = SOURCE_ROOT; };
+		0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Phase19StateInteractionAnalysis.cpp; path = Sources/StrategyEvaluationCore/Phase19StateInteractionAnalysis.cpp; sourceTree = SOURCE_ROOT; };
+		0F18001933C0000100AAA001 /* Phase19StateInteractionAnalysis.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Phase19StateInteractionAnalysis.hpp; path = Sources/StrategyEvaluationCore/Phase19StateInteractionAnalysis.hpp; sourceTree = SOURCE_ROOT; };
 		0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorMarketPathAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.cpp; sourceTree = SOURCE_ROOT; };
 		0F1900113390000100AAA001 /* TensorMarketPathAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorMarketPathAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp; sourceTree = SOURCE_ROOT; };
+		0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorPhase19StateAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorPhase19StateAdapter.cpp; sourceTree = SOURCE_ROOT; };
+		0F19002333C0000100AAA001 /* TensorPhase19StateAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorPhase19StateAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorPhase19StateAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerSemanticAdmission.hpp; path = Sources/SchedulerCore/SchedulerSemanticAdmission.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A002033A0000100AAA001 /* SchedulerInferenceResultRecovery.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerInferenceResultRecovery.hpp; path = Sources/SchedulerCore/SchedulerInferenceResultRecovery.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -1110,6 +1117,8 @@
 		0F1900003390000100AAA001 /* StrategyEvaluationCore */ = {
 			isa = PBXGroup;
 			children = (
+				0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */,
+				0F18001933C0000100AAA001 /* Phase19StateInteractionAnalysis.hpp */,
 				0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */,
 				0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */,
 				0F1800123380000100AAA001 /* ControlledFixedStopExperiment.cpp */,
@@ -1122,6 +1131,8 @@
 		0F1900013390000100AAA001 /* StrategyEvaluationAdapters */ = {
 			isa = PBXGroup;
 			children = (
+				0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */,
+				0F19002333C0000100AAA001 /* TensorPhase19StateAdapter.hpp */,
 				0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */,
 				0F1900113390000100AAA001 /* TensorMarketPathAdapter.hpp */,
 			);
@@ -1369,6 +1380,7 @@
 				0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
+				0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
@@ -1510,6 +1522,7 @@
 				0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
 				0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
+				0F19002533C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
@@ -1622,6 +1635,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F18001A33C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp in Sources */,
 				0F18001733B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp in Sources */,
 				0F1800153380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp in Sources */,
 				0F1800133380000100AAA001 /* ControlledFixedStopExperiment.cpp in Sources */,
