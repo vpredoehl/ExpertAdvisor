@@ -33,7 +33,11 @@ def sign(value: float) -> int:
 
 def read_artifacts(directory: pathlib.Path) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
-    for path in sorted(directory.glob("*.csv")):
+    paths = sorted(
+        set(directory.glob("*.csv")) | set(directory.glob("*.txt")),
+        key=lambda path: str(path),
+    )
+    for path in paths:
         header: dict[str, str] | None = None
         strata: dict[str, dict[str, str]] = {}
         deltas: dict[str, dict[str, str]] = {}
@@ -72,6 +76,18 @@ def read_artifacts(directory: pathlib.Path) -> list[dict[str, object]]:
                 "populations": populations,
             }
         )
+
+    identities: dict[tuple[int, str], pathlib.Path] = {}
+    for item in results:
+        identity = (int(item["model_id"]), str(item["window"]))
+        path = item["path"]
+        assert isinstance(path, pathlib.Path)
+        if identity in identities:
+            raise ValueError(
+                f"duplicate Phase 19 artifact {identity}: {identities[identity]} and {path}"
+            )
+        identities[identity] = path
+
     expected = {(model, window) for model in PRIMARY_MODELS | {DIAGNOSTIC_MODEL}
                 for window in WINDOWS}
     actual = {(int(item["model_id"]), str(item["window"])) for item in results}
@@ -108,6 +124,13 @@ def aggregate(results: list[dict[str, object]]) -> list[dict[str, object]]:
         accepted = [item for item in supported if bool(item["accepted"])]
         signs = [sign(float(item["delta"])) for item in supported]
         nontrivial_signs = [sign(float(item["delta"])) for item in nontrivial]
+        nontrivial_consensus_sign = 0
+        if (
+            len(nontrivial_signs) >= 2
+            and len(set(nontrivial_signs)) == 1
+            and nontrivial_signs[0] != 0
+        ):
+            nontrivial_consensus_sign = nontrivial_signs[0]
         rows.append(
             {
                 "window": window,
@@ -125,11 +148,8 @@ def aggregate(results: list[dict[str, object]]) -> list[dict[str, object]]:
                 "accepted_combined_delta": sum(float(x["delta"]) for x in accepted),
                 "accepted_activated_count": sum(int(x["count"]) for x in accepted),
                 "nontrivial_support_models": len(nontrivial),
-                "sign_agrees_across_nontrivial_models": (
-                    len(nontrivial_signs) >= 2
-                    and len(set(nontrivial_signs)) == 1
-                    and nontrivial_signs[0] != 0
-                ),
+                "nontrivial_consensus_sign": nontrivial_consensus_sign,
+                "sign_agrees_across_nontrivial_models": nontrivial_consensus_sign != 0,
             }
         )
 
@@ -141,6 +161,15 @@ def aggregate(results: list[dict[str, object]]) -> list[dict[str, object]]:
         other_sign = sign(float(other["combined_aggregate_delta"])) if other else 0
         row["aggregate_sign_agrees_between_windows"] = (
             other is not None and current_sign != 0 and current_sign == other_sign
+        )
+        current_consensus = int(row["nontrivial_consensus_sign"])
+        other_consensus = (
+            int(other["nontrivial_consensus_sign"]) if other is not None else 0
+        )
+        row["nontrivial_consensus_agrees_between_windows"] = (
+            other is not None
+            and current_consensus != 0
+            and current_consensus == other_consensus
         )
     return rows
 
@@ -169,7 +198,11 @@ def write_outputs(rows: list[dict[str, object]], prefix: pathlib.Path) -> None:
                     f"{row['negative_models']}/{row['zero_models']}, "
                     f"combined delta={float(row['combined_aggregate_delta']):.12g}, "
                     f"acceptance-qualified delta="
-                    f"{float(row['accepted_combined_delta']):.12g}.\n"
+                    f"{float(row['accepted_combined_delta']):.12g}, "
+                    f"nontrivial consensus sign="
+                    f"{int(row['nontrivial_consensus_sign']):+d}, "
+                    f"cross-window consensus agreement="
+                    f"{row['nontrivial_consensus_agrees_between_windows']}.\n"
                 )
 
 
