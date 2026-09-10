@@ -73,7 +73,9 @@
 #include "SchedulerOwnershipPolicy.hpp"
 #include "SchedulerOwnershipRepository.hpp"
 #include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
+#include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
+#include "SchedulerCore/WorkerProcessController.hpp"
 #include "SchedulerCore/SchedulerSemanticAdmission.hpp"
 #include "SupportedSymbols.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
@@ -1979,7 +1981,9 @@ void ValidateCheckpointPolicyConfig(const SchedulerOptions& options)
 SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
 {
     SchedulerOptions options;
-    options.selfPath = ResolveCanonicalExecutablePath();
+    options.selfPath =
+        EA::SchedulerCore::NativeWorkerProcessController()
+            .resolveExecutablePath();
     for (int index = 0; index < argc; ++index)
     {
         if (index)
@@ -8703,13 +8707,39 @@ std::optional<ExperimentRow> LoadExperimentCheckpointIdentity(
     return RowToExperiment(rows[0]);
 }
 
-ExperimentRow RowToPendingExperiment(const pqxx::row& row)
+ExperimentRow RepositoryRecordToExperiment(
+    const EA::SchedulerCore::SchedulerExperimentRecord& record)
 {
-    ExperimentRow experiment = RowToExperiment(row);
-    experiment.schedulerPriority = row[24].as<std::string>();
-    experiment.resumeRequested = row[25].as<bool>();
-    experiment.schedulerResumeOrigin = row[26].as<std::string>();
-    experiment.activeWorkerAttemptId = OptionalLongLongCell(row, 27);
+    ExperimentRow experiment;
+    experiment.experimentId = record.experimentId;
+    experiment.symbol = EA::CanonicalSymbol::Normalize(record.symbol);
+    experiment.predictionHorizon = record.predictionHorizon;
+    experiment.cNextThreshold = record.cNextThreshold;
+    experiment.coreLrMult = record.coreLrMult;
+    experiment.headLrMult = record.headLrMult;
+    experiment.targetEpochs = record.targetEpochs;
+    experiment.checkpointInterval = record.checkpointInterval;
+    experiment.trainStart = record.trainStart;
+    experiment.trainEnd = record.trainEnd;
+    experiment.inferStart = record.inferStart;
+    experiment.inferEnd = record.inferEnd;
+    experiment.lastModelId = record.lastModelId;
+    experiment.resumeModelId = record.resumeModelId;
+    experiment.trainLogPath = record.trainLogPath;
+    experiment.inferLogPath = record.inferLogPath;
+    experiment.analysisLogPath = record.analysisLogPath;
+    experiment.donchian20Mode =
+        ParseDonchian20Mode(record.donchian20Mode);
+    experiment.featureWarmupScope =
+        EA::ParseFeatureWarmupScope(record.featureWarmupScope);
+    experiment.donchianLookback =
+        ParseDonchianLookback(record.donchianLookback);
+    experiment.featureAblationMask = EA::FeatureAblationMask::Parse(
+        record.featureAblationMask).CanonicalText();
+    experiment.resumeExpandInputWidth = record.resumeExpandInputWidth;
+    experiment.trainingObjective = EA::TrainingObjective::ResolvePersisted(
+        record.trainingObjectiveCanonical,
+        record.trainingObjectiveHash);
     return experiment;
 }
 
@@ -8718,57 +8748,38 @@ std::vector<ExperimentRow> LoadPendingExperiments(
     const std::string& phase,
     bool cancellationOnly = false)
 {
-    std::string sql =
-        "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
-        "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
-        "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash,"
-        "scheduler_priority,resume_requested,scheduler_resume_origin,"
-        "active_scheduler_worker_attempt_id "
-        "FROM experiment "
-        "WHERE status = 'pending' AND phase = $1 ";
-    if (cancellationOnly)
-        sql +=
-            "AND cancellation_request_id=("
-            " SELECT active_request_id FROM experiment_global_control "
-            " WHERE singleton=true) "
-            "AND cancel_after_checkpoint_epoch IS NOT NULL ";
-    sql +=
-        "ORDER BY CASE scheduler_priority WHEN 'high' THEN 0 "
-        "WHEN 'normal' THEN 1 ELSE 2 END ASC,"
-        "CASE scheduler_resume_origin WHEN 'operator' THEN 0 "
-        "WHEN 'preemption' THEN 1 ELSE 2 END ASC,"
-        "updated_at ASC,experiment_id ASC;";
-    pqxx::result rows = w.exec_params(sql, phase);
-
+    EA::SchedulerCore::PostgresSchedulerRepository repository{w};
+    const auto records =
+        repository.loadPendingExperiments(phase, cancellationOnly);
     std::vector<ExperimentRow> experiments;
-    experiments.reserve(rows.size());
-    for (const auto& row : rows)
-        experiments.push_back(RowToPendingExperiment(row));
+    experiments.reserve(records.size());
+    for (const auto& record : records)
+    {
+        ExperimentRow experiment =
+            RepositoryRecordToExperiment(record.experiment);
+        experiment.schedulerPriority = record.schedulerPriority;
+        experiment.resumeRequested = record.resumeRequested;
+        experiment.schedulerResumeOrigin = record.schedulerResumeOrigin;
+        experiment.activeWorkerAttemptId = record.activeWorkerAttemptId;
+        experiments.push_back(std::move(experiment));
+    }
     return experiments;
 }
 
 std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
 {
-    pqxx::result rows = w.exec(
-        "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
-        "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
-        "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash, phase, worker_pid, "
-        "extract(epoch from COALESCE(worker_started_at, updated_at))::double precision "
-        "FROM experiment "
-        "WHERE status = 'running' "
-        "ORDER BY updated_at ASC, experiment_id ASC;");
-
+    EA::SchedulerCore::PostgresSchedulerRepository repository{w};
+    const auto records = repository.loadRunningExperiments();
     std::vector<RunningExperimentState> experiments;
-    experiments.reserve(rows.size());
-    for (const auto& row : rows)
+    experiments.reserve(records.size());
+    for (const auto& record : records)
+    {
         experiments.push_back(RunningExperimentState{
-            RowToExperiment(row),
-            row[24].as<std::string>(),
-            row[25].is_null() ? std::nullopt : std::optional<int>{row[25].as<int>()},
-            row[26].as<double>()});
+            RepositoryRecordToExperiment(record.experiment),
+            record.phase,
+            record.workerPid,
+            record.attemptStartedEpoch});
+    }
     return experiments;
 }
 
@@ -8787,32 +8798,15 @@ void AdvanceCheckpointEvalToAnalyze(
 
 QueueSnapshot LoadQueueSnapshot(pqxx::work& w)
 {
-    QueueSnapshot snapshot;
-    pqxx::result rows = w.exec(
-        "SELECT phase, status, count(*) "
-        "FROM experiment "
-        "WHERE status IN ('pending', 'running') "
-        "AND phase IN ('train', 'infer', 'analyze') "
-        "GROUP BY phase, status;");
-    for (const auto& row : rows)
-    {
-        const std::string phase = row[0].as<std::string>();
-        const std::string status = row[1].as<std::string>();
-        const int count = row[2].as<int>();
-        if (phase == "train" && status == "pending")
-            snapshot.pendingTrain = count;
-        else if (phase == "infer" && status == "pending")
-            snapshot.pendingInfer = count;
-        else if (phase == "analyze" && status == "pending")
-            snapshot.pendingAnalyze = count;
-        else if (phase == "train" && status == "running")
-            snapshot.runningTrain = count;
-        else if (phase == "infer" && status == "running")
-            snapshot.runningInfer = count;
-        else if (phase == "analyze" && status == "running")
-            snapshot.runningAnalyze = count;
-    }
-    return snapshot;
+    EA::SchedulerCore::PostgresSchedulerRepository repository{w};
+    const auto record = repository.loadQueueSnapshot();
+    return QueueSnapshot{
+        record.pendingTrain,
+        record.pendingInfer,
+        record.pendingAnalyze,
+        record.runningTrain,
+        record.runningInfer,
+        record.runningAnalyze};
 }
 
 const char* SchedulerControlActionName(const SchedulerOptions& options)
@@ -10549,14 +10543,7 @@ std::string CommandForDisplay(const std::vector<std::string>& argv)
 std::string CommandForProcessObservation(
     const std::vector<std::string>& argv)
 {
-    std::ostringstream command;
-    for (size_t index = 0; index < argv.size(); ++index)
-    {
-        if (index != 0)
-            command << ' ';
-        command << argv[index];
-    }
-    return command.str();
+    return EA::SchedulerCore::WorkerCommandLine(argv);
 }
 
 void AddCliFlag(std::vector<std::string>& argv, const std::string& optionName)
@@ -11495,72 +11482,34 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
         std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
 
-    const int fd = ::open(logPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
-    {
-        const int openError = errno;
-        ThrowSchedulerChildLaunchError(
+    const EA::SchedulerCore::SpawnResult spawn =
+        EA::SchedulerCore::NativeWorkerProcessController().spawn({
+            argv,
+            logPath,
             experimentId,
             phase,
-            commandLine,
-            openError,
-            "failed to open log file '" + logPath + "'");
-    }
-
-    std::vector<char*> childArgv;
-    childArgv.reserve(argv.size() + 1);
-    for (const auto& arg : argv)
-        childArgv.push_back(const_cast<char*>(arg.c_str()));
-    childArgv.push_back(nullptr);
-    if (argv[0].empty() || argv[0].front() != '/' ||
-        ::access(argv[0].c_str(), X_OK) != 0)
+            true});
+    if (!spawn.launched())
     {
-        ::close(fd);
-        ThrowSchedulerChildLaunchError(
-            experimentId,
-            phase,
-            commandLine,
-            EINVAL,
-            "canonical absolute executable path required");
-    }
-    const char* const phaseData = phase.data();
-    const size_t phaseLength = phase.size();
-
-    pid_t pid = ::fork();
-    if (pid < 0)
-    {
-        const int forkError = errno;
-        ::close(fd);
-        ThrowSchedulerChildLaunchError(
-            experimentId, phase, commandLine, forkError, "fork failed");
-    }
-
-    if (pid == 0)
-    {
-        if (::setsid() < 0)
+        std::string context = "fork failed";
+        if (spawn.failureStage ==
+            EA::SchedulerCore::SpawnFailureStage::InvalidRequest)
         {
-            const int childErrno = errno;
-            ::dup2(fd, STDOUT_FILENO);
-            ::dup2(fd, STDERR_FILENO);
-            ::close(fd);
-            WriteSchedulerChildExecFailureDiagnostic(
-                STDERR_FILENO, experimentId, phaseData, phaseLength, childErrno);
-            _exit(127);
+            context = "canonical absolute executable path required";
         }
-
-        ::signal(SIGHUP, SIG_IGN);
-        ::dup2(fd, STDOUT_FILENO);
-        ::dup2(fd, STDERR_FILENO);
-        ::close(fd);
-
-        ::execv(argv[0].c_str(), childArgv.data());
-        const int childErrno = errno;
-        WriteSchedulerChildExecFailureDiagnostic(
-            STDERR_FILENO, experimentId, phaseData, phaseLength, childErrno);
-        _exit(127);
+        else if (spawn.failureStage ==
+                 EA::SchedulerCore::SpawnFailureStage::OpenLog)
+        {
+            context = "failed to open log file '" + logPath + "'";
+        }
+        ThrowSchedulerChildLaunchError(
+            experimentId,
+            phase,
+            commandLine,
+            spawn.errorNumber,
+            context);
     }
-
-    ::close(fd);
+    const pid_t pid = spawn.pid;
     SchedulerOwnedChild child;
     child.pid = pid;
     child.experimentId = experimentId;
@@ -11597,80 +11546,33 @@ void MarkReservedWorkerAttemptLaunchFailed(
         pqxx::work transaction{connection};
         SetTransactionReadWrite(transaction);
         RequireAndRefreshSchedulerAuthority(transaction, options);
-        pqxx::result terminal = transaction.exec_params(
-            "UPDATE experiment_scheduler_worker_attempt a SET "
-            "lifecycle_state='launch_failed',"
-            "completed_at=clock_timestamp(),exit_code=$1,"
-            "reconciliation_result='launch_failed',diagnostic=$2 "
-            "WHERE a.worker_attempt_id=$3 "
-            "AND a.scheduler_invocation_id=$4 "
-            "AND a.scheduler_fencing_token=$5 "
-            "AND a.lifecycle_state IN ('reserved','spawned') "
-            "AND EXISTS ("
-            " SELECT 1 FROM experiment e "
-            " WHERE $6::bigint IS NULL "
-            " AND e.experiment_id=$7 "
-            " AND e.status='running' AND e.phase=$8 "
-            " AND e.active_scheduler_worker_attempt_id="
-            "a.worker_attempt_id "
-            " UNION ALL "
-            " SELECT 1 FROM experiment_checkpoint_eval ce "
-            " WHERE $6::bigint IS NOT NULL "
-            " AND ce.checkpoint_eval_id=$6 "
-            " AND ce.status='running' AND ce.phase='infer' "
-            " AND ce.active_scheduler_worker_attempt_id="
-            "a.worker_attempt_id"
-            ") RETURNING a.worker_attempt_id;",
-            exitCode,
-            diagnostic,
+        EA::SchedulerCore::PostgresSchedulerRepository repository{
+            transaction};
+        const auto result = repository.persistWorkerAttemptLaunchFailure({
             attempt.workerAttemptId,
             options.schedulerAuthority.schedulerInvocationId,
             options.schedulerAuthority.fencingToken,
-            attempt.checkpointEvalId,
             attempt.experimentId,
-            attempt.phase);
-        EA::SchedulerOwnership::RequireAffectedExactlyOne(
-            terminal,
-            "terminalize_exact_launch_failure_attempt");
-        pqxx::result lifecycle;
-        if (attempt.checkpointEvalId)
+            attempt.checkpointEvalId,
+            attempt.phase,
+            exitCode,
+            diagnostic});
+        if (result == EA::SchedulerCore::
+                          LaunchFailurePersistenceResult::
+                              AttemptPreconditionRejected)
         {
-            lifecycle = transaction.exec_params(
-                "UPDATE experiment_checkpoint_eval SET "
-                "status='failed',worker_pid=NULL,"
-                "worker_process_group_id=NULL,"
-                "completed_at=clock_timestamp(),error_message=$1,"
-                "updated_at=clock_timestamp(),"
-                "active_scheduler_worker_attempt_id=NULL "
-                "WHERE checkpoint_eval_id=$2 "
-                "AND active_scheduler_worker_attempt_id=$3 "
-                "AND status='running' AND phase='infer' "
-                "RETURNING checkpoint_eval_id;",
-                diagnostic,
-                *attempt.checkpointEvalId,
-                attempt.workerAttemptId);
+            throw std::runtime_error(
+                "exact_attempt_predicate_rejected:"
+                "terminalize_exact_launch_failure_attempt:affected_rows=0");
         }
-        else
+        if (result == EA::SchedulerCore::
+                          LaunchFailurePersistenceResult::
+                              LifecyclePreconditionRejected)
         {
-            lifecycle = transaction.exec_params(
-                "UPDATE experiment SET status='failed',"
-                "worker_pid=NULL,worker_process_group_id=NULL,"
-                "completed_at=clock_timestamp(),exit_code=$1,"
-                "error_message=$2,updated_at=clock_timestamp(),"
-                "active_scheduler_worker_attempt_id=NULL "
-                "WHERE experiment_id=$3 "
-                "AND active_scheduler_worker_attempt_id=$4 "
-                "AND status='running' AND phase=$5 "
-                "RETURNING experiment_id;",
-                exitCode,
-                diagnostic,
-                attempt.experimentId,
-                attempt.workerAttemptId,
-                attempt.phase);
+            throw std::runtime_error(
+                "exact_attempt_predicate_rejected:"
+                "clear_exact_launch_failure_binding:affected_rows=0");
         }
-        EA::SchedulerOwnership::RequireAffectedExactlyOne(
-            lifecycle,
-            "clear_exact_launch_failure_binding");
         transaction.commit();
     }
     catch (const std::exception& error)
@@ -11696,31 +11598,20 @@ void PersistSpawnedWorkerAttempt(
     SetTransactionReadWrite(transaction);
     if (requireSchedulerAuthority)
         RequireAndRefreshSchedulerAuthority(transaction, options);
-    pqxx::result spawned = transaction.exec_params(
-        "UPDATE experiment_scheduler_worker_attempt SET "
-        "lifecycle_state='spawned',worker_pid=$1,"
-        "worker_process_group_id=$1,"
-        "worker_process_start_identity=$2,"
-        "canonical_executable_path=$3,command_line=$4,"
-        "spawned_at=COALESCE(spawned_at,clock_timestamp()),"
-        "last_observed_at=clock_timestamp() "
-        "WHERE worker_attempt_id=$5 AND scheduler_invocation_id=$6 "
-        "AND scheduler_fencing_token=$7 "
-        "AND (lifecycle_state='reserved' OR ("
-        " lifecycle_state='spawned' AND worker_pid=$1 "
-        " AND worker_process_group_id=$1 "
-        " AND worker_process_start_identity=$2 "
-        " AND canonical_executable_path=$3 "
-        " AND command_line=$4)) "
-        "RETURNING worker_attempt_id;",
+    EA::SchedulerCore::PostgresSchedulerRepository repository{transaction};
+    const auto result = repository.persistSpawnedWorkerAttempt({
+        attempt.workerAttemptId,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        attempt.experimentId,
+        attempt.checkpointEvalId,
+        attempt.phase,
         static_cast<int>(pid),
         processStartIdentity,
         options.selfPath,
-        commandLine,
-        attempt.workerAttemptId,
-        options.schedulerAuthority.schedulerInvocationId,
-        options.schedulerAuthority.fencingToken);
-    if (spawned.size() != 1)
+        commandLine});
+    if (result == EA::SchedulerCore::
+                      SpawnPersistenceResult::AttemptPreconditionRejected)
     {
         if (requireSchedulerAuthority)
             throw SchedulerAuthorityLost(
@@ -11728,46 +11619,8 @@ void PersistSpawnedWorkerAttempt(
         throw std::runtime_error(
             "child_spawn_evidence_persistence_fence_rejected");
     }
-
-    pqxx::result lifecycle;
-    if (attempt.checkpointEvalId)
-    {
-        lifecycle = transaction.exec_params(
-            "UPDATE experiment_checkpoint_eval SET "
-            "worker_pid=$1,worker_process_group_id=$1,"
-            "worker_process_start_identity=$2,worker_executable=$3,"
-            "worker_command_line=$4,updated_at=clock_timestamp() "
-            "WHERE checkpoint_eval_id=$5 AND status='running' "
-            "AND phase='infer' "
-            "AND active_scheduler_worker_attempt_id=$6 "
-            "RETURNING checkpoint_eval_id;",
-            static_cast<int>(pid),
-            processStartIdentity,
-            options.selfPath,
-            commandLine,
-            *attempt.checkpointEvalId,
-            attempt.workerAttemptId);
-    }
-    else
-    {
-        lifecycle = transaction.exec_params(
-            "UPDATE experiment SET worker_pid=$1,"
-            "worker_process_group_id=$1,"
-            "worker_process_start_identity=$2,worker_executable=$3,"
-            "worker_command_line=$4,updated_at=clock_timestamp() "
-            "WHERE experiment_id=$5 AND status='running' "
-            "AND phase=$6 "
-            "AND active_scheduler_worker_attempt_id=$7 "
-            "RETURNING experiment_id;",
-            static_cast<int>(pid),
-            processStartIdentity,
-            options.selfPath,
-            commandLine,
-            attempt.experimentId,
-            attempt.phase,
-            attempt.workerAttemptId);
-    }
-    if (lifecycle.size() != 1)
+    if (result == EA::SchedulerCore::
+                      SpawnPersistenceResult::LifecyclePreconditionRejected)
         throw std::runtime_error(
             "worker_attempt_spawn_lifecycle_predicate_rejected");
     transaction.commit();
@@ -18398,19 +18251,24 @@ public:
 void TerminateUncommittedSchedulerChildren(
     const std::vector<pid_t>& processGroups)
 {
+    EA::SchedulerCore::WorkerProcessController& processes =
+        EA::SchedulerCore::NativeWorkerProcessController();
     for (const pid_t pid : processGroups)
     {
-        if (::kill(-pid, SIGTERM) != 0)
-            ::kill(pid, SIGTERM);
+        if (!processes.signal(
+                pid,
+                EA::SchedulerCore::WorkerProcessSignal::Terminate,
+                true).success)
+        {
+            (void)processes.signal(
+                pid,
+                EA::SchedulerCore::WorkerProcessSignal::Terminate);
+        }
         bool groupExited = false;
         for (int attempt = 0; attempt < 30; ++attempt)
         {
-            errno = 0;
-            const bool groupExists =
-                ::kill(-pid, 0) == 0 || errno == EPERM;
-            errno = 0;
-            const bool leaderExists =
-                ::kill(pid, 0) == 0 || errno == EPERM;
+            const bool groupExists = processes.isAlive(pid, true).alive;
+            const bool leaderExists = processes.isAlive(pid).alive;
             if (!groupExists && !leaderExists)
             {
                 groupExited = true;
@@ -18420,8 +18278,13 @@ void TerminateUncommittedSchedulerChildren(
         }
         if (!groupExited)
         {
-            ::kill(-pid, SIGKILL);
-            ::kill(pid, SIGKILL);
+            (void)processes.signal(
+                pid,
+                EA::SchedulerCore::WorkerProcessSignal::Kill,
+                true);
+            (void)processes.signal(
+                pid,
+                EA::SchedulerCore::WorkerProcessSignal::Kill);
         }
         gSchedulerOwnedChildren.erase(pid);
     }
@@ -21143,7 +21006,9 @@ void ReapSchedulerOwnedChildren(
         SchedulerOwnedChild& child = it->second;
         if (!child.observedStatus.has_value())
         {
-            const ObservedChildStatus observed = ObserveChildStatusNonBlocking(child.pid);
+            const ObservedChildStatus observed =
+                EA::SchedulerCore::NativeWorkerProcessController()
+                    .observeChild(child.pid);
             if (observed.kind == ChildStatusKind::Running)
             {
                 ++it;
@@ -21922,9 +21787,8 @@ bool SchedulerPidStillExists(std::optional<int> pid)
 {
     if (!pid.has_value() || *pid <= 0)
         return false;
-    if (::kill(static_cast<pid_t>(*pid), 0) == 0)
-        return true;
-    return errno == EPERM;
+    return EA::SchedulerCore::NativeWorkerProcessController()
+        .isAlive(static_cast<pid_t>(*pid)).alive;
 }
 
 int CountRows(pqxx::work& w, const std::string& sql)
@@ -28649,7 +28513,8 @@ bool RegisterSchedulerWorkerAttempt(
             throw std::runtime_error(
                 "worker_process_start_identity_unavailable");
         const std::string executable =
-            ResolveCanonicalExecutablePath();
+            EA::SchedulerCore::NativeWorkerProcessController()
+                .resolveExecutablePath();
 
         pqxx::connection connection{LstmDbConnectionString()};
         pqxx::work transaction{connection};
