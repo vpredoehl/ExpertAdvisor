@@ -74,7 +74,10 @@
 #include "SchedulerOwnershipRepository.hpp"
 #include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
+#include "SchedulerCore/ReconciliationService.hpp"
+#include "SchedulerCore/SchedulerAdmissionService.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
+#include "SchedulerCore/WorkerControlService.hpp"
 #include "SchedulerCore/WorkerProcessController.hpp"
 #include "SchedulerCore/SchedulerSemanticAdmission.hpp"
 #include "SupportedSymbols.hpp"
@@ -8743,14 +8746,29 @@ ExperimentRow RepositoryRecordToExperiment(
     return experiment;
 }
 
+class SchedulerServiceComposition final
+{
+public:
+    explicit SchedulerServiceComposition(pqxx::transaction_base& transaction)
+        : repository{transaction},
+          admission{repository},
+          workerControl{
+              EA::SchedulerCore::NativeWorkerProcessController()}
+    {
+    }
+
+    EA::SchedulerCore::PostgresSchedulerRepository repository;
+    EA::SchedulerCore::SchedulerAdmissionService admission;
+    EA::SchedulerCore::WorkerControlService workerControl;
+};
+
 std::vector<ExperimentRow> LoadPendingExperiments(
-    pqxx::work& w,
+    EA::SchedulerCore::SchedulerAdmissionService& admission,
     const std::string& phase,
     bool cancellationOnly = false)
 {
-    EA::SchedulerCore::PostgresSchedulerRepository repository{w};
     const auto records =
-        repository.loadPendingExperiments(phase, cancellationOnly);
+        admission.loadCandidates(phase, cancellationOnly);
     std::vector<ExperimentRow> experiments;
     experiments.reserve(records.size());
     for (const auto& record : records)
@@ -8796,10 +8814,10 @@ void AdvanceCheckpointEvalToAnalyze(
     const std::optional<long long>&
         workerAttemptId = std::nullopt);
 
-QueueSnapshot LoadQueueSnapshot(pqxx::work& w)
+QueueSnapshot LoadQueueSnapshot(
+    EA::SchedulerCore::SchedulerAdmissionService& admission)
 {
-    EA::SchedulerCore::PostgresSchedulerRepository repository{w};
-    const auto record = repository.loadQueueSnapshot();
+    const auto record = admission.loadQueueSnapshot();
     return QueueSnapshot{
         record.pendingTrain,
         record.pendingInfer,
@@ -10606,18 +10624,6 @@ int SchedulerChildLaunchErrorNumber(const std::exception& error)
 
 std::string RequireProcessStartIdentity(pid_t pid);
 
-int CountGlobalWorkerCapacity(
-    pqxx::work& transaction,
-    const std::string& capacityClass)
-{
-    return transaction.exec_params(
-        "SELECT count(*) FROM experiment_scheduler_worker_attempt "
-        "WHERE capacity_class=$1 AND lifecycle_state IN "
-        "('reserved','spawned','running','observed',"
-        "'identity_ambiguous');",
-        capacityClass).one_row()[0].as<int>();
-}
-
 EA::GlobalExperimentControl::ManagedWorker ManagedWorkerFromExactAttempt(
     const EA::SchedulerOwnership::ExactAttemptSnapshot& exact)
 {
@@ -10667,6 +10673,7 @@ bool PreemptOneLowerPriorityWorker(
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     RequireAndRefreshSchedulerAuthority(transaction, options);
+    SchedulerServiceComposition services{transaction};
     if (!SchedulerLaunchAllowed(transaction, phase))
     {
         transaction.commit();
@@ -10689,36 +10696,15 @@ bool PreemptOneLowerPriorityWorker(
         transaction.commit();
         return false;
     }
-    const int candidateRank =
-        EA::SchedulerCore::PriorityRank(candidate.schedulerPriority);
-    if (CountGlobalWorkerCapacity(transaction, phase) < maximumCapacity)
+    if (services.admission.capacityUsed(phase) < maximumCapacity)
     {
         transaction.commit();
         return false;
     }
 
-    const pqxx::result victims = transaction.exec(
-        "SELECT e.experiment_id,e.scheduler_priority,"
-        "e.active_scheduler_worker_attempt_id "
-        "FROM experiment e "
-        "JOIN experiment_scheduler_worker_attempt a "
-        "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
-        "WHERE e.status='running' AND e.phase=$1 "
-        "AND a.worker_kind='experiment' "
-        "AND a.lifecycle_phase=$1 AND a.capacity_class=$1 "
-        "AND a.lifecycle_state IN ('spawned','running','observed') "
-        "AND e.cancellation_request_id IS NULL "
-        "AND e.cancel_after_checkpoint_epoch IS NULL "
-        "AND e.stop_after_checkpoint_epoch IS NULL "
-        "AND e.worker_global_pause_request_id IS NULL "
-        "AND e.worker_control_state='running' "
-        "AND CASE e.scheduler_priority WHEN 'high' THEN 0 "
-        "WHEN 'normal' THEN 1 ELSE 2 END > $2 "
-        "ORDER BY CASE e.scheduler_priority WHEN 'low' THEN 0 "
-        "WHEN 'normal' THEN 1 ELSE 2 END,"
-        "e.worker_started_at DESC NULLS LAST,e.experiment_id DESC LIMIT 1;",
-        pqxx::params{phase, candidateRank});
-    if (victims.empty())
+    const auto victim = services.admission.selectPreemptionVictim(
+        phase, candidate.schedulerPriority);
+    if (!victim)
     {
         std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
                   << ",candidate_experiment_id="
@@ -10733,11 +10719,11 @@ bool PreemptOneLowerPriorityWorker(
     }
 
     const long long victimExperimentId =
-        victims[0][0].as<long long>();
+        victim->experimentId;
     const std::string victimPriority =
-        victims[0][1].as<std::string>();
+        victim->priority;
     const long long workerAttemptId =
-        victims[0][2].as<long long>();
+        victim->workerAttemptId;
     EA::SchedulerOwnership::ExactAttemptExpectation expected;
     expected.workerAttemptId = workerAttemptId;
     expected.experimentId = victimExperimentId;
@@ -10784,7 +10770,7 @@ bool PreemptOneLowerPriorityWorker(
         !reverified[0][5].is_null() ||
         !reverified[0][6].is_null() ||
         reverified[0][7].as<std::string>() != "running" ||
-        CountGlobalWorkerCapacity(transaction, phase) < maximumCapacity)
+        services.admission.capacityUsed(phase) < maximumCapacity)
     {
         transaction.commit();
         return false;
@@ -10919,14 +10905,13 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     RequireAndRefreshSchedulerAuthority(transaction, options);
+    SchedulerServiceComposition services{transaction};
     if (!SchedulerLaunchAllowed(transaction, phase))
     {
         transaction.commit();
         return StoppedWorkerAdmissionResult::DeferredUnsafe;
     }
-    if (!SchedulerWorkerCapacityHasSlot(
-            maximumCapacity,
-            CountGlobalWorkerCapacity(transaction, phase)))
+    if (!services.admission.hasCapacity(phase, maximumCapacity))
     {
         transaction.commit();
         return StoppedWorkerAdmissionResult::DeferredNoCapacity;
@@ -10999,14 +10984,31 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
     if (signal.identity ==
         EA::GlobalExperimentControl::IdentityResult::ProcessMissing)
     {
+        auto missingPlan =
+            EA::SchedulerCore::PlanMissingStoppedWorker(
+                phase,
+                "pending",
+                true,
+                experiment.schedulerResumeOrigin,
+                false);
+        const bool preemptedTrainRestart =
+            missingPlan.disposition ==
+            EA::SchedulerCore::MissingStoppedWorkerDisposition::
+                FailPreemptedTrainWithoutCheckpoint;
         std::optional<QueueResumeMeta> restartCheckpoint;
-        if (phase == "train" &&
-            experiment.schedulerResumeOrigin == "preemption")
+        if (preemptedTrainRestart)
         {
             const TrainingCheckpointSelection selection =
                 SelectUsableTrainingCheckpoint(
                     transaction, experiment, std::nullopt, false);
             restartCheckpoint = selection.checkpoint;
+            missingPlan =
+                EA::SchedulerCore::PlanMissingStoppedWorker(
+                    phase,
+                    "pending",
+                    true,
+                    experiment.schedulerResumeOrigin,
+                    restartCheckpoint.has_value());
         }
         pqxx::result retired = transaction.exec_params(
             "UPDATE experiment_scheduler_worker_attempt SET "
@@ -11024,9 +11026,9 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
         EA::SchedulerOwnership::RequireAffectedExactlyOne(
             retired, "retire_missing_stopped_worker_attempt");
         pqxx::result detached;
-        if (phase == "train" &&
-            experiment.schedulerResumeOrigin == "preemption" &&
-            !restartCheckpoint.has_value())
+        if (missingPlan.disposition ==
+            EA::SchedulerCore::MissingStoppedWorkerDisposition::
+                FailPreemptedTrainWithoutCheckpoint)
         {
             detached = transaction.exec(
                 "UPDATE experiment SET status='failed',"
@@ -11046,7 +11048,9 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
                     experiment.experimentId,
                     exact->workerAttemptId});
         }
-        else if (restartCheckpoint.has_value())
+        else if (missingPlan.disposition ==
+                 EA::SchedulerCore::MissingStoppedWorkerDisposition::
+                     RestartPreemptedTrainFromCheckpoint)
         {
             detached = transaction.exec(
                 "UPDATE experiment SET worker_pid=NULL,"
@@ -11097,19 +11101,14 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
                   << ",resume_origin="
                   << experiment.schedulerResumeOrigin
                   << ",fallback="
-                  << (phase == "train" &&
-                              experiment.schedulerResumeOrigin ==
-                                  "preemption"
-                          ? (restartCheckpoint.has_value()
-                                 ? "phase_a_checkpoint_restart"
-                                 : "failed_no_valid_checkpoint")
+                  << (preemptedTrainRestart
+                          ? missingPlan.eventResult
                           : "checkpoint_restart")
                   << std::endl;
         // A preempted train restart may have promoted an earlier checkpoint.
         // Defer it to the next poll so command construction reloads that
         // authoritative identity instead of using this turn's stale snapshot.
-        if (phase == "train" &&
-            experiment.schedulerResumeOrigin == "preemption")
+        if (preemptedTrainRestart)
         {
             return StoppedWorkerAdmissionResult::DeferredUnsafe;
         }
@@ -11196,6 +11195,7 @@ ReserveExperimentWorkerAttempt(
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     RequireAndRefreshSchedulerAuthority(transaction, options);
+    SchedulerServiceComposition services{transaction};
     if (!SchedulerLaunchAllowed(
             transaction,
             phase,
@@ -11221,9 +11221,7 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
-    const int used =
-        CountGlobalWorkerCapacity(transaction, phase);
-    if (!SchedulerWorkerCapacityHasSlot(maximumCapacity, used))
+    if (!services.admission.hasCapacity(phase, maximumCapacity))
     {
         transaction.commit();
         return std::nullopt;
@@ -11338,6 +11336,7 @@ ReserveCheckpointWorkerAttempt(
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     RequireAndRefreshSchedulerAuthority(transaction, options);
+    SchedulerServiceComposition services{transaction};
     if (!SchedulerLaunchAllowed(
             transaction, "checkpoint_infer", true, false))
     {
@@ -11359,9 +11358,7 @@ ReserveCheckpointWorkerAttempt(
         transaction.commit();
         return std::nullopt;
     }
-    if (!SchedulerWorkerCapacityHasSlot(
-            maximumCapacity,
-            CountGlobalWorkerCapacity(transaction, "infer")))
+    if (!services.admission.hasCapacity("infer", maximumCapacity))
     {
         transaction.commit();
         return std::nullopt;
@@ -13900,7 +13897,8 @@ size_t WriteIndexReport(pqxx::work& w,
         "COUNT(*) FILTER (WHERE status = 'failed') AS failed_experiments, "
         "COUNT(*) FILTER (WHERE status IN ('pending', 'running')) AS pending_running_experiments "
         "FROM experiment;");
-    const QueueSnapshot queue = LoadQueueSnapshot(w);
+    SchedulerServiceComposition services{w};
+    const QueueSnapshot queue = LoadQueueSnapshot(services.admission);
 
     std::ostringstream out;
     out << "# Experiment Reports Dashboard\n\n";
@@ -18251,41 +18249,11 @@ public:
 void TerminateUncommittedSchedulerChildren(
     const std::vector<pid_t>& processGroups)
 {
-    EA::SchedulerCore::WorkerProcessController& processes =
-        EA::SchedulerCore::NativeWorkerProcessController();
+    EA::SchedulerCore::WorkerControlService workerControl{
+        EA::SchedulerCore::NativeWorkerProcessController()};
     for (const pid_t pid : processGroups)
     {
-        if (!processes.signal(
-                pid,
-                EA::SchedulerCore::WorkerProcessSignal::Terminate,
-                true).success)
-        {
-            (void)processes.signal(
-                pid,
-                EA::SchedulerCore::WorkerProcessSignal::Terminate);
-        }
-        bool groupExited = false;
-        for (int attempt = 0; attempt < 30; ++attempt)
-        {
-            const bool groupExists = processes.isAlive(pid, true).alive;
-            const bool leaderExists = processes.isAlive(pid).alive;
-            if (!groupExists && !leaderExists)
-            {
-                groupExited = true;
-                break;
-            }
-            ::usleep(100000);
-        }
-        if (!groupExited)
-        {
-            (void)processes.signal(
-                pid,
-                EA::SchedulerCore::WorkerProcessSignal::Kill,
-                true);
-            (void)processes.signal(
-                pid,
-                EA::SchedulerCore::WorkerProcessSignal::Kill);
-        }
+        (void)workerControl.terminateUncommittedWorker({pid, 30, 100000});
         gSchedulerOwnedChildren.erase(pid);
     }
 }
@@ -19658,21 +19626,32 @@ int RecoverOrphanedRunningExperiments(
         const int pid = row[3].as<int>();
         const EA::GlobalExperimentControl::ProcessObservation
             observation = processes->Observe(pid);
-        if (!observation.inspectionSucceeded)
+        const auto initialObservationPlan =
+            EA::SchedulerCore::PlanAttemptObservation({
+                observation.inspectionSucceeded,
+                observation.exists,
+                false,
+                state == "stopped",
+                observation.stopped});
+        if (initialObservationPlan.action ==
+            EA::SchedulerCore::AttemptObservationAction::Defer)
         {
             transaction.exec_params(
                 "UPDATE experiment_scheduler_worker_attempt SET "
-                "lifecycle_state='identity_ambiguous',"
+                "lifecycle_state=$1,"
                 "last_observed_at=clock_timestamp(),"
-                "observed_by_scheduler_invocation_id=$1,"
-                "diagnostic='process_identity_inspection_failed' "
-                "WHERE worker_attempt_id=$2;",
+                "observed_by_scheduler_invocation_id=$2,"
+                "diagnostic=$3 "
+                "WHERE worker_attempt_id=$4;",
+                initialObservationPlan.lifecycleState,
                 options.schedulerAuthority.schedulerInvocationId,
+                initialObservationPlan.diagnostic,
                 attemptId);
             continue;
         }
 
-        if (observation.exists)
+        if (initialObservationPlan.action ==
+            EA::SchedulerCore::AttemptObservationAction::RetainLive)
         {
             bool identityMatches =
                 !row[4].is_null() &&
@@ -19737,29 +19716,26 @@ int RecoverOrphanedRunningExperiments(
                         experimentId);
             }
 
-            const bool remainsStopped =
-                identityMatches && state == "stopped" &&
-                observation.stopped;
-            const bool unexpectedlyExecuting =
-                identityMatches && state == "stopped" &&
-                !observation.stopped;
+            const auto observationPlan =
+                EA::SchedulerCore::PlanAttemptObservation({
+                    true,
+                    true,
+                    identityMatches,
+                    state == "stopped",
+                    observation.stopped});
             transaction.exec_params(
                 "UPDATE experiment_scheduler_worker_attempt SET "
                 "lifecycle_state=$1,last_observed_at=clock_timestamp(),"
                 "observed_by_scheduler_invocation_id=$2,"
                 "reconciliation_result=$3,diagnostic=$4 "
                 "WHERE worker_attempt_id=$5;",
-                identityMatches
-                    ? (remainsStopped ? "stopped" : "observed")
-                    : "identity_ambiguous",
+                observationPlan.lifecycleState,
                 options.schedulerAuthority.schedulerInvocationId,
-                identityMatches ? "valid_process_observed"
-                                : "identity_mismatch",
-                identityMatches
-                    ? "live_worker_observed_without_relaunch"
-                    : "pid_reuse_or_worker_identity_mismatch",
+                observationPlan.reconciliationResult,
+                observationPlan.diagnostic,
                 attemptId);
-            if (unexpectedlyExecuting && !checkpointEvalId)
+            if (observationPlan.restoreRunningLifecycle &&
+                !checkpointEvalId)
             {
                 transaction.exec_params(
                     "UPDATE experiment SET status='running',"
@@ -19781,7 +19757,7 @@ int RecoverOrphanedRunningExperiments(
                 << ",experiment_id=" << experimentId
                 << ",pid=" << pid
                 << ",capacity_consumed="
-                << (remainsStopped ? 0 : 1)
+                << (observationPlan.capacityConsumed ? 1 : 0)
                 << std::endl;
             continue;
         }
@@ -19801,12 +19777,23 @@ int RecoverOrphanedRunningExperiments(
                     attemptId);
             if (stoppedLifecycle.size() == 1)
             {
+                const std::string stoppedStatus =
+                    stoppedLifecycle[0][0].as<std::string>();
+                const bool stoppedResumeRequested =
+                    stoppedLifecycle[0][1].as<bool>();
+                const std::string stoppedResumeOrigin =
+                    stoppedLifecycle[0][2].as<std::string>();
+                auto missingPlan =
+                    EA::SchedulerCore::PlanMissingStoppedWorker(
+                        phase,
+                        stoppedStatus,
+                        stoppedResumeRequested,
+                        stoppedResumeOrigin,
+                        false);
                 const bool preemptedTrainRestart =
-                    phase == "train" &&
-                    stoppedLifecycle[0][0].as<std::string>() == "pending" &&
-                    stoppedLifecycle[0][1].as<bool>() &&
-                    stoppedLifecycle[0][2].as<std::string>() ==
-                        "preemption";
+                    missingPlan.disposition ==
+                    EA::SchedulerCore::MissingStoppedWorkerDisposition::
+                        FailPreemptedTrainWithoutCheckpoint;
                 std::optional<QueueResumeMeta> restartCheckpoint;
                 if (preemptedTrainRestart)
                 {
@@ -19823,6 +19810,13 @@ int RecoverOrphanedRunningExperiments(
                             std::nullopt,
                             false)
                             .checkpoint;
+                    missingPlan =
+                        EA::SchedulerCore::PlanMissingStoppedWorker(
+                            phase,
+                            stoppedStatus,
+                            stoppedResumeRequested,
+                            stoppedResumeOrigin,
+                            restartCheckpoint.has_value());
                 }
                 pqxx::result retired = transaction.exec_params(
                     "UPDATE experiment_scheduler_worker_attempt SET "
@@ -19843,7 +19837,9 @@ int RecoverOrphanedRunningExperiments(
                     retired,
                     "reconcile_missing_stopped_worker_attempt");
                 pqxx::result detached;
-                if (preemptedTrainRestart && !restartCheckpoint.has_value())
+                if (missingPlan.disposition ==
+                    EA::SchedulerCore::MissingStoppedWorkerDisposition::
+                        FailPreemptedTrainWithoutCheckpoint)
                 {
                     detached = transaction.exec(
                         "UPDATE experiment SET status='failed',"
@@ -19865,7 +19861,10 @@ int RecoverOrphanedRunningExperiments(
                         "RETURNING experiment_id;",
                         pqxx::params{experimentId, attemptId});
                 }
-                else if (restartCheckpoint.has_value())
+                else if (missingPlan.disposition ==
+                         EA::SchedulerCore::
+                             MissingStoppedWorkerDisposition::
+                                 RestartPreemptedTrainFromCheckpoint)
                 {
                     detached = transaction.exec(
                         "UPDATE experiment SET worker_pid=NULL,"
@@ -19920,11 +19919,7 @@ int RecoverOrphanedRunningExperiments(
                     << ",resume_origin="
                     << stoppedLifecycle[0][2].as<std::string>()
                     << ",result="
-                    << (preemptedTrainRestart
-                            ? (restartCheckpoint.has_value()
-                                   ? "phase_a_checkpoint_restart"
-                                   : "failed_no_valid_checkpoint")
-                            : "process_missing_restart_eligible")
+                    << missingPlan.eventResult
                     << std::endl;
                 ++reconciled;
                 continue;
@@ -20159,6 +20154,9 @@ int RecoverOrphanedRunningExperiments(
                 experimentId, attemptId);
         }
 
+        const auto terminalPlan =
+            EA::SchedulerCore::PlanMissingProcessTerminalization(
+                completedEvidence);
         pqxx::result terminal = transaction.exec_params(
             "UPDATE experiment_scheduler_worker_attempt a SET "
             "lifecycle_state=$1,completed_at=clock_timestamp(),"
@@ -20182,12 +20180,10 @@ int RecoverOrphanedRunningExperiments(
             " AND ce.active_scheduler_worker_attempt_id="
             "a.worker_attempt_id"
             ") RETURNING a.worker_attempt_id;",
-            completedEvidence ? "completed" : "failed",
+            terminalPlan.attemptLifecycleState,
             options.schedulerAuthority.schedulerInvocationId,
-            completedEvidence
-                ? "process_missing_result_recovered"
-                : "process_missing_no_result",
-            "exact_process_identity_absent",
+            terminalPlan.reconciliationResult,
+            terminalPlan.diagnostic,
             attemptId,
             checkpointEvalId,
             experimentId);
@@ -21203,8 +21199,10 @@ void FinishSchedulerPollLogging(SchedulerEventLogState* logState)
         return 0;
     }
 
+    SchedulerServiceComposition services{w};
     const std::vector<ExperimentRow> jobs =
-        LoadPendingExperiments(w, "train", cancellationOnly);
+        LoadPendingExperiments(
+            services.admission, "train", cancellationOnly);
     PhaseSchedulingStats stats;
     stats.phase = "train";
     stats.examined = static_cast<int>(jobs.size());
@@ -21377,7 +21375,9 @@ int CountRows(pqxx::work& w, const std::string& sql);
         return 0;
     }
 
-    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "infer");
+    SchedulerServiceComposition services{w};
+    const std::vector<ExperimentRow> jobs =
+        LoadPendingExperiments(services.admission, "infer");
     PhaseSchedulingStats stats;
     stats.phase = "infer";
     stats.examined = static_cast<int>(jobs.size());
@@ -21615,7 +21615,9 @@ int CountRows(pqxx::work& w, const std::string& sql);
         return 0;
     }
 
-    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "analyze");
+    SchedulerServiceComposition services{w};
+    const std::vector<ExperimentRow> jobs =
+        LoadPendingExperiments(services.admission, "analyze");
     PhaseSchedulingStats stats;
     stats.phase = "analyze";
     stats.examined = static_cast<int>(jobs.size());
@@ -22143,6 +22145,7 @@ ClaimCheckpointAnalysis(
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     RequireAndRefreshSchedulerAuthority(transaction, options);
+    SchedulerServiceComposition services{transaction};
     if (!CheckpointEvalTableExists(transaction) ||
         !SchedulerLaunchAllowed(
             transaction, "checkpoint_analyze"))
@@ -22150,9 +22153,8 @@ ClaimCheckpointAnalysis(
         transaction.commit();
         return std::nullopt;
     }
-    if (!SchedulerWorkerCapacityHasSlot(
-            options.maxAnalyzeProcs,
-            CountGlobalWorkerCapacity(transaction, "analyze")))
+    if (!services.admission.hasCapacity(
+            "analyze", options.maxAnalyzeProcs))
     {
         transaction.commit();
         return std::nullopt;
@@ -22515,8 +22517,8 @@ int GlobalCapacityUsed(
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     RequireAndRefreshSchedulerAuthority(transaction, options);
-    const int used =
-        CountGlobalWorkerCapacity(transaction, capacityClass);
+    SchedulerServiceComposition services{transaction};
+    const int used = services.admission.capacityUsed(capacityClass);
     transaction.commit();
     return used;
 }
@@ -22534,6 +22536,7 @@ int RunTrainJobs(
         pqxx::work transaction{connection};
         SetTransactionReadWrite(transaction);
         RequireAndRefreshSchedulerAuthority(transaction, options);
+        SchedulerServiceComposition services{transaction};
         if (!SchedulerLaunchAllowed(
                 transaction,
                 "train",
@@ -22544,9 +22547,8 @@ int RunTrainJobs(
             return 0;
         }
         jobs = LoadPendingExperiments(
-            transaction, "train", cancellationOnly);
-        initialUsed =
-            CountGlobalWorkerCapacity(transaction, "train");
+            services.admission, "train", cancellationOnly);
+        initialUsed = services.admission.capacityUsed("train");
         transaction.commit();
     }
 
@@ -22729,14 +22731,14 @@ int RunInferJobs(
         pqxx::work transaction{connection};
         SetTransactionReadWrite(transaction);
         RequireAndRefreshSchedulerAuthority(transaction, options);
+        SchedulerServiceComposition services{transaction};
         if (!SchedulerLaunchAllowed(transaction, "infer"))
         {
             transaction.commit();
             return 0;
         }
-        jobs = LoadPendingExperiments(transaction, "infer");
-        initialUsed =
-            CountGlobalWorkerCapacity(transaction, "infer");
+        jobs = LoadPendingExperiments(services.admission, "infer");
+        initialUsed = services.admission.capacityUsed("infer");
         transaction.commit();
     }
 
@@ -22952,14 +22954,14 @@ int RunAnalyzeJobs(
         pqxx::work transaction{connection};
         SetTransactionReadWrite(transaction);
         RequireAndRefreshSchedulerAuthority(transaction, options);
+        SchedulerServiceComposition services{transaction};
         if (!SchedulerLaunchAllowed(transaction, "analyze"))
         {
             transaction.commit();
             return 0;
         }
-        jobs = LoadPendingExperiments(transaction, "analyze");
-        initialUsed =
-            CountGlobalWorkerCapacity(transaction, "analyze");
+        jobs = LoadPendingExperiments(services.admission, "analyze");
+        initialUsed = services.admission.capacityUsed("analyze");
         transaction.commit();
     }
 
@@ -23167,6 +23169,7 @@ int RunSchedulerOnce(const SchedulerOptions& options,
         if (!options.dryRun)
             SetTransactionReadWrite(w);
         RequireAndRefreshSchedulerAuthority(w, options);
+        SchedulerServiceComposition services{w};
         if (!RequireSchedulerTables(w))
             return 1;
         const auto control = LoadLockedGlobalControl(w);
@@ -23195,7 +23198,7 @@ int RunSchedulerOnce(const SchedulerOptions& options,
                 rc |= FailInvalidSchedulerPhases(w);
             }
         }
-        snapshot = LoadQueueSnapshot(w);
+        snapshot = LoadQueueSnapshot(services.admission);
         PrintQueueSnapshot(snapshot, logState, options.schedulerVerbose);
         w.commit();
     }
@@ -26456,7 +26459,9 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
         "missing_count,rejected_count,failed_count "
         "FROM experiment_admin_request "
         "ORDER BY request_id DESC LIMIT 1;");
-    const QueueSnapshot queueSnapshot = LoadQueueSnapshot(w);
+    SchedulerServiceComposition services{w};
+    const QueueSnapshot queueSnapshot =
+        LoadQueueSnapshot(services.admission);
     const SchedulerStatusCounts counts = LoadSchedulerStatusCounts(w);
     const SchedulerIntelligenceSnapshot intelligence = LoadSchedulerIntelligenceSnapshot(w, queueSnapshot);
     std::vector<SchedulerStatusJob> runningTrain = LoadSchedulerStatusJobs(w, "running", "train", 50, false);

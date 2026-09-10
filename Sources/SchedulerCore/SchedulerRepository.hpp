@@ -66,6 +66,13 @@ struct SchedulerQueueSnapshot
     int runningAnalyze = 0;
 };
 
+struct PreemptionVictimRecord
+{
+    long long experimentId = -1;
+    std::string priority;
+    long long workerAttemptId = -1;
+};
+
 struct PendingSelectionMetadata
 {
     std::string priority = "normal";
@@ -132,6 +139,12 @@ public:
     virtual std::vector<RunningSchedulerExperimentRecord>
     loadRunningExperiments() = 0;
     virtual SchedulerQueueSnapshot loadQueueSnapshot() = 0;
+    virtual int countWorkersConsumingCapacity(
+        std::string_view capacityClass) = 0;
+    virtual std::optional<PreemptionVictimRecord>
+    loadPreemptionVictim(
+        std::string_view phase,
+        int candidatePriorityRank) = 0;
 
     virtual SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const SpawnedWorkerAttemptUpdate& update) = 0;

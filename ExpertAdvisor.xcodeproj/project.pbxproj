@@ -318,6 +318,9 @@
 		0F21001033E0000100AAA001 /* SchedulerRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F21000133E0000100AAA001 /* SchedulerRepository.cpp */; };
 		0F21001133E0000100AAA001 /* PostgresSchedulerRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F21000333E0000100AAA001 /* PostgresSchedulerRepository.cpp */; };
 		0F21001233E0000100AAA001 /* WorkerProcessController.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F21000533E0000100AAA001 /* WorkerProcessController.cpp */; };
+		0F22001033F0000100AAA001 /* SchedulerAdmissionService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F22000133F0000100AAA001 /* SchedulerAdmissionService.cpp */; };
+		0F22001133F0000100AAA001 /* WorkerControlService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F22000333F0000100AAA001 /* WorkerControlService.cpp */; };
+		0F22001233F0000100AAA001 /* ReconciliationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F22000533F0000100AAA001 /* ReconciliationService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -765,6 +768,12 @@
 		0F21000433E0000100AAA001 /* PostgresSchedulerRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PostgresSchedulerRepository.hpp; path = Sources/SchedulerCore/PostgresSchedulerRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0F21000533E0000100AAA001 /* WorkerProcessController.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = WorkerProcessController.cpp; path = Sources/SchedulerCore/WorkerProcessController.cpp; sourceTree = SOURCE_ROOT; };
 		0F21000633E0000100AAA001 /* WorkerProcessController.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = WorkerProcessController.hpp; path = Sources/SchedulerCore/WorkerProcessController.hpp; sourceTree = SOURCE_ROOT; };
+		0F22000133F0000100AAA001 /* SchedulerAdmissionService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerAdmissionService.cpp; path = Sources/SchedulerCore/SchedulerAdmissionService.cpp; sourceTree = SOURCE_ROOT; };
+		0F22000233F0000100AAA001 /* SchedulerAdmissionService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerAdmissionService.hpp; path = Sources/SchedulerCore/SchedulerAdmissionService.hpp; sourceTree = SOURCE_ROOT; };
+		0F22000333F0000100AAA001 /* WorkerControlService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = WorkerControlService.cpp; path = Sources/SchedulerCore/WorkerControlService.cpp; sourceTree = SOURCE_ROOT; };
+		0F22000433F0000100AAA001 /* WorkerControlService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = WorkerControlService.hpp; path = Sources/SchedulerCore/WorkerControlService.hpp; sourceTree = SOURCE_ROOT; };
+		0F22000533F0000100AAA001 /* ReconciliationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReconciliationService.cpp; path = Sources/SchedulerCore/ReconciliationService.cpp; sourceTree = SOURCE_ROOT; };
+		0F22000633F0000100AAA001 /* ReconciliationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ReconciliationService.hpp; path = Sources/SchedulerCore/ReconciliationService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1224,6 +1233,12 @@
 				0F21000433E0000100AAA001 /* PostgresSchedulerRepository.hpp */,
 				0F21000533E0000100AAA001 /* WorkerProcessController.cpp */,
 				0F21000633E0000100AAA001 /* WorkerProcessController.hpp */,
+				0F22000133F0000100AAA001 /* SchedulerAdmissionService.cpp */,
+				0F22000233F0000100AAA001 /* SchedulerAdmissionService.hpp */,
+				0F22000333F0000100AAA001 /* WorkerControlService.cpp */,
+				0F22000433F0000100AAA001 /* WorkerControlService.hpp */,
+				0F22000533F0000100AAA001 /* ReconciliationService.cpp */,
+				0F22000633F0000100AAA001 /* ReconciliationService.hpp */,
 				0F1A002033A0000100AAA001 /* SchedulerInferenceResultRecovery.hpp */,
 				0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */,
 			);
@@ -1768,6 +1783,9 @@
 				0F21001033E0000100AAA001 /* SchedulerRepository.cpp in Sources */,
 				0F21001133E0000100AAA001 /* PostgresSchedulerRepository.cpp in Sources */,
 				0F21001233E0000100AAA001 /* WorkerProcessController.cpp in Sources */,
+				0F22001033F0000100AAA001 /* SchedulerAdmissionService.cpp in Sources */,
+				0F22001133F0000100AAA001 /* WorkerControlService.cpp in Sources */,
+				0F22001233F0000100AAA001 /* ReconciliationService.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

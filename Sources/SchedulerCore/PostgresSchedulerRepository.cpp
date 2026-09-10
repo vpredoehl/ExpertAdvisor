@@ -157,6 +157,51 @@ SchedulerQueueSnapshot PostgresSchedulerRepository::loadQueueSnapshot()
     return snapshot;
 }
 
+int PostgresSchedulerRepository::countWorkersConsumingCapacity(
+    std::string_view capacityClass)
+{
+    return transaction_.exec(
+        "SELECT count(*) FROM experiment_scheduler_worker_attempt "
+        "WHERE capacity_class=$1 AND lifecycle_state IN "
+        "('reserved','spawned','running','observed',"
+        "'identity_ambiguous');",
+        pqxx::params{capacityClass}).one_row()[0].as<int>();
+}
+
+std::optional<PreemptionVictimRecord>
+PostgresSchedulerRepository::loadPreemptionVictim(
+    std::string_view phase,
+    int candidatePriorityRank)
+{
+    const pqxx::result rows = transaction_.exec(
+        "SELECT e.experiment_id,e.scheduler_priority,"
+        "e.active_scheduler_worker_attempt_id "
+        "FROM experiment e "
+        "JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
+        "WHERE e.status='running' AND e.phase=$1 "
+        "AND a.worker_kind='experiment' "
+        "AND a.lifecycle_phase=$1 AND a.capacity_class=$1 "
+        "AND a.lifecycle_state IN ('spawned','running','observed') "
+        "AND e.cancellation_request_id IS NULL "
+        "AND e.cancel_after_checkpoint_epoch IS NULL "
+        "AND e.stop_after_checkpoint_epoch IS NULL "
+        "AND e.worker_global_pause_request_id IS NULL "
+        "AND e.worker_control_state='running' "
+        "AND CASE e.scheduler_priority WHEN 'high' THEN 0 "
+        "WHEN 'normal' THEN 1 ELSE 2 END > $2 "
+        "ORDER BY CASE e.scheduler_priority WHEN 'low' THEN 0 "
+        "WHEN 'normal' THEN 1 ELSE 2 END,"
+        "e.worker_started_at DESC NULLS LAST,e.experiment_id DESC LIMIT 1;",
+        pqxx::params{phase, candidatePriorityRank});
+    if (rows.empty())
+        return std::nullopt;
+    return PreemptionVictimRecord{
+        rows[0][0].as<long long>(),
+        rows[0][1].as<std::string>(),
+        rows[0][2].as<long long>()};
+}
+
 SpawnPersistenceResult
 PostgresSchedulerRepository::persistSpawnedWorkerAttempt(
     const SpawnedWorkerAttemptUpdate& update)

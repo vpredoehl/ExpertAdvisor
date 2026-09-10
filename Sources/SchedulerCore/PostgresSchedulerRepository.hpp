@@ -21,6 +21,11 @@ public:
     std::vector<RunningSchedulerExperimentRecord>
     loadRunningExperiments() override;
     SchedulerQueueSnapshot loadQueueSnapshot() override;
+    int countWorkersConsumingCapacity(
+        std::string_view capacityClass) override;
+    std::optional<PreemptionVictimRecord> loadPreemptionVictim(
+        std::string_view phase,
+        int candidatePriorityRank) override;
 
     SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const SpawnedWorkerAttemptUpdate& update) override;

@@ -21,6 +21,8 @@ public:
     std::vector<EA::SchedulerCore::PendingSchedulerExperimentRecord> pending;
     std::vector<EA::SchedulerCore::RunningSchedulerExperimentRecord> running;
     EA::SchedulerCore::SchedulerQueueSnapshot queue;
+    int capacityUsed = 0;
+    std::optional<EA::SchedulerCore::PreemptionVictimRecord> victim;
     EA::SchedulerCore::SpawnedWorkerAttemptUpdate observedSpawn;
 
     std::vector<EA::SchedulerCore::PendingSchedulerExperimentRecord>
@@ -38,6 +40,17 @@ public:
     EA::SchedulerCore::SchedulerQueueSnapshot loadQueueSnapshot() override
     {
         return queue;
+    }
+
+    int countWorkersConsumingCapacity(std::string_view) override
+    {
+        return capacityUsed;
+    }
+
+    std::optional<EA::SchedulerCore::PreemptionVictimRecord>
+    loadPreemptionVictim(std::string_view, int) override
+    {
+        return victim;
     }
 
     EA::SchedulerCore::SpawnPersistenceResult persistSpawnedWorkerAttempt(
