@@ -6,75 +6,23 @@
 	objectVersion = 54;
 	objects = {
 
+/* Begin PBXAggregateTarget section */
+		0C0A000230524C260005882D /* Publish LSTM Canonical */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 0C0A000730524C260005882D /* Build configuration list for PBXAggregateTarget "Publish LSTM Canonical" */;
+			buildPhases = (
+				0C0A000130524C260005882D /* Publish Canonical LSTM Binary */,
+			);
+			dependencies = (
+				0C0A000430524C260005882D /* PBXTargetDependency */,
+			);
+			name = "Publish LSTM Canonical";
+			productName = "Publish LSTM Canonical";
+		};
+/* End PBXAggregateTarget section */
+
 /* Begin PBXBuildFile section */
-		0EC201003320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */; };
-		0EC201013320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */; };
-		0EC201023320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */; };
-		0EC201033320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */; };
-		0EC2002632E1000100AAA001 /* EconomicEventImportValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */; };
-		0EC2002732E1000100AAA001 /* EconomicEventImportRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */; };
-		0EC2002832E1000100AAA001 /* EconomicEventImportService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */; };
-		0EC2002932E1000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp */; };
-		0EC2002A32E1000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001932D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp */; };
-		0EC2002B32E1000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001B32E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp */; };
-		0EC2002C32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */; };
-		0EC200313300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */; };
-		0EC200363310000100AAA001 /* EconomicEventFeatures.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200343310000100AAA001 /* EconomicEventFeatures.cpp */; };
-		0EC200373310000100AAA001 /* EconomicEventFeatures.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200343310000100AAA001 /* EconomicEventFeatures.cpp */; };
-		0EC2003A3311000100AAA001 /* EconomicEventRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200383311000100AAA001 /* EconomicEventRepository.cpp */; };
-		0EC2003B3311000100AAA001 /* EconomicEventRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200383311000100AAA001 /* EconomicEventRepository.cpp */; };
 		08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
-		0E72000130D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */; };
-		0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */; };
-		0EC2002132C0000100AAA001 /* EconomicEventImportRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */; };
-		0EC2002232C0000100AAA001 /* EconomicEventImportService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */; };
-		0EC2002332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp */; };
-		0EC2002432D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001932D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp */; };
-		0EC2002532E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001B32E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp */; };
-		0EC2002D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */; };
-		0EC200323300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */; };
-		0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
-		0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
-		0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
-		0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
-		0E7F00103330000100AAA001 /* ProfitabilityVerification.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */; };
-		0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */; };
-		0E7F00123330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */; };
-		0E7F00133330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */; };
-		0E7F00143330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */; };
-		0E7F00153330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */; };
-		0E7F00163330000100AAA001 /* ProfitabilityCalibration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00063330000100AAA001 /* ProfitabilityCalibration.cpp */; };
-		0E7F00173330000100AAA001 /* ProfitabilityCalibration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00063330000100AAA001 /* ProfitabilityCalibration.cpp */; };
-		0E7900023190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
-		0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
-		0E7A000431A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */; };
-		0E7A000531A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */; };
-		0E7A000631A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */; };
-		0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */; };
-		0E7D000631D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */; };
-		0E7D000731D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */; };
-		0E7D000831D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */; };
-		0E7D000931D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */; };
-		0E7D000A31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
-		0E7D000B31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
-		0E8100063350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */; };
-		0E8100073350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */; };
-		0E8100083350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */; };
-		0E8100093350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */; };
-		0E81000A3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */; };
-		0E81000B3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */; };
-		0E7E000431E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
-		0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
-		0E7E000631E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
-		0E7E000731E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
-		0E8200043360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */; };
-		0E8200053360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */; };
-		0E8200063360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */; };
-		0E8200073360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */; };
-		0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
-		0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
-		0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
-		0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
@@ -88,7 +36,6 @@
 		0A1000022F70000100AAA001 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0A1000032F70000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
-		0E72000230D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */; };
 		0A1000052F70000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
 		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
 		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
@@ -97,10 +44,6 @@
 		0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
 		0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */; };
 		0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */; };
-		0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
-		0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
-		0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
-		0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
 		0A31000230A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */; };
 		0A31000330A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */; };
 		0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A4000002FB0000100AAA001 /* RunMetadata.cpp */; };
@@ -283,20 +226,95 @@
 		0B6500053090000100AAA001 /* CampaignOperationsManager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500003090000100AAA001 /* CampaignOperationsManager.cpp */; };
 		0B6500063090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */; };
 		0B6500073090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */; };
+		0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
+		0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
+		0E72000130D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp */; };
+		0E72000230D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp */; };
+		0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
+		0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
+		0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
+		0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
+		0E7900023190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
+		0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
+		0E7A000431A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */; };
+		0E7A000531A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */; };
+		0E7A000631A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */; };
+		0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */; };
+		0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
+		0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
+		0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
+		0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
+		0E7D000631D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */; };
+		0E7D000731D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */; };
+		0E7D000831D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */; };
+		0E7D000931D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */; };
+		0E7D000A31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
+		0E7D000B31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
+		0E7E000431E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
+		0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
+		0E7E000631E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
+		0E7E000731E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
+		0E7F00103330000100AAA001 /* ProfitabilityVerification.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */; };
+		0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */; };
+		0E7F00123330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */; };
+		0E7F00133330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */; };
+		0E7F00143330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */; };
+		0E7F00153330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */; };
+		0E7F00163330000100AAA001 /* ProfitabilityCalibration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00063330000100AAA001 /* ProfitabilityCalibration.cpp */; };
+		0E7F00173330000100AAA001 /* ProfitabilityCalibration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00063330000100AAA001 /* ProfitabilityCalibration.cpp */; };
+		0E8100063350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */; };
+		0E8100073350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */; };
+		0E8100083350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */; };
+		0E8100093350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */; };
+		0E81000A3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */; };
+		0E81000B3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */; };
+		0E8200043360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */; };
+		0E8200053360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */; };
+		0E8200063360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */; };
+		0E8200073360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */; };
+		0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */; };
+		0EC2002132C0000100AAA001 /* EconomicEventImportRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */; };
+		0EC2002232C0000100AAA001 /* EconomicEventImportService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */; };
+		0EC2002332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp */; };
+		0EC2002432D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001932D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp */; };
+		0EC2002532E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001B32E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp */; };
+		0EC2002632E1000100AAA001 /* EconomicEventImportValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */; };
+		0EC2002732E1000100AAA001 /* EconomicEventImportRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */; };
+		0EC2002832E1000100AAA001 /* EconomicEventImportService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */; };
+		0EC2002932E1000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp */; };
+		0EC2002A32E1000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001932D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp */; };
+		0EC2002B32E1000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001B32E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp */; };
+		0EC2002C32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */; };
+		0EC2002D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */; };
+		0EC200313300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */; };
+		0EC200323300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */; };
+		0EC200363310000100AAA001 /* EconomicEventFeatures.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200343310000100AAA001 /* EconomicEventFeatures.cpp */; };
+		0EC200373310000100AAA001 /* EconomicEventFeatures.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200343310000100AAA001 /* EconomicEventFeatures.cpp */; };
+		0EC2003A3311000100AAA001 /* EconomicEventRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200383311000100AAA001 /* EconomicEventRepository.cpp */; };
+		0EC2003B3311000100AAA001 /* EconomicEventRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200383311000100AAA001 /* EconomicEventRepository.cpp */; };
+		0EC201003320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */; };
+		0EC201013320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */; };
+		0EC201023320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */; };
+		0EC201033320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */; };
 		0F1700073370000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
 		0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
 		0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
 		0F1800073380000100AAA001 /* StrategyEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800103380000100AAA001 /* StrategyEvaluation.cpp */; };
+		0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
+		0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 		0F1800133380000100AAA001 /* ControlledFixedStopExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800123380000100AAA001 /* ControlledFixedStopExperiment.cpp */; };
 		0F1800153380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */; };
 		0F18001733B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */; };
 		0F18001A33C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */; };
-		0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
-		0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
 		0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 		0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 		0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
 		0F19002533C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
+		0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
+		0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F20001033D0000100AAA001 /* SchedulerEngine.cpp */; };
+		0F20000933D0000100AAA001 /* SchedulerPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */; };
+		0F20000E33D0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
+		0F20000F33D0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -356,6 +374,13 @@
 			remoteGlobalIDString = 08095D862DFCBECB008D6698;
 			remoteInfo = OtherTests;
 		};
+		0C0A000330524C260005882D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0A10000F2F70000100AAA001;
+			remoteInfo = "LSTM Release";
+		};
 		0F17000C3370000100AAA001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 084505512047962100A0B88F /* Project object */;
@@ -391,12 +416,19 @@
 			remoteGlobalIDString = 0F1700003370000100AAA001;
 			remoteInfo = ProfitabilityCore;
 		};
-		0C0A000330524C260005882D /* PBXContainerItemProxy */ = {
+		0F20000C33D0000100AAA001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 084505512047962100A0B88F /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 0A10000F2F70000100AAA001;
-			remoteInfo = "LSTM Release";
+			remoteGlobalIDString = 0F20000033D0000100AAA001;
+			remoteInfo = SchedulerCore;
+		};
+		0F20000D33D0000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F20000033D0000100AAA001;
+			remoteInfo = SchedulerCore;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -422,10 +454,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventConsensusImport.cpp; path = Sources/EconomicEventConsensusImport.cpp; sourceTree = SOURCE_ROOT; };
-		0EC201113320000100AAA001 /* EconomicEventConsensusImport.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventConsensusImport.hpp; path = Sources/EconomicEventConsensusImport.hpp; sourceTree = SOURCE_ROOT; };
-		0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventConsensusRepository.cpp; path = Sources/EconomicEventConsensusRepository.cpp; sourceTree = SOURCE_ROOT; };
-		0EC201133320000100AAA001 /* EconomicEventConsensusRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventConsensusRepository.hpp; path = Sources/EconomicEventConsensusRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0820370222B43B0D0025307B /* db_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = db_cursor.cpp; path = Common/db_cursor.cpp; sourceTree = SOURCE_ROOT; };
 		08403E922F1DD75E004742A5 /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Tensor.hpp; sourceTree = "<group>"; };
 		08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = db_cursor_iterator.hpp; sourceTree = "<group>"; };
@@ -451,13 +479,10 @@
 		08B33BDE2F4185280015F9CF /* BuildConfig.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = BuildConfig.hpp; sourceTree = "<group>"; };
 		08B33BEA2F4213DB0015F9CF /* Answers.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Answers.txt; sourceTree = SOURCE_ROOT; };
 		08B4021A2F31A8960032D23A /* Params.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Params.hpp; sourceTree = "<group>"; };
-		0D7900013279000100AAA001 /* TrainingObjective.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = TrainingObjective.hpp; sourceTree = "<group>"; };
 		08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = MetaNNXC.xcodeproj; path = MetaNN/MetaNNXC.xcodeproj; sourceTree = "<group>"; };
 		0A10000B2F70000100AAA001 /* LSTM_Release */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM_Release; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ExperimentMetaAnalyzer.cpp; sourceTree = "<group>"; };
-		0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentScheduler.cpp; path = Sources/ExperimentScheduler.cpp; sourceTree = SOURCE_ROOT; };
-		0C7500003175000100AAA001 /* CheckpointPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CheckpointPolicy.cpp; path = Sources/CheckpointPolicy.cpp; sourceTree = SOURCE_ROOT; };
-		0C7500013175000100AAA001 /* CheckpointPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CheckpointPolicy.hpp; path = Sources/CheckpointPolicy.hpp; sourceTree = SOURCE_ROOT; };
+		0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentScheduler.cpp; path = Sources/SchedulerCore/ExperimentScheduler.cpp; sourceTree = SOURCE_ROOT; };
 		0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = GlobalExperimentControl.cpp; path = Sources/GlobalExperimentControl.cpp; sourceTree = SOURCE_ROOT; };
 		0A31000130A0000100AAA001 /* GlobalExperimentControl.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = GlobalExperimentControl.hpp; path = Sources/GlobalExperimentControl.hpp; sourceTree = SOURCE_ROOT; };
 		0A4000002FB0000100AAA001 /* RunMetadata.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = RunMetadata.cpp; path = Sources/RunMetadata.cpp; sourceTree = SOURCE_ROOT; };
@@ -639,7 +664,53 @@
 		0B6500013090000100AAA001 /* CampaignOperationsManager.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsManager.hpp; path = Sources/CampaignOperationsManager.hpp; sourceTree = SOURCE_ROOT; };
 		0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsManagerService.cpp; path = Sources/CampaignOperationsManagerService.cpp; sourceTree = SOURCE_ROOT; };
 		0B6500033090000100AAA001 /* CampaignOperationsManagerService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsManagerService.hpp; path = Sources/CampaignOperationsManagerService.hpp; sourceTree = SOURCE_ROOT; };
-		0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Common/HistoricalFxTimestamp.cpp; sourceTree = SOURCE_ROOT; };
+		0C7500003175000100AAA001 /* CheckpointPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CheckpointPolicy.cpp; path = Sources/CheckpointPolicy.cpp; sourceTree = SOURCE_ROOT; };
+		0C7500013175000100AAA001 /* CheckpointPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CheckpointPolicy.hpp; path = Sources/CheckpointPolicy.hpp; sourceTree = SOURCE_ROOT; };
+		0D7900013279000100AAA001 /* TrainingObjective.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = TrainingObjective.hpp; sourceTree = "<group>"; };
+		0E72000030D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Common/HistoricalFxTimestamp.cpp; sourceTree = SOURCE_ROOT; };
+		0E73000030E0000100AAA001 /* InferenceProfitability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitability.cpp; path = Sources/InferenceProfitability.cpp; sourceTree = SOURCE_ROOT; };
+		0E73000130E0000100AAA001 /* InferenceProfitability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitability.hpp; path = Sources/InferenceProfitability.hpp; sourceTree = SOURCE_ROOT; };
+		0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitabilityRepository.cpp; path = Sources/InferenceProfitabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitabilityRepository.hpp; path = Sources/InferenceProfitabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityDistribution.cpp; path = Sources/ProfitabilityDistribution.cpp; sourceTree = SOURCE_ROOT; };
+		0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityDistribution.hpp; path = Sources/ProfitabilityDistribution.hpp; sourceTree = SOURCE_ROOT; };
+		0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluation.cpp; path = Sources/PairedTrainingObjectiveEvaluation.cpp; sourceTree = SOURCE_ROOT; };
+		0E7900013190000100AAA001 /* PairedTrainingObjectiveEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluation.hpp; path = Sources/PairedTrainingObjectiveEvaluation.hpp; sourceTree = SOURCE_ROOT; };
+		0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluationRepository.cpp; path = Sources/PairedTrainingObjectiveEvaluationRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E7A000131A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluationRepository.hpp; path = Sources/PairedTrainingObjectiveEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluationService.cpp; path = Sources/PairedTrainingObjectiveEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E7A000331A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluationService.hpp; path = Sources/PairedTrainingObjectiveEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
+		0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PostPairReplicationPolicy.cpp; path = Sources/PostPairReplicationPolicy.cpp; sourceTree = SOURCE_ROOT; };
+		0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PostPairReplicationPolicy.hpp; path = Sources/PostPairReplicationPolicy.hpp; sourceTree = SOURCE_ROOT; };
+		0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReplicationCandidatePlanning.cpp; path = Sources/ReplicationCandidatePlanning.cpp; sourceTree = SOURCE_ROOT; };
+		0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ReplicationCandidatePlanning.hpp; path = Sources/ReplicationCandidatePlanning.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluation.cpp; path = Sources/FeatureAblationPairEvaluation.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D000131D0000100AAA001 /* FeatureAblationPairEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluation.hpp; path = Sources/FeatureAblationPairEvaluation.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluationRepository.cpp; path = Sources/FeatureAblationPairEvaluationRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D000331D0000100AAA001 /* FeatureAblationPairEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationRepository.hpp; path = Sources/FeatureAblationPairEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluationService.cpp; path = Sources/FeatureAblationPairEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D000531D0000100AAA001 /* FeatureAblationPairEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationService.hpp; path = Sources/FeatureAblationPairEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
+		0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluation.cpp; path = Sources/FeatureAblationReplicationEvaluation.cpp; sourceTree = SOURCE_ROOT; };
+		0E7E000131E0000100AAA001 /* FeatureAblationReplicationEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluation.hpp; path = Sources/FeatureAblationReplicationEvaluation.hpp; sourceTree = SOURCE_ROOT; };
+		0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluationService.cpp; path = Sources/FeatureAblationReplicationEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E7E000331E0000100AAA001 /* FeatureAblationReplicationEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluationService.hpp; path = Sources/FeatureAblationReplicationEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
+		0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerification.cpp; path = Sources/ProfitabilityVerification.cpp; sourceTree = SOURCE_ROOT; };
+		0E7F00013330000100AAA001 /* ProfitabilityVerification.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerification.hpp; path = Sources/ProfitabilityVerification.hpp; sourceTree = SOURCE_ROOT; };
+		0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerificationRepository.cpp; path = Sources/ProfitabilityVerificationRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E7F00033330000100AAA001 /* ProfitabilityVerificationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerificationRepository.hpp; path = Sources/ProfitabilityVerificationRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerificationService.cpp; path = Sources/ProfitabilityVerificationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E7F00053330000100AAA001 /* ProfitabilityVerificationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerificationService.hpp; path = Sources/ProfitabilityVerificationService.hpp; sourceTree = SOURCE_ROOT; };
+		0E7F00063330000100AAA001 /* ProfitabilityCalibration.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityCalibration.cpp; path = Sources/ProfitabilityCalibration.cpp; sourceTree = SOURCE_ROOT; };
+		0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservability.cpp; path = Sources/CausalSurpriseObservability.cpp; sourceTree = SOURCE_ROOT; };
+		0E8100013350000100AAA001 /* CausalSurpriseObservability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservability.hpp; path = Sources/CausalSurpriseObservability.hpp; sourceTree = SOURCE_ROOT; };
+		0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservabilityRepository.cpp; path = Sources/CausalSurpriseObservabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E8100033350000100AAA001 /* CausalSurpriseObservabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservabilityRepository.hpp; path = Sources/CausalSurpriseObservabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservabilityService.cpp; path = Sources/CausalSurpriseObservabilityService.cpp; sourceTree = SOURCE_ROOT; };
+		0E8100053350000100AAA001 /* CausalSurpriseObservabilityService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservabilityService.hpp; path = Sources/CausalSurpriseObservabilityService.hpp; sourceTree = SOURCE_ROOT; };
+		0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CorrectedCausalSurpriseReplicationContinuation.cpp; path = Sources/CorrectedCausalSurpriseReplicationContinuation.cpp; sourceTree = SOURCE_ROOT; };
+		0E8200013360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CorrectedCausalSurpriseReplicationContinuation.hpp; path = Sources/CorrectedCausalSurpriseReplicationContinuation.hpp; sourceTree = SOURCE_ROOT; };
+		0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CorrectedCausalSurpriseReplicationContinuationService.cpp; path = Sources/CorrectedCausalSurpriseReplicationContinuationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E8200033360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CorrectedCausalSurpriseReplicationContinuationService.hpp; path = Sources/CorrectedCausalSurpriseReplicationContinuationService.hpp; sourceTree = SOURCE_ROOT; };
 		0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventImportValidation.cpp; path = Sources/EconomicEventImportValidation.cpp; sourceTree = SOURCE_ROOT; };
 		0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventImportRepository.cpp; path = Sources/EconomicEventImportRepository.cpp; sourceTree = SOURCE_ROOT; };
 		0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventImportService.cpp; path = Sources/EconomicEventImportService.cpp; sourceTree = SOURCE_ROOT; };
@@ -661,49 +732,10 @@
 		0EC200353310000100AAA001 /* EconomicEventFeatures.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventFeatures.hpp; path = Sources/EconomicEventFeatures.hpp; sourceTree = SOURCE_ROOT; };
 		0EC200383311000100AAA001 /* EconomicEventRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventRepository.cpp; path = Sources/EconomicEventRepository.cpp; sourceTree = SOURCE_ROOT; };
 		0EC200393311000100AAA001 /* EconomicEventRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventRepository.hpp; path = Sources/EconomicEventRepository.hpp; sourceTree = SOURCE_ROOT; };
-		0E73000030E0000100AAA001 /* InferenceProfitability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitability.cpp; path = Sources/InferenceProfitability.cpp; sourceTree = SOURCE_ROOT; };
-		0E73000130E0000100AAA001 /* InferenceProfitability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitability.hpp; path = Sources/InferenceProfitability.hpp; sourceTree = SOURCE_ROOT; };
-		0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitabilityRepository.cpp; path = Sources/InferenceProfitabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
-		0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitabilityRepository.hpp; path = Sources/InferenceProfitabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
-		0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityDistribution.cpp; path = Sources/ProfitabilityDistribution.cpp; sourceTree = SOURCE_ROOT; };
-		0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityDistribution.hpp; path = Sources/ProfitabilityDistribution.hpp; sourceTree = SOURCE_ROOT; };
-		0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerification.cpp; path = Sources/ProfitabilityVerification.cpp; sourceTree = SOURCE_ROOT; };
-		0E7F00013330000100AAA001 /* ProfitabilityVerification.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerification.hpp; path = Sources/ProfitabilityVerification.hpp; sourceTree = SOURCE_ROOT; };
-		0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerificationRepository.cpp; path = Sources/ProfitabilityVerificationRepository.cpp; sourceTree = SOURCE_ROOT; };
-		0E7F00033330000100AAA001 /* ProfitabilityVerificationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerificationRepository.hpp; path = Sources/ProfitabilityVerificationRepository.hpp; sourceTree = SOURCE_ROOT; };
-		0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerificationService.cpp; path = Sources/ProfitabilityVerificationService.cpp; sourceTree = SOURCE_ROOT; };
-		0E7F00053330000100AAA001 /* ProfitabilityVerificationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerificationService.hpp; path = Sources/ProfitabilityVerificationService.hpp; sourceTree = SOURCE_ROOT; };
-		0E7F00063330000100AAA001 /* ProfitabilityCalibration.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityCalibration.cpp; path = Sources/ProfitabilityCalibration.cpp; sourceTree = SOURCE_ROOT; };
-		0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluation.cpp; path = Sources/PairedTrainingObjectiveEvaluation.cpp; sourceTree = SOURCE_ROOT; };
-		0E7900013190000100AAA001 /* PairedTrainingObjectiveEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluation.hpp; path = Sources/PairedTrainingObjectiveEvaluation.hpp; sourceTree = SOURCE_ROOT; };
-		0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluationRepository.cpp; path = Sources/PairedTrainingObjectiveEvaluationRepository.cpp; sourceTree = SOURCE_ROOT; };
-		0E7A000131A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluationRepository.hpp; path = Sources/PairedTrainingObjectiveEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
-		0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluationService.cpp; path = Sources/PairedTrainingObjectiveEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
-		0E7A000331A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluationService.hpp; path = Sources/PairedTrainingObjectiveEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
-		0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluation.cpp; path = Sources/FeatureAblationPairEvaluation.cpp; sourceTree = SOURCE_ROOT; };
-		0E7D000131D0000100AAA001 /* FeatureAblationPairEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluation.hpp; path = Sources/FeatureAblationPairEvaluation.hpp; sourceTree = SOURCE_ROOT; };
-		0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluationRepository.cpp; path = Sources/FeatureAblationPairEvaluationRepository.cpp; sourceTree = SOURCE_ROOT; };
-		0E7D000331D0000100AAA001 /* FeatureAblationPairEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationRepository.hpp; path = Sources/FeatureAblationPairEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
-		0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluationService.cpp; path = Sources/FeatureAblationPairEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
-		0E7D000531D0000100AAA001 /* FeatureAblationPairEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationService.hpp; path = Sources/FeatureAblationPairEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
-		0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservability.cpp; path = Sources/CausalSurpriseObservability.cpp; sourceTree = SOURCE_ROOT; };
-		0E8100013350000100AAA001 /* CausalSurpriseObservability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservability.hpp; path = Sources/CausalSurpriseObservability.hpp; sourceTree = SOURCE_ROOT; };
-		0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservabilityRepository.cpp; path = Sources/CausalSurpriseObservabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
-		0E8100033350000100AAA001 /* CausalSurpriseObservabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservabilityRepository.hpp; path = Sources/CausalSurpriseObservabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
-		0E8100043350000100AAA001 /* CausalSurpriseObservabilityService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CausalSurpriseObservabilityService.cpp; path = Sources/CausalSurpriseObservabilityService.cpp; sourceTree = SOURCE_ROOT; };
-		0E8100053350000100AAA001 /* CausalSurpriseObservabilityService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CausalSurpriseObservabilityService.hpp; path = Sources/CausalSurpriseObservabilityService.hpp; sourceTree = SOURCE_ROOT; };
-		0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluation.cpp; path = Sources/FeatureAblationReplicationEvaluation.cpp; sourceTree = SOURCE_ROOT; };
-		0E7E000131E0000100AAA001 /* FeatureAblationReplicationEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluation.hpp; path = Sources/FeatureAblationReplicationEvaluation.hpp; sourceTree = SOURCE_ROOT; };
-		0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluationService.cpp; path = Sources/FeatureAblationReplicationEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
-		0E7E000331E0000100AAA001 /* FeatureAblationReplicationEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluationService.hpp; path = Sources/FeatureAblationReplicationEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
-		0E8200003360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CorrectedCausalSurpriseReplicationContinuation.cpp; path = Sources/CorrectedCausalSurpriseReplicationContinuation.cpp; sourceTree = SOURCE_ROOT; };
-		0E8200013360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CorrectedCausalSurpriseReplicationContinuation.hpp; path = Sources/CorrectedCausalSurpriseReplicationContinuation.hpp; sourceTree = SOURCE_ROOT; };
-		0E8200023360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CorrectedCausalSurpriseReplicationContinuationService.cpp; path = Sources/CorrectedCausalSurpriseReplicationContinuationService.cpp; sourceTree = SOURCE_ROOT; };
-		0E8200033360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CorrectedCausalSurpriseReplicationContinuationService.hpp; path = Sources/CorrectedCausalSurpriseReplicationContinuationService.hpp; sourceTree = SOURCE_ROOT; };
-		0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PostPairReplicationPolicy.cpp; path = Sources/PostPairReplicationPolicy.cpp; sourceTree = SOURCE_ROOT; };
-		0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PostPairReplicationPolicy.hpp; path = Sources/PostPairReplicationPolicy.hpp; sourceTree = SOURCE_ROOT; };
-		0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReplicationCandidatePlanning.cpp; path = Sources/ReplicationCandidatePlanning.cpp; sourceTree = SOURCE_ROOT; };
-		0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ReplicationCandidatePlanning.hpp; path = Sources/ReplicationCandidatePlanning.hpp; sourceTree = SOURCE_ROOT; };
+		0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventConsensusImport.cpp; path = Sources/EconomicEventConsensusImport.cpp; sourceTree = SOURCE_ROOT; };
+		0EC201113320000100AAA001 /* EconomicEventConsensusImport.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventConsensusImport.hpp; path = Sources/EconomicEventConsensusImport.hpp; sourceTree = SOURCE_ROOT; };
+		0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventConsensusRepository.cpp; path = Sources/EconomicEventConsensusRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0EC201133320000100AAA001 /* EconomicEventConsensusRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventConsensusRepository.hpp; path = Sources/EconomicEventConsensusRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0F1700013370000100AAA001 /* libProfitabilityCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libProfitabilityCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libStrategyEvaluationCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		0F1800103380000100AAA001 /* StrategyEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = StrategyEvaluation.cpp; path = Sources/StrategyEvaluationCore/StrategyEvaluation.cpp; sourceTree = SOURCE_ROOT; };
@@ -719,6 +751,11 @@
 		0F19002333C0000100AAA001 /* TensorPhase19StateAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorPhase19StateAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorPhase19StateAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerSemanticAdmission.hpp; path = Sources/SchedulerCore/SchedulerSemanticAdmission.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A002033A0000100AAA001 /* SchedulerInferenceResultRecovery.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerInferenceResultRecovery.hpp; path = Sources/SchedulerCore/SchedulerInferenceResultRecovery.hpp; sourceTree = SOURCE_ROOT; };
+		0F20000133D0000100AAA001 /* libSchedulerCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libSchedulerCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F20001033D0000100AAA001 /* SchedulerEngine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerEngine.cpp; path = Sources/SchedulerCore/SchedulerEngine.cpp; sourceTree = SOURCE_ROOT; };
+		0F20001133D0000100AAA001 /* SchedulerEngine.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerEngine.hpp; path = Sources/SchedulerCore/SchedulerEngine.hpp; sourceTree = SOURCE_ROOT; };
+		0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerPolicy.cpp; path = Sources/SchedulerCore/SchedulerPolicy.cpp; sourceTree = SOURCE_ROOT; };
+		0F20001333D0000100AAA001 /* SchedulerPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerPolicy.hpp; path = Sources/SchedulerCore/SchedulerPolicy.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -726,6 +763,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F20000E33D0000100AAA001 /* libSchedulerCore.a in Frameworks */,
 				0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
 				0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
 				08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */,
@@ -740,6 +778,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F20000F33D0000100AAA001 /* libSchedulerCore.a in Frameworks */,
 				0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
 				0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
 				0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */,
@@ -758,6 +797,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0F1800033380000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0F20000333D0000100AAA001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -787,12 +833,14 @@
 				08BF4E4820A933FB00B6F81D /* Headers */,
 				0845055A2047962100A0B88F /* Products */,
 				080C8C59219B702600840B79 /* Frameworks */,
+				089AB1BC3052563D00EBA9EB /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
 		0845055A2047962100A0B88F /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				0F20000133D0000100AAA001 /* libSchedulerCore.a */,
 				0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */,
 				0F1700013370000100AAA001 /* libProfitabilityCore.a */,
 				084426802ED8DD46002DEB21 /* LSTM_Debug */,
@@ -891,7 +939,6 @@
 				0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */,
 				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */,
-				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
 				0C7500003175000100AAA001 /* CheckpointPolicy.cpp */,
 				0C7500013175000100AAA001 /* CheckpointPolicy.hpp */,
 				0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */,
@@ -1080,6 +1127,14 @@
 			path = LSTM;
 			sourceTree = "<group>";
 		};
+		089AB1BC3052563D00EBA9EB /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				0E72000030D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		08BF4E4820A933FB00B6F81D /* Headers */ = {
 			isa = PBXGroup;
 			children = (
@@ -1149,6 +1204,11 @@
 		0F1A000033A0000100AAA001 /* SchedulerCore */ = {
 			isa = PBXGroup;
 			children = (
+				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
+				0F20001033D0000100AAA001 /* SchedulerEngine.cpp */,
+				0F20001133D0000100AAA001 /* SchedulerEngine.hpp */,
+				0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */,
+				0F20001333D0000100AAA001 /* SchedulerPolicy.hpp */,
 				0F1A002033A0000100AAA001 /* SchedulerInferenceResultRecovery.hpp */,
 				0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */,
 			);
@@ -1156,21 +1216,6 @@
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
-
-/* Begin PBXAggregateTarget section */
-		0C0A000230524C260005882D /* Publish LSTM Canonical */ = {
-			isa = PBXAggregateTarget;
-			buildConfigurationList = 0C0A000730524C260005882D /* Build configuration list for PBXAggregateTarget "Publish LSTM Canonical" */;
-			buildPhases = (
-				0C0A000130524C260005882D /* Publish Canonical LSTM Binary */,
-			);
-			dependencies = (
-				0C0A000430524C260005882D /* PBXTargetDependency */,
-			);
-			name = "Publish LSTM Canonical";
-			productName = "Publish LSTM Canonical";
-		};
-/* End PBXAggregateTarget section */
 
 /* Begin PBXNativeTarget section */
 		084426722ED8DD46002DEB21 /* LSTM Debug */ = {
@@ -1188,6 +1233,7 @@
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				0F17000A3370000100AAA001 /* PBXTargetDependency */,
 				0F18000A3380000100AAA001 /* PBXTargetDependency */,
+				0F20000A33D0000100AAA001 /* PBXTargetDependency */,
 			);
 			name = "LSTM Debug";
 			productName = LSTM_Debug;
@@ -1210,6 +1256,7 @@
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				0F17000B3370000100AAA001 /* PBXTargetDependency */,
 				0F18000B3380000100AAA001 /* PBXTargetDependency */,
+				0F20000B33D0000100AAA001 /* PBXTargetDependency */,
 			);
 			name = "LSTM Release";
 			productName = LSTM_Release;
@@ -1249,43 +1296,23 @@
 			productReference = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */;
 			productType = "com.apple.product-type.library.static";
 		};
+		0F20000033D0000100AAA001 /* SchedulerCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0F20000433D0000100AAA001 /* Build configuration list for PBXNativeTarget "SchedulerCore" */;
+			buildPhases = (
+				0F20000233D0000100AAA001 /* Sources */,
+				0F20000333D0000100AAA001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SchedulerCore;
+			productName = SchedulerCore;
+			productReference = 0F20000133D0000100AAA001 /* libSchedulerCore.a */;
+			productType = "com.apple.product-type.library.static";
+		};
 /* End PBXNativeTarget section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		0C0A000130524C260005882D /* Publish Canonical LSTM Binary */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Publish Canonical LSTM Binary";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n    exit 0\nfi\n\nif [ \"$PUBLISH_CANONICAL_BINARY\" != \"YES\" ]; then\n    echo \"Skipping canonical LSTM binary publish\"\n    exit 0\nfi\n\nCANONICAL_DIR=\"$PROJECT_DIR/DerivedData/Canonical\"\nCANONICAL_BIN=\"$CANONICAL_DIR/LSTM_Release\"\nBUILT_BIN=\"$CONFIGURATION_BUILD_DIR/LSTM_Release\"\n\nif [ ! -x \"$BUILT_BIN\" ]; then\n    echo \"error: built LSTM executable not found or not executable: $BUILT_BIN\"\n    exit 1\nfi\n\nmkdir -p \"$CANONICAL_DIR\"\n\nif ! ln -sfn \"$BUILT_BIN\" \"$CANONICAL_BIN\"; then\n    echo \"error: failed to publish canonical LSTM binary\"\n    exit 1\nfi\n\necho \"Canonical LSTM binary updated:\"\necho \"$CANONICAL_BIN -> $BUILT_BIN\"\n";
-		};
-		0A10000A2F70000100AAA002 /* Generate build provenance */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py",
-				"$(PROJECT_DIR)/.git",
-			);
-			name = "Generate build provenance";
-			outputPaths = (
-				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXProject section */
 		084505512047962100A0B88F /* Project object */ = {
@@ -1327,6 +1354,7 @@
 				0C0A000230524C260005882D /* Publish LSTM Canonical */,
 				0F1700003370000100AAA001 /* ProfitabilityCore */,
 				0F1800003380000100AAA001 /* StrategyEvaluationCore */,
+				0F20000033D0000100AAA001 /* SchedulerCore */,
 			);
 		};
 /* End PBXProject section */
@@ -1376,6 +1404,42 @@
 		};
 /* End PBXReferenceProxy section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		0A10000A2F70000100AAA002 /* Generate build provenance */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py",
+				"$(PROJECT_DIR)/.git",
+			);
+			name = "Generate build provenance";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"\n";
+		};
+		0C0A000130524C260005882D /* Publish Canonical LSTM Binary */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Publish Canonical LSTM Binary";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n    exit 0\nfi\n\nif [ \"$PUBLISH_CANONICAL_BINARY\" != \"YES\" ]; then\n    echo \"Skipping canonical LSTM binary publish\"\n    exit 0\nfi\n\nCANONICAL_DIR=\"$PROJECT_DIR/DerivedData/Canonical\"\nCANONICAL_BIN=\"$CANONICAL_DIR/LSTM_Release\"\nBUILT_BIN=\"$CONFIGURATION_BUILD_DIR/LSTM_Release\"\n\nif [ ! -x \"$BUILT_BIN\" ]; then\n    echo \"error: built LSTM executable not found or not executable: $BUILT_BIN\"\n    exit 1\nfi\n\nmkdir -p \"$CANONICAL_DIR\"\n\nif ! ln -sfn \"$BUILT_BIN\" \"$CANONICAL_BIN\"; then\n    echo \"error: failed to publish canonical LSTM binary\"\n    exit 1\nfi\n\necho \"Canonical LSTM binary updated:\"\necho \"$CANONICAL_BIN -> $BUILT_BIN\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		084426732ED8DD46002DEB21 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -1420,7 +1484,6 @@
 				0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
 				0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
-				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
 				0A31000230A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
 				0A5000042FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
@@ -1514,7 +1577,7 @@
 				0B6500063090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
-				0E72000130D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */,
+				0E72000130D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1562,7 +1625,6 @@
 				0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
 				0F19002533C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
-				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
 				0A31000330A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
 				0A5000052FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
@@ -1656,7 +1718,7 @@
 				0B6500073090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
-				0E72000230D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */,
+				0E72000230D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1681,6 +1743,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F20000233D0000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */,
+				0F20000933D0000100AAA001 /* SchedulerPolicy.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1693,6 +1765,12 @@
 			isa = PBXTargetDependency;
 			name = libMetaNN;
 			targetProxy = 08A334CD2F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
+		};
+		0C0A000430524C260005882D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "LSTM Release";
+			target = 0A10000F2F70000100AAA001 /* LSTM Release */;
+			targetProxy = 0C0A000330524C260005882D /* PBXContainerItemProxy */;
 		};
 		0F17000A3370000100AAA001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1724,11 +1802,17 @@
 			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
 			targetProxy = 0F18000F3380000100AAA001 /* PBXContainerItemProxy */;
 		};
-		0C0A000430524C260005882D /* PBXTargetDependency */ = {
+		0F20000A33D0000100AAA001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = "LSTM Release";
-			target = 0A10000F2F70000100AAA001 /* LSTM Release */;
-			targetProxy = 0C0A000330524C260005882D /* PBXContainerItemProxy */;
+			name = SchedulerCore;
+			target = 0F20000033D0000100AAA001 /* SchedulerCore */;
+			targetProxy = 0F20000C33D0000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F20000B33D0000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = SchedulerCore;
+			target = 0F20000033D0000100AAA001 /* SchedulerCore */;
+			targetProxy = 0F20000D33D0000100AAA001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2128,6 +2212,22 @@
 			};
 			name = Release;
 		};
+		0C0A000530524C260005882D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				PUBLISH_CANONICAL_BINARY = NO;
+			};
+			name = Debug;
+		};
+		0C0A000630524C260005882D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				PUBLISH_CANONICAL_BINARY = YES;
+			};
+			name = Release;
+		};
 		0F1700053370000100AAA001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2164,23 +2264,68 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				PRODUCT_NAME = StrategyEvaluationCore;
-				SKIP_INSTALL = YES;
 			};
 			name = Release;
 		};
-		0C0A000530524C260005882D /* Debug */ = {
+		0F20000533D0000100AAA001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				PUBLISH_CANONICAL_BINARY = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"LSTM_BUILD=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-Xpreprocessor",
+					"-fopenmp",
+				);
+				PRODUCT_NAME = SchedulerCore;
+				SKIP_INSTALL = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/MetaNN/**",
+					/opt/homebrew/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
+					/opt/homebrew/opt/libpq/include,
+					/opt/homebrew/opt/libomp/include,
+				);
+				USER_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Headers",
+					"$(PROJECT_DIR)/Sources",
+				);
 			};
 			name = Debug;
 		};
-		0C0A000630524C260005882D /* Release */ = {
+		0F20000633D0000100AAA001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				PUBLISH_CANONICAL_BINARY = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NDEBUG=1",
+					"LSTM_BUILD=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-Xpreprocessor",
+					"-fopenmp",
+				);
+				PRODUCT_NAME = SchedulerCore;
+				SKIP_INSTALL = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/MetaNN/**",
+					/opt/homebrew/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
+					/opt/homebrew/opt/libpq/include,
+					/opt/homebrew/opt/libomp/include,
+				);
+				USER_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Headers",
+					"$(PROJECT_DIR)/Sources",
+				);
 			};
 			name = Release;
 		};
@@ -2214,6 +2359,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		0C0A000730524C260005882D /* Build configuration list for PBXAggregateTarget "Publish LSTM Canonical" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0C0A000530524C260005882D /* Debug */,
+				0C0A000630524C260005882D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		0F1700043370000100AAA001 /* Build configuration list for PBXNativeTarget "ProfitabilityCore" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -2232,11 +2386,11 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		0C0A000730524C260005882D /* Build configuration list for PBXAggregateTarget "Publish LSTM Canonical" */ = {
+		0F20000433D0000100AAA001 /* Build configuration list for PBXNativeTarget "SchedulerCore" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				0C0A000530524C260005882D /* Debug */,
-				0C0A000630524C260005882D /* Release */,
+				0F20000533D0000100AAA001 /* Debug */,
+				0F20000633D0000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

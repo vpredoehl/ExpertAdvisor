@@ -37,7 +37,7 @@
 #include "PgModelIO.hpp"
 #include "BuildConfig.hpp"
 #include "TargetLabel.hpp"
-#include "ExperimentScheduler.hpp"
+#include "../Sources/SchedulerCore/SchedulerEngine.hpp"
 #include "ExperimentMetaAnalyzer.hpp"
 #include "GlobalExperimentControl.hpp"
 #include "CanonicalSymbol.hpp"
@@ -8084,6 +8084,9 @@ std::optional<int> RunCheckpointStopOwnershipTestBoundary(
 
 int main(int argc, const char * argv[])
 {
+    const EA::SchedulerCore::SchedulerEngine schedulerEngine;
+    const EA::SchedulerCore::CommandInvocation schedulerInvocation{
+        argc, argv};
     if (argc >= 4 && std::string(argv[1]) == "--baseline-3class")
         return RunBaseline3Class(argv[2], argv[3]);
     if (argc >= 4 && std::string(argv[1]) == "--label-grid-3class")
@@ -8097,8 +8100,8 @@ int main(int argc, const char * argv[])
     if (EA::EconomicCalendar::IsEconomicEventConsensusImportCommand(argc, argv))
         return EA::EconomicCalendar::RunEconomicEventConsensusImportCli(
             argc, argv);
-    if (EA::ExperimentScheduler::IsExperimentSchedulerCommand(argc, argv))
-        return EA::ExperimentScheduler::RunExperimentSchedulerCli(argc, argv);
+    if (schedulerEngine.recognizes(schedulerInvocation))
+        return schedulerEngine.run(schedulerInvocation);
 
     LaunchArgs launchArgs;
     try
@@ -8114,7 +8117,7 @@ int main(int argc, const char * argv[])
                 "is required");
         }
         if (launchArgs.schedulerWorkerAttemptId.has_value() &&
-            !EA::ExperimentScheduler::RegisterSchedulerWorkerAttempt(
+            !schedulerEngine.registerWorkerAttempt({
                 *launchArgs.schedulerWorkerAttemptId,
                 launchArgs.schedulerExperimentId,
                 launchArgs.schedulerCheckpointEvalId,
@@ -8126,7 +8129,7 @@ int main(int argc, const char * argv[])
                     : ((launchArgs.inferenceMode.has_value() &&
                         *launchArgs.inferenceMode)
                            ? "infer"
-                           : "train")))
+                           : "train")}))
         {
             return 125;
         }
