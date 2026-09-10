@@ -52,6 +52,7 @@
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
 #include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
+#include "../Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.hpp"
 #include "../Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp"
 #include "../Sources/StrategyEvaluationAdapters/TensorPhase19StateAdapter.hpp"
 #include "ProfitabilityVerificationRepository.hpp"
@@ -3800,6 +3801,8 @@ struct LaunchArgs
         probabilityConditionedStopExtensionEvaluationPath;
     std::optional<std::string>
         probabilityStopExtensionStateAnalysisPath;
+    std::optional<std::string>
+        probabilityStopExtensionPathMechanismPath;
     struct FrozenOutcomeSpec
     {
         std::string cohortHash;
@@ -3818,7 +3821,8 @@ bool HasControlledStrategyEvaluation(const LaunchArgs& launchArgs)
         launchArgs.probabilityConditionedStopEvaluationPath.has_value() ||
         launchArgs.probabilityConditionedStopExtensionEvaluationPath.
             has_value() ||
-        launchArgs.probabilityStopExtensionStateAnalysisPath.has_value();
+        launchArgs.probabilityStopExtensionStateAnalysisPath.has_value() ||
+        launchArgs.probabilityStopExtensionPathMechanismPath.has_value();
 }
 
 std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
@@ -4247,6 +4251,17 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     "--probability-stop-extension-state-analysis requires an output path");
             parsed.probabilityStopExtensionStateAnalysisPath = argv[++i];
         }
+        else if (arg ==
+                 "--probability-stop-extension-path-mechanism")
+        {
+            if (HasControlledStrategyEvaluation(parsed))
+                throw std::invalid_argument(
+                    "strategy evaluation artifact option specified more than once");
+            if (i + 1 >= argc || std::string{argv[i + 1]}.empty())
+                throw std::invalid_argument(
+                    "--probability-stop-extension-path-mechanism requires an output path");
+            parsed.probabilityStopExtensionPathMechanismPath = argv[++i];
+        }
         else if (arg == "--infer-all")
         {
             parsed.inferAll = true;
@@ -4323,6 +4338,16 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     throw std::invalid_argument(
                         "invalid or duplicate --probability-stop-extension-state-analysis");
                 parsed.probabilityStopExtensionStateAnalysisPath = value;
+            }
+            else if (SplitOptionWithValue(
+                         arg,
+                         "--probability-stop-extension-path-mechanism",
+                         value))
+            {
+                if (HasControlledStrategyEvaluation(parsed) || value.empty())
+                    throw std::invalid_argument(
+                        "invalid or duplicate --probability-stop-extension-path-mechanism");
+                parsed.probabilityStopExtensionPathMechanismPath = value;
             }
             else if (SplitOptionWithValue(arg, "--core-lr-mult", value))
             {
@@ -4590,9 +4615,20 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             parsed.schedulerWorkerAttemptId.has_value(),
             parsed.frozenOutcome.has_value()});
     }
+    if (parsed.probabilityStopExtensionPathMechanismPath)
+    {
+        EA::StrategyEvaluation::ValidatePhase19BInvocation({
+            parsed.inferenceMode.has_value() && *parsed.inferenceMode,
+            parsed.modelId.has_value(),
+            parsed.inferAll,
+            parsed.schedulerExperimentId.has_value(),
+            parsed.schedulerCheckpointEvalId.has_value(),
+            parsed.schedulerWorkerAttemptId.has_value(),
+            parsed.frozenOutcome.has_value()});
+    }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 19 controlled analysis: --infer --model=<model_id> --probability-stop-extension-state-analysis=<artifact_path> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 19B extraction: --infer --model=<model_id> --probability-stop-extension-path-mechanism=<artifact_path> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -7312,6 +7348,112 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
                 << ",production_rows_modified=false"
                 << std::endl;
         }
+        else if (launchArgs.probabilityStopExtensionPathMechanismPath)
+        {
+            if (!loadedModelId)
+                throw std::runtime_error(
+                    "probability_stop_extension_path_mechanism_model_identity_missing");
+            std::ostringstream scientificIdentity;
+            scientificIdentity
+                << std::setprecision(std::numeric_limits<double>::max_digits10)
+                << "phase19b_inference_scientific_identity_v1;model_id="
+                << *loadedModelId << ";symbol=" << rawPriceTableName
+                << ";prediction_horizon=" << prediction_horizon
+                << ";threshold_logret=" << c_next_threshold
+                << ";window_size=" << window_size
+                << ";label_rule_id=" << DirectionLabelRuleId()
+                << ";target_type=" << static_cast<int>(requestedTargetType)
+                << ";evaluation_start=" << fromDate
+                << ";evaluation_end=" << toDate << ';';
+            EA::StrategyEvaluationAdapters::TensorMarketPathAdapterContext
+                context;
+            context.modelId = *loadedModelId;
+            context.inferenceScientificIdentityCanonical =
+                scientificIdentity.str();
+            context.inferenceScientificIdentityHash =
+                EA::InferenceProfitability::DeterministicHash(
+                    context.inferenceScientificIdentityCanonical);
+            context.evaluationStart = fromDate;
+            context.evaluationEnd = toDate;
+            context.inferenceWindowSize = window_size;
+            context.predictionHorizon = prediction_horizon;
+            context.metricDefinitionCanonical =
+                EA::StrategyEvaluation::kFixedStopMetricDefinitionCanonical;
+            context.metricDefinitionHash =
+                EA::StrategyEvaluation::FixedStopMetricDefinitionHash();
+            const auto marketPath = EA::StrategyEvaluationAdapters::
+                AdaptTensorMarketPath(tensor, context, strategyDecisions);
+
+            const pqxx::result modelRows = w.exec(
+                "SELECT experiment_id FROM model WHERE model_id=$1;",
+                pqxx::params{*loadedModelId});
+            if (modelRows.size() != 1)
+                throw std::runtime_error(
+                    "probability_stop_extension_path_mechanism_model_identity_mismatch");
+            std::optional<long long> experimentId;
+            if (!modelRows[0][0].is_null())
+                experimentId = modelRows[0][0].as<long long>();
+
+            const auto extraction = EA::StrategyEvaluation::
+                ExtractPhase19BPostEntryPathMechanism(
+                    marketPath, {experimentId, true});
+            const std::string observationsPath =
+                *launchArgs.probabilityStopExtensionPathMechanismPath;
+            const std::string metadataPath =
+                observationsPath + ".metadata.tsv";
+            const std::string pathTracePath = observationsPath + ".paths.tsv";
+            const auto writeArtifact = [](const std::string& path,
+                                          const std::string& content) {
+                std::ofstream artifact{
+                    path, std::ios::binary | std::ios::trunc};
+                if (!artifact)
+                    throw std::runtime_error(
+                        "probability_stop_extension_path_mechanism_artifact_open_failed");
+                artifact.write(content.data(),
+                               static_cast<std::streamsize>(content.size()));
+                artifact.close();
+                if (!artifact)
+                    throw std::runtime_error(
+                        "probability_stop_extension_path_mechanism_artifact_write_failed");
+            };
+            writeArtifact(observationsPath, extraction.observationsTsv);
+            writeArtifact(metadataPath, extraction.metadataTsv);
+            writeArtifact(pathTracePath, extraction.pathTraceTsv);
+            std::cout
+                << "PROBABILITY_STOP_EXTENSION_PATH_MECHANISM"
+                << ",schema_identity=" << extraction.schemaIdentity
+                << ",schema_version=" << extraction.schemaVersion
+                << ",result_hash=" << extraction.resultHash
+                << ",market_path_hash=" << marketPath.Hash()
+                << ",model_id=" << extraction.modelId
+                << ",experiment_id="
+                << (extraction.experimentId
+                        ? std::to_string(*extraction.experimentId) : "NULL")
+                << ",symbol=" << extraction.symbol
+                << ",cohort_role=" << extraction.cohortRole
+                << ",prediction_horizon=" << extraction.predictionHorizon
+                << ",window_start=" << extraction.windowStart
+                << ",window_end=" << extraction.windowEnd
+                << ",total_actionable_count="
+                << extraction.totalActionableCount
+                << ",activated_count=" << extraction.activatedCount
+                << ",saved_count=" << extraction.savedCount
+                << ",harmed_count=" << extraction.harmedCount
+                << ",unchanged_count=" << extraction.unchangedCount
+                << ",frozen_phase18b_aggregate_delta="
+                << std::setprecision(std::numeric_limits<double>::max_digits10)
+                << extraction.frozenPhase18BAggregateDelta
+                << ",per_observation_delta_sum="
+                << extraction.perObservationDeltaSum
+                << ",aggregate_reconciliation_residual="
+                << extraction.aggregateReconciliationResidual
+                << ",observations_artifact_path=" << observationsPath
+                << ",metadata_artifact_path=" << metadataPath
+                << ",path_trace_artifact_path=" << pathTracePath
+                << ",read_only_transaction=true"
+                << ",production_rows_modified=false"
+                << std::endl;
+        }
     }
     else
     {
@@ -8170,10 +8312,11 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred Phase 18B controlled evaluation: " << argv[0] << " --infer --model=<model_id> --probability-conditioned-stop-extension-evaluation=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred Phase 19 state analysis: " << argv[0] << " --infer --model=<model_id> --probability-stop-extension-state-analysis=<artifact_path> <fromDate> <toDate>\n"
+                  << "Preferred Phase 19B path extraction: " << argv[0] << " --infer --model=<model_id> --probability-stop-extension-path-mechanism=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
     }

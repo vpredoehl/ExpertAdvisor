@@ -306,6 +306,7 @@
 		0F1800153380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800143380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp */; };
 		0F18001733B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */; };
 		0F18001A33C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */; };
+		0F18001B33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001C33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp */; };
 		0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 		0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 		0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
@@ -751,6 +752,8 @@
 		0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ControlledOneSidedStopExtensionExperiment.cpp; path = Sources/StrategyEvaluationCore/ControlledOneSidedStopExtensionExperiment.cpp; sourceTree = SOURCE_ROOT; };
 		0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Phase19StateInteractionAnalysis.cpp; path = Sources/StrategyEvaluationCore/Phase19StateInteractionAnalysis.cpp; sourceTree = SOURCE_ROOT; };
 		0F18001933C0000100AAA001 /* Phase19StateInteractionAnalysis.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Phase19StateInteractionAnalysis.hpp; path = Sources/StrategyEvaluationCore/Phase19StateInteractionAnalysis.hpp; sourceTree = SOURCE_ROOT; };
+		0F18001C33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Phase19BPostEntryPathMechanismExtractor.cpp; path = Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.cpp; sourceTree = SOURCE_ROOT; };
+		0F18001D33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Phase19BPostEntryPathMechanismExtractor.hpp; path = Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.hpp; sourceTree = SOURCE_ROOT; };
 		0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorMarketPathAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.cpp; sourceTree = SOURCE_ROOT; };
 		0F1900113390000100AAA001 /* TensorMarketPathAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorMarketPathAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorPhase19StateAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorPhase19StateAdapter.cpp; sourceTree = SOURCE_ROOT; };
@@ -1197,6 +1200,8 @@
 		0F1900003390000100AAA001 /* StrategyEvaluationCore */ = {
 			isa = PBXGroup;
 			children = (
+				0F18001C33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp */,
+				0F18001D33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.hpp */,
 				0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */,
 				0F18001933C0000100AAA001 /* Phase19StateInteractionAnalysis.hpp */,
 				0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */,
@@ -1765,6 +1770,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F18001B33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp in Sources */,
 				0F18001A33C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp in Sources */,
 				0F18001733B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp in Sources */,
 				0F1800153380000100AAA001 /* ControlledProbabilityConditionedStopExperiment.cpp in Sources */,
