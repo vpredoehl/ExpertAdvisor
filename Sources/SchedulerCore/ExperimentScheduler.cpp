@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cctype>
@@ -16,7 +15,6 @@
 #include <limits>
 #include <map>
 #include <optional>
-#include <random>
 #include <regex>
 #include <signal.h>
 #include <set>
@@ -76,6 +74,7 @@
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
+#include "SchedulerCore/SchedulerAuthorityService.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
 #include "SchedulerCore/WorkerControlService.hpp"
 #include "SchedulerCore/WorkerProcessController.hpp"
@@ -99,6 +98,9 @@ namespace EA::ExperimentScheduler
 {
 namespace
 {
+
+using EA::SchedulerCore::SchedulerAuthorityLost;
+using EA::SchedulerCore::kSchedulerLeaseSeconds;
 
 struct SchedulerOptions
 {
@@ -420,7 +422,7 @@ struct SchedulerOptions
     std::optional<std::string> lstmProfileOutputPath;
     std::string selfPath;
     std::string invocationCommandLine;
-    EA::SchedulerOwnership::SchedulerAuthorityContext schedulerAuthority;
+    EA::SchedulerCore::SchedulerAuthorityContext schedulerAuthority;
     std::optional<long long> schedulerWorkerAttemptId;
 
     std::optional<std::string> symbol;
@@ -487,23 +489,6 @@ struct QueueResumeMeta
     std::size_t modelInputWidth = 0;
     EA::TrainingObjective::Configuration trainingObjective =
         EA::TrainingObjective::Legacy();
-};
-
-struct SchedulerLeaseSnapshot
-{
-    std::optional<std::string> ownerInvocationId;
-    long long fencingToken = 0;
-    std::string authorityState = "vacant";
-    std::string acquiredAt;
-    std::string heartbeatAt;
-    std::string expiresAt;
-    std::string transitionReason;
-};
-
-class SchedulerAuthorityLost final : public std::runtime_error
-{
-public:
-    using std::runtime_error::runtime_error;
 };
 
 struct AutoResumeCandidate
@@ -592,7 +577,6 @@ std::map<pid_t, SchedulerOwnedChild> gSchedulerOwnedChildren;
 
 volatile sig_atomic_t gSchedulerStopRequested = 0;
 
-constexpr int kSchedulerLeaseSeconds = 90;
 constexpr int kSchedulerLaunchRecoveryGraceSeconds = 10;
 
 struct CheckpointEvalRow
@@ -6453,31 +6437,6 @@ void SetTransactionReadOnly(pqxx::work& w)
     w.exec("SET TRANSACTION READ ONLY;");
 }
 
-std::string GenerateSchedulerInvocationNonce()
-{
-    std::array<unsigned char, 24> bytes{};
-    std::random_device random;
-    for (unsigned char& value : bytes)
-        value = static_cast<unsigned char>(random());
-    const auto now = std::chrono::high_resolution_clock::now()
-                         .time_since_epoch()
-                         .count();
-    for (size_t index = 0;
-         index < sizeof(now) && index < bytes.size();
-         ++index)
-    {
-        bytes[index] ^= static_cast<unsigned char>(
-            (static_cast<unsigned long long>(now) >> (index * 8)) &
-            0xffU);
-    }
-
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
-    for (unsigned char value : bytes)
-        output << std::setw(2) << static_cast<unsigned int>(value);
-    return output.str();
-}
-
 std::string CanonicalizeObservedExecutable(
     const std::string& executable)
 {
@@ -6505,63 +6464,56 @@ SchedulerOwnerProcessEvidence InspectSchedulerOwnerProcess(
         processes->Observe(pid);
     if (observed != nullptr)
         *observed = observation;
-    if (observation.inspectionSucceeded && !observation.exists)
-        return SchedulerOwnerProcessEvidence::Missing;
-    if (!observation.inspectionSucceeded)
-        return SchedulerOwnerProcessEvidence::Ambiguous;
-    if (!observation.exists)
-        return SchedulerOwnerProcessEvidence::Ambiguous;
-
-    const std::string observedExecutable =
-        CanonicalizeObservedExecutable(observation.executable);
-    if (observation.pid != pid ||
-        observation.processGroupId != processGroupId ||
-        observation.processStartIdentity != processStartIdentity ||
-        observedExecutable.empty() ||
-        observedExecutable != canonicalExecutable ||
-        observation.commandLine.find("--schedule-experiments") ==
-            std::string::npos)
-    {
-        return SchedulerOwnerProcessEvidence::IdentityMismatch;
-    }
-    return SchedulerOwnerProcessEvidence::Valid;
+    return EA::SchedulerCore::EvaluateSchedulerOwnerProcess(
+        pid,
+        processGroupId,
+        processStartIdentity,
+        canonicalExecutable,
+        {observation.exists,
+         observation.inspectionSucceeded,
+         observation.pid,
+         observation.processGroupId,
+         observation.processStartIdentity,
+         observation.executable,
+         observation.commandLine});
 }
 
-const char* SchedulerOwnerProcessEvidenceText(
-    SchedulerOwnerProcessEvidence evidence)
+class NativeSchedulerOwnerProcessInspector final
+    : public EA::SchedulerCore::SchedulerOwnerProcessInspector
 {
-    switch (evidence)
+public:
+    SchedulerOwnerProcessEvidence inspectOwner(
+        int processPid,
+        int processGroupId,
+        const std::string& processStartIdentity,
+        const std::string& canonicalExecutablePath) override
     {
-        case SchedulerOwnerProcessEvidence::Valid: return "validated";
-        case SchedulerOwnerProcessEvidence::Missing: return "process_missing";
-        case SchedulerOwnerProcessEvidence::IdentityMismatch:
-            return "identity_mismatch";
-        case SchedulerOwnerProcessEvidence::Ambiguous:
-            return "inspection_ambiguous";
+        return InspectSchedulerOwnerProcess(
+            processPid,
+            processGroupId,
+            processStartIdentity,
+            canonicalExecutablePath);
     }
-    return "inspection_ambiguous";
-}
+};
 
-const char* SchedulerTakeoverDecisionText(
-    SchedulerTakeoverDecision decision)
+class SchedulerServiceComposition final
 {
-    switch (decision)
+public:
+    explicit SchedulerServiceComposition(pqxx::transaction_base& transaction)
+        : repository{transaction},
+          admission{repository},
+          workerControl{
+              EA::SchedulerCore::NativeWorkerProcessController()},
+          authority{repository, authorityProcessInspector}
     {
-        case SchedulerTakeoverDecision::AcquireVacant:
-            return "vacant";
-        case SchedulerTakeoverDecision::AcquireReleased:
-            return "explicitly_released";
-        case SchedulerTakeoverDecision::TakeOverExpiredDeadOwner:
-            return "expired_and_owner_identity_invalid";
-        case SchedulerTakeoverDecision::RejectValidOwner:
-            return "expired_but_owner_identity_valid";
-        case SchedulerTakeoverDecision::RejectFreshLease:
-            return "owner_lease_valid";
-        case SchedulerTakeoverDecision::RejectAmbiguousOwner:
-            return "owner_identity_ambiguous";
     }
-    return "unknown";
-}
+
+    EA::SchedulerCore::PostgresSchedulerRepository repository;
+    EA::SchedulerCore::SchedulerAdmissionService admission;
+    EA::SchedulerCore::WorkerControlService workerControl;
+    NativeSchedulerOwnerProcessInspector authorityProcessInspector;
+    EA::SchedulerCore::SchedulerAuthorityService authority;
+};
 
 struct SchedulerProcessAbsenceEvidence
 {
@@ -6636,67 +6588,45 @@ int CompleteSchedulerProtocolCutover(
     SetTransactionReadWrite(transaction);
     if (!RequireSchedulerTables(transaction))
         return 2;
-    EA::GlobalExperimentControl::AcquireCoordinationLock(transaction);
-    pqxx::result protocol = transaction.exec(
-        "SELECT required_generation,cutover_state "
-        "FROM experiment_scheduler_protocol "
-        "WHERE singleton=true FOR UPDATE;");
-    if (protocol.size() != 1 ||
-        protocol[0][0].as<int>() !=
-            EA::SchedulerOwnership::kProtocolGeneration)
+    SchedulerServiceComposition services{transaction};
+    const auto result = services.authority.completeProtocolCutover(
+        {options.selfPath,
+         "ps_inspection_complete;active_scheduler_dispatch_processes=0"},
+        [] {
+            const std::optional<std::string> startIdentity =
+                EA::GlobalExperimentControl::ReadProcessStartIdentity(
+                    static_cast<int>(::getpid()));
+            if (!startIdentity)
+            {
+                throw std::runtime_error(
+                    "cutover_process_start_identity_unavailable");
+            }
+            return "pid:" + std::to_string(::getpid()) +
+                   ";start:" + *startIdentity;
+        });
+    transaction.commit();
+    if (result == EA::SchedulerCore::SchedulerProtocolCutoverResult::
+                      GenerationMismatch)
     {
-        transaction.commit();
         std::cerr << "SCHEDULER_PROTOCOL_CUTOVER_REJECTED"
                   << ",reason=protocol_generation_mismatch"
                   << ",mutations=0"
                   << std::endl;
         return 1;
     }
-    if (protocol[0][1].as<std::string>() == "complete")
-    {
-        transaction.commit();
-        std::cout << "SCHEDULER_PROTOCOL_CUTOVER_COMPLETE"
-                  << ",generation="
-                  << EA::SchedulerOwnership::kProtocolGeneration
-                  << ",result=already_complete"
-                  << std::endl;
-        return 0;
-    }
-
-    const std::optional<std::string> startIdentity =
-        EA::GlobalExperimentControl::ReadProcessStartIdentity(
-            static_cast<int>(::getpid()));
-    if (!startIdentity)
-        throw std::runtime_error(
-            "cutover_process_start_identity_unavailable");
-    const std::string actor =
-        "pid:" + std::to_string(::getpid()) +
-        ";start:" + *startIdentity;
-    pqxx::result completed = transaction.exec_params(
-        "UPDATE experiment_scheduler_protocol SET "
-        "cutover_state='complete',"
-        "cutover_completed_at=clock_timestamp(),"
-        "cutover_completed_by=$1,"
-        "cutover_executable_path=$2,"
-        "cutover_process_evidence=$3,"
-        "failure_diagnostic=NULL,updated_at=clock_timestamp() "
-        "WHERE singleton=true AND required_generation=$4 "
-        "AND cutover_state IN ('pending','failed') "
-        "RETURNING required_generation;",
-        actor,
-        options.selfPath,
-        "ps_inspection_complete;active_scheduler_dispatch_processes=0",
-        EA::SchedulerOwnership::kProtocolGeneration);
-    EA::SchedulerOwnership::RequireAffectedExactlyOne(
-        completed, "complete_scheduler_protocol_cutover");
-    transaction.commit();
     std::cout << "SCHEDULER_PROTOCOL_CUTOVER_COMPLETE"
               << ",generation="
-              << EA::SchedulerOwnership::kProtocolGeneration
-              << ",result=completed"
-              << ",scheduler_processes=0"
-              << ",canonical_executable_path="
-              << options.selfPath
+              << EA::SchedulerCore::kSchedulerProtocolGeneration
+              << ",result="
+              << (result == EA::SchedulerCore::
+                                SchedulerProtocolCutoverResult::AlreadyComplete
+                      ? "already_complete"
+                      : "completed")
+              << (result == EA::SchedulerCore::
+                               SchedulerProtocolCutoverResult::Completed
+                      ? ",scheduler_processes=0,canonical_executable_path=" +
+                            options.selfPath
+                      : "")
               << std::endl;
     return 0;
 }
@@ -6711,187 +6641,65 @@ bool AcquireSchedulerAuthority(SchedulerOptions& options)
         throw std::runtime_error(
             "scheduler_process_start_identity_unavailable");
 
-    options.schedulerAuthority.invocationNonce =
-        GenerateSchedulerInvocationNonce();
-    options.schedulerAuthority.schedulerInvocationId =
-        "scheduler:" + options.schedulerAuthority.invocationNonce;
-    options.schedulerAuthority.canonicalExecutablePath =
-        options.selfPath;
-
     pqxx::connection connection{LstmDbConnectionString()};
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     if (!RequireSchedulerTables(transaction))
         return false;
-    EA::GlobalExperimentControl::AcquireCoordinationLock(transaction);
-    pqxx::result protocol = transaction.exec(
-        "SELECT required_generation,cutover_state,"
-        "failure_diagnostic FROM experiment_scheduler_protocol "
-        "WHERE singleton=true FOR UPDATE;");
-    if (protocol.size() != 1 ||
-        protocol[0][0].as<int>() !=
-            EA::SchedulerOwnership::kProtocolGeneration ||
-        protocol[0][1].as<std::string>() != "complete")
-    {
-        transaction.commit();
-        std::cout << "SCHEDULER_PROTOCOL_BARRIER_REJECTED"
-                  << ",required_generation="
-                  << EA::SchedulerOwnership::kProtocolGeneration
-                  << ",database_generation="
-                  << (protocol.size() == 1
-                          ? std::to_string(protocol[0][0].as<int>())
-                          : "NULL")
-                  << ",cutover_state="
-                  << (protocol.size() == 1
-                          ? protocol[0][1].as<std::string>()
-                          : "missing")
-                  << ",reason="
-                  << (protocol.size() == 1 &&
-                              !protocol[0][2].is_null()
-                          ? protocol[0][2].as<std::string>()
-                          : "explicit_safe_cutover_required")
-                  << ",mutations=0"
-                  << std::endl;
-        return false;
-    }
-
-    transaction.exec_params(
-        "INSERT INTO experiment_scheduler_invocation("
-        "scheduler_invocation_id,process_pid,process_group_id,"
-        "process_start_identity,canonical_executable_path,command_line,"
-        "invocation_nonce,status,protocol_generation) "
-        "VALUES($1,$2,$3,$4,$5,$6,$7,'starting',$8);",
-        options.schedulerAuthority.schedulerInvocationId,
+    SchedulerServiceComposition services{transaction};
+    const auto acquisition = services.authority.acquire({
         pid,
         processGroupId,
         *processStartIdentity,
         options.selfPath,
-        options.invocationCommandLine,
-        options.schedulerAuthority.invocationNonce,
-        EA::SchedulerOwnership::kProtocolGeneration);
-
-    pqxx::result leaseRows = transaction.exec(
-        "SELECT l.owner_scheduler_invocation_id,l.fencing_token,"
-        "l.authority_state,(l.expires_at <= clock_timestamp()) AS expired,"
-        "i.process_pid,i.process_group_id,i.process_start_identity,"
-        "i.canonical_executable_path "
-        "FROM experiment_scheduler_lease l "
-        "LEFT JOIN experiment_scheduler_invocation i "
-        "ON i.scheduler_invocation_id=l.owner_scheduler_invocation_id "
-        "WHERE l.singleton=true FOR UPDATE OF l;");
-    if (leaseRows.size() != 1)
-        throw std::runtime_error("scheduler_lease_singleton_missing");
-
-    const pqxx::row lease = leaseRows[0];
-    const bool hasOwner = !lease[0].is_null();
-    const std::string authorityState = lease[2].as<std::string>();
-    const bool explicitlyReleased =
-        authorityState == "released" ||
-        authorityState == "vacant";
-    const bool leaseExpired =
-        lease[3].is_null() || lease[3].as<bool>();
-
-    SchedulerOwnerProcessEvidence ownerEvidence =
-        SchedulerOwnerProcessEvidence::Ambiguous;
-    if (!hasOwner)
-        ownerEvidence = SchedulerOwnerProcessEvidence::Missing;
-    else if (!explicitlyReleased)
+        options.invocationCommandLine});
+    options.schedulerAuthority = acquisition.authority;
+    if (!acquisition.protocolAccepted)
     {
-        if (lease[4].is_null() || lease[5].is_null() ||
-            lease[6].is_null() || lease[7].is_null())
-        {
-            ownerEvidence =
-                SchedulerOwnerProcessEvidence::Ambiguous;
-        }
-        else
-        {
-            ownerEvidence = InspectSchedulerOwnerProcess(
-                lease[4].as<int>(),
-                lease[5].as<int>(),
-                lease[6].as<std::string>(),
-                lease[7].as<std::string>());
-        }
+        transaction.commit();
+        std::cout << "SCHEDULER_PROTOCOL_BARRIER_REJECTED"
+                  << ",required_generation="
+                  << EA::SchedulerCore::kSchedulerProtocolGeneration
+                  << ",database_generation="
+                  << (acquisition.databaseCutoverState != "missing"
+                          ? std::to_string(
+                                acquisition.databaseProtocolGeneration)
+                          : "NULL")
+                  << ",cutover_state="
+                  << acquisition.databaseCutoverState
+                  << ",reason="
+                  << acquisition.protocolFailureReason
+                  << ",mutations=0"
+                  << std::endl;
+        return false;
     }
-
-    const SchedulerTakeoverDecision decision =
-        DecideSchedulerTakeover(
-            hasOwner,
-            explicitlyReleased,
-            leaseExpired,
-            ownerEvidence);
-    const bool acquired =
-        decision == SchedulerTakeoverDecision::AcquireVacant ||
-        decision == SchedulerTakeoverDecision::AcquireReleased ||
-        decision ==
-            SchedulerTakeoverDecision::TakeOverExpiredDeadOwner;
-    if (!acquired)
+    if (!acquisition.acquired())
     {
-        transaction.exec_params(
-            "UPDATE experiment_scheduler_invocation SET "
-            "status='rejected',ended_at=clock_timestamp(),"
-            "terminal_reason=$1 "
-            "WHERE scheduler_invocation_id=$2 AND status='starting';",
-            SchedulerTakeoverDecisionText(decision),
-            options.schedulerAuthority.schedulerInvocationId);
         transaction.commit();
         std::cout << "SCHEDULER_OWNERSHIP_REJECTED"
                   << ",scheduler_invocation_id="
                   << options.schedulerAuthority.schedulerInvocationId
                   << ",lease_owner="
-                  << (hasOwner ? lease[0].as<std::string>() : "NULL")
-                  << ",fencing_token=" << lease[1].as<long long>()
+                  << acquisition.previousLeaseOwner.value_or("NULL")
+                  << ",fencing_token="
+                  << acquisition.previousFencingToken
                   << ",reason="
-                  << SchedulerTakeoverDecisionText(decision)
+                  << EA::SchedulerCore::SchedulerTakeoverDecisionText(
+                         acquisition.decision)
                   << ",mutations=0"
                   << std::endl;
         return false;
     }
-
-    if (hasOwner && lease[0].as<std::string>() !=
-                        options.schedulerAuthority.schedulerInvocationId)
-    {
-        transaction.exec_params(
-            "UPDATE experiment_scheduler_invocation SET "
-            "status=CASE WHEN status='released' THEN status ELSE 'crashed' END,"
-            "ended_at=COALESCE(ended_at,clock_timestamp()),"
-            "terminal_reason=COALESCE(terminal_reason,$1) "
-            "WHERE scheduler_invocation_id=$2;",
-            SchedulerTakeoverDecisionText(decision),
-            lease[0].as<std::string>());
-    }
-
-    const long long fencingToken =
-        lease[1].as<long long>() + 1;
-    pqxx::result updated = transaction.exec_params(
-        "UPDATE experiment_scheduler_lease SET "
-        "owner_scheduler_invocation_id=$1,fencing_token=$2,"
-        "authority_state='active',acquired_at=clock_timestamp(),"
-        "heartbeat_at=clock_timestamp(),"
-        "expires_at=clock_timestamp()+make_interval(secs=>$3),"
-        "released_at=NULL,transition_reason=$4 "
-        "WHERE singleton=true RETURNING fencing_token;",
-        options.schedulerAuthority.schedulerInvocationId,
-        fencingToken,
-        kSchedulerLeaseSeconds,
-        SchedulerTakeoverDecisionText(decision));
-    if (updated.size() != 1)
-        throw std::runtime_error("scheduler_lease_acquire_failed");
-    transaction.exec_params(
-        "UPDATE experiment_scheduler_invocation SET "
-        "status='owner',ownership_acquired_at=clock_timestamp(),"
-        "last_heartbeat_at=clock_timestamp() "
-        "WHERE scheduler_invocation_id=$1 AND status='starting';",
-        options.schedulerAuthority.schedulerInvocationId);
     transaction.commit();
-
-    options.schedulerAuthority.fencingToken = fencingToken;
-    options.schedulerAuthority.held = true;
     std::cout << "SCHEDULER_OWNERSHIP_ACQUIRED"
               << ",scheduler_invocation_id="
               << options.schedulerAuthority.schedulerInvocationId
-              << ",fencing_token=" << fencingToken
+              << ",fencing_token="
+              << options.schedulerAuthority.fencingToken
               << ",lease_seconds=" << kSchedulerLeaseSeconds
-              << ",reason=" << SchedulerTakeoverDecisionText(decision)
+              << ",reason="
+              << EA::SchedulerCore::SchedulerTakeoverDecisionText(
+                     acquisition.decision)
               << ",canonical_executable_path=" << options.selfPath
               << std::endl;
     return true;
@@ -6901,62 +6709,8 @@ void RequireAndRefreshSchedulerAuthority(
     pqxx::work& transaction,
     const SchedulerOptions& options)
 {
-    if (!options.schedulerAuthority.Complete())
-    {
-        throw SchedulerAuthorityLost(
-            "scheduler_authority_not_held");
-    }
-
-    // Global advisory -> protocol -> lease is the mandatory prefix of the
-    // scheduler lock order. The advisory lock is transaction-reentrant.
-    EA::GlobalExperimentControl::AcquireCoordinationLock(transaction);
-    pqxx::result protocol = transaction.exec(
-        "SELECT required_generation,cutover_state "
-        "FROM experiment_scheduler_protocol "
-        "WHERE singleton=true FOR UPDATE;");
-    if (protocol.size() != 1 ||
-        protocol[0][0].as<int>() !=
-            EA::SchedulerOwnership::kProtocolGeneration ||
-        protocol[0][1].as<std::string>() != "complete")
-    {
-        throw SchedulerAuthorityLost(
-            "scheduler_protocol_cutover_not_complete");
-    }
-
-    pqxx::result rows = transaction.exec(
-        "SELECT authority_state,owner_scheduler_invocation_id,"
-        "fencing_token FROM experiment_scheduler_lease "
-        "WHERE singleton=true FOR UPDATE;");
-    if (rows.size() != 1 ||
-        rows[0][0].as<std::string>() != "active" ||
-        rows[0][1].is_null() ||
-        rows[0][1].as<std::string>() !=
-            options.schedulerAuthority.schedulerInvocationId ||
-        rows[0][2].as<long long>() !=
-            options.schedulerAuthority.fencingToken)
-    {
-        throw SchedulerAuthorityLost(
-            "scheduler_lease_owner_or_fence_mismatch");
-    }
-
-    pqxx::result refreshed = transaction.exec_params(
-        "UPDATE experiment_scheduler_lease SET "
-        "heartbeat_at=clock_timestamp(),"
-        "expires_at=clock_timestamp()+make_interval(secs=>$1) "
-        "WHERE singleton=true AND authority_state='active' "
-        "AND owner_scheduler_invocation_id=$2 "
-        "AND fencing_token=$3 RETURNING fencing_token;",
-        kSchedulerLeaseSeconds,
-        options.schedulerAuthority.schedulerInvocationId,
-        options.schedulerAuthority.fencingToken);
-    if (refreshed.size() != 1)
-        throw SchedulerAuthorityLost(
-            "scheduler_lease_refresh_rejected");
-    transaction.exec_params(
-        "UPDATE experiment_scheduler_invocation SET "
-        "last_heartbeat_at=clock_timestamp() "
-        "WHERE scheduler_invocation_id=$1 AND status='owner';",
-        options.schedulerAuthority.schedulerInvocationId);
+    SchedulerServiceComposition services{transaction};
+    services.authority.requireAndRenew(options.schedulerAuthority);
 }
 
 bool SchedulerAuthorityTestFailpointEnabled(
@@ -6987,25 +6741,9 @@ void InjectSchedulerAuthorityLossForTest(
     if (!foreign || !*foreign)
         throw std::runtime_error(
             "scheduler_authority_test_foreign_invocation_missing");
-    const pqxx::result displaced = transaction.exec_params(
-        "UPDATE experiment_scheduler_lease SET "
-        "owner_scheduler_invocation_id=$1,"
-        "fencing_token=fencing_token+1,"
-        "authority_state='active',"
-        "heartbeat_at=clock_timestamp(),"
-        "expires_at=clock_timestamp()+interval '90 seconds',"
-        "transition_reason=$2 "
-        "WHERE singleton=true "
-        "AND owner_scheduler_invocation_id=$3 "
-        "AND fencing_token=$4 "
-        "RETURNING fencing_token;",
-        std::string{foreign},
-        "test_failpoint:" + boundary,
-        options.schedulerAuthority.schedulerInvocationId,
-        options.schedulerAuthority.fencingToken);
-    EA::SchedulerOwnership::RequireAffectedExactlyOne(
-        displaced,
-        "inject_scheduler_authority_loss_" + boundary);
+    SchedulerServiceComposition services{transaction};
+    services.authority.displaceForTest(
+        options.schedulerAuthority, foreign, boundary);
 }
 
 void PersistSchedulerAuthorityLossForTest(
@@ -7057,34 +6795,16 @@ void ReleaseSchedulerAuthority(
         pqxx::connection connection{LstmDbConnectionString()};
         pqxx::work transaction{connection};
         SetTransactionReadWrite(transaction);
-        pqxx::result released = transaction.exec_params(
-            "UPDATE experiment_scheduler_lease SET "
-            "authority_state='released',heartbeat_at=clock_timestamp(),"
-            "expires_at=clock_timestamp(),released_at=clock_timestamp(),"
-            "transition_reason=$1 "
-            "WHERE singleton=true AND authority_state='active' "
-            "AND owner_scheduler_invocation_id=$2 "
-            "AND fencing_token=$3 RETURNING fencing_token;",
-            reason,
-            options.schedulerAuthority.schedulerInvocationId,
-            options.schedulerAuthority.fencingToken);
-        if (released.size() == 1)
-        {
-            transaction.exec_params(
-                "UPDATE experiment_scheduler_invocation SET "
-                "status='released',ownership_released_at=clock_timestamp(),"
-                "ended_at=clock_timestamp(),terminal_reason=$1 "
-                "WHERE scheduler_invocation_id=$2 AND status='owner';",
-                reason,
-                options.schedulerAuthority.schedulerInvocationId);
-        }
+        SchedulerServiceComposition services{transaction};
+        const bool released = services.authority.release(
+            options.schedulerAuthority, reason);
         transaction.commit();
         std::cout << "SCHEDULER_OWNERSHIP_RELEASED"
                   << ",scheduler_invocation_id="
                   << options.schedulerAuthority.schedulerInvocationId
                   << ",fencing_token="
                   << options.schedulerAuthority.fencingToken
-                  << ",released=" << (released.size() == 1 ? 1 : 0)
+                  << ",released=" << (released ? 1 : 0)
                   << ",reason=" << reason
                   << std::endl;
     }
@@ -8745,22 +8465,6 @@ ExperimentRow RepositoryRecordToExperiment(
         record.trainingObjectiveHash);
     return experiment;
 }
-
-class SchedulerServiceComposition final
-{
-public:
-    explicit SchedulerServiceComposition(pqxx::transaction_base& transaction)
-        : repository{transaction},
-          admission{repository},
-          workerControl{
-              EA::SchedulerCore::NativeWorkerProcessController()}
-    {
-    }
-
-    EA::SchedulerCore::PostgresSchedulerRepository repository;
-    EA::SchedulerCore::SchedulerAdmissionService admission;
-    EA::SchedulerCore::WorkerControlService workerControl;
-};
 
 std::vector<ExperimentRow> LoadPendingExperiments(
     EA::SchedulerCore::SchedulerAdmissionService& admission,
@@ -11178,7 +10882,7 @@ std::string GenerateWorkerLaunchIdentity(
     const std::string& commandIdentity)
 {
     return options.schedulerAuthority.schedulerInvocationId + ":worker:" +
-           GenerateSchedulerInvocationNonce() + ":" +
+           EA::SchedulerCore::GenerateSchedulerIdentityNonce() + ":" +
            commandIdentity;
 }
 
@@ -26640,7 +26344,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
               << "Scheduler canonical executable: "
               << schedulerCanonicalExecutable << "\n"
               << "Scheduler executable identity: "
-              << SchedulerOwnerProcessEvidenceText(
+              << EA::SchedulerCore::SchedulerOwnerProcessEvidenceText(
                      schedulerExecutableEvidence)
               << " observed=" << schedulerObservedExecutable << "\n";
     if (attemptOwnershipCounts.size() == 1)
@@ -26832,7 +26536,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << ",scheduler_observed_executable_path="
                   << schedulerObservedExecutable
                   << ",scheduler_identity_result="
-                  << SchedulerOwnerProcessEvidenceText(
+                  << EA::SchedulerCore::SchedulerOwnerProcessEvidenceText(
                          schedulerExecutableEvidence)
                   << ",scheduler_identity_match="
                   << schedulerExecutableIdentityMatch

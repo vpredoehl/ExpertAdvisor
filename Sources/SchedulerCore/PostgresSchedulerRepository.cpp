@@ -1,5 +1,7 @@
 #include "PostgresSchedulerRepository.hpp"
 
+#include "GlobalExperimentControl.hpp"
+
 #include <stdexcept>
 
 namespace EA::SchedulerCore
@@ -341,6 +343,230 @@ PostgresSchedulerRepository::persistWorkerAttemptLaunchFailure(
     if (lifecycle.size() != 1)
         return LaunchFailurePersistenceResult::LifecyclePreconditionRejected;
     return LaunchFailurePersistenceResult::Updated;
+}
+
+void PostgresSchedulerRepository::acquireAuthorityCoordinationLock()
+{
+    transaction_.exec(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0));",
+        pqxx::params{
+            EA::GlobalExperimentControl::kCoordinationLockName});
+}
+
+std::optional<SchedulerProtocolState>
+PostgresSchedulerRepository::loadSchedulerProtocolForUpdate()
+{
+    const pqxx::result rows = transaction_.exec(
+        "SELECT required_generation,cutover_state,failure_diagnostic "
+        "FROM experiment_scheduler_protocol "
+        "WHERE singleton=true FOR UPDATE;");
+    if (rows.size() != 1)
+        return std::nullopt;
+    return SchedulerProtocolState{
+        rows[0][0].as<int>(),
+        rows[0][1].as<std::string>(),
+        OptionalCell<std::string>(rows[0], 2)};
+}
+
+void PostgresSchedulerRepository::registerSchedulerInvocation(
+    const SchedulerInvocationRecord& invocation)
+{
+    transaction_.exec(
+        "INSERT INTO experiment_scheduler_invocation("
+        "scheduler_invocation_id,process_pid,process_group_id,"
+        "process_start_identity,canonical_executable_path,command_line,"
+        "invocation_nonce,status,protocol_generation) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,'starting',$8);",
+        pqxx::params{
+            invocation.schedulerInvocationId,
+            invocation.processPid,
+            invocation.processGroupId,
+            invocation.processStartIdentity,
+            invocation.canonicalExecutablePath,
+            invocation.commandLine,
+            invocation.invocationNonce,
+            invocation.protocolGeneration});
+}
+
+std::optional<SchedulerLeaseState>
+PostgresSchedulerRepository::loadSchedulerLeaseForUpdate()
+{
+    const pqxx::result rows = transaction_.exec(
+        "SELECT l.owner_scheduler_invocation_id,l.fencing_token,"
+        "l.authority_state,(l.expires_at <= clock_timestamp()) AS expired,"
+        "i.process_pid,i.process_group_id,i.process_start_identity,"
+        "i.canonical_executable_path "
+        "FROM experiment_scheduler_lease l "
+        "LEFT JOIN experiment_scheduler_invocation i "
+        "ON i.scheduler_invocation_id=l.owner_scheduler_invocation_id "
+        "WHERE l.singleton=true FOR UPDATE OF l;");
+    if (rows.size() != 1)
+        return std::nullopt;
+    return SchedulerLeaseState{
+        OptionalCell<std::string>(rows[0], 0),
+        rows[0][1].as<long long>(),
+        rows[0][2].as<std::string>(),
+        rows[0][3].is_null() || rows[0][3].as<bool>(),
+        OptionalCell<int>(rows[0], 4),
+        OptionalCell<int>(rows[0], 5),
+        OptionalCell<std::string>(rows[0], 6),
+        OptionalCell<std::string>(rows[0], 7)};
+}
+
+void PostgresSchedulerRepository::rejectSchedulerInvocation(
+    std::string_view schedulerInvocationId,
+    std::string_view terminalReason)
+{
+    transaction_.exec(
+        "UPDATE experiment_scheduler_invocation SET "
+        "status='rejected',ended_at=clock_timestamp(),terminal_reason=$1 "
+        "WHERE scheduler_invocation_id=$2 AND status='starting';",
+        pqxx::params{terminalReason, schedulerInvocationId});
+}
+
+void PostgresSchedulerRepository::markSchedulerInvocationCrashed(
+    std::string_view schedulerInvocationId,
+    std::string_view terminalReason)
+{
+    transaction_.exec(
+        "UPDATE experiment_scheduler_invocation SET "
+        "status=CASE WHEN status='released' THEN status ELSE 'crashed' END,"
+        "ended_at=COALESCE(ended_at,clock_timestamp()),"
+        "terminal_reason=COALESCE(terminal_reason,$1) "
+        "WHERE scheduler_invocation_id=$2;",
+        pqxx::params{terminalReason, schedulerInvocationId});
+}
+
+bool PostgresSchedulerRepository::acquireSchedulerLease(
+    const SchedulerLeaseAcquisition& acquisition)
+{
+    const pqxx::result updated = transaction_.exec(
+        "UPDATE experiment_scheduler_lease SET "
+        "owner_scheduler_invocation_id=$1,fencing_token=$2,"
+        "authority_state='active',acquired_at=clock_timestamp(),"
+        "heartbeat_at=clock_timestamp(),"
+        "expires_at=clock_timestamp()+make_interval(secs=>$3),"
+        "released_at=NULL,transition_reason=$4 "
+        "WHERE singleton=true RETURNING fencing_token;",
+        pqxx::params{
+            acquisition.schedulerInvocationId,
+            acquisition.fencingToken,
+            acquisition.leaseSeconds,
+            acquisition.transitionReason});
+    return updated.size() == 1;
+}
+
+void PostgresSchedulerRepository::markSchedulerInvocationOwner(
+    std::string_view schedulerInvocationId)
+{
+    transaction_.exec(
+        "UPDATE experiment_scheduler_invocation SET "
+        "status='owner',ownership_acquired_at=clock_timestamp(),"
+        "last_heartbeat_at=clock_timestamp() "
+        "WHERE scheduler_invocation_id=$1 AND status='starting';",
+        pqxx::params{schedulerInvocationId});
+}
+
+bool PostgresSchedulerRepository::renewSchedulerLease(
+    const SchedulerAuthorityIdentity& authority,
+    int leaseSeconds)
+{
+    const pqxx::result refreshed = transaction_.exec(
+        "UPDATE experiment_scheduler_lease SET "
+        "heartbeat_at=clock_timestamp(),"
+        "expires_at=clock_timestamp()+make_interval(secs=>$1) "
+        "WHERE singleton=true AND authority_state='active' "
+        "AND owner_scheduler_invocation_id=$2 AND fencing_token=$3 "
+        "RETURNING fencing_token;",
+        pqxx::params{
+            leaseSeconds,
+            authority.schedulerInvocationId,
+            authority.fencingToken});
+    return refreshed.size() == 1;
+}
+
+void PostgresSchedulerRepository::touchSchedulerInvocation(
+    std::string_view schedulerInvocationId)
+{
+    transaction_.exec(
+        "UPDATE experiment_scheduler_invocation SET "
+        "last_heartbeat_at=clock_timestamp() "
+        "WHERE scheduler_invocation_id=$1 AND status='owner';",
+        pqxx::params{schedulerInvocationId});
+}
+
+bool PostgresSchedulerRepository::releaseSchedulerLease(
+    const SchedulerAuthorityIdentity& authority,
+    std::string_view reason)
+{
+    const pqxx::result released = transaction_.exec(
+        "UPDATE experiment_scheduler_lease SET "
+        "authority_state='released',heartbeat_at=clock_timestamp(),"
+        "expires_at=clock_timestamp(),released_at=clock_timestamp(),"
+        "transition_reason=$1 "
+        "WHERE singleton=true AND authority_state='active' "
+        "AND owner_scheduler_invocation_id=$2 AND fencing_token=$3 "
+        "RETURNING fencing_token;",
+        pqxx::params{
+            reason,
+            authority.schedulerInvocationId,
+            authority.fencingToken});
+    return released.size() == 1;
+}
+
+void PostgresSchedulerRepository::markSchedulerInvocationReleased(
+    std::string_view schedulerInvocationId,
+    std::string_view reason)
+{
+    transaction_.exec(
+        "UPDATE experiment_scheduler_invocation SET "
+        "status='released',ownership_released_at=clock_timestamp(),"
+        "ended_at=clock_timestamp(),terminal_reason=$1 "
+        "WHERE scheduler_invocation_id=$2 AND status='owner';",
+        pqxx::params{reason, schedulerInvocationId});
+}
+
+bool PostgresSchedulerRepository::completeSchedulerProtocolCutover(
+    const SchedulerProtocolCutoverUpdate& update)
+{
+    const pqxx::result completed = transaction_.exec(
+        "UPDATE experiment_scheduler_protocol SET "
+        "cutover_state='complete',cutover_completed_at=clock_timestamp(),"
+        "cutover_completed_by=$1,cutover_executable_path=$2,"
+        "cutover_process_evidence=$3,failure_diagnostic=NULL,"
+        "updated_at=clock_timestamp() "
+        "WHERE singleton=true AND required_generation=$4 "
+        "AND cutover_state IN ('pending','failed') "
+        "RETURNING required_generation;",
+        pqxx::params{
+            update.actor,
+            update.canonicalExecutablePath,
+            update.processEvidence,
+            update.protocolGeneration});
+    return completed.size() == 1;
+}
+
+bool PostgresSchedulerRepository::displaceSchedulerAuthorityForTest(
+    const SchedulerAuthorityIdentity& authority,
+    std::string_view foreignSchedulerInvocationId,
+    std::string_view transitionReason,
+    int leaseSeconds)
+{
+    const pqxx::result displaced = transaction_.exec(
+        "UPDATE experiment_scheduler_lease SET "
+        "owner_scheduler_invocation_id=$1,fencing_token=fencing_token+1,"
+        "authority_state='active',heartbeat_at=clock_timestamp(),"
+        "expires_at=clock_timestamp()+make_interval(secs=>$2),"
+        "transition_reason=$3 "
+        "WHERE singleton=true AND owner_scheduler_invocation_id=$4 "
+        "AND fencing_token=$5 RETURNING fencing_token;",
+        pqxx::params{
+            foreignSchedulerInvocationId,
+            leaseSeconds,
+            transitionReason,
+            authority.schedulerInvocationId,
+            authority.fencingToken});
+    return displaced.size() == 1;
 }
 
 } // namespace EA::SchedulerCore

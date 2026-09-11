@@ -1,49 +1,15 @@
 #pragma once
 
+#include "SchedulerCore/SchedulerAuthorityService.hpp"
+
 #include <string>
 
 namespace EA::ExperimentScheduler
 {
 
-enum class SchedulerOwnerProcessEvidence
-{
-    Valid,
-    Missing,
-    IdentityMismatch,
-    Ambiguous
-};
-
-enum class SchedulerTakeoverDecision
-{
-    AcquireVacant,
-    AcquireReleased,
-    TakeOverExpiredDeadOwner,
-    RejectValidOwner,
-    RejectFreshLease,
-    RejectAmbiguousOwner
-};
-
-inline SchedulerTakeoverDecision DecideSchedulerTakeover(
-    bool hasOwner,
-    bool explicitlyReleased,
-    bool leaseExpired,
-    SchedulerOwnerProcessEvidence processEvidence) noexcept
-{
-    if (!hasOwner)
-        return SchedulerTakeoverDecision::AcquireVacant;
-    if (explicitlyReleased)
-        return SchedulerTakeoverDecision::AcquireReleased;
-    if (!leaseExpired)
-        return SchedulerTakeoverDecision::RejectFreshLease;
-    if (processEvidence == SchedulerOwnerProcessEvidence::Missing ||
-        processEvidence == SchedulerOwnerProcessEvidence::IdentityMismatch)
-    {
-        return SchedulerTakeoverDecision::TakeOverExpiredDeadOwner;
-    }
-    if (processEvidence == SchedulerOwnerProcessEvidence::Valid)
-        return SchedulerTakeoverDecision::RejectValidOwner;
-    return SchedulerTakeoverDecision::RejectAmbiguousOwner;
-}
+using EA::SchedulerCore::DecideSchedulerTakeover;
+using EA::SchedulerCore::SchedulerOwnerProcessEvidence;
+using EA::SchedulerCore::SchedulerTakeoverDecision;
 
 inline bool WorkerAttemptConsumesCapacity(
     const std::string& lifecycleState) noexcept

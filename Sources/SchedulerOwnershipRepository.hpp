@@ -6,10 +6,13 @@
 
 #include <pqxx/pqxx>
 
+#include "SchedulerCore/SchedulerAuthorityService.hpp"
+
 namespace EA::SchedulerOwnership
 {
 
-inline constexpr int kProtocolGeneration = 52;
+inline constexpr int kProtocolGeneration =
+    EA::SchedulerCore::kSchedulerProtocolGeneration;
 inline constexpr const char* kProtocolSessionSetting =
     "expertadvisor.scheduler_protocol_generation";
 
@@ -28,22 +31,6 @@ inline constexpr const char* kProtocolSessionSetting =
 // needs and must never acquire an earlier lock later in the transaction.
 // OS process inspection is performed outside database locks except for the
 // immediate verify-and-signal critical section.
-
-struct SchedulerAuthorityContext
-{
-    std::string schedulerInvocationId;
-    std::string invocationNonce;
-    long long fencingToken = 0;
-    std::string canonicalExecutablePath;
-    bool held = false;
-
-    [[nodiscard]] bool Complete() const noexcept
-    {
-        return held && !schedulerInvocationId.empty() &&
-               fencingToken > 0 &&
-               !canonicalExecutablePath.empty();
-    }
-};
 
 struct ExactAttemptExpectation
 {

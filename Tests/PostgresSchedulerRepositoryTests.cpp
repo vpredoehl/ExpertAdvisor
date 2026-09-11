@@ -93,6 +93,50 @@ int main(int argc, char* argv[])
             reconciliation_result text,
             diagnostic text
         );
+        CREATE TABLE experiment_scheduler_protocol(
+            singleton boolean PRIMARY KEY,
+            required_generation integer NOT NULL,
+            cutover_state text NOT NULL,
+            failure_diagnostic text,
+            cutover_completed_at timestamptz,
+            cutover_completed_by text,
+            cutover_executable_path text,
+            cutover_process_evidence text,
+            updated_at timestamptz
+        );
+        INSERT INTO experiment_scheduler_protocol(
+            singleton,required_generation,cutover_state,updated_at
+        ) VALUES(true,52,'complete',clock_timestamp());
+        CREATE TABLE experiment_scheduler_invocation(
+            scheduler_invocation_id text PRIMARY KEY,
+            process_pid integer NOT NULL,
+            process_group_id integer NOT NULL,
+            process_start_identity text NOT NULL,
+            canonical_executable_path text NOT NULL,
+            command_line text NOT NULL,
+            invocation_nonce text NOT NULL,
+            status text NOT NULL,
+            protocol_generation integer NOT NULL,
+            ownership_acquired_at timestamptz,
+            ownership_released_at timestamptz,
+            last_heartbeat_at timestamptz,
+            ended_at timestamptz,
+            terminal_reason text
+        );
+        CREATE TABLE experiment_scheduler_lease(
+            singleton boolean PRIMARY KEY,
+            owner_scheduler_invocation_id text,
+            fencing_token bigint NOT NULL,
+            authority_state text NOT NULL,
+            acquired_at timestamptz,
+            heartbeat_at timestamptz,
+            expires_at timestamptz,
+            released_at timestamptz,
+            transition_reason text
+        );
+        INSERT INTO experiment_scheduler_lease(
+            singleton,fencing_token,authority_state,expires_at
+        ) VALUES(true,8,'vacant',clock_timestamp());
     )SQL");
 
     transaction.exec(R"SQL(
@@ -257,6 +301,50 @@ int main(int argc, char* argv[])
     assert(failed[3].as<std::string>() == "failed");
     assert(failed[4].is_null());
     assert(failed[5].as<std::string>() == "launch_failed_errno_2");
+
+    repository.acquireAuthorityCoordinationLock();
+    const auto protocol = repository.loadSchedulerProtocolForUpdate();
+    assert(protocol && protocol->requiredGeneration == 52);
+    assert(protocol->cutoverState == "complete");
+    repository.registerSchedulerInvocation({
+        "scheduler-repository-test",
+        900,
+        900,
+        "scheduler-start",
+        "/tmp/LSTM_Release",
+        "/tmp/LSTM_Release --schedule-experiments",
+        "repository-test-nonce",
+        52});
+    const auto lease = repository.loadSchedulerLeaseForUpdate();
+    assert(lease && !lease->ownerSchedulerInvocationId);
+    assert(lease->fencingToken == 8 && lease->authorityState == "vacant");
+    assert(repository.acquireSchedulerLease({
+        "scheduler-repository-test", 9, 90, "vacant"}));
+    repository.markSchedulerInvocationOwner("scheduler-repository-test");
+    const SchedulerAuthorityIdentity authority{
+        "scheduler-repository-test", 9};
+    assert(repository.renewSchedulerLease(authority, 90));
+    repository.touchSchedulerInvocation("scheduler-repository-test");
+    assert(!repository.renewSchedulerLease(
+        {"scheduler-repository-test", 10}, 90));
+    assert(repository.displaceSchedulerAuthorityForTest(
+        authority, "scheduler-foreign", "test_failpoint:repository", 90));
+    assert(!repository.releaseSchedulerLease(authority, "stale_release"));
+    const SchedulerAuthorityIdentity foreign{"scheduler-foreign", 10};
+    assert(repository.releaseSchedulerLease(foreign, "scheduler_exit"));
+
+    transaction.exec(
+        "UPDATE experiment_scheduler_protocol SET cutover_state='pending' "
+        "WHERE singleton=true;");
+    assert(repository.completeSchedulerProtocolCutover({
+        52,
+        "pid:900;start:scheduler-start",
+        "/tmp/LSTM_Release",
+        "ps_inspection_complete;active_scheduler_dispatch_processes=0"}));
+    assert(transaction.exec(
+               "SELECT cutover_state FROM experiment_scheduler_protocol "
+               "WHERE singleton=true").one_row()[0].as<std::string>() ==
+           "complete");
 
     transaction.abort();
     return 0;
