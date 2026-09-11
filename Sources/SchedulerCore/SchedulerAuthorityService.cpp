@@ -22,14 +22,25 @@ bool IsAcquisitionDecision(SchedulerTakeoverDecision decision) noexcept
 
 std::string CanonicalizeObservedExecutable(const std::string& executable)
 {
-    if (executable.empty())
+    if (executable.empty() || executable.front() != '/')
         return {};
+
+    errno = 0;
     char* resolved = ::realpath(executable.c_str(), nullptr);
-    if (resolved == nullptr)
-        return {};
-    std::string canonical{resolved};
-    std::free(resolved);
-    return canonical;
+    if (resolved != nullptr)
+    {
+        std::string canonical{resolved};
+        std::free(resolved);
+        return canonical;
+    }
+
+    // A live process may outlive the executable's directory entry.
+    // Preserve the absolute observed path when the only failure is that
+    // the pathname has been removed from the filesystem.
+    if (errno == ENOENT)
+        return executable;
+
+    return {};
 }
 
 } // namespace

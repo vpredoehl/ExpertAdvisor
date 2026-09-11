@@ -6441,14 +6441,26 @@ void SetTransactionReadOnly(pqxx::work& w)
 std::string CanonicalizeObservedExecutable(
     const std::string& executable)
 {
-    if (executable.empty())
+    if (executable.empty() || executable.front() != '/')
         return {};
+
+    errno = 0;
     char* resolved = ::realpath(executable.c_str(), nullptr);
-    if (resolved == nullptr)
-        return {};
-    std::string canonical{resolved};
-    std::free(resolved);
-    return canonical;
+    if (resolved != nullptr)
+    {
+        std::string canonical{resolved};
+        std::free(resolved);
+        return canonical;
+    }
+
+    // A live process may outlive the executable's directory entry.
+    // Process observation has already obtained an absolute executable path
+    // from the live process. Preserve that identity only when the pathname
+    // disappeared from the filesystem.
+    if (errno == ENOENT)
+        return executable;
+
+    return {};
 }
 
 SchedulerOwnerProcessEvidence InspectSchedulerOwnerProcess(

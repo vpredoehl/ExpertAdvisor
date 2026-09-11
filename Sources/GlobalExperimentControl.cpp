@@ -127,6 +127,34 @@ std::optional<std::string> CanonicalizeExecutablePath(
     return result;
 }
 
+// A live process may outlive the directory entry for the executable that
+// launched it. This happens legitimately when an older DerivedData tree is
+// removed while a scheduler-managed worker remains alive, including a
+// SIGSTOP'd worker.
+//
+// Keep ordinary persisted/launch path canonicalization strict. This relaxed
+// ENOENT behavior is used only while observing a process already proven live.
+std::optional<std::string> CanonicalizeObservedExecutablePath(
+    const std::string& executablePath)
+{
+    if (executablePath.empty() || executablePath.front() != '/')
+        return std::nullopt;
+
+    errno = 0;
+    char* canonicalExecutable = ::realpath(executablePath.c_str(), nullptr);
+    if (canonicalExecutable != nullptr)
+    {
+        std::string result{canonicalExecutable};
+        std::free(canonicalExecutable);
+        return result;
+    }
+
+    if (errno == ENOENT)
+        return executablePath;
+
+    return std::nullopt;
+}
+
 class PosixNativeProcessObservationBackend final
     : public NativeProcessObservationBackend
 {
@@ -331,7 +359,7 @@ public:
                 return observation;
         }
         const std::optional<std::string> canonicalExecutable =
-            CanonicalizeExecutablePath(*executablePath);
+            CanonicalizeObservedExecutablePath(*executablePath);
         if (!canonicalExecutable)
             return observation;
         observation.executable = *canonicalExecutable;
@@ -3284,7 +3312,8 @@ int RunWorkerAttemptReconciliationCommandImpl(
         const pqxx::result candidate = transaction.exec_params(
             "SELECT worker_attempt_id,experiment_id,checkpoint_eval_id,"
             "worker_kind,lifecycle_phase,capacity_class,"
-            "scheduler_invocation_id,scheduler_fencing_token "
+            "scheduler_invocation_id,scheduler_fencing_token,"
+            "lifecycle_state "
             "FROM experiment_scheduler_worker_attempt "
             "WHERE worker_attempt_id=$1 FOR UPDATE;",
             command.workerAttemptId);
@@ -3309,7 +3338,19 @@ int RunWorkerAttemptReconciliationCommandImpl(
             expected.schedulerInvocationId = candidate[0][6].as<std::string>();
         if (!candidate[0][7].is_null())
             expected.schedulerFencingToken = candidate[0][7].as<long long>();
-        expected.requiredLifecycleState = "identity_ambiguous";
+        const std::string sourceLifecycleState =
+            candidate[0][8].as<std::string>();
+        if (sourceLifecycleState != "identity_ambiguous" &&
+            sourceLifecycleState != "observed")
+        {
+            PrintWorkerAttemptReconciliationResult(
+                output, "rejected", nullptr, nullptr, "observed",
+                "source_lifecycle_state_not_reconcilable");
+            transaction.commit();
+            return 1;
+        }
+
+        expected.requiredLifecycleState = sourceLifecycleState;
         expected.requireCompleteProcessIdentity = true;
 
         const auto exact = EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
@@ -3324,7 +3365,7 @@ int RunWorkerAttemptReconciliationCommandImpl(
         {
             PrintWorkerAttemptReconciliationResult(
                 output, "rejected", exact ? &*exact : nullptr, nullptr,
-                "observed", "exact_ambiguous_attempt_verification_failed");
+                "observed", "exact_reconcilable_attempt_verification_failed");
             transaction.commit();
             return 1;
         }
@@ -3346,7 +3387,113 @@ int RunWorkerAttemptReconciliationCommandImpl(
 
         // Observe immediately before the locked guarded transition. This
         // command never calls any ProcessOperations signalling method.
-        const ValidatedWorker validated = ValidateManagedWorker(worker, processes);
+        //
+        // A pending experiment may have a scheduler-managed stopped worker
+        // whose attempt is identity_ambiguous after inspection failure or
+        // observed after a prior reconciliation misclassified the stopped
+        // process. Validate either exact source state using the stopped-worker
+        // contract without signalling it.
+        const bool recoverPendingStoppedWorker =
+            exact->lifecycleStatus == "pending" &&
+            exact->workerKind == "experiment" &&
+            !exact->checkpointEvalId;
+
+        ManagedWorker validationWorker = worker;
+        if (recoverPendingStoppedWorker)
+            validationWorker.attemptLifecycleState = "stopped";
+
+        const ValidatedWorker validated =
+            recoverPendingStoppedWorker
+                ? ValidateStoppedWorkerForSchedulerAdmission(
+                      validationWorker, processes)
+                : ValidateManagedWorker(worker, processes);
+
+        if (recoverPendingStoppedWorker &&
+            validated.identity == IdentityResult::Validated &&
+            validated.observation.stopped)
+        {
+            PrintWorkerAttemptReconciliationResult(
+                output,
+                command.dryRun ? "eligible" : "applying",
+                &*exact,
+                &validated,
+                "stopped",
+                "exact_stopped_identity_verified");
+
+            if (command.dryRun)
+            {
+                transaction.commit();
+                return 0;
+            }
+
+            const pqxx::result restored = transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt a SET "
+                "lifecycle_state='stopped',"
+                "reconciliation_result='valid_process_observed',"
+                "diagnostic="
+                "'exact_stopped_attempt_reconciled_by_administrator',"
+                "last_observed_at=clock_timestamp() "
+                "FROM experiment e "
+                "WHERE a.worker_attempt_id=$1 "
+                "AND a.lifecycle_state=$14 "
+                "AND a.experiment_id=$2 "
+                "AND a.checkpoint_eval_id IS NULL "
+                "AND a.worker_kind=$3 "
+                "AND a.lifecycle_phase=$4 "
+                "AND a.capacity_class=$5 "
+                "AND a.scheduler_invocation_id IS NOT DISTINCT FROM $6 "
+                "AND a.scheduler_fencing_token IS NOT DISTINCT FROM $7 "
+                "AND a.worker_pid=$8 "
+                "AND a.worker_process_group_id=$9 "
+                "AND a.worker_process_start_identity=$10 "
+                "AND a.canonical_executable_path=$11 "
+                "AND a.command_line=$12 "
+                "AND a.command_identity=$13 "
+                "AND e.experiment_id=a.experiment_id "
+                "AND e.active_scheduler_worker_attempt_id="
+                "a.worker_attempt_id "
+                "AND e.status='pending' "
+                "AND e.phase=$4 "
+                "AND e.worker_control_state='paused' "
+                "AND e.resume_requested=true "
+                "AND e.worker_pid=a.worker_pid "
+                "AND e.worker_process_group_id="
+                "a.worker_process_group_id "
+                "AND e.worker_process_start_identity="
+                "a.worker_process_start_identity "
+                "AND e.worker_executable=a.canonical_executable_path "
+                "AND e.worker_command_line=a.command_line "
+                "RETURNING a.worker_attempt_id;",
+                exact->workerAttemptId,
+                exact->experimentId,
+                exact->workerKind,
+                exact->lifecyclePhase,
+                exact->capacityClass,
+                exact->schedulerInvocationId,
+                exact->schedulerFencingToken,
+                *exact->workerPid,
+                *exact->processGroupId,
+                *exact->processStartIdentity,
+                *exact->canonicalExecutablePath,
+                *exact->commandLine,
+                exact->commandIdentity,
+                sourceLifecycleState);
+
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                restored,
+                "reconcile_exact_stopped_attempt");
+
+            transaction.commit();
+
+            PrintWorkerAttemptReconciliationResult(
+                output,
+                "applied",
+                &*exact,
+                &validated,
+                "stopped",
+                "exact_stopped_identity_verified");
+            return 0;
+        }
         if (validated.identity == IdentityResult::ProcessMissing &&
             validated.observation.inspectionSucceeded &&
             !validated.observation.permissionDenied)

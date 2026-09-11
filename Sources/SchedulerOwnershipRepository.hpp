@@ -276,11 +276,28 @@ inline std::optional<ExactAttemptSnapshot> LockAndVerifyExactActiveAttempt(
         expected.workerKind == "checkpoint_infer"
             ? "infer"
             : expected.lifecyclePhase;
+    // identity_ambiguous remains fail-closed for normal callers.
+    // The administrative reconciliation path may also explicitly inspect an
+    // observed attempt whose experiment is pending/paused. This handles a
+    // scheduler-managed stopped process that was previously misclassified as
+    // observed. The caller must explicitly fence the exact source state.
+    const bool explicitAdministrativeReconciliation =
+        expected.requiredLifecycleState &&
+        snapshot.lifecycleState == *expected.requiredLifecycleState &&
+        (
+            (*expected.requiredLifecycleState == "identity_ambiguous" &&
+             (snapshot.lifecycleStatus == "paused" ||
+              snapshot.lifecycleStatus == "pending")) ||
+            (*expected.requiredLifecycleState == "observed" &&
+             snapshot.lifecycleStatus == "pending")
+        );
+
     const bool activeLifecycle =
         ((snapshot.lifecycleStatus == "running") ||
          (snapshot.lifecycleState == "stopped" &&
           (snapshot.lifecycleStatus == "paused" ||
-           snapshot.lifecycleStatus == "pending"))) &&
+           snapshot.lifecycleStatus == "pending")) ||
+         explicitAdministrativeReconciliation) &&
         snapshot.lifecycleRowPhase == requiredPhase;
     const bool exactWorkerTerminalLifecycle =
         expected.allowTerminalLifecycle &&
