@@ -37,6 +37,12 @@ def assert_diagnostic_only(path: Path, names: list[str]) -> None:
 
 
 scheduler = ROOT / "Sources" / "ExperimentScheduler.cpp"
+continuation_orchestration = (
+    ROOT
+    / "Sources"
+    / "SchedulerCore"
+    / "ContinuationOrchestrationService.cpp"
+)
 policy = ROOT / "Sources" / "ContinuationPolicy.cpp"
 scoring = ROOT / "Sources" / "ExperimentRecommendationScoring.cpp"
 
@@ -45,9 +51,12 @@ assert_diagnostic_only(
     [
         "BetterContinuationRankCandidate",
         "RankContinuationSource",
-        "BetterContinuationAutoQueueCandidate",
         "DecideCheckpointPolicy",
     ],
+)
+assert_diagnostic_only(
+    continuation_orchestration,
+    ["BetterContinuationAutomationCandidate"],
 )
 assert_diagnostic_only(
     policy,

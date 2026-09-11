@@ -71,6 +71,7 @@
 #include "SchedulerOwnershipPolicy.hpp"
 #include "SchedulerOwnershipRepository.hpp"
 #include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
+#include "SchedulerCore/ContinuationOrchestrationService.hpp"
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
@@ -17145,22 +17146,8 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     return 0;
 }
 
-struct ContinuationAutoCandidate
-{
-    long long sourceExperimentId = -1;
-    ContinuationPolicyConfig config;
-    ContinuationEvaluation evaluation;
-};
-
-struct ContinuationAutoScanCounts
-{
-    int candidates = 0;
-    int evaluated = 0;
-    int alreadySatisfied = 0;
-    int eligible = 0;
-    int queued = 0;
-    int errors = 0;
-};
+using ContinuationAutoScanCounts =
+    EA::SchedulerCore::ContinuationAutomationCounts;
 
 struct ContinuationAutoScanState
 {
@@ -17170,402 +17157,181 @@ struct ContinuationAutoScanState
     ContinuationAutoScanCounts lastCounts;
 };
 
-std::string ContinuationAutoLongLongText(long long value)
+class SchedulerContinuationOrchestrationPort final
+    : public EA::SchedulerCore::ContinuationOrchestrationPort
 {
-    return value >= 0 ? std::to_string(value) : "NULL";
-}
-
-void PrintContinuationAutoEvaluationLog(
-    const std::string& marker,
-    const ContinuationPolicyConfig& config,
-    const ContinuationEvaluation& evaluation,
-    bool dryRun,
-    const std::optional<std::string>& action = std::nullopt)
-{
-    std::cout << marker
-              << ",source_experiment_id=" << config.sourceExperimentId
-              << ",source_model_id=" << ContinuationAutoLongLongText(evaluation.selected.modelId)
-              << ",source_epoch="
-              << (evaluation.selected.completedEpoch > 0
-                      ? std::to_string(evaluation.selected.completedEpoch)
-                      : "NULL")
-              << ",target_epochs=" << ContinuationOptionalIntText(config.targetEpochs)
-              << ",decision_id=" << ContinuationAutoLongLongText(evaluation.decisionId)
-              << ",decision=" << evaluation.decision
-              << ",reason=" << evaluation.reason
-              << ",rank=" << ContinuationOptionalIntText(evaluation.rankValue)
-              << ",leader_score=" << ContinuationOptionalDoubleText(evaluation.selected.leaderScore)
-              << ",infer_accuracy=" << ContinuationOptionalDoubleText(evaluation.selected.inferAccuracy)
-              << ",evidence_count=" << evaluation.evidenceCount
-              << ",policy_revision=" << config.policyRevision
-              << ",policy_hash=" << (evaluation.policyHash.empty() ? "NULL" : evaluation.policyHash)
-              << ",current_policy_hash="
-              << (evaluation.currentPolicyHash.empty()
-                      ? "NULL"
-                      : evaluation.currentPolicyHash)
-              << ",persisted_decision_policy_hash="
-              << (evaluation.persistedDecisionPolicyHash.empty()
-                      ? "NULL"
-                      : evaluation.persistedDecisionPolicyHash)
-              << ",evidence_watermark="
-              << (evaluation.evidenceWatermark.empty() ? "NULL" : evaluation.evidenceWatermark)
-              << ",queued_experiment_id="
-              << (evaluation.queuedExperimentId.has_value()
-                      ? std::to_string(*evaluation.queuedExperimentId)
-                      : "NULL")
-              << ContinuationProfitabilityEvidenceLogFields(
-                     evaluation.selected)
-              << ContinuationProfitabilityPolicyLogFields(
-                     config,
-                     evaluation.profitabilityGate)
-              << ",dry_run=" << (dryRun ? "1" : "0");
-    if (action.has_value())
-        std::cout << ",action=" << *action;
-    std::cout << std::endl;
-}
-
-bool BetterContinuationAutoQueueCandidate(
-    const ContinuationAutoCandidate& lhs,
-    const ContinuationAutoCandidate& rhs)
-{
-    if (lhs.evaluation.rankValue.has_value() != rhs.evaluation.rankValue.has_value())
-        return lhs.evaluation.rankValue.has_value();
-    if (lhs.evaluation.rankValue.has_value() &&
-        *lhs.evaluation.rankValue != *rhs.evaluation.rankValue)
+public:
+    explicit SchedulerContinuationOrchestrationPort(
+        const SchedulerOptions& options)
+        : options_(options)
     {
-        return *lhs.evaluation.rankValue < *rhs.evaluation.rankValue;
     }
-    if (lhs.evaluation.selected.leaderScore.has_value() !=
-        rhs.evaluation.selected.leaderScore.has_value())
-    {
-        return lhs.evaluation.selected.leaderScore.has_value();
-    }
-    if (lhs.evaluation.selected.leaderScore.has_value() &&
-        *lhs.evaluation.selected.leaderScore != *rhs.evaluation.selected.leaderScore)
-    {
-        return *lhs.evaluation.selected.leaderScore > *rhs.evaluation.selected.leaderScore;
-    }
-    if (lhs.evaluation.selected.inferAccuracy.has_value() !=
-        rhs.evaluation.selected.inferAccuracy.has_value())
-    {
-        return lhs.evaluation.selected.inferAccuracy.has_value();
-    }
-    if (lhs.evaluation.selected.inferAccuracy.has_value() &&
-        *lhs.evaluation.selected.inferAccuracy != *rhs.evaluation.selected.inferAccuracy)
-    {
-        return *lhs.evaluation.selected.inferAccuracy > *rhs.evaluation.selected.inferAccuracy;
-    }
-    if (lhs.evaluation.selected.completedEpoch != rhs.evaluation.selected.completedEpoch)
-        return lhs.evaluation.selected.completedEpoch > rhs.evaluation.selected.completedEpoch;
-    if (lhs.sourceExperimentId != rhs.sourceExperimentId)
-        return lhs.sourceExperimentId < rhs.sourceExperimentId;
-    return lhs.evaluation.selected.modelId < rhs.evaluation.selected.modelId;
-}
 
-std::vector<long long> LoadContinuationAutoCandidateIds()
-{
-    pqxx::connection connection{LstmDbConnectionString()};
-    pqxx::work w{connection};
-    SetTransactionReadOnly(w);
-    if (!ContinuationPolicySchemaExists(w))
-        throw std::runtime_error("continuation_policy_schema_missing");
-    pqxx::result rows = w.exec(
-        "SELECT experiment_id FROM experiment "
-        "WHERE continuation_policy_enabled = true "
-        "AND status = 'completed' AND phase = 'done' "
-        "ORDER BY experiment_id ASC;");
-    std::vector<long long> ids;
-    ids.reserve(rows.size());
-    for (const pqxx::row& row : rows)
-        ids.push_back(row[0].as<long long>());
-    w.commit();
-    return ids;
-}
-
-bool ContinuationAutoEvaluationIsError(const ContinuationEvaluation& evaluation)
-{
-    return evaluation.reason == "migration_required" ||
-           evaluation.reason == "source_experiment_not_found" ||
-           evaluation.reason.rfind("invalid_configuration:", 0) == 0;
-}
-
-void RefreshContinuationAutoQueuedIdentity(ContinuationAutoCandidate& candidate)
-{
-    pqxx::connection connection{LstmDbConnectionString()};
-    pqxx::work w{connection};
-    SetTransactionReadOnly(w);
-    const std::optional<ContinuationPolicyConfig> loaded =
-        FindContinuationPolicyConfig(w, candidate.sourceExperimentId);
-    if (loaded.has_value())
+    bool automationAllowed() override
     {
-        candidate.config = *loaded;
-        candidate.evaluation.queuedExperimentId = loaded->queuedExperimentId;
-        if (loaded->targetEpochs.has_value())
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options_);
+        const bool allowed =
+            SchedulerLaunchAllowed(transaction, "continuation_automation");
+        transaction.commit();
+        return allowed;
+    }
+
+    bool refreshAuthority() override
+    {
+        return RefreshSchedulerAuthority(options_);
+    }
+
+    std::vector<long long> loadCandidateIds() override
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadOnly(transaction);
+        if (!ContinuationPolicySchemaExists(transaction))
+            throw std::runtime_error("continuation_policy_schema_missing");
+        const pqxx::result rows = transaction.exec(
+            "SELECT experiment_id FROM experiment "
+            "WHERE continuation_policy_enabled = true "
+            "AND status = 'completed' AND phase = 'done' "
+            "ORDER BY experiment_id ASC;");
+        std::vector<long long> ids;
+        ids.reserve(rows.size());
+        for (const pqxx::row& row : rows)
+            ids.push_back(row[0].as<long long>());
+        transaction.commit();
+        return ids;
+    }
+
+    EA::SchedulerCore::ContinuationAutomationPreflight preflight(
+        long long sourceExperimentId,
+        bool dryRun) override
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadOnly(transaction);
+        const ContinuationAutoPreflightLookup preflight =
+            LoadAutomaticContinuationPreflightReadOnly(
+                transaction,
+                sourceExperimentId);
+        transaction.commit();
+        return {
+            preflight.satisfaction.alreadySatisfied,
+            FormatAutomaticContinuationSatisfiedFields(preflight, dryRun)};
+    }
+
+    EA::SchedulerCore::ContinuationAutomationCandidate evaluate(
+        long long sourceExperimentId,
+        bool persist) override
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        if (persist)
         {
-            pqxx::result decisionStorage;
-            const std::optional<pqxx::row> decision = LoadContinuationDecision(
-                w,
-                candidate.sourceExperimentId,
-                *loaded->targetEpochs,
-                false,
-                decisionStorage);
-            if (decision.has_value())
+            SetTransactionReadWrite(transaction);
+            RequireAndRefreshSchedulerAuthority(transaction, options_);
+            InjectSchedulerAuthorityLossForTest(
+                transaction,
+                options_,
+                "continuation_before_evaluation_mutation");
+            RequireAndRefreshSchedulerAuthority(transaction, options_);
+        }
+        else
+        {
+            SetTransactionReadOnly(transaction);
+        }
+
+        EA::SchedulerCore::ContinuationAutomationCandidate candidate;
+        candidate.sourceExperimentId = sourceExperimentId;
+        candidate.evaluation = EvaluateContinuationPolicy(
+            transaction,
+            sourceExperimentId,
+            &candidate.config,
+            persist);
+        if (persist)
+            RequireAndRefreshSchedulerAuthority(transaction, options_);
+        transaction.commit();
+        return candidate;
+    }
+
+    EA::SchedulerCore::ContinuationQueueResult queue(
+        long long sourceExperimentId) override
+    {
+        SchedulerOptions queueOptions;
+        queueOptions.selfPath = options_.selfPath;
+        queueOptions.schedulerAuthority = options_.schedulerAuthority;
+        queueOptions.queueContinuationExperimentId = sourceExperimentId;
+        const int result = RunQueueContinuationCommand(queueOptions);
+        if (result == 0)
+            return EA::SchedulerCore::ContinuationQueueResult::Queued;
+        if (result == 3)
+            return EA::SchedulerCore::ContinuationQueueResult::AlreadyQueued;
+        return EA::SchedulerCore::ContinuationQueueResult::Failed;
+    }
+
+    void refreshQueuedIdentity(
+        EA::SchedulerCore::ContinuationAutomationCandidate& candidate) override
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadOnly(transaction);
+        const std::optional<ContinuationPolicyConfig> loaded =
+            FindContinuationPolicyConfig(
+                transaction,
+                candidate.sourceExperimentId);
+        if (loaded.has_value())
+        {
+            candidate.config = *loaded;
+            candidate.evaluation.queuedExperimentId =
+                loaded->queuedExperimentId;
+            if (loaded->targetEpochs.has_value())
             {
-                FillContinuationEvaluationFromDecisionRow(candidate.evaluation, *decision);
-                const std::vector<ContinuationEvidence> rawEvidence =
-                    LoadContinuationEvidence(w, *loaded);
-                RefreshContinuationSelectedDiagnostics(
-                    candidate.evaluation.selected,
-                    rawEvidence);
-                candidate.evaluation.profitabilityGate =
-                    EvaluateContinuationProfitabilityGate(
-                        *loaded,
-                        candidate.evaluation.selected);
+                pqxx::result decisionStorage;
+                const std::optional<pqxx::row> decision =
+                    LoadContinuationDecision(
+                        transaction,
+                        candidate.sourceExperimentId,
+                        *loaded->targetEpochs,
+                        false,
+                        decisionStorage);
+                if (decision.has_value())
+                {
+                    FillContinuationEvaluationFromDecisionRow(
+                        candidate.evaluation,
+                        *decision);
+                    const std::vector<ContinuationEvidence> rawEvidence =
+                        LoadContinuationEvidence(transaction, *loaded);
+                    RefreshContinuationSelectedDiagnostics(
+                        candidate.evaluation.selected,
+                        rawEvidence);
+                    candidate.evaluation.profitabilityGate =
+                        EvaluateContinuationProfitabilityGate(
+                            *loaded,
+                            candidate.evaluation.selected);
+                }
             }
         }
+        transaction.commit();
     }
-    w.commit();
-}
+
+private:
+    const SchedulerOptions& options_;
+};
 
 ContinuationAutoScanCounts RunAutomaticContinuationScan(
     const SchedulerOptions& options)
 {
-    const bool dryRun = options.continuationDryRun || options.dryRun;
-    ContinuationAutoScanCounts counts;
-    {
-        pqxx::connection gateConnection{LstmDbConnectionString()};
-        pqxx::work gate{gateConnection};
-        SetTransactionReadWrite(gate);
-        RequireAndRefreshSchedulerAuthority(gate, options);
-        if (!SchedulerLaunchAllowed(gate, "continuation_automation"))
-        {
-            gate.commit();
-            std::cout << "CONTINUATION_AUTO_SCAN_SKIPPED"
-                      << ",reason=global_experiment_control"
-                      << std::endl;
-            return counts;
-        }
-        gate.commit();
-    }
-    std::cout << "CONTINUATION_AUTO_SCAN_STARTED"
-              << ",auto_evaluate=1"
-              << ",auto_queue=" << (options.autoQueueContinuations ? "1" : "0")
-              << ",scan_seconds=" << options.continuationScanSeconds
-              << ",max_queues_per_scan=" << options.continuationMaxQueuesPerScan
-              << ",dry_run=" << (dryRun ? "1" : "0")
-              << std::endl;
-
-    std::vector<long long> candidateIds;
-    try
-    {
-        candidateIds = LoadContinuationAutoCandidateIds();
-    }
-    catch (const std::exception& e)
-    {
-        ++counts.errors;
-        std::cerr << "CONTINUATION_AUTO_ERROR"
-                  << ",source_experiment_id=NULL"
-                  << ",reason=" << e.what()
-                  << ",dry_run=" << (dryRun ? "1" : "0")
-                  << std::endl;
-    }
-    counts.candidates = static_cast<int>(candidateIds.size());
-
-    std::vector<ContinuationAutoCandidate> eligible;
-    eligible.reserve(candidateIds.size());
-    for (const long long sourceExperimentId : candidateIds)
-    {
-        if (!RefreshSchedulerAuthority(options))
-            throw SchedulerAuthorityLost(
-                "continuation_scan_ownership_lost");
-        std::cout << "CONTINUATION_AUTO_SCAN_CANDIDATE"
-                  << ",source_experiment_id=" << sourceExperimentId
-                  << ",dry_run=" << (dryRun ? "1" : "0")
-                  << std::endl;
-        try
-        {
-            pqxx::connection preflightConnection{LstmDbConnectionString()};
-            pqxx::work preflightTransaction{preflightConnection};
-            SetTransactionReadOnly(preflightTransaction);
-            const ContinuationAutoPreflightLookup preflight =
-                LoadAutomaticContinuationPreflightReadOnly(
-                    preflightTransaction,
-                    sourceExperimentId);
-            preflightTransaction.commit();
-            if (preflight.satisfaction.alreadySatisfied)
-            {
-                ++counts.alreadySatisfied;
-                std::cout << "CONTINUATION_AUTO_ALREADY_SATISFIED"
-                          << FormatAutomaticContinuationSatisfiedFields(
-                                 preflight,
-                                 dryRun)
-                          << std::endl;
-                continue;
-            }
-
-            pqxx::connection connection{LstmDbConnectionString()};
-            pqxx::work w{connection};
-            if (dryRun)
-                SetTransactionReadOnly(w);
-            else
-            {
-                SetTransactionReadWrite(w);
-                RequireAndRefreshSchedulerAuthority(w, options);
-                InjectSchedulerAuthorityLossForTest(
-                    w,
-                    options,
-                    "continuation_before_evaluation_mutation");
-                RequireAndRefreshSchedulerAuthority(w, options);
-            }
-
-            ContinuationAutoCandidate candidate;
-            candidate.sourceExperimentId = sourceExperimentId;
-            candidate.evaluation = EvaluateContinuationPolicy(
-                w,
-                sourceExperimentId,
-                &candidate.config,
-                !dryRun);
-            if (!dryRun)
-                RequireAndRefreshSchedulerAuthority(w, options);
-            w.commit();
-            ++counts.evaluated;
-            PrintContinuationAutoEvaluationLog(
-                "CONTINUATION_AUTO_EVALUATED",
-                candidate.config,
-                candidate.evaluation,
-                dryRun);
-            if (dryRun)
-            {
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_DRY_RUN",
-                    candidate.config,
-                    candidate.evaluation,
-                    true,
-                    "evaluate");
-            }
-
-            if (candidate.evaluation.decision == "eligible" &&
-                !candidate.evaluation.alreadyQueued &&
-                !candidate.evaluation.queuedExperimentId.has_value())
-            {
-                ++counts.eligible;
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_ELIGIBLE",
-                    candidate.config,
-                    candidate.evaluation,
-                    dryRun);
-                eligible.push_back(std::move(candidate));
-            }
-            else if (ContinuationAutoEvaluationIsError(candidate.evaluation))
-            {
-                ++counts.errors;
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_ERROR",
-                    candidate.config,
-                    candidate.evaluation,
-                    dryRun);
-            }
-            else
-            {
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_SKIPPED",
-                    candidate.config,
-                    candidate.evaluation,
-                    dryRun);
-            }
-        }
-        catch (const SchedulerAuthorityLost&)
-        {
-            throw;
-        }
-        catch (const std::exception& e)
-        {
-            ++counts.errors;
-            std::cerr << "CONTINUATION_AUTO_ERROR"
-                      << ",source_experiment_id=" << sourceExperimentId
-                      << ",reason=" << e.what()
-                      << ",dry_run=" << (dryRun ? "1" : "0")
-                      << std::endl;
-        }
-    }
-
-    std::sort(eligible.begin(), eligible.end(), BetterContinuationAutoQueueCandidate);
-    if (options.autoQueueContinuations)
-    {
-        int selectedCount = 0;
-        for (ContinuationAutoCandidate& candidate : eligible)
-        {
-            if (selectedCount >= options.continuationMaxQueuesPerScan)
-                break;
-            ++selectedCount;
-            PrintContinuationAutoEvaluationLog(
-                "CONTINUATION_AUTO_QUEUE_SELECTED",
-                candidate.config,
-                candidate.evaluation,
-                dryRun);
-            if (dryRun)
-            {
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_DRY_RUN",
-                    candidate.config,
-                    candidate.evaluation,
-                    true,
-                    "queue");
-                continue;
-            }
-
-            SchedulerOptions queueOptions;
-            queueOptions.selfPath = options.selfPath;
-            queueOptions.schedulerAuthority =
-                options.schedulerAuthority;
-            queueOptions.queueContinuationExperimentId = candidate.sourceExperimentId;
-            const int queueResult = RunQueueContinuationCommand(queueOptions);
-            if (queueResult == 0)
-            {
-                ++counts.queued;
-                candidate.evaluation.decision = "continuation_queued";
-                candidate.evaluation.reason = "continuation_experiment_created";
-                RefreshContinuationAutoQueuedIdentity(candidate);
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_QUEUED",
-                    candidate.config,
-                    candidate.evaluation,
-                    false);
-            }
-            else if (queueResult == 3)
-            {
-                candidate.evaluation.decision = "already_continued";
-                candidate.evaluation.reason = "continuation_already_queued";
-                RefreshContinuationAutoQueuedIdentity(candidate);
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_SKIPPED",
-                    candidate.config,
-                    candidate.evaluation,
-                    false);
-            }
-            else
-            {
-                ++counts.errors;
-                candidate.evaluation.reason = "automatic_queue_failed";
-                PrintContinuationAutoEvaluationLog(
-                    "CONTINUATION_AUTO_ERROR",
-                    candidate.config,
-                    candidate.evaluation,
-                    false);
-            }
-        }
-    }
-
-    std::cout << "CONTINUATION_AUTO_SCAN_COMPLETED"
-              << ",scan_candidates=" << counts.candidates
-              << ",scan_evaluated=" << counts.evaluated
-              << ",scan_already_satisfied=" << counts.alreadySatisfied
-              << ",scan_eligible=" << counts.eligible
-              << ",scan_queued=" << counts.queued
-              << ",scan_errors=" << counts.errors
-              << ",dry_run=" << (dryRun ? "1" : "0")
-              << std::endl;
-    return counts;
+    SchedulerContinuationOrchestrationPort port{options};
+    EA::SchedulerCore::ContinuationOrchestrationService service{
+        port,
+        std::cout,
+        std::cerr};
+    return service.runAutomaticScan({
+        options.autoQueueContinuations,
+        options.continuationScanSeconds,
+        options.continuationMaxQueuesPerScan,
+        options.continuationDryRun || options.dryRun});
 }
 
 void MarkAnalyzeFailed(pqxx::work& w,
