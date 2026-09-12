@@ -4036,6 +4036,7 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
             "current_operation=$4,"
             "stopped_at_checkpoint_epoch=$1,"
             "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
+            "stop_after_checkpoint_epoch=NULL,"
             "status='pending',phase=$4,exit_code=0,error_message=NULL,"
             "updated_at=now() WHERE experiment_id=$3 "
             "AND status='running' AND phase='train' "

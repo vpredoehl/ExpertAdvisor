@@ -4681,10 +4681,11 @@ void TestProductionCheckpointStopOwnership(pqxx::connection& connection)
               "(worker_executable IS NULL)::text||':'||"
               "(worker_command_line IS NULL)::text||':'||"
               "stopped_at_checkpoint_epoch::text||':'||"
-              "stopped_at_checkpoint_model_id::text "
+              "stopped_at_checkpoint_model_id::text||':'||"
+              "(stop_after_checkpoint_epoch IS NULL)::text "
               "FROM experiment WHERE experiment_id=700085") ==
           "pending:infer:infer:true:true:true:true:true:true:20:" +
-              std::to_string(ordinaryModelId));
+              std::to_string(ordinaryModelId) + ":true");
     CHECK(Scalar(
               connection,
               "SELECT lifecycle_state||':'||capacity_class||':'||"
