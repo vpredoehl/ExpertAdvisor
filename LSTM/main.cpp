@@ -21,8 +21,10 @@
 #include <vector>
 #include <stdexcept>
 #include <sstream>
+#include <filesystem>
 #include <signal.h>
 #include <ctime>
+#include <cctype>
 #include <unistd.h>
 #include <pqxx/pqxx>
 
@@ -53,8 +55,10 @@
 #include "InferenceProfitabilityRepository.hpp"
 #include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
 #include "../Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.hpp"
+#include "../Sources/StrategyEvaluationCore/Phase19CCausalPathPredictability.hpp"
 #include "../Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp"
 #include "../Sources/StrategyEvaluationAdapters/TensorPhase19StateAdapter.hpp"
+#include "../Sources/StrategyEvaluationAdapters/TensorPhase19CCausalAdapter.hpp"
 #include "ProfitabilityVerificationRepository.hpp"
 #include "EconomicEventImportService.hpp"
 #include "EconomicEventConsensusImport.hpp"
@@ -3803,6 +3807,8 @@ struct LaunchArgs
         probabilityStopExtensionStateAnalysisPath;
     std::optional<std::string>
         probabilityStopExtensionPathMechanismPath;
+    std::optional<std::string> phase19CCausalPathPredictabilityDirectory;
+    std::optional<std::string> phase19BPathArtifactDirectory;
     struct FrozenOutcomeSpec
     {
         std::string cohortHash;
@@ -3822,7 +3828,8 @@ bool HasControlledStrategyEvaluation(const LaunchArgs& launchArgs)
         launchArgs.probabilityConditionedStopExtensionEvaluationPath.
             has_value() ||
         launchArgs.probabilityStopExtensionStateAnalysisPath.has_value() ||
-        launchArgs.probabilityStopExtensionPathMechanismPath.has_value();
+        launchArgs.probabilityStopExtensionPathMechanismPath.has_value() ||
+        launchArgs.phase19CCausalPathPredictabilityDirectory.has_value();
 }
 
 std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
@@ -4262,6 +4269,24 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     "--probability-stop-extension-path-mechanism requires an output path");
             parsed.probabilityStopExtensionPathMechanismPath = argv[++i];
         }
+        else if (arg == "--phase19c-causal-path-predictability")
+        {
+            if (HasControlledStrategyEvaluation(parsed))
+                throw std::invalid_argument(
+                    "strategy evaluation artifact option specified more than once");
+            if (i + 1 >= argc || std::string{argv[i + 1]}.empty())
+                throw std::invalid_argument(
+                    "--phase19c-causal-path-predictability requires an output directory");
+            parsed.phase19CCausalPathPredictabilityDirectory = argv[++i];
+        }
+        else if (arg == "--phase19b-path-artifact-dir")
+        {
+            if (parsed.phase19BPathArtifactDirectory || i + 1 >= argc ||
+                std::string{argv[i + 1]}.empty())
+                throw std::invalid_argument(
+                    "--phase19b-path-artifact-dir requires one directory");
+            parsed.phase19BPathArtifactDirectory = argv[++i];
+        }
         else if (arg == "--infer-all")
         {
             parsed.inferAll = true;
@@ -4348,6 +4373,22 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     throw std::invalid_argument(
                         "invalid or duplicate --probability-stop-extension-path-mechanism");
                 parsed.probabilityStopExtensionPathMechanismPath = value;
+            }
+            else if (SplitOptionWithValue(
+                         arg, "--phase19c-causal-path-predictability", value))
+            {
+                if (HasControlledStrategyEvaluation(parsed) || value.empty())
+                    throw std::invalid_argument(
+                        "invalid or duplicate --phase19c-causal-path-predictability");
+                parsed.phase19CCausalPathPredictabilityDirectory = value;
+            }
+            else if (SplitOptionWithValue(
+                         arg, "--phase19b-path-artifact-dir", value))
+            {
+                if (parsed.phase19BPathArtifactDirectory || value.empty())
+                    throw std::invalid_argument(
+                        "invalid or duplicate --phase19b-path-artifact-dir");
+                parsed.phase19BPathArtifactDirectory = value;
             }
             else if (SplitOptionWithValue(arg, "--core-lr-mult", value))
             {
@@ -4626,9 +4667,23 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             parsed.schedulerWorkerAttemptId.has_value(),
             parsed.frozenOutcome.has_value()});
     }
+    if (parsed.phase19CCausalPathPredictabilityDirectory)
+    {
+        EA::StrategyEvaluation::ValidatePhase19CInvocation(
+            parsed.inferenceMode.has_value() && *parsed.inferenceMode,
+            parsed.modelId.has_value(), parsed.inferAll,
+            parsed.schedulerExperimentId.has_value() ||
+                parsed.schedulerCheckpointEvalId.has_value() ||
+                parsed.schedulerWorkerAttemptId.has_value() ||
+                parsed.frozenOutcome.has_value(),
+            parsed.phase19BPathArtifactDirectory.has_value());
+    }
+    else if (parsed.phase19BPathArtifactDirectory)
+        throw std::invalid_argument(
+            "--phase19b-path-artifact-dir requires --phase19c-causal-path-predictability");
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 19B extraction: --infer --model=<model_id> --probability-stop-extension-path-mechanism=<artifact_path> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 19C extraction: --infer --model=<model_id> --phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -6976,6 +7031,160 @@ void PersistInferenceProfitabilityObservation(
               << std::endl;
 }
 
+std::string ReadRequiredArtifact(const std::filesystem::path& path)
+{
+    std::ifstream input{path, std::ios::binary};
+    if (!input)
+        throw std::runtime_error(
+            "phase19c_required_artifact_missing:" + path.string());
+    std::ostringstream content;
+    content << input.rdbuf();
+    if (!input.good() && !input.eof())
+        throw std::runtime_error(
+            "phase19c_artifact_read_failed:" + path.string());
+    return content.str();
+}
+
+void WritePhase19CArtifact(const std::filesystem::path& path,
+                           const std::string& content)
+{
+    std::ofstream output{path, std::ios::binary | std::ios::trunc};
+    if (!output)
+        throw std::runtime_error(
+            "phase19c_artifact_open_failed:" + path.string());
+    output.write(content.data(), static_cast<std::streamsize>(content.size()));
+    output.close();
+    if (!output)
+        throw std::runtime_error(
+            "phase19c_artifact_write_failed:" + path.string());
+}
+
+std::string Phase19CArtifactStem(long long modelId,
+                                 const std::string& symbol,
+                                 std::size_t horizon,
+                                 const std::string& fromDate)
+{
+    std::string display = EA::CanonicalSymbol::Normalize(symbol);
+    if (display.ends_with("rmp")) display.resize(display.size() - 3);
+    std::transform(display.begin(), display.end(), display.begin(),
+                   [](unsigned char value) {
+                       return static_cast<char>(std::toupper(value));
+                   });
+    const bool diagnostic = modelId == 1805;
+    return "model" + std::to_string(modelId) + '_' + display + "_H" +
+        std::to_string(horizon) + '_' + fromDate.substr(0, 4) +
+        (diagnostic ? "_DIAGNOSTIC" : "");
+}
+
+std::string Phase19CDisplaySymbol(const std::string& symbol)
+{
+    std::string display = EA::CanonicalSymbol::Normalize(symbol);
+    if (display.ends_with("rmp")) display.resize(display.size() - 3);
+    std::transform(display.begin(), display.end(), display.begin(),
+                   [](unsigned char value) {
+                       return static_cast<char>(std::toupper(value));
+                   });
+    return display;
+}
+
+void ExtractPhase19CCausalDataset(
+    pqxx::work& w,
+    const LaunchArgs& launchArgs,
+    const Tensor& tensor,
+    long long modelId,
+    const std::string& symbol,
+    const std::string& fromDate,
+    const std::string& toDate)
+{
+    const auto modelMeta = DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+    const auto semanticDims = DBIO::PgModelIO::loadParameterDims(
+        w, modelId, "model_input_semantics_meta");
+    const auto semanticValues = DBIO::PgModelIO::loadParameterValues(
+        w, modelId, "model_input_semantics_meta");
+    const auto semantic = EA::ParseModelInputSemanticMetadata(
+        semanticDims.n_rows, semanticDims.n_cols, semanticValues);
+    if (semantic.schemaVersion != EA::kModelInputSemanticMetaSchemaVersion ||
+        !EA::IsModelInputSemanticLayoutWidthCompatible(
+            semantic.layoutVersion, modelMeta.inputWidth,
+            EA::kModelInputSemanticLayoutRegistry,
+            EA::kRegisteredModelInputWidths,
+            EA::kModelInputSemanticLayoutVersion,
+            EA::kCurrentModelInputWidth, false))
+        throw std::runtime_error("phase19c_feature_layout_identity_ambiguous");
+    const bool transactionReadOnly =
+        w.exec("SHOW transaction_read_only;").one_row()[0].as<std::string>() ==
+        "on";
+    if (!transactionReadOnly)
+        throw std::runtime_error("phase19c_read_only_transaction_not_enforced");
+    const std::string stem = Phase19CArtifactStem(
+        modelId, symbol, prediction_horizon, fromDate);
+    const std::filesystem::path sourceDirectory =
+        *launchArgs.phase19BPathArtifactDirectory;
+    const std::filesystem::path sourceObservations =
+        sourceDirectory / (stem + ".tsv");
+    const std::filesystem::path sourceMetadata =
+        sourceDirectory / (stem + ".tsv.metadata.tsv");
+    const std::string sourceObservationContent =
+        ReadRequiredArtifact(sourceObservations);
+    const std::string sourceMetadataContent =
+        ReadRequiredArtifact(sourceMetadata);
+    const auto mask = LoadModelFeatureAblationMask(w, modelId);
+    const auto adapted = EA::StrategyEvaluationAdapters::
+        AdaptTensorPhase19CCausalJoinRequests(
+            tensor,
+            {window_size, modelMeta.inputWidth, semantic.layoutVersion, mask},
+            EA::StrategyEvaluation::ParsePhase19BCausalJoinRequests(
+                sourceObservationContent));
+
+    const pqxx::result modelRows = w.exec(
+        "SELECT experiment_id FROM model WHERE model_id=$1;",
+        pqxx::params{modelId});
+    if (modelRows.size() != 1)
+        throw std::runtime_error("phase19c_model_identity_mismatch");
+    std::optional<long long> experimentId;
+    if (!modelRows[0][0].is_null())
+        experimentId = modelRows[0][0].as<long long>();
+    const auto result = EA::StrategyEvaluation::BuildPhase19CCausalDataset(
+        sourceObservationContent, sourceMetadataContent, adapted.entryStates,
+        adapted.predictors,
+        {modelId, experimentId, Phase19CDisplaySymbol(symbol),
+         modelId == 1805 ? "diagnostic" : "primary",
+         prediction_horizon, fromDate, toDate, modelMeta.inputWidth,
+         semantic.layoutVersion, adapted.featureAblationIdentity,
+         transactionReadOnly});
+
+    const std::filesystem::path outputDirectory =
+        *launchArgs.phase19CCausalPathPredictabilityDirectory;
+    std::filesystem::create_directories(outputDirectory);
+    const std::filesystem::path datasetPath =
+        outputDirectory / (stem + ".phase19c.dataset.tsv");
+    const std::filesystem::path metadataPath =
+        outputDirectory / (stem + ".phase19c.metadata.tsv");
+    const std::filesystem::path predictorsPath =
+        outputDirectory / (stem + ".phase19c.predictors.tsv");
+    WritePhase19CArtifact(datasetPath, result.datasetTsv);
+    WritePhase19CArtifact(metadataPath, result.metadataTsv);
+    WritePhase19CArtifact(predictorsPath, result.predictorsTsv);
+    std::cout << "PHASE19C_CAUSAL_PATH_PREDICTABILITY"
+              << ",schema_identity=" << result.schemaIdentity
+              << ",result_hash=" << result.resultHash
+              << ",dataset_hash=" << result.datasetHash
+              << ",feature_layout_hash=" << result.featureLayoutHash
+              << ",activated_count=" << result.activatedCount
+              << ",saved_count=" << result.savedCount
+              << ",harmed_count=" << result.harmedCount
+              << ",unchanged_count=" << result.unchangedCount
+              << ",joined_count=" << result.joinedCount
+              << ",join_failure_count=" << result.joinFailureCount
+              << ",predictor_count=" << result.predictorCount
+              << ",dataset_path=" << datasetPath.string()
+              << ",metadata_path=" << metadataPath.string()
+              << ",predictors_path=" << predictorsPath.string()
+              << ",leakage_audit_passed=true"
+              << ",read_only_transaction=true"
+              << ",production_rows_modified=false" << std::endl;
+}
+
 InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
                                                  const LaunchArgs& launchArgs,
                                                  EA::LSTM& lstm,
@@ -8312,11 +8521,12 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred Phase 18B controlled evaluation: " << argv[0] << " --infer --model=<model_id> --probability-conditioned-stop-extension-evaluation=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred Phase 19 state analysis: " << argv[0] << " --infer --model=<model_id> --probability-stop-extension-state-analysis=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred Phase 19B path extraction: " << argv[0] << " --infer --model=<model_id> --probability-stop-extension-path-mechanism=<artifact_path> <fromDate> <toDate>\n"
+                  << "Preferred Phase 19C causal extraction: " << argv[0] << " --infer --model=<model_id> --phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
     }
@@ -8894,6 +9104,14 @@ int main(int argc, const char * argv[])
                     : (resumeConfig.has_value() ? resumeConfig->featureAblationMask :
                        (inferenceConfig.has_value() ? inferenceConfig->featureAblationMask :
                         EA::FeatureAblationMask{}));
+            if (launchArgs.phase19CCausalPathPredictabilityDirectory)
+            {
+                ExtractPhase19CCausalDataset(
+                    runtimeDatabaseWork, launchArgs, t, *launchArgs.modelId,
+                    rawPriceTableName, fromDate, toDate);
+                runtimeDatabaseWork.commit();
+                return 0;
+            }
             EA::LSTM l = CreateLstmForRuntimeLogLevel(
                 t, 1, 0, requestedTargetType, persistedModelInputWidth,
                 runtimeFeatureAblationMask);

@@ -307,6 +307,9 @@
 		0F18001733B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001633B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp */; };
 		0F18001A33C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */; };
 		0F18001B33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F18001C33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp */; };
+		0F1C000133F0000100AAA001 /* Phase19CCausalPathPredictability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1C001033F0000100AAA001 /* Phase19CCausalPathPredictability.cpp */; };
+		0F1C000233F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1C001233F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp */; };
+		0F1C000333F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1C001233F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp */; };
 		0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 		0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */; };
 		0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
@@ -756,6 +759,11 @@
 		0F18001933C0000100AAA001 /* Phase19StateInteractionAnalysis.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Phase19StateInteractionAnalysis.hpp; path = Sources/StrategyEvaluationCore/Phase19StateInteractionAnalysis.hpp; sourceTree = SOURCE_ROOT; };
 		0F18001C33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Phase19BPostEntryPathMechanismExtractor.cpp; path = Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.cpp; sourceTree = SOURCE_ROOT; };
 		0F18001D33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Phase19BPostEntryPathMechanismExtractor.hpp; path = Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.hpp; sourceTree = SOURCE_ROOT; };
+		0F1C001033F0000100AAA001 /* Phase19CCausalPathPredictability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Phase19CCausalPathPredictability.cpp; path = Sources/StrategyEvaluationCore/Phase19CCausalPathPredictability.cpp; sourceTree = SOURCE_ROOT; };
+		0F1C001133F0000100AAA001 /* Phase19CCausalPathPredictability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Phase19CCausalPathPredictability.hpp; path = Sources/StrategyEvaluationCore/Phase19CCausalPathPredictability.hpp; sourceTree = SOURCE_ROOT; };
+		0F1C001233F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorPhase19CCausalAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorPhase19CCausalAdapter.cpp; sourceTree = SOURCE_ROOT; };
+		0F1C001333F0000100AAA001 /* TensorPhase19CCausalAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorPhase19CCausalAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorPhase19CCausalAdapter.hpp; sourceTree = SOURCE_ROOT; };
+		0F1C001433F0000100AAA001 /* ModelInputFeatureSemantics.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ModelInputFeatureSemantics.hpp; path = Headers/ModelInputFeatureSemantics.hpp; sourceTree = SOURCE_ROOT; };
 		0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorMarketPathAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.cpp; sourceTree = SOURCE_ROOT; };
 		0F1900113390000100AAA001 /* TensorMarketPathAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = TensorMarketPathAdapter.hpp; path = Sources/StrategyEvaluationAdapters/TensorMarketPathAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TensorPhase19StateAdapter.cpp; path = Sources/StrategyEvaluationAdapters/TensorPhase19StateAdapter.cpp; sourceTree = SOURCE_ROOT; };
@@ -1166,6 +1174,7 @@
 		08BF4E4820A933FB00B6F81D /* Headers */ = {
 			isa = PBXGroup;
 			children = (
+				0F1C001433F0000100AAA001 /* ModelInputFeatureSemantics.hpp */,
 				08B33BDE2F4185280015F9CF /* BuildConfig.hpp */,
 				0889D74F2FB0C51E00F7F150 /* TargetLabel.hpp */,
 				086BEC082F397572009326B6 /* MatrixUtils.hpp */,
@@ -1207,6 +1216,8 @@
 		0F1900003390000100AAA001 /* StrategyEvaluationCore */ = {
 			isa = PBXGroup;
 			children = (
+				0F1C001033F0000100AAA001 /* Phase19CCausalPathPredictability.cpp */,
+				0F1C001133F0000100AAA001 /* Phase19CCausalPathPredictability.hpp */,
 				0F18001C33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp */,
 				0F18001D33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.hpp */,
 				0F18001833C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp */,
@@ -1223,6 +1234,8 @@
 		0F1900013390000100AAA001 /* StrategyEvaluationAdapters */ = {
 			isa = PBXGroup;
 			children = (
+				0F1C001233F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp */,
+				0F1C001333F0000100AAA001 /* TensorPhase19CCausalAdapter.hpp */,
 				0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */,
 				0F19002333C0000100AAA001 /* TensorPhase19StateAdapter.hpp */,
 				0F1900103390000100AAA001 /* TensorMarketPathAdapter.cpp */,
@@ -1530,6 +1543,7 @@
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				0F1900203390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
 				0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */,
+				0F1C000233F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
 				0A31000230A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
@@ -1671,6 +1685,7 @@
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
 				0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
 				0F19002533C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */,
+				0F1C000333F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
 				0A31000330A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
@@ -1782,6 +1797,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F1C000133F0000100AAA001 /* Phase19CCausalPathPredictability.cpp in Sources */,
 				0F18001B33E0000100AAA001 /* Phase19BPostEntryPathMechanismExtractor.cpp in Sources */,
 				0F18001A33C0000100AAA001 /* Phase19StateInteractionAnalysis.cpp in Sources */,
 				0F18001733B0000100AAA001 /* ControlledOneSidedStopExtensionExperiment.cpp in Sources */,
