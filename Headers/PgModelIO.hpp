@@ -385,6 +385,25 @@ public:
         saveParameter(w, modelId, "model_input_semantics_meta", meta);
     }
 
+    static std::optional<EA::ModelInputSemanticMetadata>
+    loadModelInputSemanticMetadata(pqxx::transaction_base& w,
+                                   long long modelId)
+    {
+        const pqxx::result marker = w.exec(
+            "SELECT 1 FROM matrix WHERE model_id=$1 "
+            "AND param_name='model_input_semantics_meta' LIMIT 1;",
+            pqxx::params{modelId});
+        if (marker.empty()) return std::nullopt;
+
+        const auto dims = loadParameterDims(
+            w, modelId, "model_input_semantics_meta");
+        const auto vals = loadParameterValues(
+            w, modelId, "model_input_semantics_meta");
+        return EA::ParseModelInputSemanticMetadata(
+            static_cast<std::size_t>(dims.n_rows),
+            static_cast<std::size_t>(dims.n_cols), vals);
+    }
+
     // Historical models predate this explicit marker.  Their known width is
     // the durable mapping into the compile-time append-only registry.  Once a
     // marker exists, an expansion must fail closed on any semantic mismatch.
@@ -398,33 +417,15 @@ public:
         // Marker-bearing models must additionally prove a compatible semantic
         // layout generation below.
         (void)EA::ContractForModelInputWidth(persistedInputWidth);
-        try
+        const auto metadata =
+            loadModelInputSemanticMetadata(w, modelId);
+        if (metadata.has_value())
         {
-            const auto dims = loadParameterDims(
-                w, modelId, "model_input_semantics_meta");
-            const auto vals = loadParameterValues(
-                w, modelId, "model_input_semantics_meta");
-            const EA::ModelInputSemanticMetadata metadata =
-                EA::ParseModelInputSemanticMetadata(
-                    static_cast<std::size_t>(dims.n_rows),
-                    static_cast<std::size_t>(dims.n_cols), vals);
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                metadata.schemaVersion, metadata.layoutVersion,
+                metadata->schemaVersion, metadata->layoutVersion,
                 persistedInputWidth);
         }
-        catch (const std::exception& error)
-        {
-            if (std::string{error.what()}.find(
-                    "No entries for parameter: model_input_semantics_meta") !=
-                std::string::npos)
-            {
-                // Pre-marker models remain eligible by registered width.
-            }
-            else
-            {
-                throw;
-            }
-        }
+        // Pre-marker models remain eligible by registered width.
         return validateInputWidthExpansionLineageIfPresent(
             w, modelId, persistedInputWidth);
     }
@@ -436,11 +437,6 @@ public:
     validateModelInputSemanticsForLoad(pqxx::transaction_base& w,
                                        long long modelId)
     {
-        const pqxx::result marker = w.exec(
-            "SELECT 1 FROM matrix WHERE model_id=$1 "
-            "AND param_name='model_input_semantics_meta' LIMIT 1;",
-            pqxx::params{modelId});
-        if (marker.empty()) return std::nullopt;
         return validateModelInputSemanticsForExpansion(w, modelId);
     }
 

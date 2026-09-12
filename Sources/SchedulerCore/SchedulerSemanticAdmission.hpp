@@ -33,6 +33,20 @@ struct SemanticAdmissionDecision
     std::string diagnostic;
 };
 
+inline SemanticAdmissionDecision EvaluateLegacyMarkerlessModelAdmission(
+    std::size_t inputWidth,
+    const WorkerSemanticCapability& worker = {})
+{
+    std::size_t matches = 0;
+    for (const std::size_t registered : worker.registeredInputWidths)
+        if (registered == inputWidth) ++matches;
+
+    if (matches != 1 || inputWidth > worker.maximumInputWidth)
+        return {false, "legacy_model_registered_width_incompatible"};
+
+    return {true, "legacy_model_registered_width_compatible"};
+}
+
 inline SemanticAdmissionDecision EvaluateSemanticWorkerAdmission(
     const std::string& phase,
     const PersistedWorkerSemanticIdentity& persisted,

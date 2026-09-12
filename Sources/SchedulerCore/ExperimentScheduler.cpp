@@ -10005,13 +10005,81 @@ EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
         experimentId);
     if (rows.size() != 1)
         return {false, "semantic_worker_identity_unavailable"};
+
     EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
     if (!rows[0][0].is_null())
         persisted.inputWidth = rows[0][0].as<std::size_t>();
     if (!rows[0][1].is_null())
         persisted.layoutVersion = rows[0][1].as<int>();
+
+    const std::optional<long long> lastModelId =
+        rows[0][2].is_null()
+            ? std::nullopt
+            : std::optional<long long>{rows[0][2].as<long long>()};
+    const std::optional<long long> resumeModelId =
+        rows[0][3].is_null()
+            ? std::nullopt
+            : std::optional<long long>{rows[0][3].as<long long>()};
+
     persisted.modelIdentityExpected =
-        !rows[0][2].is_null() || !rows[0][3].is_null();
+        lastModelId.has_value() || resumeModelId.has_value();
+
+    // Migration 089 intentionally preserves historical experiments as
+    // NULL/NULL.  If an explicit experiment identity exists, it remains
+    // authoritative and immutable.  Only recover identity from a model for
+    // the intentional legacy NULL/NULL case.
+    if (!persisted.inputWidth && !persisted.layoutVersion)
+    {
+        std::optional<long long> authoritativeModelId;
+        if (phase == "infer")
+        {
+            authoritativeModelId = lastModelId;
+        }
+        else if (phase == "train")
+        {
+            authoritativeModelId =
+                resumeModelId.has_value() ? resumeModelId : lastModelId;
+        }
+
+        if (authoritativeModelId.has_value())
+        {
+            try
+            {
+                const auto modelMeta =
+                    DBIO::PgModelIO::loadRequiredModelMeta(
+                        transaction, *authoritativeModelId);
+                persisted.inputWidth = modelMeta.inputWidth;
+
+                const auto semanticMetadata =
+                    DBIO::PgModelIO::loadModelInputSemanticMetadata(
+                        transaction, *authoritativeModelId);
+
+                if (!semanticMetadata.has_value())
+                {
+                    if (loaded != nullptr) *loaded = persisted;
+                    return EA::Scheduler::
+                        EvaluateLegacyMarkerlessModelAdmission(
+                            modelMeta.inputWidth);
+                }
+
+                if (semanticMetadata->schemaVersion !=
+                    EA::kModelInputSemanticMetaSchemaVersion)
+                {
+                    if (loaded != nullptr) *loaded = persisted;
+                    return {false, "semantic_worker_model_identity_invalid"};
+                }
+
+                persisted.layoutVersion =
+                    semanticMetadata->layoutVersion;
+            }
+            catch (const std::exception&)
+            {
+                if (loaded != nullptr) *loaded = persisted;
+                return {false, "semantic_worker_model_identity_invalid"};
+            }
+        }
+    }
+
     if (loaded != nullptr) *loaded = persisted;
     return EA::Scheduler::EvaluateSemanticWorkerAdmission(phase, persisted);
 }

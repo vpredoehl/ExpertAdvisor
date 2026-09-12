@@ -29,6 +29,11 @@ int main()
     assert(!Scheduler::EvaluateSemanticWorkerAdmission(
                 "train", resumedWithoutIdentity, current).admissible);
 
+    assert(Scheduler::EvaluateLegacyMarkerlessModelAdmission(
+               EA::kReturnAutocorrelationModelInputWidth, current).admissible);
+    assert(!Scheduler::EvaluateLegacyMarkerlessModelAdmission(
+                current.maximumInputWidth + 1, current).admissible);
+
     constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 6>
         historicalRegistry{{
             {1, EA::kHistoricalLevelProximityModelInputWidth, 0},
