@@ -371,6 +371,74 @@ PostgresSchedulerRepository::reserveCheckpointWorkerAttempt(
     return {WorkerAttemptReservationStatus::Reserved, std::move(attempt)};
 }
 
+WorkerAttemptReservationResult
+PostgresSchedulerRepository::reserveCheckpointAnalysisAttempt(
+    const CheckpointAnalysisAttemptReservation& reservation)
+{
+    const pqxx::result inserted = transaction_.exec(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "launch_attempt_identity,scheduler_invocation_id,"
+        "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
+        "worker_kind,lifecycle_phase,capacity_class,ownership_origin,"
+        "lifecycle_state,canonical_executable_path,command_line,"
+        "command_identity) VALUES($1,$2,$3,$4,$5,'checkpoint_analyze',"
+        "'analyze','analyze','scheduler_in_process','running',$6,$7,$8) "
+        "RETURNING worker_attempt_id;",
+        pqxx::params{
+            reservation.launchAttemptIdentity,
+            reservation.schedulerInvocationId,
+            reservation.schedulerFencingToken,
+            reservation.experimentId,
+            reservation.checkpointEvalId,
+            reservation.canonicalExecutablePath,
+            reservation.commandLine,
+            reservation.commandIdentity});
+    if (inserted.size() != 1)
+    {
+        return {WorkerAttemptReservationStatus::ReservationInsertFailed,
+                std::nullopt};
+    }
+
+    ReservedWorkerAttempt attempt;
+    attempt.workerAttemptId = inserted[0][0].as<long long>();
+    attempt.launchAttemptIdentity = reservation.launchAttemptIdentity;
+    attempt.experimentId = reservation.experimentId;
+    attempt.checkpointEvalId = reservation.checkpointEvalId;
+    attempt.workerKind = "checkpoint_analyze";
+    attempt.phase = "analyze";
+    attempt.capacityClass = "analyze";
+
+    std::string sql =
+        "UPDATE experiment_checkpoint_eval SET status='running',"
+        "phase='analyze',active_scheduler_worker_attempt_id=$1,"
+        "worker_pid=NULL,worker_process_group_id=NULL,"
+        "worker_process_start_identity=NULL,worker_executable=$2,"
+        "worker_command_line=$3,updated_at=clock_timestamp(),"
+        "error_message=NULL";
+    if (reservation.recordAnalyzeStartedAt)
+    {
+        sql += ",analyze_started_at="
+               "COALESCE(analyze_started_at,clock_timestamp())";
+    }
+    sql +=
+        " WHERE checkpoint_eval_id=$4 AND status='pending' "
+        "AND phase='analyze' AND active_scheduler_worker_attempt_id IS NULL "
+        "RETURNING checkpoint_eval_id;";
+    const pqxx::result claimed = transaction_.exec(
+        sql,
+        pqxx::params{
+            attempt.workerAttemptId,
+            reservation.canonicalExecutablePath,
+            reservation.commandLine,
+            reservation.checkpointEvalId});
+    if (claimed.size() != 1)
+    {
+        return {WorkerAttemptReservationStatus::LifecycleClaimFailed,
+                std::nullopt};
+    }
+    return {WorkerAttemptReservationStatus::Reserved, std::move(attempt)};
+}
+
 SpawnPersistenceResult
 PostgresSchedulerRepository::persistSpawnedWorkerAttempt(
     const SpawnedWorkerAttemptUpdate& update)
@@ -510,6 +578,93 @@ PostgresSchedulerRepository::persistWorkerAttemptLaunchFailure(
     if (lifecycle.size() != 1)
         return LaunchFailurePersistenceResult::LifecyclePreconditionRejected;
     return LaunchFailurePersistenceResult::Updated;
+}
+
+bool PostgresSchedulerRepository::persistCheckpointAnalysisCompletion(
+    const CheckpointAnalysisCompletionUpdate& update)
+{
+    std::string sql =
+        "UPDATE experiment_checkpoint_eval SET status='completed',"
+        "phase='done',completed_at=clock_timestamp(),"
+        "updated_at=clock_timestamp(),error_message=NULL";
+    if (update.recordAnalyzeCompletedAt)
+        sql += ",analyze_completed_at=clock_timestamp()";
+    sql +=
+        ",analysis_id=$1 WHERE checkpoint_eval_id=$2 "
+        "AND status='running' AND phase='analyze' "
+        "AND active_scheduler_worker_attempt_id=$3 "
+        "RETURNING checkpoint_eval_id;";
+    const pqxx::result completed = transaction_.exec(
+        sql,
+        pqxx::params{
+            update.analysisId,
+            update.checkpointEvalId,
+            update.workerAttemptId});
+    return completed.size() == 1;
+}
+
+CheckpointAnalysisPersistenceResult
+PostgresSchedulerRepository::persistCheckpointAnalysisTerminalState(
+    const CheckpointAnalysisTerminalUpdate& update)
+{
+    const pqxx::result terminal = transaction_.exec(
+        "UPDATE experiment_scheduler_worker_attempt a SET "
+        "lifecycle_state=$1,completed_at=clock_timestamp(),"
+        "last_observed_at=clock_timestamp(),reconciliation_result=$2,"
+        "diagnostic=$3 WHERE a.worker_attempt_id=$4 "
+        "AND a.scheduler_invocation_id=$5 AND a.scheduler_fencing_token=$6 "
+        "AND a.worker_kind='checkpoint_analyze' "
+        "AND a.lifecycle_state='running' AND EXISTS (SELECT 1 "
+        "FROM experiment_checkpoint_eval ce WHERE ce.checkpoint_eval_id=$7 "
+        "AND ce.active_scheduler_worker_attempt_id=a.worker_attempt_id) "
+        "RETURNING a.worker_attempt_id;",
+        pqxx::params{
+            update.attemptLifecycleState,
+            update.reconciliationResult,
+            update.diagnostic,
+            update.workerAttemptId,
+            update.schedulerInvocationId,
+            update.schedulerFencingToken,
+            update.checkpointEvalId});
+    if (terminal.size() != 1)
+    {
+        return CheckpointAnalysisPersistenceResult::
+            AttemptPreconditionRejected;
+    }
+
+    pqxx::result lifecycle;
+    if (update.complete)
+    {
+        lifecycle = transaction_.exec(
+            "UPDATE experiment_checkpoint_eval SET "
+            "active_scheduler_worker_attempt_id=NULL "
+            "WHERE checkpoint_eval_id=$1 "
+            "AND active_scheduler_worker_attempt_id=$2 "
+            "AND status='completed' AND phase='done' "
+            "RETURNING checkpoint_eval_id;",
+            pqxx::params{update.checkpointEvalId, update.workerAttemptId});
+    }
+    else
+    {
+        lifecycle = transaction_.exec(
+            "UPDATE experiment_checkpoint_eval SET status='failed',"
+            "completed_at=clock_timestamp(),error_message=$1,"
+            "active_scheduler_worker_attempt_id=NULL,"
+            "updated_at=clock_timestamp() WHERE checkpoint_eval_id=$2 "
+            "AND active_scheduler_worker_attempt_id=$3 "
+            "AND status='running' AND phase='analyze' "
+            "RETURNING checkpoint_eval_id;",
+            pqxx::params{
+                update.diagnostic,
+                update.checkpointEvalId,
+                update.workerAttemptId});
+    }
+    if (lifecycle.size() != 1)
+    {
+        return CheckpointAnalysisPersistenceResult::
+            LifecyclePreconditionRejected;
+    }
+    return CheckpointAnalysisPersistenceResult::Updated;
 }
 
 void PostgresSchedulerRepository::acquireAuthorityCoordinationLock()

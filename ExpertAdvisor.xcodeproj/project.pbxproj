@@ -328,6 +328,7 @@
 		0F2300103400000100AAA001 /* SchedulerAuthorityService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2300013400000100AAA001 /* SchedulerAuthorityService.cpp */; };
 		0F2400103410000100AAA001 /* ContinuationOrchestrationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2400013410000100AAA001 /* ContinuationOrchestrationService.cpp */; };
 		0F2500103420000100AAA001 /* WorkerAttemptLifecycleService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2500013420000100AAA001 /* WorkerAttemptLifecycleService.cpp */; };
+		0F2600103430000100AAA001 /* CheckpointAnalysisOrchestrationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2600013430000100AAA001 /* CheckpointAnalysisOrchestrationService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -795,6 +796,8 @@
 		0F2400023410000100AAA001 /* ContinuationOrchestrationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ContinuationOrchestrationService.hpp; path = Sources/SchedulerCore/ContinuationOrchestrationService.hpp; sourceTree = SOURCE_ROOT; };
 		0F2500013420000100AAA001 /* WorkerAttemptLifecycleService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = WorkerAttemptLifecycleService.cpp; path = Sources/SchedulerCore/WorkerAttemptLifecycleService.cpp; sourceTree = SOURCE_ROOT; };
 		0F2500023420000100AAA001 /* WorkerAttemptLifecycleService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = WorkerAttemptLifecycleService.hpp; path = Sources/SchedulerCore/WorkerAttemptLifecycleService.hpp; sourceTree = SOURCE_ROOT; };
+		0F2600013430000100AAA001 /* CheckpointAnalysisOrchestrationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CheckpointAnalysisOrchestrationService.cpp; path = Sources/SchedulerCore/CheckpointAnalysisOrchestrationService.cpp; sourceTree = SOURCE_ROOT; };
+		0F2600023430000100AAA001 /* CheckpointAnalysisOrchestrationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CheckpointAnalysisOrchestrationService.hpp; path = Sources/SchedulerCore/CheckpointAnalysisOrchestrationService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1274,6 +1277,8 @@
 				0F2400023410000100AAA001 /* ContinuationOrchestrationService.hpp */,
 				0F2500013420000100AAA001 /* WorkerAttemptLifecycleService.cpp */,
 				0F2500023420000100AAA001 /* WorkerAttemptLifecycleService.hpp */,
+				0F2600013430000100AAA001 /* CheckpointAnalysisOrchestrationService.cpp */,
+				0F2600023430000100AAA001 /* CheckpointAnalysisOrchestrationService.hpp */,
 				0F1A002033A0000100AAA001 /* SchedulerInferenceResultRecovery.hpp */,
 				0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */,
 			);
@@ -1828,6 +1833,7 @@
 				0F2300103400000100AAA001 /* SchedulerAuthorityService.cpp in Sources */,
 				0F2400103410000100AAA001 /* ContinuationOrchestrationService.cpp in Sources */,
 				0F2500103420000100AAA001 /* WorkerAttemptLifecycleService.cpp in Sources */,
+				0F2600103430000100AAA001 /* CheckpointAnalysisOrchestrationService.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

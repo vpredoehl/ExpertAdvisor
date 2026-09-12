@@ -74,6 +74,13 @@ public:
         return reservationResult;
     }
 
+    EA::SchedulerCore::WorkerAttemptReservationResult
+    reserveCheckpointAnalysisAttempt(
+        const EA::SchedulerCore::CheckpointAnalysisAttemptReservation&) override
+    {
+        return {};
+    }
+
     EA::SchedulerCore::SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const EA::SchedulerCore::SpawnedWorkerAttemptUpdate& update) override
     {
@@ -88,6 +95,19 @@ public:
     {
         launchFailure = update;
         return failureResult;
+    }
+
+    bool persistCheckpointAnalysisCompletion(
+        const EA::SchedulerCore::CheckpointAnalysisCompletionUpdate&) override
+    {
+        return true;
+    }
+
+    EA::SchedulerCore::CheckpointAnalysisPersistenceResult
+    persistCheckpointAnalysisTerminalState(
+        const EA::SchedulerCore::CheckpointAnalysisTerminalUpdate&) override
+    {
+        return EA::SchedulerCore::CheckpointAnalysisPersistenceResult::Updated;
     }
 };
 

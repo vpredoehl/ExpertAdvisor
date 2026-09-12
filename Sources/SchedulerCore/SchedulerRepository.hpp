@@ -111,6 +111,19 @@ struct CheckpointWorkerAttemptReservation
     std::string logPath;
 };
 
+struct CheckpointAnalysisAttemptReservation
+{
+    std::string launchAttemptIdentity;
+    std::string schedulerInvocationId;
+    long long schedulerFencingToken = 0;
+    long long experimentId = -1;
+    long long checkpointEvalId = -1;
+    std::string canonicalExecutablePath;
+    std::string commandLine;
+    std::string commandIdentity;
+    bool recordAnalyzeStartedAt = false;
+};
+
 enum class WorkerAttemptReservationStatus
 {
     Reserved,
@@ -181,6 +194,33 @@ enum class LaunchFailurePersistenceResult
     LifecyclePreconditionRejected
 };
 
+struct CheckpointAnalysisCompletionUpdate
+{
+    long long checkpointEvalId = -1;
+    long long workerAttemptId = -1;
+    std::optional<long long> analysisId;
+    bool recordAnalyzeCompletedAt = false;
+};
+
+struct CheckpointAnalysisTerminalUpdate
+{
+    long long workerAttemptId = -1;
+    std::string schedulerInvocationId;
+    long long schedulerFencingToken = 0;
+    long long checkpointEvalId = -1;
+    bool complete = false;
+    std::string attemptLifecycleState;
+    std::string reconciliationResult;
+    std::string diagnostic;
+};
+
+enum class CheckpointAnalysisPersistenceResult
+{
+    Updated,
+    AttemptPreconditionRejected,
+    LifecyclePreconditionRejected
+};
+
 class SchedulerRepository
 {
 public:
@@ -203,11 +243,18 @@ public:
         const ExperimentWorkerAttemptReservation& reservation) = 0;
     virtual WorkerAttemptReservationResult reserveCheckpointWorkerAttempt(
         const CheckpointWorkerAttemptReservation& reservation) = 0;
+    virtual WorkerAttemptReservationResult reserveCheckpointAnalysisAttempt(
+        const CheckpointAnalysisAttemptReservation& reservation) = 0;
 
     virtual SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const SpawnedWorkerAttemptUpdate& update) = 0;
     virtual LaunchFailurePersistenceResult persistWorkerAttemptLaunchFailure(
         const WorkerAttemptLaunchFailureUpdate& update) = 0;
+    virtual bool persistCheckpointAnalysisCompletion(
+        const CheckpointAnalysisCompletionUpdate& update) = 0;
+    virtual CheckpointAnalysisPersistenceResult
+    persistCheckpointAnalysisTerminalState(
+        const CheckpointAnalysisTerminalUpdate& update) = 0;
 };
 
 } // namespace EA::SchedulerCore

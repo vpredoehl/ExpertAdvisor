@@ -67,6 +67,10 @@ int main(int argc, char* argv[])
         );
         CREATE TABLE experiment_checkpoint_eval(
             checkpoint_eval_id bigint PRIMARY KEY,
+            experiment_id bigint,
+            parent_experiment_id bigint,
+            checkpoint_epoch integer,
+            checkpoint_model_id bigint,
             status text NOT NULL,
             phase text NOT NULL,
             worker_pid integer,
@@ -79,6 +83,9 @@ int main(int argc, char* argv[])
             worker_control_state text,
             started_at timestamptz,
             infer_started_at timestamptz,
+            analyze_started_at timestamptz,
+            analyze_completed_at timestamptz,
+            analysis_id bigint,
             completed_at timestamptz,
             error_message text,
             updated_at timestamptz
@@ -206,18 +213,25 @@ int main(int argc, char* argv[])
         WHERE experiment_id=10;
         INSERT INTO experiment_scheduler_worker_attempt(
             worker_attempt_id,scheduler_invocation_id,
-            scheduler_fencing_token,lifecycle_state
+            scheduler_fencing_token,experiment_id,checkpoint_eval_id,
+            worker_kind,lifecycle_phase,capacity_class,ownership_origin,
+            lifecycle_state
         ) VALUES
-            (101,'scheduler-a',7,'reserved'),
-            (102,'scheduler-a',7,'reserved'),
-            (103,'scheduler-a',7,'reserved'),
-            (201,'scheduler-a',7,'reserved');
+            (101,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
+            (102,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
+            (103,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
+            (201,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
+            (204,'scheduler-a',7,20,204,'checkpoint_analyze','analyze',
+             'analyze','scheduler_in_process','running');
         INSERT INTO experiment_checkpoint_eval(
-            checkpoint_eval_id,status,phase,
+            checkpoint_eval_id,experiment_id,parent_experiment_id,
+            checkpoint_epoch,checkpoint_model_id,status,phase,
             active_scheduler_worker_attempt_id,updated_at
         ) VALUES
-            (201,'running','infer',201,clock_timestamp()),
-            (202,'pending','infer',NULL,clock_timestamp());
+            (201,20,20,10,700,'running','infer',201,clock_timestamp()),
+            (202,20,20,20,701,'pending','infer',NULL,clock_timestamp()),
+            (203,20,20,30,702,'pending','analyze',NULL,clock_timestamp()),
+            (204,20,20,40,703,'running','analyze',204,clock_timestamp());
     )SQL");
 
     PostgresSchedulerRepository repository{transaction};
@@ -310,6 +324,96 @@ int main(int argc, char* argv[])
     assert(reservedCheckpoint[3].as<long long>() ==
            checkpointReservation.attempt->workerAttemptId);
     assert(reservedCheckpoint[4].as<std::string>() == "/tmp/checkpoint.log");
+
+    const auto checkpointAnalysis =
+        repository.reserveCheckpointAnalysisAttempt({
+            "scheduler-a:worker:nonce:checkpoint_analyze:203",
+            "scheduler-a",
+            7,
+            20,
+            203,
+            "/tmp/LSTM_Release",
+            "/tmp/LSTM_Release --schedule-experiments",
+            "checkpoint_analyze:203",
+            true});
+    assert(checkpointAnalysis.status ==
+           WorkerAttemptReservationStatus::Reserved);
+    assert(checkpointAnalysis.attempt);
+    assert(checkpointAnalysis.attempt->workerKind == "checkpoint_analyze");
+    assert(checkpointAnalysis.attempt->checkpointEvalId == 203);
+    const long long checkpointAnalysisAttemptId =
+        checkpointAnalysis.attempt->workerAttemptId;
+    const pqxx::row claimedAnalysis = transaction.exec(
+        "SELECT status,phase,active_scheduler_worker_attempt_id,"
+        "worker_pid,worker_executable,worker_command_line,"
+        "analyze_started_at IS NOT NULL "
+        "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=203")
+        .one_row();
+    assert(claimedAnalysis[0].as<std::string>() == "running");
+    assert(claimedAnalysis[1].as<std::string>() == "analyze");
+    assert(claimedAnalysis[2].as<long long>() == checkpointAnalysisAttemptId);
+    assert(claimedAnalysis[3].is_null());
+    assert(claimedAnalysis[4].as<std::string>() == "/tmp/LSTM_Release");
+    assert(claimedAnalysis[5].as<std::string>() ==
+           "/tmp/LSTM_Release --schedule-experiments");
+    assert(claimedAnalysis[6].as<bool>());
+
+    assert(!repository.persistCheckpointAnalysisCompletion(
+        {203, checkpointAnalysisAttemptId + 1, 777, true}));
+    assert(repository.persistCheckpointAnalysisCompletion(
+        {203, checkpointAnalysisAttemptId, 777, true}));
+    assert(repository.persistCheckpointAnalysisTerminalState({
+               checkpointAnalysisAttemptId,
+               "scheduler-a",
+               7,
+               203,
+               true,
+               "completed",
+               "checkpoint_analysis_completed",
+               "result_persisted_exactly_once"}) ==
+           CheckpointAnalysisPersistenceResult::Updated);
+    const pqxx::row completedAnalysis = transaction.exec(
+        "SELECT status,phase,analysis_id,analyze_completed_at IS NOT NULL,"
+        "active_scheduler_worker_attempt_id "
+        "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=203")
+        .one_row();
+    assert(completedAnalysis[0].as<std::string>() == "completed");
+    assert(completedAnalysis[1].as<std::string>() == "done");
+    assert(completedAnalysis[2].as<long long>() == 777);
+    assert(completedAnalysis[3].as<bool>());
+    assert(completedAnalysis[4].is_null());
+
+    assert(repository.persistCheckpointAnalysisTerminalState({
+               204,
+               "scheduler-a",
+               8,
+               204,
+               false,
+               "failed",
+               "checkpoint_analysis_failed",
+               "wrong_fence"}) ==
+           CheckpointAnalysisPersistenceResult::
+               AttemptPreconditionRejected);
+    assert(repository.persistCheckpointAnalysisTerminalState({
+               204,
+               "scheduler-a",
+               7,
+               204,
+               false,
+               "failed",
+               "checkpoint_analysis_failed",
+               "missing_completed_checkpoint_inference"}) ==
+           CheckpointAnalysisPersistenceResult::Updated);
+    const pqxx::row failedAnalysis = transaction.exec(
+        "SELECT status,phase,error_message,"
+        "active_scheduler_worker_attempt_id "
+        "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=204")
+        .one_row();
+    assert(failedAnalysis[0].as<std::string>() == "failed");
+    assert(failedAnalysis[1].as<std::string>() == "analyze");
+    assert(failedAnalysis[2].as<std::string>() ==
+           "missing_completed_checkpoint_inference");
+    assert(failedAnalysis[3].is_null());
 
     const auto running = repository.loadRunningExperiments();
     assert(running.size() == 3);

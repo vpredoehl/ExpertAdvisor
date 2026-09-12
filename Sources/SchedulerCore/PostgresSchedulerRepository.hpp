@@ -34,11 +34,17 @@ public:
         const ExperimentWorkerAttemptReservation& reservation) override;
     WorkerAttemptReservationResult reserveCheckpointWorkerAttempt(
         const CheckpointWorkerAttemptReservation& reservation) override;
+    WorkerAttemptReservationResult reserveCheckpointAnalysisAttempt(
+        const CheckpointAnalysisAttemptReservation& reservation) override;
 
     SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const SpawnedWorkerAttemptUpdate& update) override;
     LaunchFailurePersistenceResult persistWorkerAttemptLaunchFailure(
         const WorkerAttemptLaunchFailureUpdate& update) override;
+    bool persistCheckpointAnalysisCompletion(
+        const CheckpointAnalysisCompletionUpdate& update) override;
+    CheckpointAnalysisPersistenceResult persistCheckpointAnalysisTerminalState(
+        const CheckpointAnalysisTerminalUpdate& update) override;
 
     void acquireAuthorityCoordinationLock() override;
     std::optional<SchedulerProtocolState>

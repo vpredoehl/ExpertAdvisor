@@ -71,6 +71,7 @@
 #include "SchedulerOwnershipPolicy.hpp"
 #include "SchedulerOwnershipRepository.hpp"
 #include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
+#include "SchedulerCore/CheckpointAnalysisOrchestrationService.hpp"
 #include "SchedulerCore/ContinuationOrchestrationService.hpp"
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/ReconciliationService.hpp"
@@ -21414,7 +21415,7 @@ struct ClaimedCheckpointAnalysis
     std::string launchAttemptIdentity;
 };
 
-struct CheckpointAnalysisWorkResult
+struct CheckpointAnalysisExecution
 {
     bool success = false;
     std::string error;
@@ -21472,17 +21473,7 @@ ClaimCheckpointAnalysis(
         options.schedulerAuthority.schedulerInvocationId + ":worker:" +
         EA::SchedulerCore::GenerateSchedulerIdentityNonce() + ":" +
         commandIdentity;
-    pqxx::result inserted = transaction.exec_params(
-        "INSERT INTO experiment_scheduler_worker_attempt("
-        "launch_attempt_identity,scheduler_invocation_id,"
-        "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
-        "worker_kind,lifecycle_phase,capacity_class,"
-        "ownership_origin,lifecycle_state,"
-        "canonical_executable_path,command_line,"
-        "command_identity) "
-        "VALUES($1,$2,$3,$4,$5,'checkpoint_analyze',"
-        "'analyze','analyze','scheduler_in_process','running',"
-        "$6,$7,$8) RETURNING worker_attempt_id;",
+    const auto reserved = services.repository.reserveCheckpointAnalysisAttempt({
         claim.launchAttemptIdentity,
         options.schedulerAuthority.schedulerInvocationId,
         options.schedulerAuthority.fencingToken,
@@ -21490,60 +21481,35 @@ ClaimCheckpointAnalysis(
         claim.evaluation.checkpointEvalId,
         options.selfPath,
         options.invocationCommandLine,
-        commandIdentity);
-    EA::SchedulerOwnership::RequireAffectedExactlyOne(
-        inserted, "reserve_checkpoint_analysis_attempt");
-    claim.workerAttemptId =
-        inserted[0][0].as<long long>();
-
-    std::ostringstream claimSql;
-    claimSql
-        << "UPDATE experiment_checkpoint_eval SET "
-        << "status='running',phase='analyze',"
-        << "active_scheduler_worker_attempt_id=$1,"
-        << "worker_pid=NULL,worker_process_group_id=NULL,"
-        << "worker_process_start_identity=NULL,"
-        << "worker_executable=$2,worker_command_line=$3,"
-        << "updated_at=clock_timestamp(),error_message=NULL";
-    if (ColumnExists(
-            transaction,
-            "experiment_checkpoint_eval",
-            "analyze_started_at"))
+        commandIdentity,
+        ColumnExists(transaction, "experiment_checkpoint_eval",
+                     "analyze_started_at")});
+    if (reserved.status ==
+        EA::SchedulerCore::WorkerAttemptReservationStatus::ReservationInsertFailed)
     {
-        claimSql
-            << ",analyze_started_at="
-            << "COALESCE(analyze_started_at,clock_timestamp())";
+        throw std::runtime_error(
+            "exact_attempt_predicate_rejected:"
+            "reserve_checkpoint_analysis_attempt:affected_rows=0");
     }
-    claimSql
-        << " WHERE checkpoint_eval_id=$4 "
-        << "AND status='pending' AND phase='analyze' "
-        << "AND active_scheduler_worker_attempt_id IS NULL "
-        << "RETURNING checkpoint_eval_id;";
-    pqxx::result lifecycle = transaction.exec_params(
-        claimSql.str(),
-        claim.workerAttemptId,
-        options.selfPath,
-        options.invocationCommandLine,
-        claim.evaluation.checkpointEvalId);
-    EA::SchedulerOwnership::RequireAffectedExactlyOne(
-        lifecycle, "claim_checkpoint_analysis_lifecycle");
+    if (reserved.status !=
+            EA::SchedulerCore::WorkerAttemptReservationStatus::Reserved ||
+        !reserved.attempt)
+    {
+        throw std::runtime_error(
+            "exact_attempt_predicate_rejected:"
+            "claim_checkpoint_analysis_lifecycle:affected_rows=0");
+    }
+    claim.workerAttemptId = reserved.attempt->workerAttemptId;
     RequireAndRefreshSchedulerAuthority(
         transaction, options);
     transaction.commit();
-    std::cout << "CHECKPOINT_ANALYSIS_CLAIMED"
-              << ",checkpoint_eval_id="
-              << claim.evaluation.checkpointEvalId
-              << ",worker_attempt_id="
-              << claim.workerAttemptId
-              << ",capacity_class=analyze"
-              << std::endl;
     return claim;
 }
 
-CheckpointAnalysisWorkResult ExecuteCheckpointAnalysisWork(
+CheckpointAnalysisExecution ExecuteCheckpointAnalysisWork(
     const ClaimedCheckpointAnalysis& claim)
 {
-    CheckpointAnalysisWorkResult result;
+    CheckpointAnalysisExecution result;
     try
     {
         pqxx::connection connection{LstmDbConnectionString()};
@@ -21598,12 +21564,13 @@ CheckpointAnalysisWorkResult ExecuteCheckpointAnalysisWork(
 bool FinalizeCheckpointAnalysis(
     const SchedulerOptions& options,
     const ClaimedCheckpointAnalysis& claim,
-    const CheckpointAnalysisWorkResult& work)
+    const CheckpointAnalysisExecution& work)
 {
     pqxx::connection connection{LstmDbConnectionString()};
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     RequireAndRefreshSchedulerAuthority(transaction, options);
+    EA::SchedulerCore::PostgresSchedulerRepository repository{transaction};
     EA::SchedulerOwnership::ExactAttemptExpectation expected;
     expected.workerAttemptId = claim.workerAttemptId;
     expected.experimentId =
@@ -21627,9 +21594,11 @@ bool FinalizeCheckpointAnalysis(
     const std::optional<long long> currentInferenceResult =
         FindCompletedCheckpointInferenceResultId(
             transaction, claim.evaluation);
-    const bool success =
-        work.success && currentInferenceResult &&
-        *currentInferenceResult == work.inferenceResultId;
+    const auto plan =
+        EA::SchedulerCore::PlanCheckpointAnalysisFinalization(
+            {work.success, work.error, work.inferenceResultId},
+            currentInferenceResult);
+    const bool success = plan.complete;
     if (success)
     {
         AnalysisScopeOptions scope;
@@ -21650,101 +21619,44 @@ bool FinalizeCheckpointAnalysis(
             FindCheckpointAnalysisResultId(
                 transaction,
                 claim.evaluation.checkpointEvalId);
-        std::ostringstream lifecycleSql;
-        lifecycleSql
-            << "UPDATE experiment_checkpoint_eval SET "
-            << "status='completed',phase='done',"
-            << "completed_at=clock_timestamp(),"
-            << "updated_at=clock_timestamp(),error_message=NULL";
-        if (ColumnExists(
-                transaction,
-                "experiment_checkpoint_eval",
-                "analyze_completed_at"))
-            lifecycleSql
-                << ",analyze_completed_at=clock_timestamp()";
-        lifecycleSql << ",analysis_id=$1";
-        lifecycleSql
-            << " WHERE checkpoint_eval_id=$2 "
-            << "AND status='running' AND phase='analyze' "
-            << "AND active_scheduler_worker_attempt_id=$3 "
-            << "RETURNING checkpoint_eval_id;";
-        pqxx::result lifecycle = transaction.exec_params(
-            lifecycleSql.str(),
-            analysisId,
-            claim.evaluation.checkpointEvalId,
-            claim.workerAttemptId);
-        EA::SchedulerOwnership::RequireAffectedExactlyOne(
-            lifecycle,
-            "complete_checkpoint_analysis_exact_attempt");
+        if (!repository.persistCheckpointAnalysisCompletion({
+                claim.evaluation.checkpointEvalId,
+                claim.workerAttemptId,
+                analysisId,
+                ColumnExists(transaction, "experiment_checkpoint_eval",
+                             "analyze_completed_at")}))
+        {
+            throw std::runtime_error(
+                "exact_attempt_predicate_rejected:"
+                "complete_checkpoint_analysis_exact_attempt:affected_rows=0");
+        }
         (void)EvaluateCheckpointPolicyAfterAnalysis(
             transaction, claim.evaluation);
     }
 
-    const std::string failure =
-        work.error.empty()
-            ? "checkpoint_analysis_source_changed_before_finalize"
-            : work.error;
-    pqxx::result terminal = transaction.exec_params(
-        "UPDATE experiment_scheduler_worker_attempt a SET "
-        "lifecycle_state=$1,completed_at=clock_timestamp(),"
-        "last_observed_at=clock_timestamp(),"
-        "reconciliation_result=$2,diagnostic=$3 "
-        "WHERE a.worker_attempt_id=$4 "
-        "AND a.scheduler_invocation_id=$5 "
-        "AND a.scheduler_fencing_token=$6 "
-        "AND a.worker_kind='checkpoint_analyze' "
-        "AND a.lifecycle_state='running' "
-        "AND EXISTS (SELECT 1 "
-        " FROM experiment_checkpoint_eval ce "
-        " WHERE ce.checkpoint_eval_id=$7 "
-        " AND ce.active_scheduler_worker_attempt_id="
-        "a.worker_attempt_id) "
-        "RETURNING a.worker_attempt_id;",
-        success ? "completed" : "failed",
-        success ? "checkpoint_analysis_completed"
-                : "checkpoint_analysis_failed",
-        success ? "result_persisted_exactly_once"
-                : failure,
+    const auto persisted = repository.persistCheckpointAnalysisTerminalState({
         claim.workerAttemptId,
         options.schedulerAuthority.schedulerInvocationId,
         options.schedulerAuthority.fencingToken,
-        claim.evaluation.checkpointEvalId);
-    EA::SchedulerOwnership::RequireAffectedExactlyOne(
-        terminal,
-        "terminalize_checkpoint_analysis_exact_attempt");
-
-    pqxx::result cleared;
-    if (success)
+        claim.evaluation.checkpointEvalId,
+        plan.complete,
+        plan.attemptLifecycleState,
+        plan.reconciliationResult,
+        plan.diagnostic});
+    if (persisted == EA::SchedulerCore::CheckpointAnalysisPersistenceResult::
+                         AttemptPreconditionRejected)
     {
-        cleared = transaction.exec_params(
-            "UPDATE experiment_checkpoint_eval SET "
-            "active_scheduler_worker_attempt_id=NULL "
-            "WHERE checkpoint_eval_id=$1 "
-            "AND active_scheduler_worker_attempt_id=$2 "
-            "AND status='completed' AND phase='done' "
-            "RETURNING checkpoint_eval_id;",
-            claim.evaluation.checkpointEvalId,
-            claim.workerAttemptId);
+        throw std::runtime_error(
+            "exact_attempt_predicate_rejected:"
+            "terminalize_checkpoint_analysis_exact_attempt:affected_rows=0");
     }
-    else
+    if (persisted == EA::SchedulerCore::CheckpointAnalysisPersistenceResult::
+                         LifecyclePreconditionRejected)
     {
-        cleared = transaction.exec_params(
-            "UPDATE experiment_checkpoint_eval SET "
-            "status='failed',completed_at=clock_timestamp(),"
-            "error_message=$1,"
-            "active_scheduler_worker_attempt_id=NULL,"
-            "updated_at=clock_timestamp() "
-            "WHERE checkpoint_eval_id=$2 "
-            "AND active_scheduler_worker_attempt_id=$3 "
-            "AND status='running' AND phase='analyze' "
-            "RETURNING checkpoint_eval_id;",
-            failure,
-            claim.evaluation.checkpointEvalId,
-            claim.workerAttemptId);
+        throw std::runtime_error(
+            "exact_attempt_predicate_rejected:"
+            "clear_checkpoint_analysis_exact_attempt_binding:affected_rows=0");
     }
-    EA::SchedulerOwnership::RequireAffectedExactlyOne(
-        cleared,
-        "clear_checkpoint_analysis_exact_attempt_binding");
     RequireAndRefreshSchedulerAuthority(
         transaction, options);
     transaction.commit();
@@ -21754,44 +21666,53 @@ bool FinalizeCheckpointAnalysis(
 int RunCheckpointEvalAnalyzeJobsLegacy(
     const SchedulerOptions& options)
 {
-    const std::optional<ClaimedCheckpointAnalysis> claim =
-        ClaimCheckpointAnalysis(options);
-    if (!claim)
-        return 0;
-    LogWorkerStarted(
-        "CHECKPOINT_ANALYSIS_WORKER_STARTED",
-        "checkpoint_analyze",
-        claim->evaluation.experiment.experimentId,
-        claim->evaluation.checkpointModelId,
-        claim->evaluation.checkpointEvalId);
-    if (SchedulerAuthorityTestFailpointEnabled(
-            "checkpoint_analysis_crash_after_claim"))
-    {
-        std::cout
-            << "CHECKPOINT_ANALYSIS_TEST_CRASH_AFTER_CLAIM"
-            << ",checkpoint_eval_id="
-            << claim->evaluation.checkpointEvalId
-            << ",worker_attempt_id="
-            << claim->workerAttemptId
-            << std::endl;
-        std::cout.flush();
-        std::cerr.flush();
-        ::_exit(86);
-    }
-    PersistSchedulerAuthorityLossForTest(
-        options,
-        "checkpoint_analysis_lease_loss_during_work");
-    const CheckpointAnalysisWorkResult work =
-        ExecuteCheckpointAnalysisWork(*claim);
-    PersistSchedulerAuthorityLossForTest(
-        options,
-        "checkpoint_analysis_lease_loss_before_finalize");
-    const bool completed =
-        FinalizeCheckpointAnalysis(
-            options, *claim, work);
-    if (completed)
-        TryGenerateExperimentReports(options);
-    return completed ? 0 : 1;
+    using Claim = EA::SchedulerCore::CheckpointAnalysisClaim;
+    using Work = EA::SchedulerCore::CheckpointAnalysisWorkResult;
+    std::optional<ClaimedCheckpointAnalysis> claimed;
+    std::optional<CheckpointAnalysisExecution> execution;
+    EA::SchedulerCore::CheckpointAnalysisOperations operations{
+        [&]() -> std::optional<Claim> {
+            claimed = ClaimCheckpointAnalysis(options);
+            if (!claimed)
+                return std::nullopt;
+            return Claim{
+                claimed->evaluation.checkpointEvalId,
+                claimed->evaluation.experiment.experimentId,
+                claimed->evaluation.checkpointModelId,
+                claimed->evaluation.checkpointEpoch,
+                claimed->workerAttemptId};
+        },
+        [&](const Claim& claim) {
+            if (SchedulerAuthorityTestFailpointEnabled(
+                    "checkpoint_analysis_crash_after_claim"))
+            {
+                std::cout << "CHECKPOINT_ANALYSIS_TEST_CRASH_AFTER_CLAIM"
+                          << ",checkpoint_eval_id=" << claim.checkpointEvalId
+                          << ",worker_attempt_id=" << claim.workerAttemptId << std::endl;
+                std::cout.flush();
+                std::cerr.flush();
+                ::_exit(86);
+            }
+            PersistSchedulerAuthorityLossForTest(
+                options, "checkpoint_analysis_lease_loss_during_work");
+        },
+        [&](const Claim&) -> Work {
+            execution = ExecuteCheckpointAnalysisWork(*claimed);
+            return {execution->success, execution->error,
+                    execution->inferenceResultId};
+        },
+        [&](const Claim&, const Work&) {
+            PersistSchedulerAuthorityLossForTest(
+                options, "checkpoint_analysis_lease_loss_before_finalize");
+        },
+        [&](const Claim&, const Work&) {
+            return FinalizeCheckpointAnalysis(options, *claimed, *execution);
+        },
+        [&] { TryGenerateExperimentReports(options); }};
+    EA::SchedulerCore::CheckpointAnalysisOrchestrationService service{
+        std::move(operations), std::cout, std::cerr,
+        static_cast<long long>(::getpid())};
+    return service.runOne();
 }
 
 int GlobalCapacityUsed(
