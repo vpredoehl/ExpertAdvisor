@@ -53,6 +53,20 @@ public:
         return victim;
     }
 
+    EA::SchedulerCore::WorkerAttemptReservationResult
+    reserveExperimentWorkerAttempt(
+        const EA::SchedulerCore::ExperimentWorkerAttemptReservation&) override
+    {
+        return {};
+    }
+
+    EA::SchedulerCore::WorkerAttemptReservationResult
+    reserveCheckpointWorkerAttempt(
+        const EA::SchedulerCore::CheckpointWorkerAttemptReservation&) override
+    {
+        return {};
+    }
+
     EA::SchedulerCore::SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const EA::SchedulerCore::SpawnedWorkerAttemptUpdate& update) override
     {

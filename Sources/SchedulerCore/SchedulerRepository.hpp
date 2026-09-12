@@ -73,6 +73,59 @@ struct PreemptionVictimRecord
     long long workerAttemptId = -1;
 };
 
+struct ReservedWorkerAttempt
+{
+    long long workerAttemptId = -1;
+    std::string launchAttemptIdentity;
+    long long experimentId = -1;
+    std::optional<long long> checkpointEvalId;
+    std::string workerKind;
+    std::string phase;
+    std::string capacityClass;
+    std::string logPath;
+};
+
+struct ExperimentWorkerAttemptReservation
+{
+    std::string launchAttemptIdentity;
+    std::string schedulerInvocationId;
+    long long schedulerFencingToken = 0;
+    long long experimentId = -1;
+    std::string phase;
+    std::string canonicalExecutablePath;
+    std::string commandIdentity;
+    std::string currentOperation;
+    std::string logPath;
+    bool cancellationOnly = false;
+};
+
+struct CheckpointWorkerAttemptReservation
+{
+    std::string launchAttemptIdentity;
+    std::string schedulerInvocationId;
+    long long schedulerFencingToken = 0;
+    long long experimentId = -1;
+    long long checkpointEvalId = -1;
+    std::string canonicalExecutablePath;
+    std::string commandIdentity;
+    std::string logPath;
+};
+
+enum class WorkerAttemptReservationStatus
+{
+    Reserved,
+    LifecycleUnavailable,
+    ReservationInsertFailed,
+    LifecycleClaimFailed
+};
+
+struct WorkerAttemptReservationResult
+{
+    WorkerAttemptReservationStatus status =
+        WorkerAttemptReservationStatus::LifecycleUnavailable;
+    std::optional<ReservedWorkerAttempt> attempt;
+};
+
 struct PendingSelectionMetadata
 {
     std::string priority = "normal";
@@ -145,6 +198,11 @@ public:
     loadPreemptionVictim(
         std::string_view phase,
         int candidatePriorityRank) = 0;
+
+    virtual WorkerAttemptReservationResult reserveExperimentWorkerAttempt(
+        const ExperimentWorkerAttemptReservation& reservation) = 0;
+    virtual WorkerAttemptReservationResult reserveCheckpointWorkerAttempt(
+        const CheckpointWorkerAttemptReservation& reservation) = 0;
 
     virtual SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const SpawnedWorkerAttemptUpdate& update) = 0;

@@ -204,6 +204,173 @@ PostgresSchedulerRepository::loadPreemptionVictim(
         rows[0][2].as<long long>()};
 }
 
+WorkerAttemptReservationResult
+PostgresSchedulerRepository::reserveExperimentWorkerAttempt(
+    const ExperimentWorkerAttemptReservation& reservation)
+{
+    const pqxx::result lifecycle = transaction_.exec(
+        "SELECT status,phase,active_scheduler_worker_attempt_id,"
+        "cancellation_request_id,cancel_after_checkpoint_epoch "
+        "FROM experiment WHERE experiment_id=$1;",
+        pqxx::params{reservation.experimentId});
+    if (lifecycle.size() != 1 ||
+        lifecycle[0][0].as<std::string>() != "pending" ||
+        lifecycle[0][1].as<std::string>() != reservation.phase ||
+        !lifecycle[0][2].is_null() ||
+        (reservation.cancellationOnly &&
+         (lifecycle[0][3].is_null() || lifecycle[0][4].is_null())))
+    {
+        return {WorkerAttemptReservationStatus::LifecycleUnavailable,
+                std::nullopt};
+    }
+
+    const pqxx::result inserted = transaction_.exec(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "launch_attempt_identity,scheduler_invocation_id,"
+        "scheduler_fencing_token,experiment_id,worker_kind,"
+        "lifecycle_phase,capacity_class,ownership_origin,"
+        "lifecycle_state,canonical_executable_path,"
+        "command_identity,log_path) "
+        "VALUES($1,$2,$3,$4,'experiment',$5,$5,"
+        "'scheduler_launch','reserved',$6,$7,$8) "
+        "RETURNING worker_attempt_id;",
+        pqxx::params{
+            reservation.launchAttemptIdentity,
+            reservation.schedulerInvocationId,
+            reservation.schedulerFencingToken,
+            reservation.experimentId,
+            reservation.phase,
+            reservation.canonicalExecutablePath,
+            reservation.commandIdentity,
+            reservation.logPath});
+    if (inserted.size() != 1)
+    {
+        return {WorkerAttemptReservationStatus::ReservationInsertFailed,
+                std::nullopt};
+    }
+
+    ReservedWorkerAttempt attempt;
+    attempt.workerAttemptId = inserted[0][0].as<long long>();
+    attempt.launchAttemptIdentity = reservation.launchAttemptIdentity;
+    attempt.experimentId = reservation.experimentId;
+    attempt.workerKind = "experiment";
+    attempt.phase = reservation.phase;
+    attempt.capacityClass = reservation.phase;
+    attempt.logPath = reservation.logPath;
+
+    const std::string logColumn =
+        reservation.phase == "train"
+            ? "train_log_path"
+            : (reservation.phase == "infer"
+                   ? "infer_log_path"
+                   : "analysis_log_path");
+    const std::string claimSql =
+        std::string{
+            "UPDATE experiment SET status='running',resume_requested=false,"
+            "scheduler_resume_origin='none',"
+            "started_at=COALESCE(started_at,clock_timestamp()),"
+            "worker_started_at=clock_timestamp(),worker_pid=NULL,"
+            "worker_process_group_id=NULL,"
+            "worker_process_start_identity=NULL,worker_executable=$1,"
+            "current_operation=$2,worker_control_state='running',"
+            "active_scheduler_worker_attempt_id=$3,"} +
+        logColumn + "=$4,updated_at=clock_timestamp() "
+        "WHERE experiment_id=$5 AND status='pending' AND phase=$6 "
+        "AND active_scheduler_worker_attempt_id IS NULL "
+        "RETURNING experiment_id;";
+    const pqxx::result claimed = transaction_.exec(
+        claimSql,
+        pqxx::params{
+            reservation.canonicalExecutablePath,
+            reservation.currentOperation,
+            attempt.workerAttemptId,
+            reservation.logPath,
+            reservation.experimentId,
+            reservation.phase});
+    if (claimed.size() != 1)
+    {
+        return {WorkerAttemptReservationStatus::LifecycleClaimFailed,
+                std::nullopt};
+    }
+    return {WorkerAttemptReservationStatus::Reserved, std::move(attempt)};
+}
+
+WorkerAttemptReservationResult
+PostgresSchedulerRepository::reserveCheckpointWorkerAttempt(
+    const CheckpointWorkerAttemptReservation& reservation)
+{
+    const pqxx::result lifecycle = transaction_.exec(
+        "SELECT status,phase,active_scheduler_worker_attempt_id "
+        "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+        pqxx::params{reservation.checkpointEvalId});
+    if (lifecycle.size() != 1 ||
+        lifecycle[0][0].as<std::string>() != "pending" ||
+        lifecycle[0][1].as<std::string>() != "infer" ||
+        !lifecycle[0][2].is_null())
+    {
+        return {WorkerAttemptReservationStatus::LifecycleUnavailable,
+                std::nullopt};
+    }
+
+    const pqxx::result inserted = transaction_.exec(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "launch_attempt_identity,scheduler_invocation_id,"
+        "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
+        "worker_kind,lifecycle_phase,capacity_class,ownership_origin,"
+        "lifecycle_state,canonical_executable_path,command_identity,log_path) "
+        "VALUES($1,$2,$3,$4,$5,'checkpoint_infer','infer','infer',"
+        "'scheduler_launch','reserved',$6,$7,$8) "
+        "RETURNING worker_attempt_id;",
+        pqxx::params{
+            reservation.launchAttemptIdentity,
+            reservation.schedulerInvocationId,
+            reservation.schedulerFencingToken,
+            reservation.experimentId,
+            reservation.checkpointEvalId,
+            reservation.canonicalExecutablePath,
+            reservation.commandIdentity,
+            reservation.logPath});
+    if (inserted.size() != 1)
+    {
+        return {WorkerAttemptReservationStatus::ReservationInsertFailed,
+                std::nullopt};
+    }
+
+    ReservedWorkerAttempt attempt;
+    attempt.workerAttemptId = inserted[0][0].as<long long>();
+    attempt.launchAttemptIdentity = reservation.launchAttemptIdentity;
+    attempt.experimentId = reservation.experimentId;
+    attempt.checkpointEvalId = reservation.checkpointEvalId;
+    attempt.workerKind = "checkpoint_infer";
+    attempt.phase = "infer";
+    attempt.capacityClass = "infer";
+    attempt.logPath = reservation.logPath;
+
+    const pqxx::result claimed = transaction_.exec(
+        "UPDATE experiment_checkpoint_eval SET status='running',phase='infer',"
+        "worker_pid=NULL,worker_process_group_id=NULL,"
+        "worker_process_start_identity=NULL,worker_executable=$1,"
+        "worker_control_state='running',infer_log_path=$2,"
+        "active_scheduler_worker_attempt_id=$3,"
+        "started_at=COALESCE(started_at,clock_timestamp()),"
+        "infer_started_at=COALESCE(infer_started_at,clock_timestamp()),"
+        "updated_at=clock_timestamp(),error_message=NULL "
+        "WHERE checkpoint_eval_id=$4 AND status='pending' AND phase='infer' "
+        "AND active_scheduler_worker_attempt_id IS NULL "
+        "RETURNING checkpoint_eval_id;",
+        pqxx::params{
+            reservation.canonicalExecutablePath,
+            reservation.logPath,
+            attempt.workerAttemptId,
+            reservation.checkpointEvalId});
+    if (claimed.size() != 1)
+    {
+        return {WorkerAttemptReservationStatus::LifecycleClaimFailed,
+                std::nullopt};
+    }
+    return {WorkerAttemptReservationStatus::Reserved, std::move(attempt)};
+}
+
 SpawnPersistenceResult
 PostgresSchedulerRepository::persistSpawnedWorkerAttempt(
     const SpawnedWorkerAttemptUpdate& update)

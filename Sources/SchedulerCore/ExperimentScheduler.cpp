@@ -78,6 +78,7 @@
 #include "SchedulerCore/SchedulerAuthorityService.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
 #include "SchedulerCore/WorkerControlService.hpp"
+#include "SchedulerCore/WorkerAttemptLifecycleService.hpp"
 #include "SchedulerCore/WorkerProcessController.hpp"
 #include "SchedulerCore/SchedulerSemanticAdmission.hpp"
 #include "SupportedSymbols.hpp"
@@ -562,17 +563,7 @@ struct SchedulerOwnedChild
     ChildLifecycleDiagnosticState diagnosticState;
 };
 
-struct ReservedWorkerAttempt
-{
-    long long workerAttemptId = -1;
-    std::string launchAttemptIdentity;
-    long long experimentId = -1;
-    std::optional<long long> checkpointEvalId;
-    std::string workerKind;
-    std::string phase;
-    std::string capacityClass;
-    std::string logPath;
-};
+using EA::SchedulerCore::ReservedWorkerAttempt;
 
 std::map<pid_t, SchedulerOwnedChild> gSchedulerOwnedChildren;
 
@@ -10890,15 +10881,6 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
     return StoppedWorkerAdmissionResult::Admitted;
 }
 
-std::string GenerateWorkerLaunchIdentity(
-    const SchedulerOptions& options,
-    const std::string& commandIdentity)
-{
-    return options.schedulerAuthority.schedulerInvocationId + ":worker:" +
-           EA::SchedulerCore::GenerateSchedulerIdentityNonce() + ":" +
-           commandIdentity;
-}
-
 std::optional<ReservedWorkerAttempt>
 ReserveExperimentWorkerAttempt(
     const SchedulerOptions& options,
@@ -10944,100 +10926,17 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
-    pqxx::result lifecycle = transaction.exec_params(
-        "SELECT status,phase,active_scheduler_worker_attempt_id,"
-        "cancellation_request_id, cancel_after_checkpoint_epoch "
-        "FROM experiment WHERE experiment_id=$1;",
-        experiment.experimentId);
-    if (lifecycle.size() != 1 ||
-        lifecycle[0][0].as<std::string>() != "pending" ||
-        lifecycle[0][1].as<std::string>() != phase ||
-        !lifecycle[0][2].is_null())
-    {
-        transaction.commit();
-        return std::nullopt;
-    }
-    if (cancellationOnly &&
-        (lifecycle[0][3].is_null() ||
-         lifecycle[0][4].is_null()))
-    {
-        transaction.commit();
-        return std::nullopt;
-    }
-
-    ReservedWorkerAttempt attempt;
-    attempt.launchAttemptIdentity =
-        GenerateWorkerLaunchIdentity(
-            options,
-            "experiment:" +
-                std::to_string(experiment.experimentId) + ":" +
-                phase);
-    attempt.experimentId = experiment.experimentId;
-    attempt.workerKind = "experiment";
-    attempt.phase = phase;
-    attempt.capacityClass = phase;
-    attempt.logPath = logPath;
-
-    pqxx::result inserted = transaction.exec_params(
-        "INSERT INTO experiment_scheduler_worker_attempt("
-        "launch_attempt_identity,scheduler_invocation_id,"
-        "scheduler_fencing_token,experiment_id,worker_kind,"
-        "lifecycle_phase,capacity_class,ownership_origin,"
-        "lifecycle_state,canonical_executable_path,"
-        "command_identity,log_path) "
-        "VALUES($1,$2,$3,$4,'experiment',$5,$5,"
-        "'scheduler_launch','reserved',$6,$7,$8) "
-        "RETURNING worker_attempt_id;",
-        attempt.launchAttemptIdentity,
-        options.schedulerAuthority.schedulerInvocationId,
-        options.schedulerAuthority.fencingToken,
+    EA::SchedulerCore::WorkerAttemptLifecycleService lifecycle{
+        services.repository,
+        {options.schedulerAuthority.schedulerInvocationId,
+         options.schedulerAuthority.fencingToken,
+         options.selfPath}};
+    auto attempt = lifecycle.reserveExperiment({
         experiment.experimentId,
         phase,
-        options.selfPath,
-        "experiment:" +
-            std::to_string(experiment.experimentId) + ":" + phase,
-        logPath);
-    if (inserted.size() != 1)
-        throw std::runtime_error(
-            "worker_attempt_reservation_insert_failed");
-    attempt.workerAttemptId =
-        inserted[0][0].as<long long>();
-
-    const std::string currentOperation =
-        EA::ExperimentLifecycle::
-            RequireCanonicalCurrentOperationForPhase(phase);
-    const std::string logColumn =
-        phase == "train"
-            ? "train_log_path"
-            : (phase == "infer"
-                   ? "infer_log_path"
-                   : "analysis_log_path");
-    const std::string claimSql =
-        std::string{
-        "UPDATE experiment SET status='running',resume_requested=false,"
-        "scheduler_resume_origin='none',"
-        "started_at=COALESCE(started_at,clock_timestamp()),"
-        "worker_started_at=clock_timestamp(),worker_pid=NULL,"
-        "worker_process_group_id=NULL,"
-        "worker_process_start_identity=NULL,"
-        "worker_executable=$1,current_operation=$2,"
-        "worker_control_state='running',"
-        "active_scheduler_worker_attempt_id=$3,"} +
-        logColumn + "=$4,updated_at=clock_timestamp() "
-        "WHERE experiment_id=$5 AND status='pending' AND phase=$6 "
-        "AND active_scheduler_worker_attempt_id IS NULL "
-        "RETURNING experiment_id;";
-    pqxx::result claimed = transaction.exec_params(
-        claimSql,
-        options.selfPath,
-        currentOperation,
-        attempt.workerAttemptId,
         logPath,
-        experiment.experimentId,
-        phase);
-    if (claimed.size() != 1)
-        throw std::runtime_error(
-            "worker_attempt_lifecycle_claim_failed");
+        EA::SchedulerCore::GenerateSchedulerIdentityNonce(),
+        cancellationOnly});
     transaction.commit();
     return attempt;
 }
@@ -11081,79 +10980,16 @@ ReserveCheckpointWorkerAttempt(
         return std::nullopt;
     }
 
-    pqxx::result lifecycle = transaction.exec_params(
-        "SELECT status,phase,active_scheduler_worker_attempt_id "
-        "FROM experiment_checkpoint_eval "
-        "WHERE checkpoint_eval_id=$1;",
-        eval.checkpointEvalId);
-    if (lifecycle.size() != 1 ||
-        lifecycle[0][0].as<std::string>() != "pending" ||
-        lifecycle[0][1].as<std::string>() != "infer" ||
-        !lifecycle[0][2].is_null())
-    {
-        transaction.commit();
-        return std::nullopt;
-    }
-
-    ReservedWorkerAttempt attempt;
-    attempt.launchAttemptIdentity =
-        GenerateWorkerLaunchIdentity(
-            options,
-            "checkpoint_infer:" +
-                std::to_string(eval.checkpointEvalId));
-    attempt.experimentId = eval.experiment.experimentId;
-    attempt.checkpointEvalId = eval.checkpointEvalId;
-    attempt.workerKind = "checkpoint_infer";
-    attempt.phase = "infer";
-    attempt.capacityClass = "infer";
-    attempt.logPath = logPath;
-    pqxx::result inserted = transaction.exec_params(
-        "INSERT INTO experiment_scheduler_worker_attempt("
-        "launch_attempt_identity,scheduler_invocation_id,"
-        "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
-        "worker_kind,lifecycle_phase,capacity_class,"
-        "ownership_origin,lifecycle_state,"
-        "canonical_executable_path,command_identity,log_path) "
-        "VALUES($1,$2,$3,$4,$5,'checkpoint_infer','infer','infer',"
-        "'scheduler_launch','reserved',$6,$7,$8) "
-        "RETURNING worker_attempt_id;",
-        attempt.launchAttemptIdentity,
-        options.schedulerAuthority.schedulerInvocationId,
-        options.schedulerAuthority.fencingToken,
+    EA::SchedulerCore::WorkerAttemptLifecycleService lifecycle{
+        services.repository,
+        {options.schedulerAuthority.schedulerInvocationId,
+         options.schedulerAuthority.fencingToken,
+         options.selfPath}};
+    auto attempt = lifecycle.reserveCheckpoint({
         eval.experiment.experimentId,
         eval.checkpointEvalId,
-        options.selfPath,
-        "checkpoint_infer:" +
-            std::to_string(eval.checkpointEvalId),
-        logPath);
-    if (inserted.size() != 1)
-        throw std::runtime_error(
-            "checkpoint_worker_attempt_reservation_insert_failed");
-    attempt.workerAttemptId =
-        inserted[0][0].as<long long>();
-
-    pqxx::result claimed = transaction.exec_params(
-        "UPDATE experiment_checkpoint_eval SET "
-        "status='running',phase='infer',worker_pid=NULL,"
-        "worker_process_group_id=NULL,"
-        "worker_process_start_identity=NULL,worker_executable=$1,"
-        "worker_control_state='running',infer_log_path=$2,"
-        "active_scheduler_worker_attempt_id=$3,"
-        "started_at=COALESCE(started_at,clock_timestamp()),"
-        "infer_started_at=COALESCE(infer_started_at,"
-        "clock_timestamp()),updated_at=clock_timestamp(),"
-        "error_message=NULL "
-        "WHERE checkpoint_eval_id=$4 AND status='pending' "
-        "AND phase='infer' "
-        "AND active_scheduler_worker_attempt_id IS NULL "
-        "RETURNING checkpoint_eval_id;",
-        options.selfPath,
         logPath,
-        attempt.workerAttemptId,
-        eval.checkpointEvalId);
-    if (claimed.size() != 1)
-        throw std::runtime_error(
-            "checkpoint_worker_attempt_lifecycle_claim_failed");
+        EA::SchedulerCore::GenerateSchedulerIdentityNonce()});
     transaction.commit();
     return attempt;
 }
@@ -11262,31 +11098,12 @@ void MarkReservedWorkerAttemptLaunchFailed(
         RequireAndRefreshSchedulerAuthority(transaction, options);
         EA::SchedulerCore::PostgresSchedulerRepository repository{
             transaction};
-        const auto result = repository.persistWorkerAttemptLaunchFailure({
-            attempt.workerAttemptId,
-            options.schedulerAuthority.schedulerInvocationId,
-            options.schedulerAuthority.fencingToken,
-            attempt.experimentId,
-            attempt.checkpointEvalId,
-            attempt.phase,
-            exitCode,
-            diagnostic});
-        if (result == EA::SchedulerCore::
-                          LaunchFailurePersistenceResult::
-                              AttemptPreconditionRejected)
-        {
-            throw std::runtime_error(
-                "exact_attempt_predicate_rejected:"
-                "terminalize_exact_launch_failure_attempt:affected_rows=0");
-        }
-        if (result == EA::SchedulerCore::
-                          LaunchFailurePersistenceResult::
-                              LifecyclePreconditionRejected)
-        {
-            throw std::runtime_error(
-                "exact_attempt_predicate_rejected:"
-                "clear_exact_launch_failure_binding:affected_rows=0");
-        }
+        EA::SchedulerCore::WorkerAttemptLifecycleService lifecycle{
+            repository,
+            {options.schedulerAuthority.schedulerInvocationId,
+             options.schedulerAuthority.fencingToken,
+             options.selfPath}};
+        lifecycle.recordLaunchFailure({attempt, exitCode, diagnostic});
         transaction.commit();
     }
     catch (const std::exception& error)
@@ -11313,30 +11130,17 @@ void PersistSpawnedWorkerAttempt(
     if (requireSchedulerAuthority)
         RequireAndRefreshSchedulerAuthority(transaction, options);
     EA::SchedulerCore::PostgresSchedulerRepository repository{transaction};
-    const auto result = repository.persistSpawnedWorkerAttempt({
-        attempt.workerAttemptId,
-        options.schedulerAuthority.schedulerInvocationId,
-        options.schedulerAuthority.fencingToken,
-        attempt.experimentId,
-        attempt.checkpointEvalId,
-        attempt.phase,
+    EA::SchedulerCore::WorkerAttemptLifecycleService lifecycle{
+        repository,
+        {options.schedulerAuthority.schedulerInvocationId,
+         options.schedulerAuthority.fencingToken,
+         options.selfPath}};
+    lifecycle.recordSpawned({
+        attempt,
         static_cast<int>(pid),
         processStartIdentity,
-        options.selfPath,
-        commandLine});
-    if (result == EA::SchedulerCore::
-                      SpawnPersistenceResult::AttemptPreconditionRejected)
-    {
-        if (requireSchedulerAuthority)
-            throw SchedulerAuthorityLost(
-                "worker_attempt_spawn_persistence_fence_rejected");
-        throw std::runtime_error(
-            "child_spawn_evidence_persistence_fence_rejected");
-    }
-    if (result == EA::SchedulerCore::
-                      SpawnPersistenceResult::LifecyclePreconditionRejected)
-        throw std::runtime_error(
-            "worker_attempt_spawn_lifecycle_predicate_rejected");
+        commandLine,
+        requireSchedulerAuthority});
     transaction.commit();
 }
 
@@ -21661,12 +21465,13 @@ ClaimCheckpointAnalysis(
     }
     ClaimedCheckpointAnalysis claim;
     claim.evaluation = pending.front();
+    const std::string commandIdentity =
+        "checkpoint_analyze:" +
+        std::to_string(claim.evaluation.checkpointEvalId);
     claim.launchAttemptIdentity =
-        GenerateWorkerLaunchIdentity(
-            options,
-            "checkpoint_analyze:" +
-                std::to_string(
-                    claim.evaluation.checkpointEvalId));
+        options.schedulerAuthority.schedulerInvocationId + ":worker:" +
+        EA::SchedulerCore::GenerateSchedulerIdentityNonce() + ":" +
+        commandIdentity;
     pqxx::result inserted = transaction.exec_params(
         "INSERT INTO experiment_scheduler_worker_attempt("
         "launch_attempt_identity,scheduler_invocation_id,"
@@ -21685,9 +21490,7 @@ ClaimCheckpointAnalysis(
         claim.evaluation.checkpointEvalId,
         options.selfPath,
         options.invocationCommandLine,
-        "checkpoint_analyze:" +
-            std::to_string(
-                claim.evaluation.checkpointEvalId));
+        commandIdentity);
     EA::SchedulerOwnership::RequireAffectedExactlyOne(
         inserted, "reserve_checkpoint_analysis_attempt");
     claim.workerAttemptId =

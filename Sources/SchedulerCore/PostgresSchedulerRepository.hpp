@@ -30,6 +30,11 @@ public:
         std::string_view phase,
         int candidatePriorityRank) override;
 
+    WorkerAttemptReservationResult reserveExperimentWorkerAttempt(
+        const ExperimentWorkerAttemptReservation& reservation) override;
+    WorkerAttemptReservationResult reserveCheckpointWorkerAttempt(
+        const CheckpointWorkerAttemptReservation& reservation) override;
+
     SpawnPersistenceResult persistSpawnedWorkerAttempt(
         const SpawnedWorkerAttemptUpdate& update) override;
     LaunchFailurePersistenceResult persistWorkerAttemptLaunchFailure(
