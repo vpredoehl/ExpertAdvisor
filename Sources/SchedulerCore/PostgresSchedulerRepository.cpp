@@ -305,6 +305,8 @@ PostgresSchedulerRepository::reserveExperimentWorkerAttempt(
     attempt.phase = reservation.phase;
     attempt.capacityClass = reservation.phase;
     attempt.logPath = reservation.logPath;
+    attempt.canonicalExecutablePath =
+        reservation.canonicalExecutablePath;
 
     const std::string logColumn =
         reservation.phase == "train"
@@ -393,6 +395,8 @@ PostgresSchedulerRepository::reserveCheckpointWorkerAttempt(
     attempt.phase = "infer";
     attempt.capacityClass = "infer";
     attempt.logPath = reservation.logPath;
+    attempt.canonicalExecutablePath =
+        reservation.canonicalExecutablePath;
 
     const pqxx::result claimed = transaction_.exec(
         "UPDATE experiment_checkpoint_eval SET status='running',phase='infer',"
@@ -455,6 +459,8 @@ PostgresSchedulerRepository::reserveCheckpointAnalysisAttempt(
     attempt.workerKind = "checkpoint_analyze";
     attempt.phase = "analyze";
     attempt.capacityClass = "analyze";
+    attempt.canonicalExecutablePath =
+        reservation.canonicalExecutablePath;
 
     std::string sql =
         "UPDATE experiment_checkpoint_eval SET status='running',"
@@ -503,6 +509,7 @@ PostgresSchedulerRepository::persistSpawnedWorkerAttempt(
         "last_observed_at=clock_timestamp() "
         "WHERE worker_attempt_id=$5 AND scheduler_invocation_id=$6 "
         "AND scheduler_fencing_token=$7 "
+        "AND canonical_executable_path=$3 "
         "AND (lifecycle_state='reserved' OR ("
         " lifecycle_state='spawned' AND worker_pid=$1 "
         " AND worker_process_group_id=$1 "

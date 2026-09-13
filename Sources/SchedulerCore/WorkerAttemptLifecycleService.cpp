@@ -40,7 +40,7 @@ WorkerAttemptLifecycleService::WorkerAttemptLifecycleService(
 {
     if (context_.schedulerInvocationId.empty() ||
         context_.schedulerFencingToken <= 0 ||
-        context_.canonicalExecutablePath.empty())
+        context_.selectedWorkerCanonicalExecutablePath.empty())
     {
         throw std::invalid_argument(
             "complete scheduler authority context required");
@@ -77,7 +77,7 @@ WorkerAttemptLifecycleService::reserveExperiment(
             context_.schedulerFencingToken,
             request.experimentId,
             request.phase,
-            context_.canonicalExecutablePath,
+            context_.selectedWorkerCanonicalExecutablePath,
             commandIdentity,
             EA::ExperimentLifecycle::
                 RequireCanonicalCurrentOperationForPhase(request.phase),
@@ -106,7 +106,7 @@ WorkerAttemptLifecycleService::reserveCheckpoint(
             context_.schedulerFencingToken,
             request.experimentId,
             request.checkpointEvalId,
-            context_.canonicalExecutablePath,
+            context_.selectedWorkerCanonicalExecutablePath,
             commandIdentity,
             request.logPath}),
         "checkpoint_worker_attempt_reservation_insert_failed",
@@ -116,6 +116,13 @@ WorkerAttemptLifecycleService::reserveCheckpoint(
 void WorkerAttemptLifecycleService::recordSpawned(
     const SpawnedWorkerAttemptEvidence& evidence)
 {
+    if (evidence.attempt.canonicalExecutablePath.empty() ||
+        evidence.attempt.canonicalExecutablePath !=
+            context_.selectedWorkerCanonicalExecutablePath)
+    {
+        throw std::invalid_argument(
+            "reserved worker executable identity mismatch");
+    }
     const auto result = repository_.persistSpawnedWorkerAttempt({
         evidence.attempt.workerAttemptId,
         context_.schedulerInvocationId,
@@ -125,7 +132,7 @@ void WorkerAttemptLifecycleService::recordSpawned(
         evidence.attempt.phase,
         evidence.workerPid,
         evidence.processStartIdentity,
-        context_.canonicalExecutablePath,
+        evidence.attempt.canonicalExecutablePath,
         evidence.commandLine});
     if (result == SpawnPersistenceResult::AttemptPreconditionRejected)
     {

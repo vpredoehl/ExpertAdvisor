@@ -299,14 +299,18 @@ int main(int argc, char* argv[])
             worker_attempt_id,scheduler_invocation_id,
             scheduler_fencing_token,experiment_id,checkpoint_eval_id,
             worker_kind,lifecycle_phase,capacity_class,ownership_origin,
-            lifecycle_state
+            lifecycle_state,canonical_executable_path
         ) VALUES
-            (101,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
-            (102,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
-            (103,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
-            (201,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved'),
+            (101,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved',
+             '/tmp/LSTM_Release'),
+            (102,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved',
+             '/tmp/LSTM_Release'),
+            (103,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved',
+             '/tmp/LSTM_Release'),
+            (201,'scheduler-a',7,NULL,NULL,NULL,NULL,NULL,NULL,'reserved',
+             '/tmp/LSTM_Release'),
             (204,'scheduler-a',7,20,204,'checkpoint_analyze','analyze',
-             'analyze','scheduler_in_process','running');
+             'analyze','scheduler_in_process','running','/tmp/LSTM_Release');
         INSERT INTO experiment_checkpoint_eval(
             checkpoint_eval_id,experiment_id,parent_experiment_id,
             checkpoint_epoch,checkpoint_model_id,status,phase,
@@ -452,6 +456,8 @@ int main(int argc, char* argv[])
     assert(experimentReservation.attempt);
     assert(experimentReservation.attempt->workerKind == "experiment");
     assert(experimentReservation.attempt->phase == "analyze");
+    assert(experimentReservation.attempt->canonicalExecutablePath ==
+           "/tmp/LSTM_Release");
     const pqxx::row reservedExperiment = transaction.exec(
         "SELECT status,phase,current_operation,worker_control_state,"
         "active_scheduler_worker_attempt_id,analysis_log_path "
@@ -493,6 +499,8 @@ int main(int argc, char* argv[])
            WorkerAttemptReservationStatus::Reserved);
     assert(checkpointReservation.attempt);
     assert(checkpointReservation.attempt->checkpointEvalId == 202);
+    assert(checkpointReservation.attempt->canonicalExecutablePath ==
+           "/tmp/LSTM_Release");
     const pqxx::row reservedCheckpoint = transaction.exec(
         "SELECT status,phase,worker_control_state,"
         "active_scheduler_worker_attempt_id,infer_log_path "
@@ -618,6 +626,10 @@ int main(int argc, char* argv[])
         "/tmp/LSTM_Release --train"};
     assert(repository.persistSpawnedWorkerAttempt(spawned) ==
            SpawnPersistenceResult::Updated);
+    SpawnedWorkerAttemptUpdate substitutedExecutable = spawned;
+    substitutedExecutable.canonicalExecutablePath = "/tmp/other_worker";
+    assert(repository.persistSpawnedWorkerAttempt(substitutedExecutable) ==
+           SpawnPersistenceResult::AttemptPreconditionRejected);
     const pqxx::row mapped = transaction.exec(
         "SELECT a.lifecycle_state,a.worker_pid,a.worker_process_group_id,"
         "a.worker_process_start_identity,a.canonical_executable_path,"

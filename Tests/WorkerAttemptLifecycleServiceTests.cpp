@@ -133,7 +133,8 @@ EA::SchedulerCore::ReservedWorkerAttempt ExperimentAttempt()
             "experiment",
             "train",
             "train",
-            "/tmp/train.log"};
+            "/tmp/train.log",
+            "/tmp/LSTM_Release"};
 }
 
 template <typename Exception, typename Operation>
@@ -187,7 +188,8 @@ int main()
         "checkpoint_infer",
         "infer",
         "infer",
-        "/tmp/checkpoint.log"};
+        "/tmp/checkpoint.log",
+        "/tmp/LSTM_Release"};
     repository.reservationResult = {
         WorkerAttemptReservationStatus::Reserved,
         checkpointAttempt};
@@ -200,6 +202,34 @@ int main()
            "scheduler-a:worker:nonce-b:checkpoint_infer:88");
     assert(checkpointRequest.commandIdentity == "checkpoint_infer:88");
     assert(checkpointRequest.checkpointEvalId == 88);
+
+    ReservedWorkerAttempt legacyInferAttempt{
+        73,
+        "scheduler-a:worker:nonce-legacy:experiment:41:infer",
+        41,
+        std::nullopt,
+        "experiment",
+        "infer",
+        "infer",
+        "/tmp/legacy-infer.log",
+        "/legacy/LSTM_Release"};
+    repository.reservationResult = {
+        WorkerAttemptReservationStatus::Reserved,
+        legacyInferAttempt};
+    WorkerAttemptLifecycleService legacyService{
+        repository,
+        {"scheduler-a", 17, "/legacy/LSTM_Release"}};
+    const auto legacyInfer = legacyService.reserveExperiment(
+        {41, "infer", "/tmp/legacy-infer.log", "nonce-legacy", false});
+    assert(legacyInfer);
+    assert(repository.experimentReservation);
+    assert(repository.experimentReservation->canonicalExecutablePath ==
+           "/legacy/LSTM_Release");
+    legacyService.recordSpawned(
+        {legacyInferAttempt, 43212, "legacy-start", "legacy-command", true});
+    assert(repository.spawned);
+    assert(repository.spawned->canonicalExecutablePath ==
+           "/legacy/LSTM_Release");
 
     repository.reservationResult = {
         WorkerAttemptReservationStatus::LifecycleUnavailable,
@@ -230,6 +260,13 @@ int main()
     assert(repository.spawned->workerPid == 43210);
     assert(repository.spawned->canonicalExecutablePath ==
            "/tmp/LSTM_Release");
+
+    ReservedWorkerAttempt mismatchedAttempt = checkpointAttempt;
+    mismatchedAttempt.canonicalExecutablePath = "/tmp/other_worker";
+    assert(Throws<std::invalid_argument>([&] {
+               service.recordSpawned(
+                   {mismatchedAttempt, 43210, "start", "command", true});
+           }) == "reserved worker executable identity mismatch");
 
     repository.spawnResult =
         SpawnPersistenceResult::AttemptPreconditionRejected;

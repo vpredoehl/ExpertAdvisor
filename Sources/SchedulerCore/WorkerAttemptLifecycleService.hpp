@@ -13,7 +13,7 @@ struct WorkerAttemptLifecycleContext
 {
     std::string schedulerInvocationId;
     long long schedulerFencingToken = 0;
-    std::string canonicalExecutablePath;
+    std::string selectedWorkerCanonicalExecutablePath;
 };
 
 struct ExperimentWorkerAttemptRequest

@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:-${repo_root}/DerivedData/Development/SchedulerRecoveryRequeuePreemption/Build/Products/Debug/LSTM_Release}"
+legacy_layout6_binary="${2:-}"
 test_db="ea_scheduler_preemption_${$}"
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/ea-scheduler-preemption.XXXXXX")"
 process_binary="${test_dir}/GlobalExperimentControlProcessTests"
@@ -109,6 +110,7 @@ wait_for_state() {
 launch_and_persist() {
     local experiment_id="$1" attempt_id="$2" phase="$3" status="$4"
     local priority="$5" origin="$6" started_at="$7"
+    local semantic_width="${8:-75}" semantic_layout="${9:-5}"
     local worker_link="${test_dir}/LSTM_Release_${experiment_id}"
     local ready="${test_dir}/${experiment_id}.ready"
     local identity="" pid="" pgid="" start="" executable="" command=""
@@ -145,7 +147,9 @@ launch_and_persist() {
         -v origin="${origin}" -v resume="${resume}" -v control="${control}" \
         -v lifecycle="${state}" -v started_at="${started_at}" \
         -v pid="${pid}" -v pgid="${pgid}" -v start="${start}" \
-        -v executable="${executable}" -v command="${command}" <<'SQL'
+        -v executable="${executable}" -v command="${command}" \
+        -v semantic_width="${semantic_width}" \
+        -v semantic_layout="${semantic_layout}" <<'SQL'
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
@@ -160,7 +164,7 @@ INSERT INTO experiment(
     '2020-01-01','2021-01-01','2021-01-01','2022-01-01',
     :'status',:'phase',:'phase',:experiment_id,:'priority',:resume,
     :'origin',:pid,:pgid,:'start',:'executable',:'command',:'control',
-    :'started_at'::timestamptz,75,5
+    :'started_at'::timestamptz,:semantic_width,:semantic_layout
 );
 INSERT INTO experiment_scheduler_worker_attempt(
     worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
@@ -279,10 +283,17 @@ SQL
 assert_preemption_pair() {
     local base="$1" victim_priority="$2" candidate_priority="$3" phase="$4"
     local victim="${base}" candidate="$((base + 1))" output="${test_dir}/${base}.out"
+    local semantic_width=75 semantic_layout=5
+    if [[ "${phase}" = infer ]]; then
+        semantic_width=77
+        semantic_layout=7
+    fi
     launch_and_persist "${victim}" "$((victim + 9000000))" "${phase}" \
-        running "${victim_priority}" none '2026-03-01 00:00:00+00'
+        running "${victim_priority}" none '2026-03-01 00:00:00+00' \
+        "${semantic_width}" "${semantic_layout}"
     launch_and_persist "${candidate}" "$((candidate + 9000000))" "${phase}" \
-        pending "${candidate_priority}" operator '2026-03-01 00:00:01+00'
+        pending "${candidate_priority}" operator '2026-03-01 00:00:01+00' \
+        "${semantic_width}" "${semantic_layout}"
     if [[ "${phase}" = train ]]; then
         run_scheduler 1 0 "${output}"
     else
@@ -302,10 +313,17 @@ assert_preemption_pair() {
 assert_no_equal_preemption() {
     local base="$1" priority="$2" phase="${3:-train}"
     local output="${test_dir}/${base}.out"
+    local semantic_width=75 semantic_layout=5
+    if [[ "${phase}" = infer ]]; then
+        semantic_width=77
+        semantic_layout=7
+    fi
     launch_and_persist "${base}" "$((base + 9000000))" "${phase}" running \
-        "${priority}" none '2026-03-02 00:00:00+00'
+        "${priority}" none '2026-03-02 00:00:00+00' \
+        "${semantic_width}" "${semantic_layout}"
     launch_and_persist "$((base + 1))" "$((base + 9000001))" "${phase}" pending \
-        "${priority}" operator '2026-03-02 00:00:01+00'
+        "${priority}" operator '2026-03-02 00:00:01+00' \
+        "${semantic_width}" "${semantic_layout}"
     if [[ "${phase}" = infer ]]; then
         attach_infer_model "${base}" >/dev/null
         attach_infer_model "$((base + 1))" >/dev/null
@@ -332,13 +350,57 @@ assert_no_equal_preemption 994060 normal
 assert_no_equal_preemption 994070 low
 assert_no_equal_preemption 994075 high infer
 
+# A semantically eligible high-priority layout-6 candidate uses the ordinary
+# infer slot and preempts a low-priority layout-7 worker. This optional case
+# requires the audited historical worker executable.
+if [[ -n "${legacy_layout6_binary}" ]]; then
+    legacy_layout6_binary="$(cd "$(dirname "${legacy_layout6_binary}")" && pwd)/$(basename "${legacy_layout6_binary}")"
+    test -x "${legacy_layout6_binary}"
+    launch_and_persist 994140 9994140 infer running low none \
+        '2026-03-02 00:00:00+00' 77 7
+    attach_infer_model 994140 >/dev/null
+    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+INSERT INTO experiment(
+    experiment_id,symbol,prediction_horizon,c_next_threshold,
+    core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
+    train_start,train_end,infer_start,infer_end,status,phase,
+    current_operation,duplicate_nonce,scheduler_priority,resume_requested,
+    scheduler_resume_origin,worker_control_state,model_input_width,
+    model_input_semantic_layout_version,updated_at
+) VALUES(
+    994141,'mixedlayout6',1,0.0008,1,1,80,20,
+    '2020-01-01','2021-01-01','2021-01-01','2022-01-01',
+    'pending','infer','infer',994141,'high',false,'none','running',77,6,
+    clock_timestamp()
+);
+SQL
+    attach_infer_model 994141 >/dev/null
+    run_scheduler 0 1 "${test_dir}/mixed-layout-priority.out" \
+        --legacy-layout6-infer-worker="${legacy_layout6_binary}"
+    grep -q 'SCHEDULER_INFER_WORKER_SELECTED,experiment_id=994141,.*model_input_semantic_layout_version=6,worker_semantic_layout_version=6' \
+        "${test_dir}/mixed-layout-priority.out"
+    grep -q 'SCHEDULER_PRIORITY_PREEMPTED,candidate_experiment_id=994141.*victim_experiment_id=994140' \
+        "${test_dir}/mixed-layout-priority.out"
+    test "$(scalar "SELECT status||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994140")" = \
+        'pending:preemption'
+    test "$(scalar "SELECT canonical_executable_path FROM experiment_scheduler_worker_attempt WHERE experiment_id=994141 ORDER BY worker_attempt_id DESC LIMIT 1")" = \
+        "${legacy_layout6_binary}"
+    test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE capacity_class='infer' AND lifecycle_state IN ('reserved','spawned','running','observed','identity_ambiguous')")" = 1
+    legacy_pid="$(scalar "SELECT worker_pid FROM experiment_scheduler_worker_attempt WHERE experiment_id=994141 ORDER BY worker_attempt_id DESC LIMIT 1")"
+    if [[ -n "${legacy_pid}" ]] && kill -0 "${legacy_pid}" >/dev/null 2>&1; then
+        kill -TERM -- "-${legacy_pid}" >/dev/null 2>&1 ||
+            kill -TERM "${legacy_pid}" >/dev/null 2>&1 || true
+    fi
+    retire_all
+fi
+
 # An authoritative exact-attempt infer result wins over a stale preemption
 # observation. The lower-priority worker remains live for normal
 # completion/reconciliation and no replacement worker is admitted.
 launch_and_persist 994130 9994130 infer running low none \
-    '2026-03-02 00:00:00+00'
+    '2026-03-02 00:00:00+00' 77 7
 launch_and_persist 994131 9994131 infer pending high operator \
-    '2026-03-02 00:00:01+00'
+    '2026-03-02 00:00:01+00' 77 7
 victim_infer_model="$(attach_infer_model 994130)"
 attach_infer_model 994131 >/dev/null
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
@@ -375,9 +437,9 @@ retire_all
 # result is completed by orphan reconciliation instead of being detached and
 # relaunched. The replacement high-priority worker remains the sole consumer.
 launch_and_persist 994132 9994132 infer running low none \
-    '2026-03-02 00:00:00+00'
+    '2026-03-02 00:00:00+00' 77 7
 launch_and_persist 994133 9994133 infer pending high operator \
-    '2026-03-02 00:00:01+00'
+    '2026-03-02 00:00:01+00' 77 7
 preempted_infer_model="$(attach_infer_model 994132)"
 attach_infer_model 994133 >/dev/null
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \

@@ -83,6 +83,7 @@ struct ReservedWorkerAttempt
     std::string phase;
     std::string capacityClass;
     std::string logPath;
+    std::string canonicalExecutablePath;
 };
 
 struct ExperimentWorkerAttemptReservation

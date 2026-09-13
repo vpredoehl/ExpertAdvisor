@@ -76,6 +76,7 @@
 #include "SchedulerCore/ContinuationOrchestrationService.hpp"
 #include "SchedulerCore/ExperimentTransitionService.hpp"
 #include "SchedulerCore/FinalExperimentDispatchService.hpp"
+#include "SchedulerCore/InferenceWorkerSelection.hpp"
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
@@ -437,6 +438,7 @@ struct SchedulerOptions
     bool lstmProfileHotspots = false;
     std::optional<std::string> lstmProfileOutputPath;
     std::string selfPath;
+    std::optional<std::string> legacyLayout6InferWorkerPath;
     std::string invocationCommandLine;
     EA::SchedulerCore::SchedulerAuthorityContext schedulerAuthority;
     std::optional<long long> schedulerWorkerAttemptId;
@@ -894,6 +896,8 @@ struct SchedulerEventLogState
     std::map<std::string, std::string> previousPhaseKeys;
     std::set<std::string> previousSkipKeys;
     std::set<std::string> currentSkipKeys;
+    std::set<std::string> previousWorkerSelectionKeys;
+    std::set<std::string> currentWorkerSelectionKeys;
     std::set<std::string> previousRunningPresentKeys;
     std::set<std::string> currentRunningPresentKeys;
 };
@@ -1967,6 +1971,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "--scheduler-worker-attempt-id specified more than once");
             options.schedulerWorkerAttemptId = ParsePositiveLongLong(
                 arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--legacy-layout6-infer-worker")
+        {
+            if (options.legacyLayout6InferWorkerPath)
+                throw std::invalid_argument(
+                    "--legacy-layout6-infer-worker specified more than once");
+            options.legacyLayout6InferWorkerPath =
+                EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
+                    RequireNextArg(argc, argv, i, arg), arg);
         }
         else if (arg == "--backfill-experiment-metadata")
             options.backfillExperimentMetadata = true;
@@ -3245,6 +3258,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.schedulerWorkerAttemptId =
                 ParsePositiveLongLong(
                     "--scheduler-worker-attempt-id", value);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--legacy-layout6-infer-worker", value))
+        {
+            if (options.legacyLayout6InferWorkerPath)
+                throw std::invalid_argument(
+                    "--legacy-layout6-infer-worker specified more than once");
+            options.legacyLayout6InferWorkerPath =
+                EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
+                    value, "--legacy-layout6-infer-worker");
         }
         else if (SplitOptionWithValue(arg, "--experiment-report-dir", value))
             options.experimentReportDir = value;
@@ -5345,6 +5368,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument("--experiment-id is only valid with --status");
     if (options.recoverOrphansOnly && !options.scheduleExperiments)
         throw std::invalid_argument("--recover-orphans-only requires --schedule-experiments");
+    if (options.legacyLayout6InferWorkerPath &&
+        !options.scheduleExperiments)
+    {
+        throw std::invalid_argument(
+            "--legacy-layout6-infer-worker requires --schedule-experiments");
+    }
     if (options.autoGenerateReports &&
         !options.scheduleExperiments &&
         !options.analyzeExperimentId.has_value())
@@ -9563,8 +9592,30 @@ EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
     return EA::Scheduler::EvaluateSemanticWorkerAdmission(phase, persisted);
 }
 
-bool SemanticWorkerPreflight(
+EA::Scheduler::InferenceWorkerRoutingConfiguration
+InferenceWorkerRoutingConfigurationFor(const SchedulerOptions& options)
+{
+    return {options.selfPath, options.legacyLayout6InferWorkerPath};
+}
+
+EA::Scheduler::InferenceWorkerSelection LoadInferenceWorkerSelection(
+    pqxx::transaction_base& transaction,
+    const SchedulerOptions& options,
     long long experimentId,
+    EA::Scheduler::PersistedWorkerSemanticIdentity* loaded = nullptr)
+{
+    EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
+    (void)LoadSemanticWorkerAdmission(
+        transaction, experimentId, "infer", &persisted);
+    if (loaded != nullptr) *loaded = persisted;
+    return EA::Scheduler::SelectInferenceWorker(
+        persisted, InferenceWorkerRoutingConfigurationFor(options));
+}
+
+bool SemanticWorkerPreflight(
+    const SchedulerOptions& options,
+    long long experimentId,
+    const std::optional<long long>& modelId,
     const std::string& phase,
     SchedulerEventLogState* logState,
     bool verbose)
@@ -9573,9 +9624,54 @@ bool SemanticWorkerPreflight(
     pqxx::connection connection{LstmDbConnectionString()};
     pqxx::read_transaction transaction{connection};
     EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
-    const auto decision = LoadSemanticWorkerAdmission(
-        transaction, experimentId, phase, &persisted);
-    if (decision.admissible) return true;
+    EA::Scheduler::SemanticAdmissionDecision decision;
+    std::optional<EA::Scheduler::InferenceWorkerSelection> selection;
+    if (phase == "infer")
+    {
+        selection = LoadInferenceWorkerSelection(
+            transaction, options, experimentId, &persisted);
+        decision = {selection->selected, selection->diagnostic};
+    }
+    else
+    {
+        decision = LoadSemanticWorkerAdmission(
+            transaction, experimentId, phase, &persisted);
+    }
+    if (decision.admissible)
+    {
+        if (selection)
+        {
+            std::ostringstream key;
+            key << experimentId << '|' << modelId.value_or(-1) << '|'
+                << persisted.inputWidth.value_or(0) << '|'
+                << persisted.layoutVersion.value_or(0) << '|'
+                << selection->semanticLayoutVersion << '|'
+                << selection->canonicalExecutablePath;
+            const bool alreadyLogged =
+                !verbose && logState != nullptr &&
+                logState->previousWorkerSelectionKeys.contains(key.str());
+            if (logState != nullptr)
+                logState->currentWorkerSelectionKeys.insert(key.str());
+            if (!alreadyLogged)
+            {
+                std::cout << "SCHEDULER_INFER_WORKER_SELECTED"
+                          << ",experiment_id=" << experimentId
+                          << ",model_id="
+                          << (modelId ? std::to_string(*modelId) : "NULL")
+                          << ",model_input_width="
+                          << *persisted.inputWidth
+                          << ",model_input_semantic_layout_version="
+                          << *persisted.layoutVersion
+                          << ",worker_semantic_layout_version="
+                          << selection->semanticLayoutVersion
+                          << ",worker_executable="
+                          << selection->canonicalExecutablePath
+                          << ",reason=" << selection->reason
+                          << std::endl;
+            }
+        }
+        return true;
+    }
 
     const std::string reason = decision.diagnostic;
     LogSkip(phase, experimentId, reason, logState, verbose);
@@ -9594,9 +9690,13 @@ bool SemanticWorkerPreflight(
                   << (persisted.layoutVersion
                           ? std::to_string(*persisted.layoutVersion) : "NULL")
                   << ",worker_maximum_input_width="
-                  << EA::kCurrentModelInputWidth
+                  << (selection && selection->maximumInputWidth != 0
+                          ? selection->maximumInputWidth
+                          : EA::kCurrentModelInputWidth)
                   << ",worker_semantic_layout_version="
-                  << EA::kModelInputSemanticLayoutVersion
+                  << (selection && selection->semanticLayoutVersion != 0
+                          ? selection->semanticLayoutVersion
+                          : EA::kModelInputSemanticLayoutVersion)
                   << ",diagnostic=" << reason
                   << ",capacity_consumed=0,child_launched=0,"
                      "experiment_status_changed=false"
@@ -10509,8 +10609,21 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
-    const auto semanticAdmission = LoadSemanticWorkerAdmission(
-        transaction, experiment.experimentId, phase);
+    std::string selectedWorkerExecutable = options.selfPath;
+    EA::Scheduler::SemanticAdmissionDecision semanticAdmission;
+    if (phase == "infer")
+    {
+        const auto selection = LoadInferenceWorkerSelection(
+            transaction, options, experiment.experimentId);
+        semanticAdmission = {selection.selected, selection.diagnostic};
+        if (selection.selected)
+            selectedWorkerExecutable = selection.canonicalExecutablePath;
+    }
+    else
+    {
+        semanticAdmission = LoadSemanticWorkerAdmission(
+            transaction, experiment.experimentId, phase);
+    }
     if (!semanticAdmission.admissible)
     {
         std::cout << "SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE"
@@ -10534,7 +10647,7 @@ ReserveExperimentWorkerAttempt(
         services.repository,
         {options.schedulerAuthority.schedulerInvocationId,
          options.schedulerAuthority.fencingToken,
-         options.selfPath}};
+         selectedWorkerExecutable}};
     auto attempt = lifecycle.reserveExperiment({
         experiment.experimentId,
         phase,
@@ -10563,15 +10676,15 @@ ReserveCheckpointWorkerAttempt(
         transaction.commit();
         return std::nullopt;
     }
-    const auto semanticAdmission = LoadSemanticWorkerAdmission(
-        transaction, eval.experiment.experimentId, "infer");
-    if (!semanticAdmission.admissible)
+    const auto selection = LoadInferenceWorkerSelection(
+        transaction, options, eval.experiment.experimentId);
+    if (!selection.selected)
     {
         std::cout << "SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE"
                   << ",experiment_id=" << eval.experiment.experimentId
                   << ",checkpoint_eval_id=" << eval.checkpointEvalId
                   << ",phase=infer,diagnostic="
-                  << semanticAdmission.diagnostic
+                  << selection.diagnostic
                   << ",capacity_consumed=0,child_launched=0,"
                      "experiment_status_changed=false"
                   << std::endl;
@@ -10588,7 +10701,7 @@ ReserveCheckpointWorkerAttempt(
         services.repository,
         {options.schedulerAuthority.schedulerInvocationId,
          options.schedulerAuthority.fencingToken,
-         options.selfPath}};
+         selection.canonicalExecutablePath}};
     auto attempt = lifecycle.reserveCheckpoint({
         eval.experiment.experimentId,
         eval.checkpointEvalId,
@@ -10706,7 +10819,7 @@ void MarkReservedWorkerAttemptLaunchFailed(
             repository,
             {options.schedulerAuthority.schedulerInvocationId,
              options.schedulerAuthority.fencingToken,
-             options.selfPath}};
+             attempt.canonicalExecutablePath}};
         lifecycle.recordLaunchFailure({attempt, exitCode, diagnostic});
         transaction.commit();
     }
@@ -10738,7 +10851,7 @@ void PersistSpawnedWorkerAttempt(
         repository,
         {options.schedulerAuthority.schedulerInvocationId,
          options.schedulerAuthority.fencingToken,
-         options.selfPath}};
+         attempt.canonicalExecutablePath}};
     lifecycle.recordSpawned({
         attempt,
         static_cast<int>(pid),
@@ -10754,8 +10867,24 @@ pid_t LaunchReservedChildProcess(
     std::vector<std::string> argv,
     const std::optional<long long>& expectedModelId = std::nullopt)
 {
-    if (argv.empty() || argv.front() != options.selfPath ||
-        argv.front().empty() || argv.front().front() != '/')
+    bool executableIdentityValid = false;
+    if (!argv.empty() && !attempt.canonicalExecutablePath.empty() &&
+        attempt.canonicalExecutablePath.front() == '/' &&
+        argv.front() == attempt.canonicalExecutablePath)
+    {
+        try
+        {
+            executableIdentityValid =
+                EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
+                    argv.front(), "reserved worker executable") ==
+                attempt.canonicalExecutablePath;
+        }
+        catch (const std::invalid_argument&)
+        {
+            executableIdentityValid = false;
+        }
+    }
+    if (!executableIdentityValid)
     {
         MarkReservedWorkerAttemptLaunchFailed(
             options,
@@ -10943,7 +11072,7 @@ pid_t LaunchReservedChildProcess(
                     "AND command_line=$4;",
                     attempt.workerAttemptId,
                     static_cast<int>(pid),
-                    options.selfPath,
+                    attempt.canonicalExecutablePath,
                     commandLine);
             if (registered.size() == 1)
             {
@@ -11121,8 +11250,10 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     return argv;
 }
 
-std::vector<std::string> BuildInferCommand(const SchedulerOptions& options,
-                                                  const ExperimentRow& experiment)
+std::vector<std::string> BuildInferCommand(
+    const SchedulerOptions& options,
+    const ExperimentRow& experiment,
+    const std::string& selectedWorkerExecutable)
 {
     if (!experiment.lastModelId.has_value())
         throw std::runtime_error("infer phase has no last_model_id");
@@ -11130,7 +11261,7 @@ std::vector<std::string> BuildInferCommand(const SchedulerOptions& options,
         throw std::runtime_error("infer phase has no infer date range");
 
     std::vector<std::string> argv;
-    argv.push_back(options.selfPath);
+    argv.push_back(selectedWorkerExecutable);
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(*experiment.lastModelId));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
@@ -11174,14 +11305,16 @@ std::string CheckpointEvalLogPathFor(const SchedulerOptions& options,
     return (dir / name.str()).string();
 }
 
-std::vector<std::string> BuildCheckpointEvalInferCommand(const SchedulerOptions& options,
-                                                         const CheckpointEvalRow& eval)
+std::vector<std::string> BuildCheckpointEvalInferCommand(
+    const SchedulerOptions& options,
+    const CheckpointEvalRow& eval,
+    const std::string& selectedWorkerExecutable)
 {
     if (!eval.experiment.inferStart.has_value() || !eval.experiment.inferEnd.has_value())
         throw std::runtime_error("checkpoint eval infer has no infer date range");
 
     std::vector<std::string> argv;
-    argv.push_back(options.selfPath);
+    argv.push_back(selectedWorkerExecutable);
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(eval.checkpointModelId));
     AddCliOption(argv, "--scheduler-checkpoint-eval-id", std::to_string(eval.checkpointEvalId));
@@ -19214,6 +19347,7 @@ void BeginSchedulerPollLogging(SchedulerEventLogState* logState)
     if (logState == nullptr)
         return;
     logState->currentSkipKeys.clear();
+    logState->currentWorkerSelectionKeys.clear();
     logState->currentRunningPresentKeys.clear();
 }
 
@@ -19222,6 +19356,8 @@ void FinishSchedulerPollLogging(SchedulerEventLogState* logState)
     if (logState == nullptr)
         return;
     logState->previousSkipKeys = logState->currentSkipKeys;
+    logState->previousWorkerSelectionKeys =
+        logState->currentWorkerSelectionKeys;
     logState->previousRunningPresentKeys = logState->currentRunningPresentKeys;
 }
 
@@ -19563,7 +19699,8 @@ int CountRows(pqxx::work& w, const std::string& sql);
         }
 
         const std::string logPath = LogPathFor(options, job, "infer");
-        const std::vector<std::string> command = BuildInferCommand(options, job);
+        const std::vector<std::string> command =
+            BuildInferCommand(options, job, options.selfPath);
         const std::string commandDisplay = CommandForDisplay(command);
         if (options.dryRun)
         {
@@ -20060,7 +20197,8 @@ void LogCheckpointEvalInferenceResultMissing(const CheckpointEvalRow& eval,
         }
 
         const std::string logPath = CheckpointEvalLogPathFor(options, eval, "infer");
-        const std::vector<std::string> command = BuildCheckpointEvalInferCommand(options, eval);
+        const std::vector<std::string> command =
+            BuildCheckpointEvalInferCommand(options, eval, options.selfPath);
         const std::string commandDisplay = CommandForDisplay(command);
         if (options.dryRun)
         {
@@ -20593,7 +20731,9 @@ int RunFinalExperimentPhase(
         [&](const FinalExperimentDispatchCandidate& candidate,
             FinalExperimentPhase phase) {
             return SemanticWorkerPreflight(
+                options,
                 candidate.experimentId,
+                jobs.at(candidate.sourceIndex).lastModelId,
                 std::string{FinalExperimentPhaseName(phase)},
                 logState,
                 options.schedulerVerbose);
@@ -20725,7 +20865,16 @@ int RunFinalExperimentPhase(
             if (phase == FinalExperimentPhase::Train)
                 command = BuildTrainCommand(options, job);
             else if (phase == FinalExperimentPhase::Infer)
-                command = BuildInferCommand(options, job);
+            {
+                pqxx::connection connection{LstmDbConnectionString()};
+                pqxx::read_transaction transaction{connection};
+                const auto selection = LoadInferenceWorkerSelection(
+                    transaction, options, job.experimentId);
+                if (!selection.selected)
+                    throw std::runtime_error(selection.diagnostic);
+                command = BuildInferCommand(
+                    options, job, selection.canonicalExecutablePath);
+            }
             else
                 command = BuildAnalyzeCommand(options, job);
             std::cout << "EXPERIMENT_CHILD_COMMAND"
@@ -20783,7 +20932,10 @@ int RunFinalExperimentPhase(
             }
             else if (phase == FinalExperimentPhase::Infer)
             {
-                command = BuildInferCommand(options, job);
+                command = BuildInferCommand(
+                    options,
+                    job,
+                    reservedAttempt->canonicalExecutablePath);
             }
             else
             {
@@ -20893,7 +21045,8 @@ int RunAnalyzeJobs(
 }
 
 int RunCheckpointEvalInferJobs(
-    const SchedulerOptions& options)
+    const SchedulerOptions& options,
+    SchedulerEventLogState* logState)
 {
     std::vector<CheckpointEvalRow> jobs;
     std::optional<long long> activeRequestId;
@@ -20940,7 +21093,10 @@ int RunCheckpointEvalInferJobs(
             !eval.experiment.inferEnd)
             continue;
         if (!SemanticWorkerPreflight(
-                eval.experiment.experimentId, "infer", nullptr,
+                options,
+                eval.experiment.experimentId,
+                eval.checkpointModelId,
+                "infer", logState,
                 options.schedulerVerbose))
             continue;
         if (options.dryRun)
@@ -20964,7 +21120,8 @@ int RunCheckpointEvalInferJobs(
         try
         {
             std::vector<std::string> command =
-                BuildCheckpointEvalInferCommand(options, eval);
+                BuildCheckpointEvalInferCommand(
+                    options, eval, attempt->canonicalExecutablePath);
             PrintSchedulerExec(command);
             (void)LaunchReservedChildProcess(
                 options,
@@ -21059,7 +21216,9 @@ int RunSchedulerOnce(const SchedulerOptions& options,
     };
     operations.runFinalInference = [&] { return RunInferJobs(options, snapshot, logState); };
     operations.runFinalAnalysis = [&] { return RunAnalyzeJobs(options, snapshot, logState); };
-    operations.runCheckpointInference = [&] { return RunCheckpointEvalInferJobs(options); };
+    operations.runCheckpointInference = [&] {
+        return RunCheckpointEvalInferJobs(options, logState);
+    };
     operations.runCheckpointAnalysis = [&] { return RunCheckpointEvalAnalyzeJobs(options); };
     operations.finishPoll = [logState] { FinishSchedulerPollLogging(logState); };
     EA::SchedulerCore::SchedulerCycleService service{
@@ -21113,6 +21272,9 @@ int RunScheduler(SchedulerOptions options)
               << ",max_train_procs=" << options.maxTrainProcs
               << ",max_infer_procs=" << options.maxInferProcs
               << ",max_analyze_procs=" << options.maxAnalyzeProcs
+              << ",scheduler_canonical_executable=" << options.selfPath
+              << ",legacy_layout6_infer_worker="
+              << options.legacyLayout6InferWorkerPath.value_or("NULL")
               << ",auto_evaluate_continuations="
               << (options.autoEvaluateContinuations ? "1" : "0")
               << ",auto_queue_continuations="
@@ -25022,6 +25184,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
         << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
+        << "[--legacy-layout6-infer-worker=/absolute/path/to/LSTM_Release] "
         << "[--scheduler-log-dir=PATH] [--auto-generate-reports] [--experiment-report-dir=PATH] "
         << "[--lstm-profile-hotspots] [--lstm-profile-output=PATH] "
         << "[--scheduler-verbose] [--dry-run] [--recover-orphans-only] "
@@ -25030,6 +25193,9 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "[--continuation-dry-run]\n"
         << "Scheduler worker limits accept non-negative integers. Zero prevents new workers "
         << "in that capacity class without stopping the scheduler or existing workers.\n"
+        << "Layout-6 inference is fail-closed unless an explicitly configured, "
+        << "canonical executable legacy worker path is supplied. Train, analyze, "
+        << "and layout-7 inference always use the canonical scheduler executable.\n"
         << "Usage: " << exe
         << " --create-economic-calendar-snapshot [--dry-run]\n"
         << "Computes the deterministic current economic-calendar corpus identity. "
