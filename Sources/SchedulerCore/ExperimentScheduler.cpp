@@ -75,6 +75,7 @@
 #include "SchedulerCore/CheckpointEvaluationService.hpp"
 #include "SchedulerCore/ContinuationOrchestrationService.hpp"
 #include "SchedulerCore/ExperimentTransitionService.hpp"
+#include "SchedulerCore/FinalExperimentDispatchService.hpp"
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
@@ -20507,312 +20508,199 @@ int GlobalCapacityUsed(
     return used;
 }
 
-int RunTrainJobs(
-    const SchedulerOptions& options,
-    const QueueSnapshot&,
-    SchedulerEventLogState* logState,
-    bool cancellationOnly = false)
+std::string_view FinalExperimentPhaseName(
+    EA::SchedulerCore::FinalExperimentPhase phase)
 {
-    std::vector<ExperimentRow> jobs;
-    int initialUsed = 0;
+    using EA::SchedulerCore::FinalExperimentPhase;
+    switch (phase)
     {
-        pqxx::connection connection{LstmDbConnectionString()};
-        pqxx::work transaction{connection};
-        SetTransactionReadWrite(transaction);
-        RequireAndRefreshSchedulerAuthority(transaction, options);
-        SchedulerServiceComposition services{transaction};
-        if (!SchedulerLaunchAllowed(
-                transaction,
-                "train",
-                false,
-                cancellationOnly))
-        {
-            transaction.commit();
-            return 0;
-        }
-        jobs = LoadPendingExperiments(
-            services.admission, "train", cancellationOnly);
-        initialUsed = services.admission.capacityUsed("train");
-        transaction.commit();
+    case FinalExperimentPhase::Train:
+        return "train";
+    case FinalExperimentPhase::Infer:
+        return "infer";
+    case FinalExperimentPhase::Analyze:
+        return "analyze";
     }
-
-    PhaseSchedulingStats stats;
-    stats.phase = "train";
-    stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots = AvailableWorkerProcessSlots(
-        options.maxTrainProcs, initialUsed);
-    EnsureLogDir(options.schedulerLogDir);
-    int rc = 0;
-
-    for (const ExperimentRow& job : jobs)
-    {
-        if (!SemanticWorkerPreflight(
-                job.experimentId, "train", logState,
-                options.schedulerVerbose))
-        {
-            ++stats.skipped;
-            continue;
-        }
-        if (!options.dryRun && !cancellationOnly)
-        {
-            (void)PreemptOneLowerPriorityWorker(
-                options, job, "train", options.maxTrainProcs);
-        }
-        if (!options.dryRun && job.activeWorkerAttemptId)
-        {
-            const StoppedWorkerAdmissionResult admission =
-                AdmitStoppedExperimentWorker(
-                    options, job, "train", options.maxTrainProcs);
-            if (admission == StoppedWorkerAdmissionResult::Admitted)
-            {
-                ++stats.launched;
-                continue;
-            }
-            if (admission ==
-                StoppedWorkerAdmissionResult::DeferredNoCapacity)
-            {
-                ++stats.skipped;
-                LogSkip(
-                    "train",
-                    job.experimentId,
-                    "global_train_slots_full_stopped_worker_waiting",
-                    logState,
-                    options.schedulerVerbose);
-                break;
-            }
-            if (admission ==
-                StoppedWorkerAdmissionResult::DeferredUnsafe ||
-                admission ==
-                    StoppedWorkerAdmissionResult::NotApplicable)
-            {
-                ++stats.skipped;
-                LogSkip(
-                    "train",
-                    job.experimentId,
-                    "stopped_worker_admission_deferred",
-                    logState,
-                    options.schedulerVerbose);
-                continue;
-            }
-            // Positive process absence detached the old exact attempt while
-            // deliberately preserving resume_requested. Continue through the
-            // normal checkpoint/restart reservation path in this same turn.
-        }
-        if (options.dryRun)
-        {
-            if (stats.launched >= stats.freeSlots)
-            {
-                ++stats.skipped;
-                continue;
-            }
-            const std::vector<std::string> command =
-                BuildTrainCommand(options, job);
-            std::cout << "EXPERIMENT_CHILD_COMMAND"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=train,dry_run=1,argv="
-                      << CommandForDisplay(command)
-                      << std::endl;
-            ++stats.launched;
-            continue;
-        }
-
-        const std::optional<long long> resumeFrom =
-            job.lastModelId ? job.lastModelId : job.resumeModelId;
-        if (resumeFrom)
-        {
-            pqxx::connection connection{LstmDbConnectionString()};
-            pqxx::work transaction{connection};
-            SetTransactionReadWrite(transaction);
-            RequireAndRefreshSchedulerAuthority(
-                transaction, options);
-            if (!ModelExists(transaction, *resumeFrom))
-            {
-                transaction.exec_params(
-                    "UPDATE experiment SET status='failed',"
-                    "completed_at=clock_timestamp(),exit_code=-1,"
-                    "error_message='train_model_not_found',"
-                    "updated_at=clock_timestamp() "
-                    "WHERE experiment_id=$1 AND status='pending' "
-                    "AND phase='train' "
-                    "AND active_scheduler_worker_attempt_id IS NULL;",
-                    job.experimentId);
-                transaction.commit();
-                ++stats.skipped;
-                rc = 1;
-                continue;
-            }
-            transaction.commit();
-        }
-
-        const std::string logPath =
-            LogPathFor(options, job, "train");
-        const auto attempt = ReserveExperimentWorkerAttempt(
-            options,
-            job,
-            "train",
-            logPath,
-            options.maxTrainProcs,
-            cancellationOnly);
-        if (!attempt)
-        {
-            ++stats.skipped;
-            const int used =
-                GlobalCapacityUsed(options, "train");
-            LogSkip(
-                "train",
-                job.experimentId,
-                !SchedulerWorkerCapacityHasSlot(
-                    options.maxTrainProcs, used)
-                    ? "global_train_slots_full"
-                    : "claim_changed",
-                logState,
-                options.schedulerVerbose);
-            if (!SchedulerWorkerCapacityHasSlot(
-                    options.maxTrainProcs, used))
-                break;
-            continue;
-        }
-
-        std::vector<std::string> command =
-            BuildTrainCommand(options, job);
-        std::cout << "EXPERIMENT_STARTED"
-                  << ",experiment_id=" << job.experimentId
-                  << ",phase=train,worker_attempt_id="
-                  << attempt->workerAttemptId
-                  << std::endl;
-        try
-        {
-            PrintSchedulerExec(command);
-            (void)LaunchReservedChildProcess(
-                options, *attempt, std::move(command), resumeFrom);
-            ++stats.launched;
-        }
-        catch (const std::exception& error)
-        {
-            std::cerr << "EXPERIMENT_FAILED"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=train,worker_attempt_id="
-                      << attempt->workerAttemptId
-                      << ",error=" << error.what()
-                      << std::endl;
-            rc = 1;
-        }
-    }
-    PrintPhaseSchedulingStats(
-        stats, logState, options.schedulerVerbose);
-    return rc;
+    throw std::logic_error("unknown final experiment phase");
 }
 
-int RunInferJobs(
-    const SchedulerOptions& options,
-    const QueueSnapshot&,
-    SchedulerEventLogState* logState)
+EA::SchedulerCore::FinalExperimentStoppedAdmission
+ToFinalExperimentStoppedAdmission(StoppedWorkerAdmissionResult result)
 {
-    std::vector<ExperimentRow> jobs;
-    int initialUsed = 0;
+    using EA::SchedulerCore::FinalExperimentStoppedAdmission;
+    switch (result)
     {
-        pqxx::connection connection{LstmDbConnectionString()};
-        pqxx::work transaction{connection};
-        SetTransactionReadWrite(transaction);
-        RequireAndRefreshSchedulerAuthority(transaction, options);
-        SchedulerServiceComposition services{transaction};
-        if (!SchedulerLaunchAllowed(transaction, "infer"))
-        {
-            transaction.commit();
-            return 0;
-        }
-        jobs = LoadPendingExperiments(services.admission, "infer");
-        initialUsed = services.admission.capacityUsed("infer");
-        transaction.commit();
+    case StoppedWorkerAdmissionResult::NotApplicable:
+        return FinalExperimentStoppedAdmission::NotApplicable;
+    case StoppedWorkerAdmissionResult::Admitted:
+        return FinalExperimentStoppedAdmission::Admitted;
+    case StoppedWorkerAdmissionResult::MissingProcessFallbackReady:
+        return FinalExperimentStoppedAdmission::MissingProcessFallbackReady;
+    case StoppedWorkerAdmissionResult::DeferredNoCapacity:
+        return FinalExperimentStoppedAdmission::DeferredNoCapacity;
+    case StoppedWorkerAdmissionResult::DeferredUnsafe:
+        return FinalExperimentStoppedAdmission::DeferredUnsafe;
     }
+    throw std::logic_error("unknown stopped worker admission result");
+}
 
-    PhaseSchedulingStats stats;
-    stats.phase = "infer";
-    stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots = AvailableWorkerProcessSlots(
-        options.maxInferProcs, initialUsed);
-    EnsureLogDir(options.schedulerLogDir);
-    int rc = 0;
+int RunFinalExperimentPhase(
+    const SchedulerOptions& options,
+    SchedulerEventLogState* logState,
+    EA::SchedulerCore::FinalExperimentPhase requestedPhase,
+    bool cancellationOnly = false)
+{
+    using EA::SchedulerCore::FinalExperimentDispatchBatch;
+    using EA::SchedulerCore::FinalExperimentDispatchCandidate;
+    using EA::SchedulerCore::FinalExperimentDispatchConfiguration;
+    using EA::SchedulerCore::FinalExperimentDispatchOperations;
+    using EA::SchedulerCore::FinalExperimentDispatchService;
+    using EA::SchedulerCore::FinalExperimentDispatchStats;
+    using EA::SchedulerCore::FinalExperimentEligibility;
+    using EA::SchedulerCore::FinalExperimentPhase;
 
-    for (const ExperimentRow& job : jobs)
-    {
-        if (!SemanticWorkerPreflight(
-                job.experimentId, "infer", logState,
-                options.schedulerVerbose))
-        {
-            ++stats.skipped;
-            continue;
-        }
-        if (!options.dryRun)
-        {
-            (void)PreemptOneLowerPriorityWorker(
-                options, job, "infer", options.maxInferProcs);
-        }
-        if (!options.dryRun && job.activeWorkerAttemptId)
-        {
-            const StoppedWorkerAdmissionResult admission =
-                AdmitStoppedExperimentWorker(
-                    options, job, "infer", options.maxInferProcs);
-            if (admission == StoppedWorkerAdmissionResult::Admitted)
-            {
-                ++stats.launched;
-                continue;
-            }
-            if (admission ==
-                StoppedWorkerAdmissionResult::DeferredNoCapacity)
-            {
-                ++stats.skipped;
-                LogSkip(
-                    "infer",
-                    job.experimentId,
-                    "global_infer_slots_full_stopped_worker_waiting",
-                    logState,
-                    options.schedulerVerbose);
-                break;
-            }
-            if (admission ==
-                StoppedWorkerAdmissionResult::DeferredUnsafe ||
-                admission ==
-                    StoppedWorkerAdmissionResult::NotApplicable)
-            {
-                ++stats.skipped;
-                LogSkip(
-                    "infer",
-                    job.experimentId,
-                    "stopped_worker_admission_deferred",
-                    logState,
-                    options.schedulerVerbose);
-                continue;
-            }
-        }
-        bool eligible = true;
-        {
+    std::vector<ExperimentRow> jobs;
+    std::optional<ReservedWorkerAttempt> reservedAttempt;
+    std::vector<std::string> preparedCommand;
+
+    FinalExperimentDispatchOperations operations;
+    operations.load =
+        [&](FinalExperimentPhase phase, bool cancellation) {
+            const std::string phaseName{FinalExperimentPhaseName(phase)};
             pqxx::connection connection{LstmDbConnectionString()};
             pqxx::work transaction{connection};
             SetTransactionReadWrite(transaction);
-            RequireAndRefreshSchedulerAuthority(
-                transaction, options);
-            if (!job.lastModelId ||
-                !ModelExists(transaction, *job.lastModelId))
+            RequireAndRefreshSchedulerAuthority(transaction, options);
+            SchedulerServiceComposition services{transaction};
+
+            FinalExperimentDispatchBatch batch;
+            if (!SchedulerLaunchAllowed(
+                    transaction,
+                    phaseName,
+                    false,
+                    cancellation))
             {
-                if (!options.dryRun)
+                transaction.commit();
+                return batch;
+            }
+
+            jobs = LoadPendingExperiments(
+                services.admission, phaseName, cancellation);
+            const int used = services.admission.capacityUsed(phaseName);
+            transaction.commit();
+
+            const int maximum =
+                phase == FinalExperimentPhase::Train
+                    ? options.maxTrainProcs
+                    : (phase == FinalExperimentPhase::Infer
+                           ? options.maxInferProcs
+                           : options.maxAnalyzeProcs);
+            batch.launchAllowed = true;
+            batch.freeSlots = AvailableWorkerProcessSlots(maximum, used);
+            batch.candidates.reserve(jobs.size());
+            for (std::size_t index = 0; index < jobs.size(); ++index)
+            {
+                const ExperimentRow& job = jobs[index];
+                batch.candidates.push_back({
+                    index,
+                    job.experimentId,
+                    job.activeWorkerAttemptId.has_value(),
+                    job.lastModelId.has_value()});
+            }
+            return batch;
+        };
+    operations.ensureLogDirectory =
+        [&] { EnsureLogDir(options.schedulerLogDir); };
+    operations.semanticPreflight =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase) {
+            return SemanticWorkerPreflight(
+                candidate.experimentId,
+                std::string{FinalExperimentPhaseName(phase)},
+                logState,
+                options.schedulerVerbose);
+        };
+    operations.preemptOneLowerPriorityWorker =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase,
+            int maximumCapacity) {
+            (void)PreemptOneLowerPriorityWorker(
+                options,
+                jobs.at(candidate.sourceIndex),
+                std::string{FinalExperimentPhaseName(phase)},
+                maximumCapacity);
+        };
+    operations.admitStoppedWorker =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase,
+            int maximumCapacity) {
+            return ToFinalExperimentStoppedAdmission(
+                AdmitStoppedExperimentWorker(
+                    options,
+                    jobs.at(candidate.sourceIndex),
+                    std::string{FinalExperimentPhaseName(phase)},
+                    maximumCapacity));
+        };
+    operations.evaluateEligibility =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase) {
+            const ExperimentRow& job = jobs.at(candidate.sourceIndex);
+            if (phase == FinalExperimentPhase::Train)
+            {
+                const std::optional<long long> resumeFrom =
+                    job.lastModelId ? job.lastModelId : job.resumeModelId;
+                if (!resumeFrom)
+                    return FinalExperimentEligibility::Eligible;
+
+                pqxx::connection connection{LstmDbConnectionString()};
+                pqxx::work transaction{connection};
+                SetTransactionReadWrite(transaction);
+                RequireAndRefreshSchedulerAuthority(transaction, options);
+                if (!ModelExists(transaction, *resumeFrom))
                 {
                     transaction.exec_params(
                         "UPDATE experiment SET status='failed',"
                         "completed_at=clock_timestamp(),exit_code=-1,"
-                        "error_message=$1,updated_at=clock_timestamp() "
-                        "WHERE experiment_id=$2 AND status='pending' "
-                        "AND phase='infer' "
+                        "error_message='train_model_not_found',"
+                        "updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$1 AND status='pending' "
+                        "AND phase='train' "
                         "AND active_scheduler_worker_attempt_id IS NULL;",
-                        job.lastModelId
-                            ? "infer_model_not_found"
-                            : "infer_missing_last_model_id",
                         job.experimentId);
+                    transaction.commit();
+                    return FinalExperimentEligibility::Failed;
                 }
-                eligible = false;
+                transaction.commit();
+                return FinalExperimentEligibility::Eligible;
             }
-            else
+
+            if (phase == FinalExperimentPhase::Infer)
             {
+                pqxx::connection connection{LstmDbConnectionString()};
+                pqxx::work transaction{connection};
+                SetTransactionReadWrite(transaction);
+                RequireAndRefreshSchedulerAuthority(transaction, options);
+                if (!job.lastModelId ||
+                    !ModelExists(transaction, *job.lastModelId))
+                {
+                    if (!options.dryRun)
+                    {
+                        transaction.exec_params(
+                            "UPDATE experiment SET status='failed',"
+                            "completed_at=clock_timestamp(),exit_code=-1,"
+                            "error_message=$1,updated_at=clock_timestamp() "
+                            "WHERE experiment_id=$2 AND status='pending' "
+                            "AND phase='infer' "
+                            "AND active_scheduler_worker_attempt_id IS NULL;",
+                            job.lastModelId
+                                ? "infer_model_not_found"
+                                : "infer_missing_last_model_id",
+                            job.experimentId);
+                    }
+                    transaction.commit();
+                    return FinalExperimentEligibility::Skipped;
+                }
+
                 const bool forcedFinalInferenceRerun =
                     OperatorForcedFinalInferenceRerunRequested(
                         transaction, job.experimentId);
@@ -20826,17 +20714,20 @@ int RunInferJobs(
                             << ",experiment_id=" << job.experimentId
                             << ",model_id=" << *job.lastModelId
                             << std::endl;
-                        if (HasCompletedAnalysisResult(
-                                transaction, job))
-                            MarkExperimentDone(
-                                transaction, job, "infer");
+                        if (HasCompletedAnalysisResult(transaction, job))
+                        {
+                            MarkExperimentDone(transaction, job, "infer");
+                        }
                         else
+                        {
                             MarkExperimentPendingPhase(
                                 transaction, job, "infer", "analyze");
+                        }
                     }
-                    eligible = false;
+                    transaction.commit();
+                    return FinalExperimentEligibility::Skipped;
                 }
-                else if (forcedFinalInferenceRerun)
+                if (forcedFinalInferenceRerun)
                 {
                     std::cout
                         << "SCHEDULER_FORCED_FINAL_INFERENCE_RERUN_DISPATCH"
@@ -20844,86 +20735,172 @@ int RunInferJobs(
                         << ",model_id=" << *job.lastModelId
                         << std::endl;
                 }
+                transaction.commit();
             }
-            transaction.commit();
-        }
-        if (!eligible)
-        {
-            ++stats.skipped;
-            continue;
-        }
-
-        if (options.dryRun)
-        {
-            if (stats.launched >= stats.freeSlots)
-            {
-                ++stats.skipped;
-                continue;
-            }
+            return FinalExperimentEligibility::Eligible;
+        };
+    operations.emitDryRunCommand =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase) {
+            const ExperimentRow& job = jobs.at(candidate.sourceIndex);
+            std::vector<std::string> command;
+            if (phase == FinalExperimentPhase::Train)
+                command = BuildTrainCommand(options, job);
+            else if (phase == FinalExperimentPhase::Infer)
+                command = BuildInferCommand(options, job);
+            else
+                command = BuildAnalyzeCommand(options, job);
             std::cout << "EXPERIMENT_CHILD_COMMAND"
                       << ",experiment_id=" << job.experimentId
-                      << ",phase=infer,dry_run=1,argv="
-                      << CommandForDisplay(
-                             BuildInferCommand(options, job))
+                      << ",phase=" << FinalExperimentPhaseName(phase)
+                      << ",dry_run=1,argv="
+                      << CommandForDisplay(command)
                       << std::endl;
-            ++stats.launched;
-            continue;
-        }
-
-        const std::string logPath =
-            LogPathFor(options, job, "infer");
-        const auto attempt = ReserveExperimentWorkerAttempt(
-            options,
-            job,
-            "infer",
-            logPath,
-            options.maxInferProcs);
-        if (!attempt)
-        {
-            ++stats.skipped;
-            const int used =
-                GlobalCapacityUsed(options, "infer");
-            LogSkip(
-                "infer",
-                job.experimentId,
-                !SchedulerWorkerCapacityHasSlot(
-                    options.maxInferProcs, used)
-                    ? "global_infer_slots_full"
-                    : "claim_changed",
-                logState,
-                options.schedulerVerbose);
-            if (!SchedulerWorkerCapacityHasSlot(
-                    options.maxInferProcs, used))
-                break;
-            continue;
-        }
-
-        try
-        {
-            std::vector<std::string> command =
-                BuildInferCommand(options, job);
-            PrintSchedulerExec(command);
+        };
+    operations.reserveWorkerAttempt =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase,
+            int maximumCapacity,
+            bool cancellation) -> std::optional<long long> {
+            const ExperimentRow& job = jobs.at(candidate.sourceIndex);
+            const std::string phaseName{FinalExperimentPhaseName(phase)};
+            const std::string logPath = LogPathFor(
+                options,
+                job,
+                phase == FinalExperimentPhase::Analyze
+                    ? "analysis"
+                    : phaseName);
+            const auto attempt = ReserveExperimentWorkerAttempt(
+                options,
+                job,
+                phaseName,
+                logPath,
+                maximumCapacity,
+                cancellation);
+            if (!attempt)
+                return std::nullopt;
+            const long long attemptId = attempt->workerAttemptId;
+            reservedAttempt = std::move(*attempt);
+            return attemptId;
+        };
+    operations.capacityUsed =
+        [&](FinalExperimentPhase phase) {
+            return GlobalCapacityUsed(
+                options, std::string{FinalExperimentPhaseName(phase)});
+        };
+    operations.prepareReservedLaunch =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase,
+            long long attemptId) {
+            const ExperimentRow& job = jobs.at(candidate.sourceIndex);
+            std::vector<std::string> command;
+            if (phase == FinalExperimentPhase::Train)
+            {
+                command = BuildTrainCommand(options, job);
+                std::cout << "EXPERIMENT_STARTED"
+                          << ",experiment_id=" << job.experimentId
+                          << ",phase=train,worker_attempt_id="
+                          << attemptId
+                          << std::endl;
+            }
+            else if (phase == FinalExperimentPhase::Infer)
+            {
+                command = BuildInferCommand(options, job);
+            }
+            else
+            {
+                command = BuildAnalyzeCommand(options, job);
+            }
+            preparedCommand = std::move(command);
+        };
+    operations.launchPreparedWorker =
+        [&](const FinalExperimentDispatchCandidate& candidate,
+            FinalExperimentPhase phase,
+            long long) {
+            const ExperimentRow& job = jobs.at(candidate.sourceIndex);
+            PrintSchedulerExec(preparedCommand);
+            std::optional<long long> expectedModelId;
+            if (phase == FinalExperimentPhase::Train)
+            {
+                expectedModelId =
+                    job.lastModelId ? job.lastModelId : job.resumeModelId;
+            }
+            else
+            {
+                expectedModelId = job.lastModelId;
+            }
             (void)LaunchReservedChildProcess(
                 options,
-                *attempt,
-                std::move(command),
-                job.lastModelId);
-            ++stats.launched;
-        }
-        catch (const std::exception& error)
-        {
-            std::cerr << "EXPERIMENT_FAILED"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=infer,worker_attempt_id="
-                      << attempt->workerAttemptId
-                      << ",error=" << error.what()
-                      << std::endl;
-            rc = 1;
-        }
+                *reservedAttempt,
+                std::move(preparedCommand),
+                expectedModelId);
+        };
+    operations.logSkip =
+        [&](FinalExperimentPhase phase,
+            long long experimentId,
+            std::string_view reason) {
+            LogSkip(
+                std::string{FinalExperimentPhaseName(phase)},
+                experimentId,
+                std::string{reason},
+                logState,
+                options.schedulerVerbose);
+        };
+    operations.printStats =
+        [&](const FinalExperimentDispatchStats& serviceStats) {
+            PhaseSchedulingStats stats;
+            stats.phase =
+                std::string{FinalExperimentPhaseName(serviceStats.phase)};
+            stats.examined = serviceStats.examined;
+            stats.skipped = serviceStats.skipped;
+            stats.launched = serviceStats.launched;
+            stats.freeSlots = serviceStats.freeSlots;
+            PrintPhaseSchedulingStats(
+                stats, logState, options.schedulerVerbose);
+        };
+
+    FinalExperimentDispatchService service{
+        FinalExperimentDispatchConfiguration{
+            options.dryRun,
+            options.maxTrainProcs,
+            options.maxInferProcs,
+            options.maxAnalyzeProcs},
+        std::move(operations),
+        std::cerr};
+    switch (requestedPhase)
+    {
+    case FinalExperimentPhase::Train:
+        return service.runTrain(cancellationOnly);
+    case FinalExperimentPhase::Infer:
+        return service.runInference();
+    case FinalExperimentPhase::Analyze:
+        return service.runAnalysis();
     }
-    PrintPhaseSchedulingStats(
-        stats, logState, options.schedulerVerbose);
-    return rc;
+    throw std::logic_error("unknown final experiment phase");
+}
+
+int RunTrainJobs(
+    const SchedulerOptions& options,
+    const QueueSnapshot&,
+    SchedulerEventLogState* logState,
+    bool cancellationOnly = false)
+{
+    return RunFinalExperimentPhase(
+        options,
+        logState,
+        EA::SchedulerCore::FinalExperimentPhase::Train,
+        cancellationOnly);
+}
+
+int RunInferJobs(
+    const SchedulerOptions& options,
+    const QueueSnapshot&,
+    SchedulerEventLogState* logState)
+{
+    return RunFinalExperimentPhase(
+        options,
+        logState,
+        EA::SchedulerCore::FinalExperimentPhase::Infer);
 }
 
 int RunAnalyzeJobs(
@@ -20931,99 +20908,10 @@ int RunAnalyzeJobs(
     const QueueSnapshot&,
     SchedulerEventLogState* logState)
 {
-    std::vector<ExperimentRow> jobs;
-    int initialUsed = 0;
-    {
-        pqxx::connection connection{LstmDbConnectionString()};
-        pqxx::work transaction{connection};
-        SetTransactionReadWrite(transaction);
-        RequireAndRefreshSchedulerAuthority(transaction, options);
-        SchedulerServiceComposition services{transaction};
-        if (!SchedulerLaunchAllowed(transaction, "analyze"))
-        {
-            transaction.commit();
-            return 0;
-        }
-        jobs = LoadPendingExperiments(services.admission, "analyze");
-        initialUsed = services.admission.capacityUsed("analyze");
-        transaction.commit();
-    }
-
-    PhaseSchedulingStats stats;
-    stats.phase = "analyze";
-    stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots = AvailableWorkerProcessSlots(
-        options.maxAnalyzeProcs, initialUsed);
-    EnsureLogDir(options.schedulerLogDir);
-    int rc = 0;
-    for (const ExperimentRow& job : jobs)
-    {
-        if (!job.lastModelId)
-        {
-            ++stats.skipped;
-            continue;
-        }
-        if (options.dryRun)
-        {
-            if (stats.launched >= stats.freeSlots)
-            {
-                ++stats.skipped;
-                continue;
-            }
-            std::cout << "EXPERIMENT_CHILD_COMMAND"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=analyze,dry_run=1,argv="
-                      << CommandForDisplay(
-                             BuildAnalyzeCommand(options, job))
-                      << std::endl;
-            ++stats.launched;
-            continue;
-        }
-
-        const std::string logPath =
-            LogPathFor(options, job, "analysis");
-        const auto attempt = ReserveExperimentWorkerAttempt(
-            options,
-            job,
-            "analyze",
-            logPath,
-            options.maxAnalyzeProcs);
-        if (!attempt)
-        {
-            ++stats.skipped;
-            const int used =
-                GlobalCapacityUsed(options, "analyze");
-            if (!SchedulerWorkerCapacityHasSlot(
-                    options.maxAnalyzeProcs, used))
-                break;
-            continue;
-        }
-        try
-        {
-            std::vector<std::string> command =
-                BuildAnalyzeCommand(options, job);
-            PrintSchedulerExec(command);
-            (void)LaunchReservedChildProcess(
-                options,
-                *attempt,
-                std::move(command),
-                job.lastModelId);
-            ++stats.launched;
-        }
-        catch (const std::exception& error)
-        {
-            std::cerr << "EXPERIMENT_FAILED"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=analyze,worker_attempt_id="
-                      << attempt->workerAttemptId
-                      << ",error=" << error.what()
-                      << std::endl;
-            rc = 1;
-        }
-    }
-    PrintPhaseSchedulingStats(
-        stats, logState, options.schedulerVerbose);
-    return rc;
+    return RunFinalExperimentPhase(
+        options,
+        logState,
+        EA::SchedulerCore::FinalExperimentPhase::Analyze);
 }
 
 int RunCheckpointEvalInferJobs(
