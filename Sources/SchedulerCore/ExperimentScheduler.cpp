@@ -79,6 +79,7 @@
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
 #include "SchedulerCore/SchedulerAuthorityService.hpp"
+#include "SchedulerCore/SchedulerCycleService.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
 #include "SchedulerCore/WorkerControlService.hpp"
 #include "SchedulerCore/WorkerAttemptLifecycleService.hpp"
@@ -21140,13 +21141,11 @@ std::string SchedulerCancellationReconciliationOwner(
 int RunSchedulerOnce(const SchedulerOptions& options,
                      SchedulerEventLogState* logState)
 {
-    int rc = 0;
     QueueSnapshot snapshot;
-    bool normalSchedulingAllowed = false;
-    bool cancellationInferenceAllowed = false;
-    bool cancellationCheckpointTrainAllowed = false;
-    BeginSchedulerPollLogging(logState);
-    {
+    EA::SchedulerCore::SchedulerCycleOperations operations;
+    operations.beginPoll = [logState] { BeginSchedulerPollLogging(logState); };
+    operations.prepare = [&] {
+        EA::SchedulerCore::SchedulerCyclePreparation preparation;
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
         if (!options.dryRun)
@@ -21154,15 +21153,17 @@ int RunSchedulerOnce(const SchedulerOptions& options,
         RequireAndRefreshSchedulerAuthority(w, options);
         SchedulerServiceComposition services{w};
         if (!RequireSchedulerTables(w))
-            return 1;
+            return EA::SchedulerCore::SchedulerCyclePreparation{
+                .result = 1};
         const auto control = LoadLockedGlobalControl(w);
         if (!control)
-            return 1;
-        normalSchedulingAllowed =
+            return EA::SchedulerCore::SchedulerCyclePreparation{
+                .result = 1};
+        preparation.normalSchedulingAllowed =
             EA::GlobalExperimentControl::NormalSchedulingAllowed(*control);
-        cancellationInferenceAllowed =
+        preparation.cancellationInferenceAllowed =
             EA::GlobalExperimentControl::CancellationInferenceAllowed(*control);
-        cancellationCheckpointTrainAllowed =
+        preparation.cancellationCheckpointTrainAllowed =
             EA::GlobalExperimentControl::CancellationCheckpointTrainAllowed(
                 *control);
         if (!options.dryRun)
@@ -21175,34 +21176,29 @@ int RunSchedulerOnce(const SchedulerOptions& options,
             ReapSchedulerOwnedChildren(w, options);
             RecoverOrphanedRunningExperiments(
                 w, options, logState, options.schedulerVerbose);
-            if (normalSchedulingAllowed)
+            if (preparation.normalSchedulingAllowed)
             {
                 EnqueueCheckpointEvalRows(w);
-                rc |= FailInvalidSchedulerPhases(w);
+                preparation.result |= FailInvalidSchedulerPhases(w);
             }
         }
         snapshot = LoadQueueSnapshot(services.admission);
         PrintQueueSnapshot(snapshot, logState, options.schedulerVerbose);
         w.commit();
-    }
-
-    if (!normalSchedulingAllowed)
-    {
-        if (cancellationCheckpointTrainAllowed)
-            rc |= RunTrainJobs(options, snapshot, logState, true);
-        if (cancellationInferenceAllowed)
-            rc |= RunCheckpointEvalInferJobs(options);
-        FinishSchedulerPollLogging(logState);
-        return rc;
-    }
-
-    rc |= RunTrainJobs(options, snapshot, logState);
-    rc |= RunInferJobs(options, snapshot, logState);
-    rc |= RunAnalyzeJobs(options, snapshot, logState);
-    rc |= RunCheckpointEvalInferJobs(options);
-    rc |= RunCheckpointEvalAnalyzeJobs(options);
-    FinishSchedulerPollLogging(logState);
-    return rc;
+        preparation.ready = true;
+        return preparation;
+    };
+    operations.runTrain = [&](bool cancellationOnly) {
+        return RunTrainJobs(options, snapshot, logState, cancellationOnly);
+    };
+    operations.runFinalInference = [&] { return RunInferJobs(options, snapshot, logState); };
+    operations.runFinalAnalysis = [&] { return RunAnalyzeJobs(options, snapshot, logState); };
+    operations.runCheckpointInference = [&] { return RunCheckpointEvalInferJobs(options); };
+    operations.runCheckpointAnalysis = [&] { return RunCheckpointEvalAnalyzeJobs(options); };
+    operations.finishPoll = [logState] { FinishSchedulerPollLogging(logState); };
+    EA::SchedulerCore::SchedulerCycleService service{
+        std::move(operations)};
+    return service.runOnce();
 }
 
 int RunScheduler(SchedulerOptions options)
