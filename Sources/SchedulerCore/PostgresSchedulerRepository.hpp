@@ -46,6 +46,12 @@ public:
     CheckpointAnalysisPersistenceResult persistCheckpointAnalysisTerminalState(
         const CheckpointAnalysisTerminalUpdate& update) override;
 
+    std::optional<ExperimentTransitionRecord> loadExperimentTransition(
+        long long experimentId,
+        bool forUpdate) override;
+    ExperimentTransitionPersistenceResult applyExperimentTransition(
+        const ExperimentTransitionUpdate& update) override;
+
     void acquireAuthorityCoordinationLock() override;
     std::optional<SchedulerProtocolState>
     loadSchedulerProtocolForUpdate() override;

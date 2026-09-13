@@ -96,6 +96,19 @@ public:
     {
         return EA::SchedulerCore::CheckpointAnalysisPersistenceResult::Updated;
     }
+
+    std::optional<EA::SchedulerCore::ExperimentTransitionRecord>
+    loadExperimentTransition(long long, bool) override
+    {
+        return std::nullopt;
+    }
+
+    EA::SchedulerCore::ExperimentTransitionPersistenceResult
+    applyExperimentTransition(
+        const EA::SchedulerCore::ExperimentTransitionUpdate&) override
+    {
+        return EA::SchedulerCore::ExperimentTransitionPersistenceResult::Updated;
+    }
 };
 
 class RecordingProcessController final

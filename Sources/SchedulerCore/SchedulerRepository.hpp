@@ -221,6 +221,51 @@ enum class CheckpointAnalysisPersistenceResult
     LifecyclePreconditionRejected
 };
 
+enum class ExperimentTransitionAction
+{
+    Cancel,
+    RetryFailed,
+    RequeueTraining,
+    RequeueAnalysis,
+    RequeueInference
+};
+
+struct ExperimentTransitionRecord
+{
+    SchedulerExperimentRecord experiment;
+    std::string status;
+    std::string phase;
+    std::optional<int> currentEpoch;
+    std::string schedulerPriority = "normal";
+    std::string schedulerResumeOrigin = "none";
+    std::optional<long long> activeWorkerAttemptId;
+    std::optional<int> workerPid;
+    std::optional<long long> workerProcessGroupId;
+    std::optional<std::string> workerProcessStartIdentity;
+    std::optional<std::string> workerExecutable;
+    std::optional<std::string> workerCommandLine;
+    bool hasAttachedWorkerAttempt = false;
+};
+
+struct ExperimentTransitionUpdate
+{
+    ExperimentTransitionAction action = ExperimentTransitionAction::Cancel;
+    long long experimentId = -1;
+    std::string previousStatus;
+    std::string previousPhase;
+    std::string previousSchedulerPriority;
+    std::string previousSchedulerResumeOrigin;
+    std::string newStatus;
+    std::string newPhase;
+    std::optional<long long> selectedResumeModelId;
+};
+
+enum class ExperimentTransitionPersistenceResult
+{
+    Updated,
+    AtomicPreconditionRejected
+};
+
 class SchedulerRepository
 {
 public:
@@ -255,6 +300,11 @@ public:
     virtual CheckpointAnalysisPersistenceResult
     persistCheckpointAnalysisTerminalState(
         const CheckpointAnalysisTerminalUpdate& update) = 0;
+
+    virtual std::optional<ExperimentTransitionRecord>
+    loadExperimentTransition(long long experimentId, bool forUpdate) = 0;
+    virtual ExperimentTransitionPersistenceResult applyExperimentTransition(
+        const ExperimentTransitionUpdate& update) = 0;
 };
 
 } // namespace EA::SchedulerCore

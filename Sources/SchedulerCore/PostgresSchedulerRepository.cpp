@@ -667,6 +667,170 @@ PostgresSchedulerRepository::persistCheckpointAnalysisTerminalState(
     return CheckpointAnalysisPersistenceResult::Updated;
 }
 
+std::optional<ExperimentTransitionRecord>
+PostgresSchedulerRepository::loadExperimentTransition(
+    long long experimentId,
+    bool forUpdate)
+{
+    std::string sql =
+        "SELECT " + std::string{kExperimentProjection} + ","
+        "status,phase,current_epoch,scheduler_priority,"
+        "scheduler_resume_origin,active_scheduler_worker_attempt_id,"
+        "worker_pid,worker_process_group_id,worker_process_start_identity,"
+        "worker_executable,worker_command_line,"
+        "EXISTS (SELECT 1 FROM experiment_scheduler_worker_attempt a "
+        "WHERE a.experiment_id=experiment.experiment_id "
+        "AND a.worker_kind='experiment' "
+        "AND a.lifecycle_state IN ('reserved','spawned','running','observed',"
+        "'stopped','identity_ambiguous')) "
+        "FROM experiment WHERE experiment_id=$1";
+    if (forUpdate)
+        sql += " FOR UPDATE";
+    sql += ";";
+
+    const pqxx::result rows = transaction_.exec(
+        sql, pqxx::params{experimentId});
+    if (rows.empty())
+        return std::nullopt;
+
+    ExperimentTransitionRecord record;
+    record.experiment = MapExperiment(rows[0]);
+    record.status = rows[0][24].as<std::string>();
+    record.phase = rows[0][25].as<std::string>();
+    record.currentEpoch = OptionalCell<int>(rows[0], 26);
+    record.schedulerPriority = rows[0][27].as<std::string>();
+    record.schedulerResumeOrigin = rows[0][28].as<std::string>();
+    record.activeWorkerAttemptId = OptionalCell<long long>(rows[0], 29);
+    record.workerPid = OptionalCell<int>(rows[0], 30);
+    record.workerProcessGroupId = OptionalCell<long long>(rows[0], 31);
+    record.workerProcessStartIdentity =
+        OptionalCell<std::string>(rows[0], 32);
+    record.workerExecutable = OptionalCell<std::string>(rows[0], 33);
+    record.workerCommandLine = OptionalCell<std::string>(rows[0], 34);
+    record.hasAttachedWorkerAttempt = rows[0][35].as<bool>();
+    return record;
+}
+
+ExperimentTransitionPersistenceResult
+PostgresSchedulerRepository::applyExperimentTransition(
+    const ExperimentTransitionUpdate& update)
+{
+    std::string sql =
+        "UPDATE experiment SET status=$1,phase=$2,updated_at=now()";
+
+    if (update.action == ExperimentTransitionAction::Cancel)
+    {
+        sql +=
+            ",completed_at=now(),resume_requested=false,"
+            "scheduler_resume_origin='none'";
+    }
+    else
+    {
+        sql +=
+            ",started_at=NULL,worker_started_at=NULL,completed_at=NULL,"
+            "exit_code=NULL,error_message=NULL,worker_pid=NULL,"
+            "worker_process_group_id=NULL,worker_process_start_identity=NULL,"
+            "worker_executable=NULL,worker_command_line=NULL,"
+            "worker_control_state='running',worker_global_pause_request_id=NULL,"
+            "active_scheduler_worker_attempt_id=NULL";
+        if (update.action != ExperimentTransitionAction::RequeueTraining)
+            sql += ",current_operation=NULL";
+        if (update.action == ExperimentTransitionAction::RequeueAnalysis ||
+            update.action == ExperimentTransitionAction::RequeueInference)
+        {
+            sql +=
+                ",resume_requested=true,"
+                "scheduler_resume_origin='operator'";
+        }
+        else
+        {
+            sql +=
+                ",resume_requested=false,"
+                "scheduler_resume_origin='none'";
+        }
+    }
+
+    if (update.action == ExperimentTransitionAction::RequeueTraining)
+    {
+        if (!update.selectedResumeModelId)
+        {
+            throw std::invalid_argument(
+                "requeue_training_requires_selected_checkpoint");
+        }
+        sql += ",current_operation='train',last_model_id=$3";
+    }
+    if (update.action == ExperimentTransitionAction::RequeueInference)
+    {
+        sql +=
+            ",operator_forced_final_inference_rerun_requested=true";
+    }
+    if (update.selectedResumeModelId)
+        sql += ",resume_model_id=$3";
+
+    const bool selectedResumeModel = update.selectedResumeModelId.has_value();
+    const int experimentParameter = selectedResumeModel ? 4 : 3;
+    sql += " WHERE experiment_id=$" +
+           std::to_string(experimentParameter);
+    if (update.action == ExperimentTransitionAction::RequeueTraining)
+    {
+        sql +=
+            " AND status=$5 AND phase=$6 AND scheduler_priority=$7 "
+            "AND scheduler_resume_origin=$8 "
+            "AND active_scheduler_worker_attempt_id IS NULL "
+            "AND worker_pid IS NULL "
+            "AND worker_process_group_id IS NULL "
+            "AND worker_process_start_identity IS NULL "
+            "AND worker_executable IS NULL "
+            "AND worker_command_line IS NULL "
+            "AND COALESCE(current_epoch,-1)<target_epochs "
+            "AND NOT EXISTS (SELECT 1 "
+            "FROM experiment_scheduler_worker_attempt a "
+            "WHERE a.experiment_id=experiment.experiment_id "
+            "AND a.worker_kind='experiment' "
+            "AND a.lifecycle_state IN ('reserved','spawned','running',"
+            "'observed','stopped','identity_ambiguous'))";
+    }
+    sql += " RETURNING experiment_id;";
+
+    pqxx::result updated;
+    if (update.action == ExperimentTransitionAction::RequeueTraining)
+    {
+        updated = transaction_.exec(
+            sql,
+            pqxx::params{
+                update.newStatus,
+                update.newPhase,
+                update.selectedResumeModelId,
+                update.experimentId,
+                update.previousStatus,
+                update.previousPhase,
+                update.previousSchedulerPriority,
+                update.previousSchedulerResumeOrigin});
+    }
+    else if (selectedResumeModel)
+    {
+        updated = transaction_.exec(
+            sql,
+            pqxx::params{
+                update.newStatus,
+                update.newPhase,
+                update.selectedResumeModelId,
+                update.experimentId});
+    }
+    else
+    {
+        updated = transaction_.exec(
+            sql,
+            pqxx::params{
+                update.newStatus,
+                update.newPhase,
+                update.experimentId});
+    }
+    return updated.size() == 1
+        ? ExperimentTransitionPersistenceResult::Updated
+        : ExperimentTransitionPersistenceResult::AtomicPreconditionRejected;
+}
+
 void PostgresSchedulerRepository::acquireAuthorityCoordinationLock()
 {
     transaction_.exec(

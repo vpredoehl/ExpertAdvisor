@@ -56,10 +56,13 @@ int main(int argc, char* argv[])
             worker_process_start_identity text,
             worker_executable text,
             worker_command_line text,
+            current_epoch integer,
             started_at timestamptz,
             worker_started_at timestamptz,
             current_operation text,
             worker_control_state text,
+            worker_global_pause_request_id bigint,
+            operator_forced_final_inference_rerun_requested boolean NOT NULL DEFAULT false,
             updated_at timestamptz NOT NULL,
             completed_at timestamptz,
             exit_code integer,
@@ -550,6 +553,90 @@ int main(int argc, char* argv[])
                "SELECT cutover_state FROM experiment_scheduler_protocol "
                "WHERE singleton=true").one_row()[0].as<std::string>() ==
            "complete");
+
+    transaction.exec(R"SQL(
+        INSERT INTO experiment(
+            experiment_id,symbol,prediction_horizon,c_next_threshold,
+            target_epochs,checkpoint_interval,train_start,train_end,
+            last_model_id,donchian20_mode,feature_warmup_scope,
+            donchian_lookback,feature_ablation_mask,resume_expand_input_width,
+            training_objective_canonical,training_objective_hash,
+            scheduler_priority,resume_requested,scheduler_resume_origin,
+            status,phase,current_epoch,current_operation,worker_control_state,
+            started_at,worker_started_at,completed_at,exit_code,error_message,
+            updated_at
+        ) VALUES
+        (30,'transitioninfer',4,0.1,80,20,'2020-01-01','2021-01-01',
+         700,'enabled','full_history_warmup','20','none',false,
+         'objective','hash','high',false,'none','failed','analyze',40,
+         'analyze','running',clock_timestamp(),clock_timestamp(),
+         clock_timestamp(),9,'fixture failure',clock_timestamp()),
+        (31,'transitiontrain',4,0.1,80,20,'2020-01-01','2021-01-01',
+         701,'enabled','full_history_warmup','20','none',false,
+         'objective','hash','normal',false,'none','pending','infer',20,
+         'infer','running',clock_timestamp(),clock_timestamp(),NULL,NULL,NULL,
+         clock_timestamp());
+    )SQL");
+
+    const auto transition = repository.loadExperimentTransition(30, true);
+    assert(transition);
+    assert(transition->experiment.experimentId == 30);
+    assert(transition->experiment.lastModelId == 700);
+    assert(transition->status == "failed");
+    assert(transition->phase == "analyze");
+    assert(transition->currentEpoch == 40);
+    assert(transition->schedulerPriority == "high");
+    assert(!transition->hasAttachedWorkerAttempt);
+    assert(repository.applyExperimentTransition({
+               ExperimentTransitionAction::RequeueInference,
+               30,
+               "failed",
+               "analyze",
+               "high",
+               "none",
+               "pending",
+               "infer",
+               std::nullopt}) ==
+           ExperimentTransitionPersistenceResult::Updated);
+    const pqxx::row requeuedInference = transaction.exec(
+        "SELECT status,phase,resume_requested,scheduler_resume_origin,"
+        "started_at,worker_started_at,completed_at,exit_code,error_message,"
+        "current_operation,operator_forced_final_inference_rerun_requested "
+        "FROM experiment WHERE experiment_id=30").one_row();
+    assert(requeuedInference[0].as<std::string>() == "pending");
+    assert(requeuedInference[1].as<std::string>() == "infer");
+    assert(requeuedInference[2].as<bool>());
+    assert(requeuedInference[3].as<std::string>() == "operator");
+    for (int column = 4; column <= 9; ++column)
+        assert(requeuedInference[column].is_null());
+    assert(requeuedInference[10].as<bool>());
+
+    const ExperimentTransitionUpdate requeueTraining{
+        ExperimentTransitionAction::RequeueTraining,
+        31,
+        "pending",
+        "infer",
+        "normal",
+        "none",
+        "pending",
+        "train",
+        900};
+    assert(repository.applyExperimentTransition(requeueTraining) ==
+           ExperimentTransitionPersistenceResult::Updated);
+    const pqxx::row requeuedTraining = transaction.exec(
+        "SELECT status,phase,current_operation,last_model_id,resume_model_id,"
+        "resume_requested,scheduler_resume_origin "
+        "FROM experiment WHERE experiment_id=31").one_row();
+    assert(requeuedTraining[0].as<std::string>() == "pending");
+    assert(requeuedTraining[1].as<std::string>() == "train");
+    assert(requeuedTraining[2].as<std::string>() == "train");
+    assert(requeuedTraining[3].as<long long>() == 900);
+    assert(requeuedTraining[4].as<long long>() == 900);
+    assert(!requeuedTraining[5].as<bool>());
+    assert(requeuedTraining[6].as<std::string>() == "none");
+    assert(repository.applyExperimentTransition(requeueTraining) ==
+           ExperimentTransitionPersistenceResult::
+               AtomicPreconditionRejected);
 
     transaction.abort();
     return 0;

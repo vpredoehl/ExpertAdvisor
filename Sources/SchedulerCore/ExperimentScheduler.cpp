@@ -73,6 +73,7 @@
 #include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
 #include "SchedulerCore/CheckpointAnalysisOrchestrationService.hpp"
 #include "SchedulerCore/ContinuationOrchestrationService.hpp"
+#include "SchedulerCore/ExperimentTransitionService.hpp"
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
@@ -710,40 +711,6 @@ struct SchedulerStatusCounts
     int completed = 0;
     int failed = 0;
     int cancelled = 0;
-};
-
-struct SchedulerControlExperimentRow
-{
-    long long experimentId = -1;
-    std::string status;
-    std::string phase;
-    std::optional<long long> lastModelId;
-    std::optional<long long> resumeModelId;
-    std::string symbol;
-    int predictionHorizon = 0;
-    double cNextThreshold = 0.0;
-    std::optional<double> coreLrMult;
-    std::optional<double> headLrMult;
-    int targetEpochs = 0;
-    std::string trainStart;
-    std::string trainEnd;
-    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
-    EA::FeatureWarmupScope featureWarmupScope =
-        EA::FeatureWarmupScope::LegacyColdBoundary;
-    std::size_t donchianLookback = kDefaultDonchianLookback;
-    std::string featureAblationMask;
-    EA::TrainingObjective::Configuration trainingObjective =
-        EA::TrainingObjective::Legacy();
-    std::optional<int> currentEpoch;
-    std::string schedulerPriority = "normal";
-    std::string schedulerResumeOrigin = "none";
-    std::optional<long long> activeWorkerAttemptId;
-    std::optional<int> workerPid;
-    std::optional<long long> workerProcessGroupId;
-    std::optional<std::string> workerProcessStartIdentity;
-    std::optional<std::string> workerExecutable;
-    std::optional<std::string> workerCommandLine;
-    bool hasAttachedWorkerAttempt = false;
 };
 
 struct SchedulerStopExperiment
@@ -8536,23 +8503,20 @@ QueueSnapshot LoadQueueSnapshot(
         record.runningAnalyze};
 }
 
-const char* SchedulerControlActionName(const SchedulerOptions& options)
+EA::SchedulerCore::ExperimentTransitionAction SchedulerControlAction(
+    const SchedulerOptions& options)
 {
-    if (options.pauseExperimentId.has_value())
-        return "pause";
-    if (options.resumeExperimentId.has_value())
-        return "resume";
     if (options.cancelExperimentId.has_value())
-        return "cancel";
+        return EA::SchedulerCore::ExperimentTransitionAction::Cancel;
     if (options.retryFailedExperimentId.has_value())
-        return "retry_failed";
+        return EA::SchedulerCore::ExperimentTransitionAction::RetryFailed;
     if (options.requeueTrainingExperimentId.has_value())
-        return "requeue_training";
+        return EA::SchedulerCore::ExperimentTransitionAction::RequeueTraining;
     if (options.requeueAnalysisExperimentId.has_value())
-        return "requeue_analysis";
+        return EA::SchedulerCore::ExperimentTransitionAction::RequeueAnalysis;
     if (options.requeueInferenceExperimentId.has_value())
-        return "requeue_inference";
-    return "unknown";
+        return EA::SchedulerCore::ExperimentTransitionAction::RequeueInference;
+    throw std::invalid_argument("missing scheduler transition action");
 }
 
 long long SchedulerControlExperimentId(const SchedulerOptions& options)
@@ -8574,136 +8538,59 @@ long long SchedulerControlExperimentId(const SchedulerOptions& options)
     throw std::invalid_argument("missing scheduler control experiment id");
 }
 
-std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx::work& w,
-                                                                                   long long experimentId,
-                                                                                   bool forUpdate)
-{
-    std::ostringstream sql;
-    sql << "SELECT experiment_id, status, phase, last_model_id, resume_model_id, symbol, prediction_horizon, "
-        << "c_next_threshold, core_lr_mult, head_lr_mult, target_epochs, "
-        << "train_start::text, train_end::text, donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,training_objective_canonical,training_objective_hash,"
-        << "current_epoch,scheduler_priority,scheduler_resume_origin,"
-        << "active_scheduler_worker_attempt_id,"
-        << "worker_pid,worker_process_group_id,worker_process_start_identity,"
-        << "worker_executable,worker_command_line,"
-        << "EXISTS (SELECT 1 FROM experiment_scheduler_worker_attempt a "
-        << "WHERE a.experiment_id=experiment.experiment_id "
-        << "AND a.worker_kind='experiment' "
-        << "AND a.lifecycle_state IN ('reserved','spawned','running','observed',"
-        << "'stopped','identity_ambiguous')) "
-        << "FROM experiment WHERE experiment_id = " << experimentId;
-    if (forUpdate)
-        sql << " FOR UPDATE";
-    sql << ";";
-
-    pqxx::result rows = w.exec(sql.str());
-    if (rows.empty())
-        return std::nullopt;
-
-    SchedulerControlExperimentRow row;
-    row.experimentId = rows[0][0].as<long long>();
-    row.status = rows[0][1].as<std::string>();
-    row.phase = rows[0][2].as<std::string>();
-    row.lastModelId = OptionalLongLongCell(rows[0], 3);
-    row.resumeModelId = OptionalLongLongCell(rows[0], 4);
-    row.symbol = rows[0][5].as<std::string>();
-    row.predictionHorizon = rows[0][6].as<int>();
-    row.cNextThreshold = rows[0][7].as<double>();
-    row.coreLrMult = OptionalDoubleCell(rows[0], 8);
-    row.headLrMult = OptionalDoubleCell(rows[0], 9);
-    row.targetEpochs = rows[0][10].as<int>();
-    row.trainStart = rows[0][11].as<std::string>();
-    row.trainEnd = rows[0][12].as<std::string>();
-    row.donchian20Mode = ParseDonchian20Mode(rows[0][13].as<std::string>());
-    row.featureWarmupScope = EA::ParseFeatureWarmupScope(rows[0][14].as<std::string>());
-    row.donchianLookback = ParseDonchianLookback(rows[0][15].as<std::string>());
-    row.featureAblationMask = EA::FeatureAblationMask::Parse(
-        rows[0][16].as<std::string>()).CanonicalText();
-    row.trainingObjective = EA::TrainingObjective::ResolvePersisted(
-        rows[0][17].as<std::string>(), rows[0][18].as<std::string>());
-    if (!rows[0][19].is_null())
-        row.currentEpoch = rows[0][19].as<int>();
-    row.schedulerPriority = rows[0][20].as<std::string>();
-    row.schedulerResumeOrigin = rows[0][21].as<std::string>();
-    row.activeWorkerAttemptId = OptionalLongLongCell(rows[0], 22);
-    if (!rows[0][23].is_null())
-        row.workerPid = rows[0][23].as<int>();
-    row.workerProcessGroupId = OptionalLongLongCell(rows[0], 24);
-    row.workerProcessStartIdentity = OptionalStringCell(rows[0], 25);
-    row.workerExecutable = OptionalStringCell(rows[0], 26);
-    row.workerCommandLine = OptionalStringCell(rows[0], 27);
-    row.hasAttachedWorkerAttempt = rows[0][28].as<bool>();
-    return row;
-}
-
 ExperimentRow SchedulerControlCheckpointExperiment(
-    const SchedulerControlExperimentRow& row)
+    const EA::SchedulerCore::ExperimentTransitionRecord& row)
 {
+    const auto& record = row.experiment;
     ExperimentRow experiment;
-    experiment.experimentId = row.experimentId;
-    experiment.symbol = row.symbol;
-    experiment.predictionHorizon = row.predictionHorizon;
-    experiment.cNextThreshold = row.cNextThreshold;
-    experiment.coreLrMult = row.coreLrMult;
-    experiment.headLrMult = row.headLrMult;
-    experiment.targetEpochs = row.targetEpochs;
-    experiment.trainStart = row.trainStart;
-    experiment.trainEnd = row.trainEnd;
-    experiment.lastModelId = row.lastModelId;
-    experiment.resumeModelId = row.resumeModelId;
-    experiment.donchian20Mode = row.donchian20Mode;
-    experiment.featureWarmupScope = row.featureWarmupScope;
-    experiment.donchianLookback = row.donchianLookback;
-    experiment.featureAblationMask = row.featureAblationMask;
-    experiment.trainingObjective = row.trainingObjective;
+    experiment.experimentId = record.experimentId;
+    experiment.symbol = record.symbol;
+    experiment.predictionHorizon = record.predictionHorizon;
+    experiment.cNextThreshold = record.cNextThreshold;
+    experiment.coreLrMult = record.coreLrMult;
+    experiment.headLrMult = record.headLrMult;
+    experiment.targetEpochs = record.targetEpochs;
+    experiment.trainStart = record.trainStart;
+    experiment.trainEnd = record.trainEnd;
+    experiment.lastModelId = record.lastModelId;
+    experiment.resumeModelId = record.resumeModelId;
+    experiment.donchian20Mode = ParseDonchian20Mode(record.donchian20Mode);
+    experiment.featureWarmupScope =
+        EA::ParseFeatureWarmupScope(record.featureWarmupScope);
+    experiment.donchianLookback =
+        ParseDonchianLookback(record.donchianLookback);
+    experiment.featureAblationMask = EA::FeatureAblationMask::Parse(
+        record.featureAblationMask).CanonicalText();
+    experiment.trainingObjective = EA::TrainingObjective::ResolvePersisted(
+        record.trainingObjectiveCanonical,
+        record.trainingObjectiveHash);
     experiment.schedulerPriority = row.schedulerPriority;
     experiment.schedulerResumeOrigin = row.schedulerResumeOrigin;
     experiment.activeWorkerAttemptId = row.activeWorkerAttemptId;
     return experiment;
 }
 
-std::optional<long long> ControlModelId(const SchedulerControlExperimentRow& row)
-{
-    if (row.lastModelId.has_value())
-        return row.lastModelId;
-    return row.resumeModelId;
-}
-
-std::string RetryPhaseForExperiment(const SchedulerControlExperimentRow& row)
-{
-    if (row.phase == "train" || row.phase == "infer" || row.phase == "analyze")
-        return row.phase;
-    if (row.phase == "done" && ControlModelId(row).has_value())
-        return "analyze";
-    return "train";
-}
-
-struct RetryCheckpointSelection
-{
-    std::optional<long long> previousResumeModelId;
-    std::optional<long long> selectedResumeModelId;
-    std::optional<int> selectedCompletedEpoch;
-    bool promoted = false;
-    std::string reason;
-};
-
 QueueResumeCompatibilityRequirements RetryCheckpointRequirements(
-    const SchedulerControlExperimentRow& row)
+    const EA::SchedulerCore::ExperimentTransitionRecord& row)
 {
+    const auto& experiment = row.experiment;
     return QueueResumeCompatibilityRequirements{
-        row.targetEpochs,
-        row.symbol,
-        row.predictionHorizon,
-        row.cNextThreshold,
-        row.trainStart,
-        row.trainEnd,
-        row.coreLrMult.value_or(default_core_lr_mult),
-        row.headLrMult.value_or(default_head_weight_lr_mult),
-        row.donchian20Mode,
-        row.featureWarmupScope,
-        row.donchianLookback,
-        row.featureAblationMask,
-        row.trainingObjective
+        experiment.targetEpochs,
+        experiment.symbol,
+        experiment.predictionHorizon,
+        experiment.cNextThreshold,
+        experiment.trainStart,
+        experiment.trainEnd,
+        experiment.coreLrMult.value_or(default_core_lr_mult),
+        experiment.headLrMult.value_or(default_head_weight_lr_mult),
+        ParseDonchian20Mode(experiment.donchian20Mode),
+        EA::ParseFeatureWarmupScope(experiment.featureWarmupScope),
+        ParseDonchianLookback(experiment.donchianLookback),
+        EA::FeatureAblationMask::Parse(
+            experiment.featureAblationMask).CanonicalText(),
+        EA::TrainingObjective::ResolvePersisted(
+            experiment.trainingObjectiveCanonical,
+            experiment.trainingObjectiveHash)
     };
 }
 
@@ -8727,25 +8614,28 @@ std::optional<QueueResumeMeta> TryLoadCompatibleRetryResumeMeta(
     }
 }
 
-RetryCheckpointSelection SelectRetryTrainingCheckpoint(
+EA::SchedulerCore::RetryTrainingCheckpointSelection
+SelectRetryTrainingCheckpoint(
     pqxx::work& w,
-    const SchedulerControlExperimentRow& row)
+    const EA::SchedulerCore::ExperimentTransitionRecord& row)
 {
-    RetryCheckpointSelection selection;
-    selection.previousResumeModelId = row.resumeModelId;
-    selection.selectedResumeModelId = row.resumeModelId;
+    EA::SchedulerCore::RetryTrainingCheckpointSelection selection;
+    selection.previousResumeModelId = row.experiment.resumeModelId;
+    selection.selectedResumeModelId = row.experiment.resumeModelId;
 
     const QueueResumeCompatibilityRequirements requirements =
         RetryCheckpointRequirements(row);
     const std::optional<long long> effectiveExistingResume =
-        row.resumeModelId.has_value() ? row.resumeModelId : row.lastModelId;
+        row.experiment.resumeModelId.has_value()
+            ? row.experiment.resumeModelId
+            : row.experiment.lastModelId;
     std::optional<QueueResumeMeta> existingMeta;
     if (effectiveExistingResume.has_value())
     {
         existingMeta = TryLoadCompatibleRetryResumeMeta(
             w, *effectiveExistingResume, requirements);
     }
-    if (row.resumeModelId.has_value() && existingMeta.has_value())
+    if (row.experiment.resumeModelId.has_value() && existingMeta.has_value())
         selection.selectedCompletedEpoch = existingMeta->completedEpochs;
 
     const pqxx::result candidates = w.exec_params(
@@ -8753,7 +8643,7 @@ RetryCheckpointSelection SelectRetryTrainingCheckpoint(
         "WHERE experiment_id=$1 "
         "AND COALESCE(comment,'') ILIKE '%periodic training checkpoint%' "
         "ORDER BY model_id DESC;",
-        row.experimentId);
+        row.experiment.experimentId);
 
     std::optional<QueueResumeMeta> bestCandidate;
     for (const auto& candidate : candidates)
@@ -8787,288 +8677,55 @@ RetryCheckpointSelection SelectRetryTrainingCheckpoint(
 
     selection.selectedResumeModelId = bestCandidate->modelId;
     selection.selectedCompletedEpoch = bestCandidate->completedEpochs;
-    selection.promoted = row.resumeModelId != bestCandidate->modelId;
+    selection.promoted =
+        row.experiment.resumeModelId != bestCandidate->modelId;
     selection.reason = selection.promoted ? "newer_compatible_checkpoint" :
                                             "existing_resume_already_selected";
     return selection;
 }
 
-void PrintRetryCheckpointSelection(long long experimentId,
-                                   const RetryCheckpointSelection& selection)
+class SchedulerTransitionCheckpointSelector final
+    : public EA::SchedulerCore::ExperimentTransitionCheckpointSelector
 {
-    std::cout << "SCHEDULER_RETRY_CHECKPOINT_SELECTION"
-              << ",experiment_id=" << experimentId
-              << ",previous_resume_model_id="
-              << (selection.previousResumeModelId.has_value()
-                      ? std::to_string(*selection.previousResumeModelId)
-                      : "NULL")
-              << ",selected_resume_model_id="
-              << (selection.selectedResumeModelId.has_value()
-                      ? std::to_string(*selection.selectedResumeModelId)
-                      : "NULL")
-              << ",selected_completed_epoch="
-              << (selection.selectedCompletedEpoch.has_value()
-                      ? std::to_string(*selection.selectedCompletedEpoch)
-                      : "NULL")
-              << ",promotion=" << (selection.promoted ? "1" : "0")
-              << ",reason=" << selection.reason
-              << std::endl;
-}
-
-void PrintSchedulerControlAttempt(const std::string& action,
-                                         const SchedulerControlExperimentRow& row)
-{
-    std::cout << "SCHEDULER_CONTROL_ATTEMPT"
-              << ",action=" << action
-              << ",experiment_id=" << row.experimentId
-              << ",current_status=" << row.status
-              << ",current_phase=" << row.phase
-              << std::endl;
-}
-
-void PrintSchedulerControlRejected(const std::string& action,
-                                          long long experimentId,
-                                          const std::string& reason)
-{
-    std::cout << "SCHEDULER_CONTROL_REJECTED"
-              << ",action=" << action
-              << ",experiment_id=" << experimentId
-              << ",reason=" << reason
-              << std::endl;
-}
-
-void PrintSchedulerControlTransition(const SchedulerControlExperimentRow& row,
-                                            const std::string& newStatus,
-                                            const std::string& newPhase)
-{
-    std::cout << "Experiment " << row.experimentId << "\n"
-              << "Current: status=" << row.status << " phase=" << row.phase << "\n"
-              << "Requested: status=" << newStatus << " phase=" << newPhase << "\n";
-}
-
-void PrintSchedulerControlApplied(const std::string& action,
-                                         long long experimentId,
-                                         const std::string& newStatus,
-                                         const std::string& newPhase)
-{
-    std::cout << "SCHEDULER_CONTROL_APPLIED"
-              << ",action=" << action
-              << ",experiment_id=" << experimentId
-              << ",new_status=" << newStatus
-              << ",new_phase=" << newPhase;
-    if (action == "requeue_inference")
+public:
+    explicit SchedulerTransitionCheckpointSelector(pqxx::work& transaction)
+        : transaction_{transaction}
     {
-        std::cout
-            << ",operator_forced_final_inference_rerun_requested=1";
-    }
-    std::cout << std::endl;
-}
-
-std::optional<std::string> ValidateSchedulerControlTransition(const SchedulerOptions& options,
-                                                                     const SchedulerControlExperimentRow& row,
-                                                                     std::string& newStatus,
-                                                                     std::string& newPhase)
-{
-    newStatus = row.status;
-    newPhase = row.phase;
-
-    if (options.pauseExperimentId.has_value())
-    {
-        if (row.status != "pending")
-            return "pause_requires_pending_status";
-        newStatus = "paused";
-        return std::nullopt;
-    }
-    if (options.resumeExperimentId.has_value())
-    {
-        if (row.status != "paused")
-            return "resume_requires_paused_status";
-        newStatus = "pending";
-        return std::nullopt;
-    }
-    if (options.cancelExperimentId.has_value())
-    {
-        if (row.status == "running")
-            return "running_experiment_cannot_be_cancelled";
-        if (row.status != "pending" && row.status != "paused")
-            return "cancel_requires_pending_or_paused_status";
-        newStatus = "cancelled";
-        return std::nullopt;
-    }
-    if (options.retryFailedExperimentId.has_value())
-    {
-        if (row.status != "failed")
-            return "retry_requires_failed_status";
-        newStatus = "pending";
-        newPhase = RetryPhaseForExperiment(row);
-        return std::nullopt;
-    }
-    if (options.requeueTrainingExperimentId.has_value())
-    {
-        if (row.status == "running")
-            return "running_experiment_cannot_be_requeued";
-        if (row.status == "completed" || row.status == "cancelled")
-            return "terminal_experiment_cannot_be_requeued";
-        if (row.status != "pending" && row.status != "failed")
-            return "requeue_training_requires_pending_or_failed_status";
-        if (row.phase != "train" && row.phase != "infer" &&
-            row.phase != "analyze")
-        {
-            return "requeue_training_requires_supported_phase";
-        }
-        if (row.currentEpoch.has_value() &&
-            *row.currentEpoch >= row.targetEpochs)
-        {
-            return "requeue_training_has_no_remaining_epochs";
-        }
-        if (row.activeWorkerAttemptId.has_value() ||
-            row.hasAttachedWorkerAttempt)
-        {
-            return "requeue_training_worker_attempt_attached";
-        }
-        if (row.workerPid.has_value() ||
-            row.workerProcessGroupId.has_value() ||
-            row.workerProcessStartIdentity.has_value() ||
-            row.workerExecutable.has_value() ||
-            row.workerCommandLine.has_value())
-        {
-            return "requeue_training_worker_identity_present";
-        }
-        newStatus = "pending";
-        newPhase = "train";
-        return std::nullopt;
-    }
-    if (options.requeueAnalysisExperimentId.has_value())
-    {
-        if (row.status == "running")
-            return "running_experiment_cannot_be_requeued";
-        if (!ControlModelId(row).has_value())
-            return "requeue_analysis_requires_model_id";
-        newStatus = "pending";
-        newPhase = "analyze";
-        return std::nullopt;
-    }
-    if (options.requeueInferenceExperimentId.has_value())
-    {
-        if (row.status == "running")
-            return "running_experiment_cannot_be_requeued";
-        if (!ControlModelId(row).has_value())
-            return "requeue_inference_requires_model_id";
-        newStatus = "pending";
-        newPhase = "infer";
-        return std::nullopt;
     }
 
-    return "unknown_scheduler_control_action";
-}
-
-void ApplySchedulerControlTransition(pqxx::work& w,
-                                            const std::string& action,
-                                            const SchedulerControlExperimentRow& row,
-                                            const std::string& newStatus,
-                                            const std::string& newPhase,
-                                            const std::optional<long long>& promotedResumeModelId =
-                                                std::nullopt)
-{
-    std::ostringstream sql;
-    sql << "UPDATE experiment SET status = " << w.quote(newStatus)
-        << ", phase = " << w.quote(newPhase)
-        << ", updated_at = now()";
-
-    if (action == "cancel")
+    EA::SchedulerCore::RetryTrainingCheckpointSelection
+    selectRetryTrainingCheckpoint(
+        const EA::SchedulerCore::ExperimentTransitionRecord& experiment)
+        override
     {
-        sql << ", completed_at = now()"
-            << ", resume_requested = false"
-            << ", scheduler_resume_origin = 'none'";
-    }
-    else if (action == "retry_failed" ||
-             action == "requeue_analysis" ||
-             action == "requeue_inference" ||
-             action == "requeue_training")
-    {
-        sql << ", started_at = NULL"
-            << ", worker_started_at = NULL"
-            << ", completed_at = NULL"
-            << ", exit_code = NULL"
-            << ", error_message = NULL"
-            << ", worker_pid = NULL"
-            << ", worker_process_group_id = NULL"
-            << ", worker_process_start_identity = NULL"
-            << ", worker_executable = NULL"
-            << ", worker_command_line = NULL"
-            << ", worker_control_state = 'running'"
-            << ", worker_global_pause_request_id = NULL"
-            << ", active_scheduler_worker_attempt_id = NULL";
-        if (action != "requeue_training")
-            sql << ", current_operation = NULL";
-        if (action == "retry_failed")
-        {
-            sql << ", resume_requested = false"
-                << ", scheduler_resume_origin = 'none'";
-        }
-        else if (action == "requeue_training")
-        {
-            // A same-ID checkpoint requeue is ordinary work. Persistent
-            // priority still applies, but it receives no resume-origin boost.
-            sql << ", resume_requested = false"
-                << ", scheduler_resume_origin = 'none'";
-        }
-        else
-        {
-            sql << ", resume_requested = true"
-                << ", scheduler_resume_origin = 'operator'";
-        }
+        return SelectRetryTrainingCheckpoint(transaction_, experiment);
     }
 
-    if (action == "requeue_training")
+    EA::SchedulerCore::RequeueTrainingCheckpointSelection
+    selectRequeueTrainingCheckpoint(
+        const EA::SchedulerCore::ExperimentTransitionRecord& experiment)
+        override
     {
-        if (!promotedResumeModelId.has_value())
-            throw std::invalid_argument(
-                "requeue_training_requires_selected_checkpoint");
-        sql << ", current_operation = 'train'"
-            << ", last_model_id = " << *promotedResumeModelId;
+        const TrainingCheckpointSelection selection =
+            SelectUsableTrainingCheckpoint(
+                transaction_,
+                SchedulerControlCheckpointExperiment(experiment),
+                std::nullopt,
+                false);
+        if (!selection.checkpoint)
+            return {std::nullopt, std::nullopt, selection.reason};
+        return {
+            selection.checkpoint->modelId,
+            selection.checkpoint->completedEpochs,
+            selection.reason};
     }
 
-    if (action == "requeue_inference")
-    {
-        sql << ", operator_forced_final_inference_rerun_requested = true";
-    }
-
-    if (promotedResumeModelId.has_value())
-        sql << ", resume_model_id = " << *promotedResumeModelId;
-
-    sql << " WHERE experiment_id = " << row.experimentId;
-    if (action == "requeue_training")
-    {
-        sql << " AND status = " << w.quote(row.status)
-            << " AND phase = " << w.quote(row.phase)
-            << " AND scheduler_priority = "
-            << w.quote(row.schedulerPriority)
-            << " AND scheduler_resume_origin = "
-            << w.quote(row.schedulerResumeOrigin)
-            << " AND active_scheduler_worker_attempt_id IS NULL"
-            << " AND worker_pid IS NULL"
-            << " AND worker_process_group_id IS NULL"
-            << " AND worker_process_start_identity IS NULL"
-            << " AND worker_executable IS NULL"
-            << " AND worker_command_line IS NULL"
-            << " AND COALESCE(current_epoch,-1) < target_epochs"
-            << " AND NOT EXISTS (SELECT 1 "
-            << "FROM experiment_scheduler_worker_attempt a "
-            << "WHERE a.experiment_id=experiment.experiment_id "
-            << "AND a.worker_kind='experiment' "
-            << "AND a.lifecycle_state IN ('reserved','spawned','running',"
-            << "'observed','stopped','identity_ambiguous'))";
-    }
-    sql << " RETURNING experiment_id;";
-    const pqxx::result updated = w.exec(sql.str());
-    if (updated.size() != 1)
-        throw std::runtime_error("scheduler_control_atomic_predicate_changed");
-}
+private:
+    pqxx::work& transaction_;
+};
 
 int RunSchedulerControlCommand(const SchedulerOptions& options)
 {
-    const std::string action = SchedulerControlActionName(options);
     const long long experimentId = SchedulerControlExperimentId(options);
     if (options.pauseExperimentId.has_value())
     {
@@ -9107,97 +8764,17 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
     if (!RequireSchedulerTables(w))
         return 2;
 
-    std::optional<SchedulerControlExperimentRow> row =
-        LoadSchedulerControlExperiment(w, experimentId, willApply);
-    if (!row.has_value())
-    {
-        PrintSchedulerControlRejected(action, experimentId, "experiment_not_found");
-        w.commit();
-        return 1;
-    }
-
-    PrintSchedulerControlAttempt(action, *row);
-
-    std::string newStatus;
-    std::string newPhase;
-    if (const std::optional<std::string> rejection =
-            ValidateSchedulerControlTransition(options, *row, newStatus, newPhase);
-        rejection.has_value())
-    {
-        PrintSchedulerControlRejected(action, experimentId, *rejection);
-        w.commit();
-        return 1;
-    }
-
-    PrintSchedulerControlTransition(*row, newStatus, newPhase);
-
-    RetryCheckpointSelection retryCheckpointSelection;
-    std::optional<long long> selectedRequeueTrainingCheckpoint;
-    if (action == "retry_failed" && row->phase == "train")
-    {
-        retryCheckpointSelection = SelectRetryTrainingCheckpoint(w, *row);
-        PrintRetryCheckpointSelection(experimentId, retryCheckpointSelection);
-    }
-    else if (action == "requeue_training")
-    {
-        const TrainingCheckpointSelection selection =
-            SelectUsableTrainingCheckpoint(
-                w,
-                SchedulerControlCheckpointExperiment(*row),
-                std::nullopt,
-                false);
-        if (!selection.checkpoint.has_value())
-        {
-            PrintSchedulerControlRejected(
-                action, experimentId, selection.reason);
-            w.commit();
-            return 1;
-        }
-        selectedRequeueTrainingCheckpoint =
-            selection.checkpoint->modelId;
-        std::cout << "SCHEDULER_REQUEUE_TRAINING_SELECTION"
-                  << ",experiment_id=" << experimentId
-                  << ",resume_model_id="
-                  << *selectedRequeueTrainingCheckpoint
-                  << ",completed_epoch="
-                  << selection.checkpoint->completedEpochs
-                  << ",scheduler_priority=" << row->schedulerPriority
-                  << std::endl;
-    }
-
-    if (options.dryRun)
-    {
-        std::cout << "SCHEDULER_CONTROL_DRY_RUN"
-                  << ",action=" << action
-                  << ",experiment_id=" << experimentId
-                  << ",new_status=" << newStatus
-                  << ",new_phase=" << newPhase
-                  << std::endl;
-        w.commit();
-        return 0;
-    }
-
-    if (!options.yes)
-    {
-        std::cout << "Use --yes to apply." << std::endl;
-        w.commit();
-        return 0;
-    }
-
-    ApplySchedulerControlTransition(
-        w,
-        action,
-        *row,
-        newStatus,
-        newPhase,
-        selectedRequeueTrainingCheckpoint.has_value()
-            ? selectedRequeueTrainingCheckpoint
-            : (retryCheckpointSelection.promoted
-                   ? retryCheckpointSelection.selectedResumeModelId
-                   : std::nullopt));
-    PrintSchedulerControlApplied(action, experimentId, newStatus, newPhase);
+    EA::SchedulerCore::PostgresSchedulerRepository repository{w};
+    SchedulerTransitionCheckpointSelector checkpointSelector{w};
+    EA::SchedulerCore::ExperimentTransitionService service{
+        repository, checkpointSelector, std::cout};
+    const int result = service.run({
+        SchedulerControlAction(options),
+        experimentId,
+        options.dryRun,
+        options.yes});
     w.commit();
-    return 0;
+    return result;
 }
 
 int RunCampaignMaterializationSchedulerControlCommand(

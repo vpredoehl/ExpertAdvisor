@@ -25,7 +25,7 @@ SQL
 
 add_experiment() {
     local id="$1" phase="$2" resume="$3" mode="$4"
-    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,infer_start,infer_end,status,phase,resume_model_id,current_epoch,current_operation,worker_control_state,started_at,completed_at,exit_code,error_message,duplicate_nonce,donchian20_mode) VALUES(${id},'cadchfrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','2021-01-01','2022-01-01','failed','${phase}',${resume},79,'${phase}','running',clock_timestamp(),clock_timestamp(),17,'fixture failure',${id},'${mode}')"
+    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,infer_start,infer_end,status,phase,resume_model_id,current_epoch,current_operation,worker_control_state,started_at,completed_at,exit_code,error_message,duplicate_nonce,donchian20_mode,model_input_width,model_input_semantic_layout_version) VALUES(${id},'cadchfrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','2021-01-01','2022-01-01','failed','${phase}',${resume},79,'${phase}','running',clock_timestamp(),clock_timestamp(),17,'fixture failure',${id},'${mode}',75,5)"
 }
 
 add_model() {
@@ -65,8 +65,8 @@ add_experiment 960561 train 961001 enabled
 add_experiment 960555 train NULL enabled
 add_experiment 960610 train NULL enabled
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "UPDATE experiment SET feature_ablation_mask='return_sign_persistence' WHERE experiment_id=960554"
-psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,status,phase,duplicate_nonce) SELECT id,'cadchfrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','completed','done',id FROM unnest(ARRAY[960551::bigint,960562,960563,960569]) AS id"
-psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,status,phase,worker_pid,worker_process_group_id,worker_process_start_identity,worker_executable,worker_command_line,current_operation,worker_control_state,duplicate_nonce) VALUES(960699,'unrelatedrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','cancelled','done',960699,960699,'unrelated','/unrelated/LSTM_Release','unrelated command','train','running',960699)"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,status,phase,duplicate_nonce,model_input_width,model_input_semantic_layout_version) SELECT id,'cadchfrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','completed','done',id,75,5 FROM unnest(ARRAY[960551::bigint,960562,960563,960569]) AS id"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,status,phase,worker_pid,worker_process_group_id,worker_process_start_identity,worker_executable,worker_command_line,current_operation,worker_control_state,duplicate_nonce,model_input_width,model_input_semantic_layout_version) VALUES(960699,'unrelatedrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','cancelled','done',960699,960699,'unrelated','/unrelated/LSTM_Release','unrelated command','train','running',960699,75,5)"
 
 # Sources and durable same-experiment checkpoints.  961001 deliberately has
 # no Donchian metadata, matching the legacy enabled source behavior.
