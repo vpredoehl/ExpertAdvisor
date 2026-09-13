@@ -27,7 +27,7 @@ FindAuthoritativeFinalInferenceResultForWorkerAttempt(
         "SELECT to_regclass('inference_eval_result');").one_row();
     if (relation[0].is_null()) return std::nullopt;
 
-    const pqxx::result rows = transaction.exec_params(
+    const pqxx::result rows = transaction.exec(
         "SELECT r.id,r.model_id,"
         "e.operator_forced_final_inference_rerun_requested "
         "FROM experiment e "
@@ -47,12 +47,15 @@ FindAuthoritativeFinalInferenceResultForWorkerAttempt(
         " AND r.status='completed' AND r.inference_scope='final' "
         " AND r.checkpoint_eval_id IS NULL "
         " AND r.completed_at>=a.reserved_at "
-        "WHERE e.experiment_id=$1 AND e.status='running' "
-        "AND e.phase='infer' "
+        "WHERE e.experiment_id=$1 AND e.phase='infer' "
         "AND e.active_scheduler_worker_attempt_id=a.worker_attempt_id "
+        "AND (e.status='running' OR ("
+        " e.status='pending' AND e.resume_requested "
+        " AND e.scheduler_resume_origin='preemption' "
+        " AND e.worker_control_state='paused' "
+        " AND a.lifecycle_state='stopped')) "
         "ORDER BY r.completed_at DESC,r.id DESC LIMIT 1;",
-        experimentId,
-        workerAttemptId);
+        pqxx::params{experimentId, workerAttemptId});
     if (rows.empty()) return std::nullopt;
     return AuthoritativeFinalInferenceResult{
         rows[0][0].as<long long>(),

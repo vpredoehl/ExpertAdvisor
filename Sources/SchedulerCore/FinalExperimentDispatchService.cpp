@@ -114,6 +114,25 @@ int FinalExperimentDispatchService::runPhase(
             continue;
         }
 
+        // Infer eligibility must be established before displacing a running
+        // worker. In particular, a missing model or an already-authoritative
+        // result is not valid preemption demand.
+        bool inferEligibilityChecked = false;
+        if (phase == FinalExperimentPhase::Infer &&
+            !candidate.hasActiveWorkerAttempt)
+        {
+            const FinalExperimentEligibility eligibility =
+                operations_.evaluateEligibility(candidate, phase);
+            if (eligibility != FinalExperimentEligibility::Eligible)
+            {
+                ++stats.skipped;
+                if (eligibility == FinalExperimentEligibility::Failed)
+                    result = 1;
+                continue;
+            }
+            inferEligibilityChecked = true;
+        }
+
         if (!configuration_.dryRun &&
             (phase == FinalExperimentPhase::Infer ||
              (phase == FinalExperimentPhase::Train && !cancellationOnly)))
@@ -157,7 +176,8 @@ int FinalExperimentDispatchService::runPhase(
             }
         }
 
-        if (phase == FinalExperimentPhase::Infer)
+        if (phase == FinalExperimentPhase::Infer &&
+            !inferEligibilityChecked)
         {
             const FinalExperimentEligibility eligibility =
                 operations_.evaluateEligibility(candidate, phase);
@@ -169,7 +189,8 @@ int FinalExperimentDispatchService::runPhase(
                 continue;
             }
         }
-        else if (phase == FinalExperimentPhase::Analyze &&
+
+        if (phase == FinalExperimentPhase::Analyze &&
                  !candidate.hasLastModel)
         {
             ++stats.skipped;

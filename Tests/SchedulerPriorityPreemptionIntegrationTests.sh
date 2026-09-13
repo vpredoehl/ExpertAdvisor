@@ -232,6 +232,18 @@ SQL
     printf '%s\n' "${model_id}"
 }
 
+attach_infer_model() {
+    local experiment_id="$1" model_id
+    model_id="$(psql -X -Atq -d "${test_db}" -c \
+        "INSERT INTO model(experiment_id,name,comment)
+         VALUES(${experiment_id},'preemption-infer-${experiment_id}',
+                'priority preemption inference fixture') RETURNING model_id")"
+    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+        "UPDATE experiment SET last_model_id=${model_id}
+         WHERE experiment_id=${experiment_id}"
+    printf '%s\n' "${model_id}"
+}
+
 retire_all() {
     local index
     for index in "${!worker_pids[@]}"; do
@@ -274,6 +286,8 @@ assert_preemption_pair() {
     if [[ "${phase}" = train ]]; then
         run_scheduler 1 0 "${output}"
     else
+        attach_infer_model "${victim}" >/dev/null
+        attach_infer_model "${candidate}" >/dev/null
         run_scheduler 0 1 "${output}"
     fi
     grep -q "SCHEDULER_PRIORITY_PREEMPTED,candidate_experiment_id=${candidate}.*victim_experiment_id=${victim}" "${output}"
@@ -286,13 +300,19 @@ assert_preemption_pair() {
 }
 
 assert_no_equal_preemption() {
-    local base="$1" priority="$2"
+    local base="$1" priority="$2" phase="${3:-train}"
     local output="${test_dir}/${base}.out"
-    launch_and_persist "${base}" "$((base + 9000000))" train running \
+    launch_and_persist "${base}" "$((base + 9000000))" "${phase}" running \
         "${priority}" none '2026-03-02 00:00:00+00'
-    launch_and_persist "$((base + 1))" "$((base + 9000001))" train pending \
+    launch_and_persist "$((base + 1))" "$((base + 9000001))" "${phase}" pending \
         "${priority}" operator '2026-03-02 00:00:01+00'
-    run_scheduler 1 0 "${output}"
+    if [[ "${phase}" = infer ]]; then
+        attach_infer_model "${base}" >/dev/null
+        attach_infer_model "$((base + 1))" >/dev/null
+        run_scheduler 0 1 "${output}"
+    else
+        run_scheduler 1 0 "${output}"
+    fi
     ! grep -q 'SCHEDULER_PRIORITY_PREEMPTED' "${output}"
     test "$(scalar "SELECT status FROM experiment WHERE experiment_id=${base}")" = running
     test "$(scalar "SELECT status FROM experiment WHERE experiment_id=$((base + 1))")" = pending
@@ -310,6 +330,97 @@ assert_preemption_pair 994040 low high infer
 assert_no_equal_preemption 994050 high
 assert_no_equal_preemption 994060 normal
 assert_no_equal_preemption 994070 low
+assert_no_equal_preemption 994075 high infer
+
+# An authoritative exact-attempt infer result wins over a stale preemption
+# observation. The lower-priority worker remains live for normal
+# completion/reconciliation and no replacement worker is admitted.
+launch_and_persist 994130 9994130 infer running low none \
+    '2026-03-02 00:00:00+00'
+launch_and_persist 994131 9994131 infer pending high operator \
+    '2026-03-02 00:00:01+00'
+victim_infer_model="$(attach_infer_model 994130)"
+attach_infer_model 994131 >/dev/null
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "INSERT INTO inference_eval_result(
+         model_id,symbol,prediction_horizon,threshold_logret,
+         window_size,label_rule_id,target_type,from_date,to_date,
+         completed_epochs,accuracy,accept_model,status,completed_at,
+         inference_scope,checkpoint_eval_id,parent_experiment_id,
+         checkpoint_epoch)
+     SELECT
+         ${victim_infer_model},
+         e.symbol,
+         e.prediction_horizon,
+         e.c_next_threshold,
+         30,1,0,
+         e.infer_start::date::text,
+         e.infer_end::date::text,
+         e.target_epochs,
+         0.5,false,'completed',
+         clock_timestamp(),'final',NULL,NULL,NULL
+     FROM experiment e
+     WHERE e.experiment_id=994130"
+run_scheduler 0 1 "${test_dir}/infer-authoritative-result.out"
+grep -q 'SCHEDULER_PREEMPTION_DEFERRED,candidate_experiment_id=994131.*reason=authoritative_inference_result_observed' \
+    "${test_dir}/infer-authoritative-result.out"
+test "$(scalar "SELECT status||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994130")" = \
+    'running:none'
+test "$(scalar "SELECT status FROM experiment WHERE experiment_id=994131")" = pending
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=994131")" = 1
+[[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" != T* ]]
+retire_all
+
+# A preempted infer attempt that disappears after persisting its authoritative
+# result is completed by orphan reconciliation instead of being detached and
+# relaunched. The replacement high-priority worker remains the sole consumer.
+launch_and_persist 994132 9994132 infer running low none \
+    '2026-03-02 00:00:00+00'
+launch_and_persist 994133 9994133 infer pending high operator \
+    '2026-03-02 00:00:01+00'
+preempted_infer_model="$(attach_infer_model 994132)"
+attach_infer_model 994133 >/dev/null
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "UPDATE experiment
+     SET operator_forced_final_inference_rerun_requested=true
+     WHERE experiment_id=994132"
+run_scheduler 0 1 "${test_dir}/infer-preempt-then-missing.out"
+grep -q 'SCHEDULER_PRIORITY_PREEMPTED,candidate_experiment_id=994133.*victim_experiment_id=994132' \
+    "${test_dir}/infer-preempt-then-missing.out"
+wait_for_state "${worker_pids[0]}" T
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "INSERT INTO inference_eval_result(
+         model_id,symbol,prediction_horizon,threshold_logret,
+         window_size,label_rule_id,target_type,from_date,to_date,
+         completed_epochs,accuracy,accept_model,status,completed_at,
+         inference_scope,checkpoint_eval_id,parent_experiment_id,
+         checkpoint_epoch)
+     SELECT
+         ${preempted_infer_model},
+         e.symbol,
+         e.prediction_horizon,
+         e.c_next_threshold,
+         30,1,0,
+         e.infer_start::date::text,
+         e.infer_end::date::text,
+         e.target_epochs,
+         0.5,false,'completed',
+         clock_timestamp(),'final',NULL,NULL,NULL
+     FROM experiment e
+     WHERE e.experiment_id=994132"
+kill -KILL -- "-${worker_pgids[0]}"
+wait "${worker_pids[0]}" 2>/dev/null || true
+run_scheduler 0 1 "${test_dir}/infer-preempted-result-recovery.out" \
+    --recover-orphans-only
+grep -q 'SCHEDULER_WORKER_RESULT_RECOVERED,experiment_id=994132.*reason=completed_inference_result' \
+    "${test_dir}/infer-preempted-result-recovery.out"
+test "$(scalar "SELECT status||':'||phase||':'||resume_requested::text||':'||scheduler_resume_origin||':'||(active_scheduler_worker_attempt_id IS NULL)::text FROM experiment WHERE experiment_id=994132")" = \
+    'pending:analyze:false:none:true'
+test "$(scalar "SELECT operator_forced_final_inference_rerun_requested::text FROM experiment WHERE experiment_id=994132")" = false
+test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=9994132")" = \
+    'completed:process_missing_result_recovered'
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE capacity_class='infer' AND lifecycle_state IN ('reserved','spawned','running','observed','identity_ambiguous')")" = 1
+retire_all
 
 # C8/C19: one high request selects exactly one low victim ahead of normal.
 launch_and_persist 994080 9994080 train running normal none '2026-03-03 00:00:00+00'
@@ -428,6 +539,9 @@ retire_all
 printf '%s\n' \
     'SchedulerPriorityPreemptionIntegrationTests passed' \
     'strict_priority_preemption=C1,C2,C3,C4,C5,C6:PASS' \
+    'infer_equal_priority_no_preemption=PASS' \
+    'infer_authoritative_result_wins=PASS' \
+    'preempted_infer_result_recovery=PASS' \
     'two_slot_L1_N1_H1_H2=C7:PASS' \
     'victim_order=C8,C9:PASS' \
     'identity_fail_closed=C10:PASS' \

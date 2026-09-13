@@ -9880,6 +9880,16 @@ int SchedulerChildLaunchErrorNumber(const std::exception& error)
 
 std::string RequireProcessStartIdentity(pid_t pid);
 
+bool OperatorForcedFinalInferenceRerunRequested(
+    pqxx::work& w,
+    long long experimentId);
+
+bool HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
+    pqxx::work& w,
+    const ExperimentRow& experiment,
+    long long workerAttemptId,
+    bool useThresholdTolerance);
+
 EA::GlobalExperimentControl::ManagedWorker ManagedWorkerFromExactAttempt(
     const EA::SchedulerOwnership::ExactAttemptSnapshot& exact)
 {
@@ -10032,6 +10042,33 @@ bool PreemptOneLowerPriorityWorker(
         return false;
     }
 
+    const auto inferAttemptHasAuthoritativeResult = [&] {
+        if (phase != "infer")
+            return false;
+        const auto victimExperiment = LoadExperimentCheckpointIdentity(
+            transaction, victimExperimentId);
+        return victimExperiment.has_value() &&
+               HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
+                   transaction,
+                   *victimExperiment,
+                   workerAttemptId,
+                   OperatorForcedFinalInferenceRerunRequested(
+                       transaction, victimExperimentId));
+    };
+    if (inferAttemptHasAuthoritativeResult())
+    {
+        std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
+                  << ",candidate_experiment_id="
+                  << candidate.experimentId
+                  << ",victim_experiment_id=" << victimExperimentId
+                  << ",worker_attempt_id=" << workerAttemptId
+                  << ",phase=infer"
+                  << ",reason=authoritative_inference_result_observed"
+                  << std::endl;
+        transaction.commit();
+        return false;
+    }
+
     auto processes =
         EA::GlobalExperimentControl::CreateNativeProcessOperations();
     const auto worker = ManagedWorkerFromExactAttempt(*exact);
@@ -10056,6 +10093,25 @@ bool PreemptOneLowerPriorityWorker(
                       << ",phase=" << phase
                       << ",reason=" << signal.result
                       << ",detail=" << signal.detail
+                      << std::endl;
+            transaction.commit();
+            return false;
+        }
+        // The worker is now quiescent. Recheck the exact-attempt result after
+        // SIGSTOP so a completion persisted during the preemption decision
+        // wins without rewriting the experiment as preempted.
+        if (inferAttemptHasAuthoritativeResult())
+        {
+            const auto resumed =
+                EA::GlobalExperimentControl::ResumeWorker(worker, *processes);
+            std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
+                      << ",candidate_experiment_id="
+                      << candidate.experimentId
+                      << ",victim_experiment_id=" << victimExperimentId
+                      << ",worker_attempt_id=" << workerAttemptId
+                      << ",phase=infer"
+                      << ",reason=authoritative_inference_result_observed"
+                      << ",worker_resume_result=" << resumed.result
                       << std::endl;
             transaction.commit();
             return false;
@@ -16477,7 +16533,10 @@ void TransitionRecoveredInferenceToAnalyze(pqxx::work& w,
             "FROM experiment_scheduler_worker_attempt a "
             "WHERE e.experiment_id=$1 "
             "AND e.operator_forced_final_inference_rerun_requested "
-            "AND e.status='running' AND e.phase='infer' "
+            "AND e.phase='infer' "
+            "AND (e.status='running' OR (e.status='pending' "
+            " AND e.resume_requested=true "
+            " AND e.scheduler_resume_origin='preemption')) "
             "AND e.active_scheduler_worker_attempt_id=$2 "
             "AND a.worker_attempt_id=$2 "
             "AND a.experiment_id=e.experiment_id "
@@ -17677,36 +17736,25 @@ int RecoverOrphanedRunningExperiments(
         }
 
         const int pid = row[3].as<int>();
-        const EA::GlobalExperimentControl::ProcessObservation
-            observation = processes->Observe(pid);
-        const auto initialObservationPlan =
-            EA::SchedulerCore::PlanAttemptObservation({
-                observation.inspectionSucceeded,
-                observation.exists,
-                false,
-                state == "stopped",
-                observation.stopped});
-        if (initialObservationPlan.action ==
-            EA::SchedulerCore::AttemptObservationAction::Defer)
-        {
-            transaction.exec_params(
-                "UPDATE experiment_scheduler_worker_attempt SET "
-                "lifecycle_state=$1,"
-                "last_observed_at=clock_timestamp(),"
-                "observed_by_scheduler_invocation_id=$2,"
-                "diagnostic=$3 "
-                "WHERE worker_attempt_id=$4;",
-                initialObservationPlan.lifecycleState,
-                options.schedulerAuthority.schedulerInvocationId,
-                initialObservationPlan.diagnostic,
-                attemptId);
-            continue;
-        }
+        EA::GlobalExperimentControl::ProcessObservation observation;
+        bool identityMatches = false;
+        bool processMissing = false;
+        EA::SchedulerCore::OrphanedRunningAttempt candidate;
+        candidate.workerAttemptId = attemptId;
+        candidate.experimentId = experimentId;
+        candidate.checkpointEvalId = checkpointEvalId;
+        candidate.lifecycleState = state;
+        candidate.phase = phase;
 
-        if (initialObservationPlan.action ==
-            EA::SchedulerCore::AttemptObservationAction::RetainLive)
-        {
-            bool identityMatches =
+        EA::SchedulerCore::OrphanedRunningExperimentReconciliationOperations
+            reconciliationOperations;
+        reconciliationOperations.loadCandidates =
+            [&] { return std::vector{candidate}; };
+        reconciliationOperations.observeProcess = [&](const auto&) {
+            observation = processes->Observe(pid);
+            identityMatches =
+                observation.inspectionSucceeded &&
+                observation.exists &&
                 !row[4].is_null() &&
                 !row[5].is_null() &&
                 !row[6].is_null() &&
@@ -17768,54 +17816,100 @@ int RecoverOrphanedRunningExperiments(
                         "--analyze-experiment",
                         experimentId);
             }
-
-            const auto observationPlan =
-                EA::SchedulerCore::PlanAttemptObservation({
-                    true,
-                    true,
-                    identityMatches,
-                    state == "stopped",
-                    observation.stopped});
-            transaction.exec_params(
-                "UPDATE experiment_scheduler_worker_attempt SET "
-                "lifecycle_state=$1,last_observed_at=clock_timestamp(),"
-                "observed_by_scheduler_invocation_id=$2,"
-                "reconciliation_result=$3,diagnostic=$4 "
-                "WHERE worker_attempt_id=$5;",
-                observationPlan.lifecycleState,
-                options.schedulerAuthority.schedulerInvocationId,
-                observationPlan.reconciliationResult,
-                observationPlan.diagnostic,
-                attemptId);
-            if (observationPlan.restoreRunningLifecycle &&
-                !checkpointEvalId)
-            {
+            return EA::SchedulerCore::AttemptObservation{
+                observation.inspectionSucceeded,
+                observation.exists,
+                identityMatches,
+                state == "stopped",
+                observation.stopped};
+        };
+        reconciliationOperations.persistProcessObservation =
+            [&](const auto&, const auto& observationPlan) {
+                if (observationPlan.action ==
+                    EA::SchedulerCore::AttemptObservationAction::Defer)
+                {
+                    transaction.exec_params(
+                        "UPDATE experiment_scheduler_worker_attempt SET "
+                        "lifecycle_state=$1,"
+                        "last_observed_at=clock_timestamp(),"
+                        "observed_by_scheduler_invocation_id=$2,"
+                        "diagnostic=$3 WHERE worker_attempt_id=$4;",
+                        observationPlan.lifecycleState,
+                        options.schedulerAuthority.schedulerInvocationId,
+                        observationPlan.diagnostic,
+                        attemptId);
+                    return;
+                }
                 transaction.exec_params(
-                    "UPDATE experiment SET status='running',"
-                    "resume_requested=false,scheduler_resume_origin='none',"
-                    "worker_control_state='running',"
-                    "updated_at=clock_timestamp() "
-                    "WHERE experiment_id=$1 AND phase=$2 "
-                    "AND status IN ('paused','pending') "
-                    "AND active_scheduler_worker_attempt_id=$3;",
-                    experimentId,
-                    phase,
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state=$1,last_observed_at=clock_timestamp(),"
+                    "observed_by_scheduler_invocation_id=$2,"
+                    "reconciliation_result=$3,diagnostic=$4 "
+                    "WHERE worker_attempt_id=$5;",
+                    observationPlan.lifecycleState,
+                    options.schedulerAuthority.schedulerInvocationId,
+                    observationPlan.reconciliationResult,
+                    observationPlan.diagnostic,
                     attemptId);
-            }
-            std::cout
-                << (identityMatches
-                        ? "SCHEDULER_PRIOR_WORKER_OBSERVED"
-                        : "SCHEDULER_WORKER_IDENTITY_AMBIGUOUS")
-                << ",worker_attempt_id=" << attemptId
-                << ",experiment_id=" << experimentId
-                << ",pid=" << pid
-                << ",capacity_consumed="
-                << (observationPlan.capacityConsumed ? 1 : 0)
-                << std::endl;
+                if (observationPlan.restoreRunningLifecycle &&
+                    !checkpointEvalId)
+                {
+                    transaction.exec_params(
+                        "UPDATE experiment SET status='running',"
+                        "resume_requested=false,"
+                        "scheduler_resume_origin='none',"
+                        "worker_control_state='running',"
+                        "updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$1 AND phase=$2 "
+                        "AND status IN ('paused','pending') "
+                        "AND active_scheduler_worker_attempt_id=$3;",
+                        experimentId,
+                        phase,
+                        attemptId);
+                }
+                if (observationPlan.action ==
+                    EA::SchedulerCore::AttemptObservationAction::RetainLive)
+                {
+                    std::cout
+                        << (identityMatches
+                                ? "SCHEDULER_PRIOR_WORKER_OBSERVED"
+                                : "SCHEDULER_WORKER_IDENTITY_AMBIGUOUS")
+                        << ",worker_attempt_id=" << attemptId
+                        << ",experiment_id=" << experimentId
+                        << ",pid=" << pid
+                        << ",capacity_consumed="
+                        << (observationPlan.capacityConsumed ? 1 : 0)
+                        << std::endl;
+                }
+            };
+        reconciliationOperations.reconcileMissingProcess =
+            [&](const auto&) {
+                processMissing = true;
+                return false;
+            };
+        EA::SchedulerCore::ReconciliationService reconciliationService{
+            std::move(reconciliationOperations)};
+        (void)reconciliationService.recoverOrphanedRunningExperiments();
+        if (!processMissing)
             continue;
+
+        bool stoppedInferHasAuthoritativeResult = false;
+        if (state == "stopped" && !checkpointEvalId && phase == "infer")
+        {
+            const auto stoppedExperiment = LoadExperimentCheckpointIdentity(
+                transaction, experimentId);
+            stoppedInferHasAuthoritativeResult =
+                stoppedExperiment.has_value() &&
+                HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
+                    transaction,
+                    *stoppedExperiment,
+                    attemptId,
+                    OperatorForcedFinalInferenceRerunRequested(
+                        transaction, experimentId));
         }
 
-        if (state == "stopped" && !checkpointEvalId)
+        if (state == "stopped" && !checkpointEvalId &&
+            !stoppedInferHasAuthoritativeResult)
         {
             const pqxx::result stoppedLifecycle =
                 transaction.exec_params(
@@ -18004,6 +18098,9 @@ int RecoverOrphanedRunningExperiments(
                 "SELECT status,phase FROM experiment "
                 "WHERE experiment_id=$1 "
                 "AND ((status='running' AND phase=$2) "
+                " OR ($2='infer' AND status='pending' AND phase='infer' "
+                "     AND resume_requested=true "
+                "     AND scheduler_resume_origin='preemption') "
                 " OR ($2='analyze' AND status='completed' "
                 "     AND phase='done')) "
                 "AND active_scheduler_worker_attempt_id=$3 "
@@ -18122,6 +18219,23 @@ int RecoverOrphanedRunningExperiments(
                         std::nullopt,
                         attemptId,
                         forcedFinalInferenceRerun);
+                    if (state == "stopped")
+                    {
+                        const pqxx::result clearedPreemption =
+                            transaction.exec(
+                                "UPDATE experiment SET "
+                                "resume_requested=false,"
+                                "scheduler_resume_origin='none',"
+                                "updated_at=clock_timestamp() "
+                                "WHERE experiment_id=$1 "
+                                "AND status='pending' AND phase='analyze' "
+                                "AND active_scheduler_worker_attempt_id=$2 "
+                                "RETURNING experiment_id;",
+                                pqxx::params{experimentId, attemptId});
+                        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                            clearedPreemption,
+                            "clear_recovered_infer_preemption_origin");
+                    }
                     completedEvidence = true;
                 }
                 else if (

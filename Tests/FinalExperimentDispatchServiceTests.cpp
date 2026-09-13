@@ -196,14 +196,51 @@ int main()
             "load:infer:normal",
             "ensure_log",
             "semantic:infer:8",
-            "preempt:infer:8:3",
             "eligible:infer:8",
+            "preempt:infer:8:3",
             "reserve:infer:8:3:normal",
             "capacity:infer",
             "skip:infer:8:global_infer_slots_full",
             "stats:infer"}));
         assert(dispatch.stats.skipped == 1);
         assert(dispatch.stats.launched == 0);
+    }
+
+    {
+        RecordingDispatch dispatch;
+        dispatch.batch.candidates = {{0, 81, false, true}};
+        dispatch.eligibility = FinalExperimentEligibility::Skipped;
+        std::ostringstream errors;
+        FinalExperimentDispatchService service{
+            Configuration(), dispatch.operations(), errors};
+        assert(service.runInference() == 0);
+        assert((dispatch.calls == std::vector<std::string>{
+            "load:infer:normal",
+            "ensure_log",
+            "semantic:infer:81",
+            "eligible:infer:81",
+            "stats:infer"}));
+        assert(dispatch.stats.skipped == 1);
+        assert(dispatch.stats.launched == 0);
+    }
+
+    {
+        RecordingDispatch dispatch;
+        dispatch.batch.candidates = {{0, 82, true, true}};
+        dispatch.stopped = FinalExperimentStoppedAdmission::Admitted;
+        std::ostringstream errors;
+        FinalExperimentDispatchService service{
+            Configuration(), dispatch.operations(), errors};
+        assert(service.runInference() == 0);
+        assert((dispatch.calls == std::vector<std::string>{
+            "load:infer:normal",
+            "ensure_log",
+            "semantic:infer:82",
+            "preempt:infer:82:3",
+            "admit:infer:82:3",
+            "stats:infer"}));
+        assert(dispatch.stats.skipped == 0);
+        assert(dispatch.stats.launched == 1);
     }
 
     {

@@ -1,5 +1,8 @@
 #include "ReconciliationService.hpp"
 
+#include <stdexcept>
+#include <utility>
+
 namespace EA::SchedulerCore
 {
 
@@ -93,6 +96,44 @@ MissingProcessTerminalPlan PlanMissingProcessTerminalization(
               "failed",
               "process_missing_no_result",
               "exact_process_identity_absent"};
+}
+
+ReconciliationService::ReconciliationService(
+    OrphanedRunningExperimentReconciliationOperations operations)
+    : operations_{std::move(operations)}
+{
+    if (!operations_.loadCandidates ||
+        !operations_.observeProcess ||
+        !operations_.persistProcessObservation ||
+        !operations_.reconcileMissingProcess)
+    {
+        throw std::invalid_argument(
+            "complete orphan reconciliation operations required");
+    }
+}
+
+int ReconciliationService::recoverOrphanedRunningExperiments()
+{
+    int reconciled = 0;
+    for (const OrphanedRunningAttempt& attempt :
+         operations_.loadCandidates())
+    {
+        const AttemptObservation observation =
+            operations_.observeProcess(attempt);
+        const AttemptObservationPlan observationPlan =
+            PlanAttemptObservation(observation);
+        if (observationPlan.action !=
+            AttemptObservationAction::ReconcileMissing)
+        {
+            operations_.persistProcessObservation(
+                attempt, observationPlan);
+            continue;
+        }
+
+        if (operations_.reconcileMissingProcess(attempt))
+            ++reconciled;
+    }
+    return reconciled;
 }
 
 } // namespace EA::SchedulerCore

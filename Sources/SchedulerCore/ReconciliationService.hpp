@@ -1,6 +1,10 @@
 #pragma once
 
+#include <functional>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace EA::SchedulerCore
 {
@@ -64,5 +68,42 @@ struct MissingProcessTerminalPlan
 
 MissingProcessTerminalPlan PlanMissingProcessTerminalization(
     bool completedEvidence) noexcept;
+
+struct OrphanedRunningAttempt
+{
+    long long workerAttemptId = -1;
+    long long experimentId = -1;
+    std::optional<long long> checkpointEvalId;
+    std::string lifecycleState;
+    std::string phase;
+};
+
+struct OrphanedRunningExperimentReconciliationOperations
+{
+    std::function<std::vector<OrphanedRunningAttempt>()> loadCandidates;
+    std::function<AttemptObservation(const OrphanedRunningAttempt&)>
+        observeProcess;
+    std::function<void(
+        const OrphanedRunningAttempt&,
+        const AttemptObservationPlan&)>
+        persistProcessObservation;
+    std::function<bool(const OrphanedRunningAttempt&)>
+        reconcileMissingProcess;
+};
+
+// Owns PID-bearing orphan process-observation sequencing. The supplied
+// operations retain transaction, row-lock, exact-attempt, process-control,
+// authority/fencing, and phase-specific persistence mechanics.
+class ReconciliationService final
+{
+public:
+    explicit ReconciliationService(
+        OrphanedRunningExperimentReconciliationOperations operations);
+
+    int recoverOrphanedRunningExperiments();
+
+private:
+    OrphanedRunningExperimentReconciliationOperations operations_;
+};
 
 } // namespace EA::SchedulerCore
