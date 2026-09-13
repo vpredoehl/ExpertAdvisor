@@ -18,6 +18,8 @@ read -r -a pqxx_link_flags <<<"$(pkg-config --libs libpqxx)"
 clang++ -std=c++20 -Wall -Wextra -Werror \
     -I"${repo_root}/Headers" -I"${repo_root}/Sources" \
     "${pqxx_compile_flags[@]}" \
+    "${repo_root}/Sources/CheckpointPolicy.cpp" \
+    "${repo_root}/Sources/SchedulerCore/CheckpointEvaluationService.cpp" \
     "${repo_root}/Sources/SchedulerCore/SchedulerPolicy.cpp" \
     "${repo_root}/Sources/SchedulerCore/SchedulerRepository.cpp" \
     "${repo_root}/Sources/SchedulerCore/PostgresSchedulerRepository.cpp" \

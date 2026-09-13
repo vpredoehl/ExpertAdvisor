@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SchedulerAuthorityRepository.hpp"
+#include "CheckpointEvaluationService.hpp"
 #include "SchedulerRepository.hpp"
 
 #include <pqxx/pqxx>
@@ -52,6 +53,34 @@ public:
     ExperimentTransitionPersistenceResult applyExperimentTransition(
         const ExperimentTransitionUpdate& update) override;
 
+    bool checkpointPolicySchemaAvailable();
+    std::optional<EA::ExperimentScheduler::CheckpointPolicyConfig>
+    loadCheckpointPolicyForEvaluation(long long parentExperimentId);
+    EA::ExperimentScheduler::CheckpointPolicyConfig
+    reconcileCheckpointPolicyIdentity(
+        const CheckpointEvaluationRecord& evaluation,
+        EA::ExperimentScheduler::CheckpointPolicyConfig config);
+    CheckpointPolicyEvidenceLoadResult loadCheckpointPolicyEvidence(
+        const CheckpointEvaluationRecord& evaluation);
+    CheckpointPolicyPopulation loadCompletedCheckpointPolicyPopulation(
+        long long parentExperimentId);
+    CheckpointPolicyPopulation loadCheckpointPolicyRankPopulation(
+        const CheckpointEvaluationRecord& evaluation,
+        const EA::ExperimentScheduler::CheckpointPolicyConfig& config);
+    PersistedCheckpointPolicyDecision persistCheckpointPolicyDecision(
+        const CheckpointEvaluationRecord& evaluation,
+        const EA::ExperimentScheduler::CheckpointPolicyConfig& config,
+        const EA::ExperimentScheduler::CheckpointPolicyDecision& decision,
+        const ValidatedCheckpointPolicyEvidence& evidence,
+        const EA::ExperimentScheduler::CheckpointPolicyEvidenceIdentity&
+            evidenceIdentity);
+    std::string applyCheckpointPolicyStopRequest(
+        const CheckpointEvaluationRecord& evaluation,
+        const EA::ExperimentScheduler::CheckpointPolicyConfig& config,
+        const EA::ExperimentScheduler::CheckpointPolicyDecision& decision,
+        const PersistedCheckpointPolicyDecision& persisted,
+        const std::string& expectedEvidenceWatermark);
+
     void acquireAuthorityCoordinationLock() override;
     std::optional<SchedulerProtocolState>
     loadSchedulerProtocolForUpdate() override;
@@ -89,6 +118,10 @@ public:
         int leaseSeconds) override;
 
 private:
+    std::string markCheckpointPolicyDecisionSuperseded(
+        long long decisionId,
+        std::string_view reason);
+
     pqxx::transaction_base& transaction_;
 };
 

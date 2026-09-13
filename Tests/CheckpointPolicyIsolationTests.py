@@ -26,15 +26,20 @@ def function_body(path: Path, name: str) -> str:
 
 scheduler = ROOT / "Sources" / "ExperimentScheduler.cpp"
 policy = ROOT / "Sources" / "CheckpointPolicy.cpp"
+evaluation = ROOT / "Sources" / "SchedulerCore" / "CheckpointEvaluationService.cpp"
+repository = ROOT / "Sources" / "SchedulerCore" / "PostgresSchedulerRepository.cpp"
 scoring = ROOT / "Sources" / "ExperimentRecommendationScoring.cpp"
 training = ROOT / "LSTM" / "main.cpp"
 
 for path, names in [
-    (scheduler, [
-        "DecideCheckpointPolicy",
-        "RankCheckpointPolicyEval",
-        "LoadCheckpointPolicyRankPopulation",
-        "ApplyCheckpointPolicyStopRequest",
+    (evaluation, [
+        "PlanCheckpointPolicyDecision",
+        "MakeCheckpointPolicyEvidenceIdentity",
+        "CheckpointEvaluationService::evaluate",
+    ]),
+    (repository, [
+        "PostgresSchedulerRepository::loadCheckpointPolicyRankPopulation",
+        "PostgresSchedulerRepository::applyCheckpointPolicyStopRequest",
     ]),
     (policy, [
         "CheckpointPolicyCanonicalText",
@@ -70,12 +75,22 @@ if "CheckpointPolicyCanonicalText" not in control or \
 
 automatic = function_body(scheduler, "EvaluateCheckpointPolicyAfterAnalysis")
 manual = function_body(scheduler, "RunEvaluateCheckpointPolicyCommand")
-if "DecideCheckpointPolicyWithIdentity" not in automatic:
-    raise AssertionError("automatic path does not use hardened evaluator")
+if "CheckpointEvaluationService" not in automatic or \
+        "service.evaluate" not in automatic:
+    raise AssertionError("automatic path does not delegate to evaluation service")
 if "EvaluateCheckpointPolicyAfterAnalysis" not in manual:
     raise AssertionError("manual path does not share automatic evaluator")
 
-rank_body = function_body(scheduler, "LoadCheckpointPolicyRankPopulation")
+service_evaluation = function_body(
+    evaluation, "CheckpointEvaluationService::evaluate")
+if "PlanCheckpointPolicyDecision" not in service_evaluation or \
+        "persistDecision" not in service_evaluation or \
+        "applyStopRequest" not in service_evaluation:
+    raise AssertionError("evaluation service does not own hardened orchestration")
+
+rank_body = function_body(
+    repository,
+    "PostgresSchedulerRepository::loadCheckpointPolicyRankPopulation")
 if "a.leader_score DESC NULLS LAST" not in rank_body or \
         "a.infer_accuracy DESC NULLS LAST" not in rank_body or \
         "ce.checkpoint_epoch DESC" not in rank_body or \
@@ -83,10 +98,13 @@ if "a.leader_score DESC NULLS LAST" not in rank_body or \
     raise AssertionError("legacy checkpoint rank ordering changed")
 
 if "checkpoint_policy_stop_decision_id=$2" not in function_body(
-        scheduler, "ApplyCheckpointPolicyStopRequest"):
+        repository,
+        "PostgresSchedulerRepository::applyCheckpointPolicyStopRequest"):
     raise AssertionError("stop application lacks durable decision attribution")
 
-persist = function_body(scheduler, "PersistCheckpointPolicyDecision")
+persist = function_body(
+    repository,
+    "PostgresSchedulerRepository::persistCheckpointPolicyDecision")
 if "DO NOTHING" not in persist or "DO UPDATE" in persist:
     raise AssertionError("decision persistence is not append-only/idempotent")
 for identity_field in [
@@ -95,10 +113,12 @@ for identity_field in [
 ]:
     if identity_field not in persist:
         raise AssertionError(f"decision persistence omits {identity_field}")
-if "checkpoint_epoch = $4 AND checkpoint_eval_id < $1" not in persist:
+if "checkpoint_epoch=$4 AND checkpoint_eval_id<$1" not in persist:
     raise AssertionError("same-epoch older checkpoint decisions are not superseded")
 
-stop = function_body(scheduler, "ApplyCheckpointPolicyStopRequest")
+stop = function_body(
+    repository,
+    "PostgresSchedulerRepository::applyCheckpointPolicyStopRequest")
 if "newer.checkpoint_epoch>current_decision.checkpoint_epoch" not in stop or \
         "newer.checkpoint_eval_id>current_decision.checkpoint_eval_id" not in stop:
     raise AssertionError("stop fence does not use epoch/eval checkpoint authority")
