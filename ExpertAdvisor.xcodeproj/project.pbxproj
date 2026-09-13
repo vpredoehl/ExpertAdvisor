@@ -333,6 +333,7 @@
 		0F2800103450000100AAA001 /* CheckpointEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2800013450000100AAA001 /* CheckpointEvaluationService.cpp */; };
 		0F2900103460000100AAA001 /* SchedulerCycleService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2900013460000100AAA001 /* SchedulerCycleService.cpp */; };
 		0F2A00103470000100AAA001 /* FinalExperimentDispatchService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2A00013470000100AAA001 /* FinalExperimentDispatchService.cpp */; };
+		0F2B00103480000100AAA001 /* SchedulerChildCompletionService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2B00013480000100AAA001 /* SchedulerChildCompletionService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -810,6 +811,8 @@
 		0F2900023460000100AAA001 /* SchedulerCycleService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerCycleService.hpp; path = Sources/SchedulerCore/SchedulerCycleService.hpp; sourceTree = SOURCE_ROOT; };
 		0F2A00013470000100AAA001 /* FinalExperimentDispatchService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FinalExperimentDispatchService.cpp; path = Sources/SchedulerCore/FinalExperimentDispatchService.cpp; sourceTree = SOURCE_ROOT; };
 		0F2A00023470000100AAA001 /* FinalExperimentDispatchService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FinalExperimentDispatchService.hpp; path = Sources/SchedulerCore/FinalExperimentDispatchService.hpp; sourceTree = SOURCE_ROOT; };
+		0F2B00013480000100AAA001 /* SchedulerChildCompletionService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerChildCompletionService.cpp; path = Sources/SchedulerCore/SchedulerChildCompletionService.cpp; sourceTree = SOURCE_ROOT; };
+		0F2B00023480000100AAA001 /* SchedulerChildCompletionService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerChildCompletionService.hpp; path = Sources/SchedulerCore/SchedulerChildCompletionService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1299,6 +1302,8 @@
 				0F2900023460000100AAA001 /* SchedulerCycleService.hpp */,
 				0F2A00013470000100AAA001 /* FinalExperimentDispatchService.cpp */,
 				0F2A00023470000100AAA001 /* FinalExperimentDispatchService.hpp */,
+				0F2B00013480000100AAA001 /* SchedulerChildCompletionService.cpp */,
+				0F2B00023480000100AAA001 /* SchedulerChildCompletionService.hpp */,
 				0F1A002033A0000100AAA001 /* SchedulerInferenceResultRecovery.hpp */,
 				0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */,
 			);
@@ -1858,6 +1863,7 @@
 				0F2800103450000100AAA001 /* CheckpointEvaluationService.cpp in Sources */,
 				0F2900103460000100AAA001 /* SchedulerCycleService.cpp in Sources */,
 				0F2A00103470000100AAA001 /* FinalExperimentDispatchService.cpp in Sources */,
+				0F2B00103480000100AAA001 /* SchedulerChildCompletionService.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

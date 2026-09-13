@@ -215,6 +215,17 @@ int main()
     assert(::kill(pid, SIGTERM) == 0);
     WaitUntilObserved(pid, ChildStatusKind::Signaled, SIGTERM);
 
+    // The scheduler intentionally does not pass WUNTRACED. A stopped child
+    // remains tracked as running here and is handled by worker-control and
+    // reconciliation state rather than terminal child completion.
+    pid = ForkSleepingChild();
+    assert(::kill(pid, SIGSTOP) == 0);
+    ::usleep(1000);
+    assert(ObserveChildStatusNonBlocking(pid).kind == ChildStatusKind::Running);
+    assert(::kill(pid, SIGCONT) == 0);
+    assert(::kill(pid, SIGTERM) == 0);
+    WaitUntilObserved(pid, ChildStatusKind::Signaled, SIGTERM);
+
     pid = ForkSleepingChild();
     assert(::kill(pid, SIGKILL) == 0);
     WaitUntilObserved(pid, ChildStatusKind::Signaled, SIGKILL);

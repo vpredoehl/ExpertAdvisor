@@ -80,6 +80,7 @@
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
 #include "SchedulerCore/SchedulerAuthorityService.hpp"
+#include "SchedulerCore/SchedulerChildCompletionService.hpp"
 #include "SchedulerCore/SchedulerCycleService.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
 #include "SchedulerCore/WorkerControlService.hpp"
@@ -559,26 +560,12 @@ struct RunningExperimentChild
     std::string logPath;
 };
 
-struct SchedulerOwnedChild
-{
-    pid_t pid = -1;
-    std::optional<long long> workerAttemptId;
-    long long experimentId = -1;
-    std::string phase;
-    std::string operation;
-    std::string commandLine;
-    std::optional<long long> expectedModelId;
-    std::optional<long long> checkpointEvalId;
-    std::string logPath;
-    std::string launchedAt;
-    double launchedEpoch = 0.0;
-    std::optional<ObservedChildStatus> observedStatus;
-    ChildLifecycleDiagnosticState diagnosticState;
-};
-
 using EA::SchedulerCore::ReservedWorkerAttempt;
+using EA::SchedulerCore::SchedulerChildCompletionEvidence;
+using EA::SchedulerCore::SchedulerOwnedChild;
+using EA::SchedulerCore::SchedulerOwnedChildren;
 
-std::map<pid_t, SchedulerOwnedChild> gSchedulerOwnedChildren;
+SchedulerOwnedChildren gSchedulerOwnedChildren;
 
 volatile sig_atomic_t gSchedulerStopRequested = 0;
 
@@ -18334,51 +18321,6 @@ int RecoverOrphanedRunningExperiments(
     }
 }
 
-const char* SchedulerSignalName(int signalNumber)
-{
-    switch (signalNumber)
-    {
-        case SIGHUP: return "SIGHUP";
-        case SIGINT: return "SIGINT";
-        case SIGQUIT: return "SIGQUIT";
-        case SIGILL: return "SIGILL";
-        case SIGABRT: return "SIGABRT";
-        case SIGFPE: return "SIGFPE";
-        case SIGKILL: return "SIGKILL";
-        case SIGSEGV: return "SIGSEGV";
-        case SIGPIPE: return "SIGPIPE";
-        case SIGALRM: return "SIGALRM";
-        case SIGTERM: return "SIGTERM";
-#ifdef SIGBUS
-        case SIGBUS: return "SIGBUS";
-#endif
-        default: return "UNKNOWN";
-    }
-}
-
-std::string ObservedChildError(const SchedulerOwnedChild& child,
-                               int exitCode,
-                               const std::optional<int>& signalNumber,
-                               bool coreDumped)
-{
-    std::ostringstream error;
-    if (signalNumber.has_value())
-    {
-        error << "child_signal_" << *signalNumber
-              << ";phase=" << child.phase
-              << ";signal=" << *signalNumber
-              << ";signal_name=" << SchedulerSignalName(*signalNumber)
-              << ";core_dumped=" << (coreDumped ? 1 : 0);
-    }
-    else
-    {
-        error << "child_exit_code_" << exitCode
-              << ";phase=" << child.phase
-              << ";exit_code=" << exitCode;
-    }
-    return error.str();
-}
-
 void PersistObservedExitFields(pqxx::work& w,
                                const SchedulerOwnedChild& child,
                                int exitCode,
@@ -18402,10 +18344,10 @@ void PersistObservedExitFields(pqxx::work& w,
 
 void PersistObservedExperimentChild(pqxx::work& w,
                                     const SchedulerOwnedChild& child,
-                                    int exitCode,
-                                    const std::optional<int>& signalNumber,
-                                    bool coreDumped)
+                                    const SchedulerChildCompletionEvidence&
+                                        completion)
 {
+    const int exitCode = completion.exitCode;
     pqxx::result rows = w.exec_params(
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
@@ -18440,7 +18382,7 @@ void PersistObservedExperimentChild(pqxx::work& w,
         rows[0][29].is_null()
             ? std::nullopt
             : std::optional<int>{rows[0][29].as<int>()};
-    const std::string error = ObservedChildError(child, exitCode, signalNumber, coreDumped);
+    const std::string& error = completion.error;
 
     if (status != "running" || phase != child.phase ||
         (workerPid.has_value() && *workerPid != child.pid))
@@ -18632,13 +18574,13 @@ void AdvanceCheckpointEvalToAnalyze(pqxx::work& w,
 
 void PersistObservedCheckpointChild(pqxx::work& w,
                                     const SchedulerOwnedChild& child,
-                                    int exitCode,
-                                    const std::optional<int>& signalNumber,
-                                    bool coreDumped)
+                                    const SchedulerChildCompletionEvidence&
+                                        completion)
 {
     if (!child.checkpointEvalId.has_value())
         return;
-    const std::string error = ObservedChildError(child, exitCode, signalNumber, coreDumped);
+    const int exitCode = completion.exitCode;
+    const std::string& error = completion.error;
     CheckpointEvalRow eval;
     eval.checkpointEvalId = *child.checkpointEvalId;
     eval.experiment.experimentId = child.experimentId;
@@ -19059,176 +19001,98 @@ void InjectStaleReaperReplacementForTest(
         rebound, "test_bind_stale_reaper_replacement");
 }
 
+bool VerifyExactActiveChildAttempt(
+    pqxx::work& transaction,
+    const SchedulerOwnedChild& child,
+    const SchedulerOptions& options)
+{
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId = *child.workerAttemptId;
+    expected.experimentId = child.experimentId;
+    expected.checkpointEvalId = child.checkpointEvalId;
+    expected.workerKind = child.checkpointEvalId
+        ? "checkpoint_infer"
+        : "experiment";
+    expected.lifecyclePhase = child.checkpointEvalId
+        ? "infer"
+        : child.phase;
+    expected.capacityClass = child.checkpointEvalId
+        ? "infer"
+        : child.phase;
+    expected.schedulerInvocationId =
+        options.schedulerAuthority.schedulerInvocationId;
+    expected.schedulerFencingToken =
+        options.schedulerAuthority.fencingToken;
+    expected.requireCompleteProcessIdentity = true;
+    expected.allowTerminalLifecycle = true;
+    const auto exact =
+        EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+            transaction, expected, true);
+    return exact &&
+           exact->workerPid ==
+               std::optional<int>{static_cast<int>(child.pid)};
+}
+
 void ReapSchedulerOwnedChildren(
     pqxx::work& w,
     const SchedulerOptions& options)
 {
-    for (auto it = gSchedulerOwnedChildren.begin(); it != gSchedulerOwnedChildren.end();)
-    {
-        SchedulerOwnedChild& child = it->second;
-        if (!child.observedStatus.has_value())
-        {
-            const ObservedChildStatus observed =
-                EA::SchedulerCore::NativeWorkerProcessController()
-                    .observeChild(child.pid);
-            if (observed.kind == ChildStatusKind::Running)
-            {
-                ++it;
-                continue;
-            }
-            if (observed.kind == ChildStatusKind::WaitError)
-            {
-                std::cout << "SCHEDULER_CHILD_WAIT_ERROR"
-                          << ",experiment_id=" << child.experimentId
-                          << ",phase=" << child.phase
-                          << ",operation=" << child.operation
-                          << ",worker_pid=" << child.pid
-                          << ",pid=" << child.pid
-                          << ",errno=" << observed.errorNumber
-                          << ",error=waitpid_failed"
-                          << ",ownership=no_longer_owned"
-                          << std::endl;
-                it = gSchedulerOwnedChildren.erase(it);
-                continue;
-            }
-            child.observedStatus = observed;
-            MarkChildTerminationObserved(child.diagnosticState);
-        }
-
-        const ObservedChildStatus& observed = *child.observedStatus;
-        if (!child.workerAttemptId)
-        {
-            std::cout << "SCHEDULER_STALE_CHILD_REAP_REJECTED"
-                      << ",experiment_id=" << child.experimentId
-                      << ",pid=" << child.pid
-                      << ",reason=worker_attempt_id_missing"
-                      << std::endl;
-            it = gSchedulerOwnedChildren.erase(it);
-            continue;
-        }
-        if (ObserveTerminalCheckpointStopAttempt(
-                w, child, options, observed))
-        {
-            it = gSchedulerOwnedChildren.erase(it);
-            continue;
-        }
-        InjectStaleReaperReplacementForTest(
-            w, child, options);
-        EA::SchedulerOwnership::ExactAttemptExpectation expected;
-        expected.workerAttemptId = *child.workerAttemptId;
-        expected.experimentId = child.experimentId;
-        expected.checkpointEvalId = child.checkpointEvalId;
-        expected.workerKind = child.checkpointEvalId
-            ? "checkpoint_infer"
-            : "experiment";
-        expected.lifecyclePhase = child.checkpointEvalId
-            ? "infer"
-            : child.phase;
-        expected.capacityClass = child.checkpointEvalId
-            ? "infer"
-            : child.phase;
-        expected.schedulerInvocationId =
-            options.schedulerAuthority.schedulerInvocationId;
-        expected.schedulerFencingToken =
-            options.schedulerAuthority.fencingToken;
-        expected.requireCompleteProcessIdentity = true;
-        expected.allowTerminalLifecycle = true;
-        const auto exact =
-            EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
-                w, expected, true);
-        if (!exact ||
-            exact->workerPid !=
-                std::optional<int>{
-                    static_cast<int>(child.pid)})
-        {
-            std::cout << "SCHEDULER_STALE_CHILD_REAP_REJECTED"
-                      << ",experiment_id=" << child.experimentId
-                      << ",worker_attempt_id="
-                      << *child.workerAttemptId
-                      << ",pid=" << child.pid
-                      << ",reason=exact_active_attempt_changed"
-                      << std::endl;
-            if (SchedulerAuthorityTestFailpointEnabled(
-                    "stale_reaper_before_exact_verification"))
-            {
-                gSchedulerStopRequested = 1;
-            }
-            it = gSchedulerOwnedChildren.erase(it);
-            continue;
-        }
-        int exitCode = observed.exitCode;
-        std::optional<int> signalNumber;
-        const bool coreDumped = observed.coreDumped;
-        if (observed.kind == ChildStatusKind::Exited)
-        {
-            if (MarkChildExitDiagnosticEmitted(child.diagnosticState))
-            {
-                std::cout << "SCHEDULER_CHILD_EXITED"
-                          << ",experiment_id=" << child.experimentId
-                          << ",worker_pid=" << child.pid
-                          << ",pid=" << child.pid
-                          << ",phase=" << child.phase
-                          << ",operation=" << child.operation
-                          << ",exit_code=" << exitCode
-                          << std::endl;
-            }
-        }
-        else if (observed.kind == ChildStatusKind::Signaled)
-        {
-            signalNumber = observed.signalNumber;
-            if (MarkChildExitDiagnosticEmitted(child.diagnosticState))
-            {
-                std::cout << "SCHEDULER_CHILD_SIGNALED"
-                          << ",experiment_id=" << child.experimentId
-                          << ",worker_pid=" << child.pid
-                          << ",pid=" << child.pid
-                          << ",phase=" << child.phase
-                          << ",operation=" << child.operation
-                          << ",signal_number=" << *signalNumber
-                          << ",signal=" << *signalNumber
-                          << ",signal_name=" << SchedulerSignalName(*signalNumber)
-                          << ",core_dumped=" << (coreDumped ? 1 : 0)
-                          << std::endl;
-            }
-        }
-        else
-        {
-            std::cout << "SCHEDULER_CHILD_WAIT_ERROR"
-                      << ",experiment_id=" << child.experimentId
-                      << ",phase=" << child.phase
-                      << ",operation=" << child.operation
-                      << ",worker_pid=" << child.pid
-                      << ",pid=" << child.pid
-                      << ",errno=0,error=unexpected_wait_status"
-                      << ",raw_status=" << observed.rawStatus
-                      << std::endl;
-            PersistUnexpectedChildStatus(w, child, observed.rawStatus);
+    EA::SchedulerCore::SchedulerChildCompletionOperations operations;
+    operations.observeChild = [](pid_t pid) {
+        return EA::SchedulerCore::NativeWorkerProcessController()
+            .observeChild(pid);
+    };
+    operations.observeTerminalCheckpointStop =
+        [&](const SchedulerOwnedChild& child,
+            const ObservedChildStatus& observed) {
+            return ObserveTerminalCheckpointStopAttempt(
+                w, child, options, observed);
+        };
+    operations.injectStaleReaperReplacementForTest =
+        [&](const SchedulerOwnedChild& child) {
+            InjectStaleReaperReplacementForTest(w, child, options);
+        };
+    operations.verifyExactActiveAttempt =
+        [&](const SchedulerOwnedChild& child) {
+            return VerifyExactActiveChildAttempt(w, child, options);
+        };
+    operations.staleReaperFailpointEnabled = [] {
+        return SchedulerAuthorityTestFailpointEnabled(
+            "stale_reaper_before_exact_verification");
+    };
+    operations.requestSchedulerStop = [] {
+        gSchedulerStopRequested = 1;
+    };
+    operations.persistUnexpectedStatus =
+        [&](const SchedulerOwnedChild& child, int rawStatus) {
+            PersistUnexpectedChildStatus(w, child, rawStatus);
+        };
+    operations.persistCheckpointCompletion =
+        [&](const SchedulerOwnedChild& child,
+            const SchedulerChildCompletionEvidence& completion) {
+            PersistObservedCheckpointChild(w, child, completion);
+        };
+    operations.persistExperimentCompletion =
+        [&](const SchedulerOwnedChild& child,
+            const SchedulerChildCompletionEvidence& completion) {
+            PersistObservedExperimentChild(w, child, completion);
+        };
+    operations.finalizeWorkerAttempt =
+        [&](const SchedulerOwnedChild& child,
+            int exitCode,
+            const std::optional<int>& signalNumber,
+            std::string_view diagnostic) {
             FinalizeObservedWorkerAttempt(
                 w,
                 child,
                 options,
-                -1,
-                std::nullopt,
-                "unexpected_wait_status");
-            it = gSchedulerOwnedChildren.erase(it);
-            continue;
-        }
-
-        if (child.checkpointEvalId.has_value())
-            PersistObservedCheckpointChild(w, child, exitCode, signalNumber, coreDumped);
-        else
-            PersistObservedExperimentChild(w, child, exitCode, signalNumber, coreDumped);
-        FinalizeObservedWorkerAttempt(
-            w,
-            child,
-            options,
-            exitCode,
-            signalNumber,
-            observed.kind == ChildStatusKind::Exited
-                ? "child_exited"
-                : "child_signaled");
-        it = gSchedulerOwnedChildren.erase(it);
-    }
+                exitCode,
+                signalNumber,
+                std::string{diagnostic});
+        };
+    EA::SchedulerCore::SchedulerChildCompletionService service{
+        std::move(operations), std::cout};
+    service.reap(gSchedulerOwnedChildren);
 }
 
 void BeginSchedulerPollLogging(SchedulerEventLogState* logState)
