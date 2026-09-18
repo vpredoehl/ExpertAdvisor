@@ -1,5 +1,6 @@
 #include "../Sources/SchedulerCore/SchedulerEngine.hpp"
 #include "../Sources/SchedulerCore/SchedulerPolicy.hpp"
+#include "../Sources/SchedulerCore/SchedulerRuntimeContext.hpp"
 
 #include "../Headers/ExperimentScheduler.hpp"
 
@@ -72,6 +73,12 @@ int main()
     assert(!observedRegistration.checkpointEvalId);
     assert(observedRegistration.workerKind == "experiment");
     assert(observedRegistration.lifecyclePhase == "train");
+
+    SchedulerRuntimeContext runtime;
+    runtime.ownedChildren.emplace(
+        77, SchedulerOwnedChild{.pid = 77, .experimentId = 618});
+    assert(runtime.ownedChildren.size() == 1);
+    assert(runtime.ownedChildren.at(77).experimentId == 618);
 
     assert(PriorityRank("high") < PriorityRank("normal"));
     assert(PriorityRank("normal") < PriorityRank("low"));

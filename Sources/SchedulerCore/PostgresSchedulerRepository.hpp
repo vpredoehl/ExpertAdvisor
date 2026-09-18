@@ -2,6 +2,7 @@
 
 #include "SchedulerAuthorityRepository.hpp"
 #include "CheckpointEvaluationService.hpp"
+#include "SchedulerInferenceResultRecovery.hpp"
 #include "SchedulerRepository.hpp"
 
 #include <pqxx/pqxx>
@@ -52,6 +53,13 @@ public:
         bool forUpdate) override;
     ExperimentTransitionPersistenceResult applyExperimentTransition(
         const ExperimentTransitionUpdate& update) override;
+
+    // Durable final-inference completion evidence for an exact worker attempt.
+    // Kept in this PostgreSQL adapter so orchestration never owns recovery SQL.
+    std::optional<AuthoritativeFinalInferenceResult>
+    findAuthoritativeFinalInferenceResultForWorkerAttempt(
+        long long experimentId,
+        long long workerAttemptId);
 
     bool checkpointPolicySchemaAvailable();
     std::optional<EA::ExperimentScheduler::CheckpointPolicyConfig>

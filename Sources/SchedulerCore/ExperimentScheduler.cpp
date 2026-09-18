@@ -70,7 +70,6 @@
 #include "SchedulerExecutablePath.hpp"
 #include "SchedulerOwnershipPolicy.hpp"
 #include "SchedulerOwnershipRepository.hpp"
-#include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
 #include "SchedulerCore/CheckpointAnalysisOrchestrationService.hpp"
 #include "SchedulerCore/CheckpointEvaluationService.hpp"
 #include "SchedulerCore/ContinuationOrchestrationService.hpp"
@@ -84,6 +83,7 @@
 #include "SchedulerCore/SchedulerChildCompletionService.hpp"
 #include "SchedulerCore/SchedulerCycleService.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
+#include "SchedulerCore/SchedulerRuntimeContext.hpp"
 #include "SchedulerCore/WorkerControlService.hpp"
 #include "SchedulerCore/WorkerAttemptLifecycleService.hpp"
 #include "SchedulerCore/WorkerProcessController.hpp"
@@ -446,6 +446,7 @@ struct SchedulerOptions
     std::string invocationCommandLine;
     EA::SchedulerCore::SchedulerAuthorityContext schedulerAuthority;
     std::optional<long long> schedulerWorkerAttemptId;
+    EA::SchedulerCore::SchedulerRuntimeContext* runtimeContext = nullptr;
 
     std::optional<std::string> symbol;
     std::optional<int> predictionHorizon;
@@ -564,11 +565,19 @@ struct RunningExperimentChild
 using EA::SchedulerCore::ReservedWorkerAttempt;
 using EA::SchedulerCore::SchedulerChildCompletionEvidence;
 using EA::SchedulerCore::SchedulerOwnedChild;
-using EA::SchedulerCore::SchedulerOwnedChildren;
 
-SchedulerOwnedChildren gSchedulerOwnedChildren;
-
+// The signal handler may only touch sig_atomic_t state. It is a bridge into
+// the invocation-owned SchedulerRuntimeContext, whose child collection is
+// consumed by normal scheduler control flow after the signal is observed.
 volatile sig_atomic_t gSchedulerStopRequested = 0;
+
+EA::SchedulerCore::SchedulerRuntimeContext& SchedulerRuntime(
+    const SchedulerOptions& options)
+{
+    if (options.runtimeContext == nullptr)
+        throw std::logic_error("scheduler_runtime_context_missing");
+    return *options.runtimeContext;
+}
 
 constexpr int kSchedulerLaunchRecoveryGraceSeconds = 10;
 
@@ -11053,7 +11062,7 @@ pid_t LaunchReservedChildProcess(
         std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch())
             .count();
-    gSchedulerOwnedChildren.emplace(pid, std::move(child));
+    SchedulerRuntime(options).ownedChildren.emplace(pid, std::move(child));
     std::cout << "SCHEDULER_CHILD_LAUNCHED"
               << ",worker_attempt_id=" << attempt.workerAttemptId
               << ",launch_attempt_identity="
@@ -11791,9 +11800,10 @@ bool HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
     long long workerAttemptId,
     bool useThresholdTolerance = false)
 {
-    const auto result = EA::Scheduler::
-        FindAuthoritativeFinalInferenceResultForWorkerAttempt(
-            w, experiment.experimentId, workerAttemptId);
+    EA::SchedulerCore::PostgresSchedulerRepository repository{w};
+    const auto result =
+        repository.findAuthoritativeFinalInferenceResultForWorkerAttempt(
+            experiment.experimentId, workerAttemptId);
     if (!result) return false;
     if (result->forcedFinalInferenceRerun != useThresholdTolerance)
         throw std::runtime_error(
@@ -18508,7 +18518,7 @@ void ReapSchedulerOwnedChildren(
         };
     EA::SchedulerCore::SchedulerChildCompletionService service{
         std::move(operations), std::cout};
-    service.reap(gSchedulerOwnedChildren);
+    service.reap(SchedulerRuntime(options).ownedChildren);
 }
 
 void BeginSchedulerPollLogging(SchedulerEventLogState* logState)
@@ -19505,6 +19515,9 @@ int RunSchedulerOnce(const SchedulerOptions& options,
 
 int RunScheduler(SchedulerOptions options)
 {
+    EA::SchedulerCore::SchedulerRuntimeContext runtimeContext;
+    options.runtimeContext = &runtimeContext;
+    gSchedulerStopRequested = 0;
     try
     {
         options.semanticWorkerRegistry =

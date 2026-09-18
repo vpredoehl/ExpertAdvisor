@@ -1,5 +1,5 @@
 #include "GlobalExperimentControl.hpp"
-#include "SchedulerCore/SchedulerInferenceResultRecovery.hpp"
+#include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "ExperimentCurrentOperation.hpp"
 #include "SchedulerOwnershipRepository.hpp"
 
@@ -3503,14 +3503,17 @@ int RunWorkerAttemptReconciliationCommandImpl(
             // uncertain observations remain on the fail-closed live path
             // below. Final inference uses the same authoritative persisted
             // result contract as scheduler-owned orphan reconciliation.
-            const auto completedInference =
-                exact->lifecyclePhase == "infer"
-                    ? EA::Scheduler::
-                          FindAuthoritativeFinalInferenceResultForWorkerAttempt(
-                              transaction,
-                              exact->experimentId,
-                              exact->workerAttemptId)
-                    : std::nullopt;
+            std::optional<EA::SchedulerCore::AuthoritativeFinalInferenceResult>
+                completedInference;
+            if (exact->lifecyclePhase == "infer")
+            {
+                EA::SchedulerCore::PostgresSchedulerRepository repository{
+                    transaction};
+                completedInference =
+                    repository.findAuthoritativeFinalInferenceResultForWorkerAttempt(
+                        exact->experimentId,
+                        exact->workerAttemptId);
+            }
             const bool recoverCompletedInference =
                 completedInference.has_value();
             const char* kAbsentReason = recoverCompletedInference
