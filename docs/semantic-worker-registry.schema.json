@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://expertadvisor.local/schemas/semantic-worker-registry-v1.json",
+  "title": "ExpertAdvisor Semantic Worker Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "current_layout", "workers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "current_layout": {"type": "integer", "minimum": 1},
+    "workers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "semantic_layout",
+          "worker_rule",
+          "model_input_width",
+          "source_commit",
+          "sha256",
+          "executable",
+          "manifest",
+          "capabilities"
+        ],
+        "properties": {
+          "semantic_layout": {"type": "integer", "minimum": 1},
+          "worker_rule": {"enum": ["current", "historical"]},
+          "model_input_width": {"type": "integer", "minimum": 1},
+          "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "executable": {"type": "string"},
+          "manifest": {"type": "string"},
+          "capabilities": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"enum": ["train", "infer", "analyze"]}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,441 @@
+#!/usr/bin/env python3
+"""Publish immutable semantic workers and atomically replace their registry."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+
+
+SCHEMA_VERSION = 1
+COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+VALID_CAPABILITIES = frozenset({"train", "infer", "analyze"})
+
+
+class PublishError(RuntimeError):
+    pass
+
+
+def git_output(repository_root: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["/usr/bin/git", "-C", str(repository_root), *arguments],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout.rstrip("\r\n")
+
+
+def clean_source_commit(repository_root: Path) -> str:
+    if git_output(repository_root, "status", "--porcelain"):
+        raise PublishError("semantic worker publication requires a clean source tree")
+    commit = git_output(repository_root, "rev-parse", "--verify", "HEAD")
+    if not COMMIT_PATTERN.fullmatch(commit):
+        raise PublishError("HEAD is not an exact lowercase 40-hex commit")
+    return commit
+
+
+def current_semantic_contract(repository_root: Path) -> tuple[int, int]:
+    source = (
+        '#include "ModelInputExpansion.hpp"\n'
+        '#include <iostream>\n'
+        'int main() { std::cout << EA::kModelInputSemanticLayoutVersion << " " '
+        '<< EA::kCurrentModelInputWidth << "\\n"; }\n'
+    )
+    with tempfile.TemporaryDirectory(prefix="ea-semantic-contract.") as temporary:
+        temporary_path = Path(temporary)
+        source_path = temporary_path / "contract.cpp"
+        executable_path = temporary_path / "contract"
+        source_path.write_text(source, encoding="utf-8")
+        subprocess.run(
+            ["/usr/bin/xcrun", "clang++", "-std=c++20",
+             "-I", str(repository_root / "Headers"),
+             str(source_path), "-o", str(executable_path)],
+            check=True,
+        )
+        fields = subprocess.check_output([str(executable_path)], text=True).split()
+    if len(fields) != 2:
+        raise PublishError("current semantic contract probe returned malformed output")
+    layout, width = (int(value) for value in fields)
+    if layout <= 0 or width <= 0:
+        raise PublishError("current semantic contract is invalid")
+    return layout, width
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def fsync_file(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def write_json(path: Path, value: object) -> None:
+    with path.open("x", encoding="utf-8") as output:
+        json.dump(value, output, indent=2, sort_keys=True)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+
+
+def atomic_write_json(path: Path, value: object) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(value, output, indent=2, sort_keys=True)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def verify_embedded_commit(executable: Path, commit: str) -> None:
+    result = subprocess.run(
+        ["/usr/bin/strings", str(executable)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+    )
+    if commit not in result.stdout.splitlines():
+        raise PublishError(
+            f"built executable does not contain exact source commit {commit}")
+
+
+def validate_inputs(
+    executable: Path,
+    worker_rule: str,
+    layout: int,
+    width: int,
+    commit: str,
+    capabilities: list[str],
+) -> None:
+    if not executable.is_absolute() or not executable.is_file():
+        raise PublishError("worker executable must be an absolute existing regular file")
+    if not os.access(executable, os.X_OK):
+        raise PublishError("worker executable is not executable")
+    if worker_rule not in {"current", "historical"}:
+        raise PublishError("worker rule must be current or historical")
+    if layout <= 0 or width <= 0:
+        raise PublishError("semantic layout and model input width must be positive")
+    if not COMMIT_PATTERN.fullmatch(commit):
+        raise PublishError("source commit must be exact lowercase 40-hex")
+    if not capabilities or len(capabilities) != len(set(capabilities)):
+        raise PublishError("capabilities must be nonempty and unique")
+    if not set(capabilities) <= VALID_CAPABILITIES:
+        raise PublishError("capabilities contain an unsupported phase")
+    if "infer" not in capabilities:
+        raise PublishError("all semantic workers must support inference")
+    if worker_rule == "current":
+        if set(capabilities) != VALID_CAPABILITIES:
+            raise PublishError("current worker must support train, infer, and analyze")
+    elif set(capabilities) != {"infer"}:
+        raise PublishError("historical workers are inference-only")
+
+
+def load_registry(path: Path) -> dict:
+    if not path.exists():
+        return {"schema_version": SCHEMA_VERSION, "current_layout": None, "workers": []}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise PublishError(f"existing semantic worker registry is malformed: {error}") from error
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version", "current_layout", "workers"
+    }:
+        raise PublishError("existing semantic worker registry has an invalid shape")
+    if value["schema_version"] != SCHEMA_VERSION or not isinstance(value["workers"], list):
+        raise PublishError("existing semantic worker registry schema is unsupported")
+    layouts = [worker.get("semantic_layout") for worker in value["workers"]
+               if isinstance(worker, dict)]
+    if len(layouts) != len(value["workers"]) or len(layouts) != len(set(layouts)):
+        raise PublishError("existing semantic worker registry has duplicate/malformed layouts")
+    current = [worker for worker in value["workers"]
+               if worker.get("worker_rule") == "current"]
+    if value["current_layout"] is not None and (
+        len(current) != 1 or current[0].get("semantic_layout") != value["current_layout"]
+    ):
+        raise PublishError("existing semantic worker registry current rule is invalid")
+    validate_existing_registry(path.parent.resolve(), value)
+    return value
+
+
+def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
+    required_fields = {
+        "semantic_layout", "worker_rule", "model_input_width", "source_commit",
+        "sha256", "executable", "manifest", "capabilities",
+    }
+    current_layout = registry["current_layout"]
+    if (not isinstance(current_layout, int) or isinstance(current_layout, bool) or
+            current_layout <= 0):
+        raise PublishError("existing semantic worker registry current layout is invalid")
+    if not registry["workers"]:
+        raise PublishError("existing semantic worker registry has no workers")
+    for worker in registry["workers"]:
+        if set(worker) != required_fields:
+            raise PublishError("existing semantic worker registry worker shape is invalid")
+        layout = worker["semantic_layout"]
+        width = worker["model_input_width"]
+        commit = worker["source_commit"]
+        digest = worker["sha256"]
+        rule = worker["worker_rule"]
+        capabilities = worker["capabilities"]
+        if (not isinstance(layout, int) or isinstance(layout, bool) or layout <= 0 or
+                not isinstance(width, int) or isinstance(width, bool) or width <= 0 or
+                not isinstance(rule, str) or rule not in {"current", "historical"} or
+                not isinstance(commit, str) or not COMMIT_PATTERN.fullmatch(commit) or
+                not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest) or
+                not isinstance(capabilities, list) or not capabilities or
+                not all(isinstance(capability, str) for capability in capabilities) or
+                len(capabilities) != len(set(capabilities)) or
+                not set(capabilities) <= VALID_CAPABILITIES or
+                "infer" not in capabilities):
+            raise PublishError("existing semantic worker registry worker contract is invalid")
+        if rule == "current" and set(capabilities) != VALID_CAPABILITIES:
+            raise PublishError("existing current semantic worker capabilities are invalid")
+        relative_directory = Path(f"layout{layout}") / commit / digest
+        expected_executable = str(relative_directory / "LSTM_Release")
+        expected_manifest_path = str(relative_directory / "manifest.json")
+        if (worker["executable"] != expected_executable or
+                worker["manifest"] != expected_manifest_path):
+            raise PublishError("existing semantic worker content-addressed path is invalid")
+        directory = artifact_root / relative_directory
+        try:
+            if directory.resolve(strict=True) != directory:
+                raise PublishError("existing semantic worker artifact path is not canonical")
+        except OSError as error:
+            raise PublishError(
+                f"existing semantic worker artifact is missing: {directory}") from error
+        expected_manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "semantic_layout": layout,
+            "storage": "immutable",
+            "model_input_width": width,
+            "source_commit": commit,
+            "sha256": digest,
+            "executable_identity": "LSTM_Release",
+            "capabilities": capabilities,
+        }
+        verify_existing_artifact(directory, expected_manifest, digest)
+
+
+def verify_existing_artifact(directory: Path, expected_manifest: dict, digest: str) -> None:
+    executable = directory / "LSTM_Release"
+    manifest = directory / "manifest.json"
+    try:
+        canonical_executable = executable.resolve(strict=True)
+        canonical_manifest = manifest.resolve(strict=True)
+    except OSError as error:
+        raise PublishError(f"immutable artifact path is incomplete: {directory}") from error
+    if canonical_executable != executable or canonical_manifest != manifest:
+        raise PublishError(f"immutable artifact path is not canonical: {directory}")
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise PublishError(f"immutable artifact path is incomplete: {directory}")
+    if sha256(executable) != digest:
+        raise PublishError(f"immutable artifact hash conflict: {directory}")
+    try:
+        observed_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise PublishError(f"immutable artifact manifest is invalid: {directory}") from error
+    if observed_manifest != expected_manifest:
+        raise PublishError(f"immutable artifact manifest conflict: {directory}")
+
+
+def publish(
+    artifact_root: Path,
+    executable: Path,
+    worker_rule: str,
+    layout: int,
+    width: int,
+    commit: str,
+    capabilities: list[str],
+    check_embedded_commit: bool = True,
+) -> Path:
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    artifact_root = artifact_root.resolve()
+    try:
+        executable = executable.resolve(strict=True)
+    except OSError as error:
+        raise PublishError(
+            "worker executable must be an absolute existing regular file"
+        ) from error
+    validate_inputs(executable, worker_rule, layout, width, commit, capabilities)
+    if check_embedded_commit:
+        verify_embedded_commit(executable, commit)
+    digest = sha256(executable)
+    if not SHA256_PATTERN.fullmatch(digest):
+        raise PublishError("computed SHA-256 is malformed")
+
+    relative_directory = Path(f"layout{layout}") / commit / digest
+    final_directory = artifact_root / relative_directory
+    manifest_value = {
+        "schema_version": SCHEMA_VERSION,
+        "semantic_layout": layout,
+        "storage": "immutable",
+        "model_input_width": width,
+        "source_commit": commit,
+        "sha256": digest,
+        "executable_identity": "LSTM_Release",
+        "capabilities": capabilities,
+    }
+    worker_value = {
+        "semantic_layout": layout,
+        "worker_rule": worker_rule,
+        "model_input_width": width,
+        "source_commit": commit,
+        "sha256": digest,
+        "executable": str(relative_directory / "LSTM_Release"),
+        "manifest": str(relative_directory / "manifest.json"),
+        "capabilities": capabilities,
+    }
+
+    lock_path = artifact_root / ".publish.lock"
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        registry_path = artifact_root / "registry.json"
+        registry = load_registry(registry_path)
+
+        if final_directory.exists():
+            verify_existing_artifact(final_directory, manifest_value, digest)
+        else:
+            final_directory.parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(
+                prefix=f".{digest}.", suffix=".stage", dir=final_directory.parent))
+            try:
+                staged_executable = staging / "LSTM_Release"
+                shutil.copy2(executable, staged_executable)
+                staged_executable.chmod(0o555)
+                if sha256(staged_executable) != digest:
+                    raise PublishError("staged semantic worker hash mismatch")
+                fsync_file(staged_executable)
+                staged_manifest = staging / "manifest.json"
+                write_json(staged_manifest, manifest_value)
+                staged_manifest.chmod(0o444)
+                fsync_directory(staging)
+                os.rename(staging, final_directory)
+                fsync_directory(final_directory.parent)
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging)
+
+        workers = [worker for worker in registry["workers"]
+                   if worker["semantic_layout"] != layout]
+        if worker_rule == "current":
+            for worker in workers:
+                if worker.get("worker_rule") == "current":
+                    worker["worker_rule"] = "historical"
+            registry["current_layout"] = layout
+        elif registry["current_layout"] == layout:
+            raise PublishError("cannot replace the current layout with a historical rule")
+        workers.append(worker_value)
+        workers.sort(key=lambda worker: worker["semantic_layout"])
+        registry["workers"] = workers
+        if registry["current_layout"] is None:
+            raise PublishError("historical publication requires an existing current worker")
+
+        atomic_write_json(registry_path, registry)
+
+        if worker_rule == "current":
+            current_link = artifact_root / "current"
+            temporary_link = artifact_root / f".current.{os.getpid()}.tmp"
+            temporary_link.unlink(missing_ok=True)
+            os.symlink(relative_directory, temporary_link)
+            os.replace(temporary_link, current_link)
+            fsync_directory(artifact_root)
+    return final_directory / "LSTM_Release"
+
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repository-root", required=True, type=Path)
+    parser.add_argument("--built-executable", required=True, type=Path)
+    parser.add_argument("--artifact-root", type=Path)
+    parser.add_argument("--worker-rule", choices=("current", "historical"), default="current")
+    parser.add_argument("--semantic-layout", type=int)
+    parser.add_argument("--model-input-width", type=int)
+    parser.add_argument("--source-commit")
+    parser.add_argument("--capability", action="append", dest="capabilities")
+    return parser.parse_args()
+
+
+def main() -> int:
+    arguments = parse_arguments()
+    repository_root = arguments.repository_root.resolve(strict=True)
+    artifact_root = (arguments.artifact_root or
+                     repository_root / "Builds" / "SemanticWorkers")
+    if arguments.semantic_layout is None or arguments.model_input_width is None:
+        if arguments.worker_rule != "current":
+            raise PublishError("historical import requires explicit semantic layout and width")
+        source_layout, source_width = current_semantic_contract(repository_root)
+        layout = arguments.semantic_layout or source_layout
+        width = arguments.model_input_width or source_width
+        if (layout, width) != (source_layout, source_width):
+            raise PublishError("explicit current contract disagrees with source")
+    else:
+        layout, width = arguments.semantic_layout, arguments.model_input_width
+    if arguments.worker_rule == "current":
+        clean_commit = clean_source_commit(repository_root)
+        if (arguments.source_commit is not None and
+                arguments.source_commit != clean_commit):
+            raise PublishError("explicit current source commit disagrees with clean HEAD")
+        commit = clean_commit
+    else:
+        if arguments.source_commit is None:
+            raise PublishError("historical import requires an explicit source commit")
+        commit = arguments.source_commit
+    capabilities = arguments.capabilities or (
+        ["train", "infer", "analyze"] if arguments.worker_rule == "current"
+        else ["infer"]
+    )
+    published = publish(
+        artifact_root=artifact_root,
+        executable=arguments.built_executable,
+        worker_rule=arguments.worker_rule,
+        layout=layout,
+        width=width,
+        commit=commit,
+        capabilities=capabilities,
+        check_embedded_commit=True,
+    )
+    print(f"Semantic worker published: {published}")
+    print(f"Semantic worker registry: {(artifact_root / 'registry.json').resolve()}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, subprocess.CalledProcessError, PublishError) as error:
+        raise SystemExit(f"PublishSemanticWorker.py: {error}")

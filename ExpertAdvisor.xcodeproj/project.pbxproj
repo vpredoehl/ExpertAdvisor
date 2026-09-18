@@ -317,6 +317,7 @@
 		0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
 		0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F20001033D0000100AAA001 /* SchedulerEngine.cpp */; };
 		0F20000933D0000100AAA001 /* SchedulerPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */; };
+		0F2C00103490000100AAA001 /* SemanticWorkerRegistry.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2C00003490000100AAA001 /* SemanticWorkerRegistry.cpp */; };
 		0F20000E33D0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
 		0F20000F33D0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
 		0F21001033E0000100AAA001 /* SchedulerRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F21000133E0000100AAA001 /* SchedulerRepository.cpp */; };
@@ -782,6 +783,8 @@
 		0F20001133D0000100AAA001 /* SchedulerEngine.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerEngine.hpp; path = Sources/SchedulerCore/SchedulerEngine.hpp; sourceTree = SOURCE_ROOT; };
 		0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerPolicy.cpp; path = Sources/SchedulerCore/SchedulerPolicy.cpp; sourceTree = SOURCE_ROOT; };
 		0F20001333D0000100AAA001 /* SchedulerPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerPolicy.hpp; path = Sources/SchedulerCore/SchedulerPolicy.hpp; sourceTree = SOURCE_ROOT; };
+		0F2C00003490000100AAA001 /* SemanticWorkerRegistry.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SemanticWorkerRegistry.cpp; path = Sources/SchedulerCore/SemanticWorkerRegistry.cpp; sourceTree = SOURCE_ROOT; };
+		0F2C00013490000100AAA001 /* SemanticWorkerRegistry.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SemanticWorkerRegistry.hpp; path = Sources/SchedulerCore/SemanticWorkerRegistry.hpp; sourceTree = SOURCE_ROOT; };
 		0F21000133E0000100AAA001 /* SchedulerRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerRepository.cpp; path = Sources/SchedulerCore/SchedulerRepository.cpp; sourceTree = SOURCE_ROOT; };
 		0F21000233E0000100AAA001 /* SchedulerRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerRepository.hpp; path = Sources/SchedulerCore/SchedulerRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0F21000333E0000100AAA001 /* PostgresSchedulerRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PostgresSchedulerRepository.cpp; path = Sources/SchedulerCore/PostgresSchedulerRepository.cpp; sourceTree = SOURCE_ROOT; };
@@ -1273,6 +1276,8 @@
 				0F20001133D0000100AAA001 /* SchedulerEngine.hpp */,
 				0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */,
 				0F20001333D0000100AAA001 /* SchedulerPolicy.hpp */,
+				0F2C00003490000100AAA001 /* SemanticWorkerRegistry.cpp */,
+				0F2C00013490000100AAA001 /* SemanticWorkerRegistry.hpp */,
 				0F21000133E0000100AAA001 /* SchedulerRepository.cpp */,
 				0F21000233E0000100AAA001 /* SchedulerRepository.hpp */,
 				0F21000333E0000100AAA001 /* PostgresSchedulerRepository.cpp */,
@@ -1531,7 +1536,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n    exit 0\nfi\n\nif [ \"$PUBLISH_CANONICAL_BINARY\" != \"YES\" ]; then\n    echo \"Skipping canonical LSTM binary publish\"\n    exit 0\nfi\n\nCANONICAL_DIR=\"$PROJECT_DIR/DerivedData/Canonical\"\nCANONICAL_BIN=\"$CANONICAL_DIR/LSTM_Release\"\nBUILT_BIN=\"$CONFIGURATION_BUILD_DIR/LSTM_Release\"\n\nif [ ! -x \"$BUILT_BIN\" ]; then\n    echo \"error: built LSTM executable not found or not executable: $BUILT_BIN\"\n    exit 1\nfi\n\nmkdir -p \"$CANONICAL_DIR\"\n\nif ! ln -sfn \"$BUILT_BIN\" \"$CANONICAL_BIN\"; then\n    echo \"error: failed to publish canonical LSTM binary\"\n    exit 1\nfi\n\necho \"Canonical LSTM binary updated:\"\necho \"$CANONICAL_BIN -> $BUILT_BIN\"\n";
+			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n    exit 0\nfi\n\nif [ \"$PUBLISH_CANONICAL_BINARY\" != \"YES\" ]; then\n    echo \"Skipping semantic worker publish\"\n    exit 0\nfi\n\nBUILT_BIN=\"$CONFIGURATION_BUILD_DIR/LSTM_Release\"\nif [ ! -x \"$BUILT_BIN\" ]; then\n    echo \"error: built LSTM executable not found or not executable: $BUILT_BIN\"\n    exit 1\nfi\n\n/usr/bin/python3 \"$PROJECT_DIR/Scripts/PublishSemanticWorker.py\" \\\n    --repository-root \"$PROJECT_DIR\" \\\n    --built-executable \"$BUILT_BIN\" \\\n    --worker-rule current\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1849,6 +1854,7 @@
 				0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */,
 				0F20000933D0000100AAA001 /* SchedulerPolicy.cpp in Sources */,
+				0F2C00103490000100AAA001 /* SemanticWorkerRegistry.cpp in Sources */,
 				0F21001033E0000100AAA001 /* SchedulerRepository.cpp in Sources */,
 				0F21001133E0000100AAA001 /* PostgresSchedulerRepository.cpp in Sources */,
 				0F21001233E0000100AAA001 /* WorkerProcessController.cpp in Sources */,
@@ -2114,7 +2120,7 @@
 					/opt/homebrew/lib,
 					"/opt/homebrew/lib/postgresql@17",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.15;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
@@ -2182,7 +2188,7 @@
 					/opt/homebrew/lib,
 					"/opt/homebrew/lib/postgresql@17",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.15;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
 				OTHER_LDFLAGS = "-lpqxx";

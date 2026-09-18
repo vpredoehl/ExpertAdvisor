@@ -3,6 +3,19 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:?usage: $0 /path/to/isolated/LSTM_Release}"
+semantic_worker_registry="${2:-${repo_root}/Builds/SemanticWorkers/registry.json}"
+semantic_worker_registry="$(cd "$(dirname "${semantic_worker_registry}")" && pwd)/$(basename "${semantic_worker_registry}")"
+current_worker_binary="$(/usr/bin/python3 - "${semantic_worker_registry}" <<'PY'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+registry = json.loads(path.read_text(encoding="utf-8"))
+entry = next(worker for worker in registry["workers"]
+             if worker["semantic_layout"] == registry["current_layout"])
+print((path.parent / entry["executable"]).resolve(strict=True))
+PY
+)"
 test_db="ea_scheduler_control_identity_test_${$}"
 test_dir="$(mktemp -d /tmp/ea_scheduler_control_identity_test.XXXXXX)"
 
@@ -168,7 +181,7 @@ test "${historical_before}" = "$(historical_snapshot)"
 test "$(snapshot | sed -n '4p')" = "941004:cancelled:done:941004:941004:unrelated-start-941004:/unrelated/LSTM_Release:/unrelated/LSTM_Release --train --scheduler-experiment-id=941004:NULL:running:NULL:train"
 
 set +e
-LSTM_DB_NAME="${test_db}" "${scheduler_binary}" --schedule-experiments --scheduler-once --max-analyze-procs=1 --scheduler-log-dir="${test_dir}/logs" >"${test_dir}/replacement-dispatch.out" 2>&1
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" --schedule-experiments --scheduler-once --max-analyze-procs=1 --semantic-worker-registry="${semantic_worker_registry}" --scheduler-log-dir="${test_dir}/logs" >"${test_dir}/replacement-dispatch.out" 2>&1
 dispatch_result=$?
 set -e
 grep -q 'SCHEDULER_QUEUE_PHASE,phase=analyze,.*launched=1' "${test_dir}/replacement-dispatch.out"
@@ -182,10 +195,11 @@ test -n "${replacement_pgid}"
 test "${replacement_pid}" != "941003"
 test "${replacement_pgid}" != "941003"
 test "${replacement_start}" != "old-start-941003"
-test "${replacement_executable}" != "/old/LSTM_Release"
+test "${replacement_executable}" = "${current_worker_binary}"
 [[ "${replacement_command}" == *"--scheduler-worker-attempt-id=${replacement_id}"* ]]
+[[ "${replacement_command}" != *"--semantic-worker-registry"* ]]
 test "${lifecycle_start}" != "old-start-941003"
-test "${lifecycle_executable}" != "/old/LSTM_Release"
+test "${lifecycle_executable}" = "${current_worker_binary}"
 [[ "${lifecycle_command}" == *"--scheduler-worker-attempt-id=${replacement_id}"* ]]
 if [[ "${lifecycle_attempt}" != "NULL" ]]; then
     test "${lifecycle_attempt}" = "${replacement_id}"

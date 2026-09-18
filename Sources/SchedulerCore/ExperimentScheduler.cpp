@@ -437,7 +437,11 @@ struct SchedulerOptions
     std::string experimentReportDir = "experiment_reports";
     bool lstmProfileHotspots = false;
     std::optional<std::string> lstmProfileOutputPath;
-    std::string selfPath;
+    std::string schedulerExecutablePath;
+    std::string semanticWorkerRegistryPath;
+    bool semanticWorkerRegistryPathSpecified = false;
+    std::string currentWorkerExecutablePath;
+    std::optional<EA::Scheduler::SemanticWorkerRegistry> semanticWorkerRegistry;
     std::optional<std::string> legacyLayout6InferWorkerPath;
     std::string invocationCommandLine;
     EA::SchedulerCore::SchedulerAuthorityContext schedulerAuthority;
@@ -1829,9 +1833,12 @@ void ValidateCheckpointPolicyConfig(const SchedulerOptions& options)
 SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
 {
     SchedulerOptions options;
-    options.selfPath =
+    options.schedulerExecutablePath =
         EA::SchedulerCore::NativeWorkerProcessController()
             .resolveExecutablePath();
+    options.semanticWorkerRegistryPath =
+        (std::filesystem::current_path() / "Builds" /
+         "SemanticWorkers" / "registry.json").string();
     for (int index = 0; index < argc; ++index)
     {
         if (index)
@@ -1975,6 +1982,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.legacyLayout6InferWorkerPath =
                 EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
                     RequireNextArg(argc, argv, i, arg), arg);
+        }
+        else if (arg == "--semantic-worker-registry")
+        {
+            if (options.semanticWorkerRegistryPathSpecified)
+                throw std::invalid_argument(
+                    "--semantic-worker-registry specified more than once");
+            options.semanticWorkerRegistryPath =
+                RequireNextArg(argc, argv, i, arg);
+            options.semanticWorkerRegistryPathSpecified = true;
         }
         else if (arg == "--backfill-experiment-metadata")
             options.backfillExperimentMetadata = true;
@@ -3263,6 +3279,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.legacyLayout6InferWorkerPath =
                 EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
                     value, "--legacy-layout6-infer-worker");
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--semantic-worker-registry", value))
+        {
+            if (options.semanticWorkerRegistryPathSpecified)
+                throw std::invalid_argument(
+                    "--semantic-worker-registry specified more than once");
+            if (value.empty())
+                throw std::invalid_argument(
+                    "--semantic-worker-registry requires a path");
+            options.semanticWorkerRegistryPath = value;
+            options.semanticWorkerRegistryPathSpecified = true;
         }
         else if (SplitOptionWithValue(arg, "--experiment-report-dir", value))
             options.experimentReportDir = value;
@@ -5369,6 +5397,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "--legacy-layout6-infer-worker requires --schedule-experiments");
     }
+    if (options.semanticWorkerRegistryPathSpecified &&
+        !options.scheduleExperiments)
+    {
+        throw std::invalid_argument(
+            "--semantic-worker-registry requires --schedule-experiments");
+    }
     if (options.autoGenerateReports &&
         !options.scheduleExperiments &&
         !options.analyzeExperimentId.has_value())
@@ -6469,7 +6503,7 @@ int CompleteSchedulerProtocolCutover(
         return 2;
     SchedulerServiceComposition services{transaction};
     const auto result = services.authority.completeProtocolCutover(
-        {options.selfPath,
+        {options.schedulerExecutablePath,
          "ps_inspection_complete;active_scheduler_dispatch_processes=0"},
         [] {
             const std::optional<std::string> startIdentity =
@@ -6504,7 +6538,7 @@ int CompleteSchedulerProtocolCutover(
               << (result == EA::SchedulerCore::
                                SchedulerProtocolCutoverResult::Completed
                       ? ",scheduler_processes=0,canonical_executable_path=" +
-                            options.selfPath
+                            options.schedulerExecutablePath
                       : "")
               << std::endl;
     return 0;
@@ -6530,7 +6564,7 @@ bool AcquireSchedulerAuthority(SchedulerOptions& options)
         pid,
         processGroupId,
         *processStartIdentity,
-        options.selfPath,
+        options.schedulerExecutablePath,
         options.invocationCommandLine});
     options.schedulerAuthority = acquisition.authority;
     if (!acquisition.protocolAccepted)
@@ -6579,7 +6613,7 @@ bool AcquireSchedulerAuthority(SchedulerOptions& options)
               << ",reason="
               << EA::SchedulerCore::SchedulerTakeoverDecisionText(
                      acquisition.decision)
-              << ",canonical_executable_path=" << options.selfPath
+              << ",canonical_executable_path=" << options.schedulerExecutablePath
               << std::endl;
     return true;
 }
@@ -7035,7 +7069,7 @@ long long InsertExperimentRecord(pqxx::work& w,
             : (options.queueExperiment
                    ? "queue_experiment" : "enqueue_experiment"));
     const EA::RunMetadata::Snapshot runMetadata =
-        EA::RunMetadata::Capture(options.selfPath, invocationMode);
+        EA::RunMetadata::Capture(options.schedulerExecutablePath, invocationMode);
     const std::string schemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
 
     std::ostringstream sql;
@@ -7508,7 +7542,7 @@ SchedulerOptions CorrectedReplicationQueueOptions(
 {
     const auto& configured = plan.configuration;
     SchedulerOptions options;
-    options.selfPath = commandOptions.selfPath;
+    options.schedulerExecutablePath = commandOptions.schedulerExecutablePath;
     options.queueExperiment = true;
     options.symbol = pair.symbol;
     options.predictionHorizon = pair.predictionHorizon;
@@ -8042,10 +8076,10 @@ int BackfillExperimentMetadata(const SchedulerOptions& options)
 
     const long long eligible = CountExperimentMetadataBackfillEligible(w);
     const EA::RunMetadata::Snapshot metadata =
-        EA::RunMetadata::Capture(options.selfPath, "metadata_backfill");
+        EA::RunMetadata::Capture(options.schedulerExecutablePath, "metadata_backfill");
     const std::string schemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
     const long long updated = EA::RunMetadata::BackfillMissingExperimentRunMetadataWithCount(
-        w, options.selfPath, "metadata_backfill");
+        w, options.schedulerExecutablePath, "metadata_backfill");
     w.commit();
 
     std::cout << "EXPERIMENT_METADATA_BACKFILL"
@@ -8641,7 +8675,7 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     invocationStarted)
                     .count()) +
-            ";executable:" + options.selfPath;
+            ";executable:" + options.schedulerExecutablePath;
         return EA::GlobalExperimentControl::RunExperimentResumeCommand(
             LstmDbConnectionString(), command, std::cout, std::cerr);
     }
@@ -8687,7 +8721,7 @@ int RunCampaignMaterializationSchedulerControlCommand(
                 invocationStarted).count()) +
         ";action:" + (pause ? "pause" : "resume") +
         ";materialization:" + std::to_string(command.materializationId) +
-        ";executable:" + options.selfPath;
+        ";executable:" + options.schedulerExecutablePath;
     if (pause)
         return EA::GlobalExperimentControl::
             RunCampaignMaterializationPauseCommand(
@@ -9540,10 +9574,12 @@ EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
     return EA::Scheduler::EvaluateSemanticWorkerAdmission(phase, persisted);
 }
 
-EA::Scheduler::InferenceWorkerRoutingConfiguration
-InferenceWorkerRoutingConfigurationFor(const SchedulerOptions& options)
+const EA::Scheduler::SemanticWorkerRegistry&
+SemanticWorkerRegistryFor(const SchedulerOptions& options)
 {
-    return {options.selfPath, options.legacyLayout6InferWorkerPath};
+    if (!options.semanticWorkerRegistry)
+        throw std::logic_error("semantic_worker_registry_not_initialized");
+    return *options.semanticWorkerRegistry;
 }
 
 EA::Scheduler::InferenceWorkerSelection LoadInferenceWorkerSelection(
@@ -9557,7 +9593,7 @@ EA::Scheduler::InferenceWorkerSelection LoadInferenceWorkerSelection(
         transaction, experimentId, "infer", &persisted);
     if (loaded != nullptr) *loaded = persisted;
     return EA::Scheduler::SelectInferenceWorker(
-        persisted, InferenceWorkerRoutingConfigurationFor(options));
+        persisted, SemanticWorkerRegistryFor(options));
 }
 
 bool SemanticWorkerPreflight(
@@ -10488,7 +10524,7 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
-    std::string selectedWorkerExecutable = options.selfPath;
+    std::string selectedWorkerExecutable = options.currentWorkerExecutablePath;
     EA::Scheduler::SemanticAdmissionDecision semanticAdmission;
     if (phase == "infer")
     {
@@ -10986,7 +11022,7 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
         EA::TrainingObjective::CanonicalText(
             experiment.trainingObjective));
     std::vector<std::string> argv;
-    argv.push_back(options.selfPath);
+    argv.push_back(options.currentWorkerExecutablePath);
     AddCliFlag(argv, "--train");
     AddCliOption(argv, "--log-level", "summary");
     AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
@@ -11062,7 +11098,7 @@ std::vector<std::string> BuildAnalyzeCommand(const SchedulerOptions& options,
                                                     const ExperimentRow& experiment)
 {
     std::vector<std::string> argv;
-    argv.push_back(options.selfPath);
+    argv.push_back(options.currentWorkerExecutablePath);
     AddCliOption(argv, "--analyze-experiment", std::to_string(experiment.experimentId));
     if (options.autoGenerateReports)
         AddCliFlag(argv, "--auto-generate-reports");
@@ -15029,7 +15065,7 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
         }
 
         SchedulerOptions child;
-        child.selfPath = options.selfPath;
+        child.schedulerExecutablePath = options.schedulerExecutablePath;
         child.schedulerAuthority = options.schedulerAuthority;
         child.queueExperiment = true;
         child.resumeModelId = evaluation.selected.modelId;
@@ -15682,7 +15718,7 @@ public:
         long long sourceExperimentId) override
     {
         SchedulerOptions queueOptions;
-        queueOptions.selfPath = options_.selfPath;
+        queueOptions.schedulerExecutablePath = options_.schedulerExecutablePath;
         queueOptions.schedulerAuthority = options_.schedulerAuthority;
         queueOptions.queueContinuationExperimentId = sourceExperimentId;
         const int result = RunQueueContinuationCommand(queueOptions);
@@ -18565,7 +18601,7 @@ ClaimCheckpointAnalysis(
         options.schedulerAuthority.fencingToken,
         claim.evaluation.experiment.experimentId,
         claim.evaluation.checkpointEvalId,
-        options.selfPath,
+        options.schedulerExecutablePath,
         options.invocationCommandLine,
         commandIdentity,
         ColumnExists(transaction, "experiment_checkpoint_eval",
@@ -19343,7 +19379,7 @@ std::string SchedulerCancellationReconciliationOwner(
         EA::GlobalExperimentControl::ReadProcessStartIdentity(pid);
     return "scheduler:pid:" + std::to_string(pid) +
            ";start:" + startIdentity.value_or("unavailable") +
-           ";executable:" + options.selfPath;
+           ";executable:" + options.schedulerExecutablePath;
 }
 
 int RunSchedulerOnce(const SchedulerOptions& options,
@@ -19380,7 +19416,7 @@ int RunSchedulerOnce(const SchedulerOptions& options,
                 w,
                 SchedulerCancellationReconciliationOwner(options),
                 true);
-            EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
+            EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.schedulerExecutablePath, "scheduler_start");
             ReapSchedulerOwnedChildren(w, options);
             RecoverOrphanedRunningExperiments(
                 w, options, logState, options.schedulerVerbose);
@@ -19413,6 +19449,24 @@ int RunSchedulerOnce(const SchedulerOptions& options,
 
 int RunScheduler(SchedulerOptions options)
 {
+    try
+    {
+        options.semanticWorkerRegistry =
+            EA::Scheduler::SemanticWorkerRegistry::Load({
+                options.semanticWorkerRegistryPath,
+                options.legacyLayout6InferWorkerPath});
+        options.currentWorkerExecutablePath =
+            options.semanticWorkerRegistry->currentWorker()
+                .canonicalExecutablePath;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "SCHEDULER_START_REJECTED"
+                  << ",diagnostic=" << error.what()
+                  << ",authority_acquired=0,workers_launched=0"
+                  << std::endl;
+        return 1;
+    }
     InstallSchedulerSignalHandlers();
     if (!AcquireSchedulerAuthority(options))
         return 3;
@@ -19438,7 +19492,7 @@ int RunScheduler(SchedulerOptions options)
                 w,
                 SchedulerCancellationReconciliationOwner(options),
                 true);
-            EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
+            EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.schedulerExecutablePath, "scheduler_start");
             BeginSchedulerPollLogging(&logState);
             recoveryCount = RecoverOrphanedRunningExperiments(
                 w, options, &logState, options.schedulerVerbose);
@@ -19457,8 +19511,12 @@ int RunScheduler(SchedulerOptions options)
               << ",max_train_procs=" << options.maxTrainProcs
               << ",max_infer_procs=" << options.maxInferProcs
               << ",max_analyze_procs=" << options.maxAnalyzeProcs
-              << ",scheduler_canonical_executable=" << options.selfPath
-              << ",legacy_layout6_infer_worker="
+              << ",scheduler_canonical_executable=" << options.schedulerExecutablePath
+              << ",semantic_worker_registry="
+              << options.semanticWorkerRegistry->canonicalRegistryPath()
+              << ",current_worker_canonical_executable="
+              << options.currentWorkerExecutablePath
+              << ",legacy_layout6_identity_assertion="
               << options.legacyLayout6InferWorkerPath.value_or("NULL")
               << ",auto_evaluate_continuations="
               << (options.autoEvaluateContinuations ? "1" : "0")
@@ -22797,7 +22855,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << schedulerProtocol[0][5].as<int>()
                   << "\n";
     }
-    std::cout << "Status reporter executable: " << options.selfPath << "\n"
+    std::cout << "Status reporter executable: " << options.schedulerExecutablePath << "\n"
               << "Scheduler canonical executable: "
               << schedulerCanonicalExecutable << "\n"
               << "Scheduler executable identity: "
@@ -22987,7 +23045,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
         }
         std::cout << "SCHEDULER_STATUS_EXECUTABLE_IDENTITY"
                   << ",status_reporter_executable_path="
-                  << options.selfPath
+                  << options.schedulerExecutablePath
                   << ",scheduler_canonical_executable_path="
                   << schedulerCanonicalExecutable
                   << ",scheduler_observed_executable_path="
@@ -23338,6 +23396,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
         << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
+        << "[--semantic-worker-registry=/absolute/path/to/registry.json] "
         << "[--legacy-layout6-infer-worker=/absolute/path/to/LSTM_Release] "
         << "[--scheduler-log-dir=PATH] [--auto-generate-reports] [--experiment-report-dir=PATH] "
         << "[--lstm-profile-hotspots] [--lstm-profile-output=PATH] "
@@ -23347,9 +23406,11 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "[--continuation-dry-run]\n"
         << "Scheduler worker limits accept non-negative integers. Zero prevents new workers "
         << "in that capacity class without stopping the scheduler or existing workers.\n"
-        << "Layout-6 inference is fail-closed unless an explicitly configured, "
-        << "canonical executable legacy worker path is supplied. Train, analyze, "
-        << "and layout-7 inference always use the canonical scheduler executable.\n"
+        << "The semantic-worker registry is validated before scheduler authority "
+        << "is acquired. Train and final analysis use its current published worker; "
+        << "final and checkpoint inference select an exact registered semantic layout. "
+        << "The transitional layout-6 option is only an exact-identity assertion "
+        << "against the registry and is never forwarded to child workers.\n"
         << "Usage: " << exe
         << " --create-economic-calendar-snapshot [--dry-run]\n"
         << "Computes the deterministic current economic-calendar corpus identity. "
@@ -23927,7 +23988,7 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
                 "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
             std::cout, std::cerr,
             EA::CampaignOperations::CaptureActualManagerBuildContract(
-                options.selfPath));
+                options.schedulerExecutablePath));
     if (options.campaignOperationsProductionStatus)
         return EA::CampaignOperations::RunProductionStatusCommand(
             CampaignOperationsProductionConnectionString(
@@ -23940,12 +24001,12 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
             CampaignOperationsProductionConnectionString(
                 "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER"),
             *options.campaignOperationsManagerRunOnceLimit,
-            options.selfPath, std::cout, std::cerr);
+            options.schedulerExecutablePath, std::cout, std::cerr);
     if (options.campaignOperationsProductionEnable)
     {
         const auto build =
             EA::CampaignOperations::CaptureActualManagerBuildContract(
-                options.selfPath);
+                options.schedulerExecutablePath);
         if (!build)
             throw std::runtime_error(
                 "production enable requires a clean Release build identity");
@@ -23981,7 +24042,7 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
     {
         const auto build =
             EA::CampaignOperations::CaptureActualManagerBuildContract(
-                options.selfPath);
+                options.schedulerExecutablePath);
         if (!build)
             throw std::runtime_error(
                 "production dispatch requires a clean Release build identity");
@@ -24000,7 +24061,7 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
                     "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
                 CampaignOperationsProductionConnectionString(
                     "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER"),
-                request, options.selfPath);
+                request, options.schedulerExecutablePath);
         std::cout << "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH"
                   << ",request_id=" << result.requestId.value()
                   << ",classification="
@@ -25083,7 +25144,7 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
                         invocationStarted)
                         .count()) +
-                ";executable:" + options.selfPath;
+                ";executable:" + options.schedulerExecutablePath;
             return EA::GlobalExperimentControl::RunCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
         }

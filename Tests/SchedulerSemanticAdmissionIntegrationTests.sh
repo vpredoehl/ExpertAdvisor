@@ -4,12 +4,30 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:?usage: $0 /path/to/isolated/LSTM_Release}"
 scheduler_binary="$(cd "$(dirname "${scheduler_binary}")" && pwd)/$(basename "${scheduler_binary}")"
-legacy_layout6_binary="${2:-}"
-if [[ -n "${legacy_layout6_binary}" ]]; then
-    legacy_layout6_binary="$(cd "$(dirname "${legacy_layout6_binary}")" && pwd)/$(basename "${legacy_layout6_binary}")"
-fi
+semantic_worker_registry="${2:-${repo_root}/Builds/SemanticWorkers/registry.json}"
+semantic_worker_registry="$(cd "$(dirname "${semantic_worker_registry}")" && pwd)/$(basename "${semantic_worker_registry}")"
+test -f "${semantic_worker_registry}"
+worker_path_for_layout() {
+    /usr/bin/python3 - "${semantic_worker_registry}" "$1" <<'PY'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+layout = int(sys.argv[2])
+registry = json.loads(path.read_text(encoding="utf-8"))
+by_layout = {entry["semantic_layout"]: entry for entry in registry["workers"]}
+print((path.parent / by_layout[layout]["executable"]).resolve(strict=True))
+PY
+}
+current_worker_binary="$(worker_path_for_layout 7)"
+legacy_layout6_binary="$(worker_path_for_layout 6)"
+test -x "${current_worker_binary}"
+test -x "${legacy_layout6_binary}"
 test_db="ea_scheduler_semantic_admission_test_${$}"
 test_dir="$(mktemp -d /tmp/ea_scheduler_semantic_admission.XXXXXX)"
+current_only_root="${test_dir}/current-only-semantic-workers"
+current_only_registry="${current_only_root}/registry.json"
+current_only_worker_binary=""
 
 cleanup() {
     local status=$?
@@ -20,8 +38,10 @@ cleanup() {
             local command=""
             command="$(ps -p "${pid}" -o command= 2>/dev/null || true)"
             if [[ ( "${command}" == *"${scheduler_binary}"* ||
-                    ( -n "${legacy_layout6_binary}" &&
-                      "${command}" == *"${legacy_layout6_binary}"* ) ) &&
+                    "${command}" == *"${current_worker_binary}"* ||
+                    ( -n "${current_only_worker_binary}" &&
+                      "${command}" == *"${current_only_worker_binary}"* ) ||
+                    "${command}" == *"${legacy_layout6_binary}"* ) &&
                   ( "${command}" == *"--scheduler-experiment-id=917001"* ||
                     "${command}" == *"--scheduler-experiment-id=917002"* ||
                     "${command}" == *"--scheduler-experiment-id=917003"* ||
@@ -46,6 +66,36 @@ cleanup() {
     return "${status}"
 }
 trap cleanup EXIT
+
+current_only_worker_binary="$(/usr/bin/python3 - \
+    "${semantic_worker_registry}" "${current_only_root}" <<'PY'
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+
+source, destination = map(Path, sys.argv[1:])
+registry = json.loads(source.read_text(encoding="utf-8"))
+current = [entry for entry in registry["workers"]
+           if entry["semantic_layout"] == registry["current_layout"]]
+assert len(current) == 1
+entry = current[0]
+for field in ("executable", "manifest"):
+    source_artifact = (source.parent / entry[field]).resolve(strict=True)
+    destination_artifact = destination / entry[field]
+    destination_artifact.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source_artifact, destination_artifact)
+    except OSError:
+        shutil.copy2(source_artifact, destination_artifact)
+registry["workers"] = [entry]
+(destination / "registry.json").write_text(
+    json.dumps(registry, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print((destination / entry["executable"]).resolve(strict=True))
+PY
+)"
+test -x "${current_only_worker_binary}"
 
 createdb "${test_db}"
 pg_dump -s -h 127.0.0.1 -U vjp -d LSTM |
@@ -201,22 +251,23 @@ SQL
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once \
     --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
+    --semantic-worker-registry="${current_only_registry}" \
     --scheduler-log-dir="${test_dir}/logs" \
     >"${test_dir}/admission.out" 2>&1
 
-grep -q 'SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE,experiment_id=917001,phase=infer,.*diagnostic=semantic_worker_unavailable_for_layout=6,capacity_consumed=0,child_launched=0,experiment_status_changed=false' \
+grep -q 'SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE,experiment_id=917001,phase=infer,.*diagnostic=semantic_worker_layout_unsupported:layout=6,capacity_consumed=0,child_launched=0,experiment_status_changed=false' \
     "${test_dir}/admission.out"
 ! grep -q 'SCHEDULER_CHILD_LAUNCHED,.*experiment_id=917001' \
     "${test_dir}/admission.out"
 
-grep -q 'SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE,experiment_id=917004,phase=infer,.*model_input_width=77,.*model_input_semantic_layout_version=6,.*diagnostic=semantic_worker_unavailable_for_layout=6,capacity_consumed=0,child_launched=0,experiment_status_changed=false' \
+grep -q 'SCHEDULER_SEMANTIC_WORKER_INCOMPATIBLE,experiment_id=917004,phase=infer,.*model_input_width=77,.*model_input_semantic_layout_version=6,.*diagnostic=semantic_worker_layout_unsupported:layout=6,capacity_consumed=0,child_launched=0,experiment_status_changed=false' \
     "${test_dir}/admission.out"
 ! grep -q 'SCHEDULER_CHILD_LAUNCHED,.*experiment_id=917004' \
     "${test_dir}/admission.out"
 
 grep -q 'SCHEDULER_CHILD_LAUNCHED,.*experiment_id=917002,.*phase=infer' \
     "${test_dir}/admission.out"
-grep -Fq "SCHEDULER_INFER_WORKER_SELECTED,experiment_id=917002,model_id=917012,model_input_width=77,model_input_semantic_layout_version=7,worker_semantic_layout_version=7,worker_executable=${scheduler_binary},reason=current_semantic_layout" \
+grep -Fq "SCHEDULER_INFER_WORKER_SELECTED,experiment_id=917002,model_id=917012,model_input_width=77,model_input_semantic_layout_version=7,worker_semantic_layout_version=7,worker_executable=${current_only_worker_binary},reason=current_published_semantic_worker" \
     "${test_dir}/admission.out"
 
 test "$(psql -X -At -d "${test_db}" -c \
@@ -232,41 +283,74 @@ test "$(psql -X -At -d "${test_db}" -c \
     "SELECT canonical_executable_path
      FROM experiment_scheduler_worker_attempt
      WHERE experiment_id=917002 ORDER BY worker_attempt_id DESC LIMIT 1")" = \
-    "${scheduler_binary}"
+    "${current_only_worker_binary}"
+
+test "$(psql -X -At -d "${test_db}" -c \
+    "SELECT position('--semantic-worker-registry' IN command_line)
+     FROM experiment_scheduler_worker_attempt
+     WHERE experiment_id=917002 ORDER BY worker_attempt_id DESC LIMIT 1")" = 0
 
 test "$(psql -X -At -d "${test_db}" -c \
     "SELECT count(*) FROM experiment_scheduler_worker_attempt
      WHERE experiment_id=917004")" = "0"
 
-if [[ -n "${legacy_layout6_binary}" ]]; then
-    test -x "${legacy_layout6_binary}"
-    layout7_pid="$(psql -X -At -d "${test_db}" -c \
+layout7_pid="$(psql -X -At -d "${test_db}" -c \
         "SELECT worker_pid FROM experiment_scheduler_worker_attempt
          WHERE experiment_id=917002 ORDER BY worker_attempt_id DESC LIMIT 1")"
-    for _ in {1..200}; do
-        if [[ -z "${layout7_pid}" ]] ||
-           ! kill -0 "${layout7_pid}" >/dev/null 2>&1; then
-            break
-        fi
-        sleep 0.02
-    done
-    LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
-        --schedule-experiments --scheduler-once --recover-orphans-only \
-        --max-train-procs=0 --max-infer-procs=0 --max-analyze-procs=0 \
-        --scheduler-log-dir="${test_dir}/logs" \
-        >"${test_dir}/layout7-recovery.out" 2>&1
-    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
-        "UPDATE experiment SET scheduler_priority='low'
-         WHERE experiment_id=917004"
+for _ in {1..200}; do
+    if [[ -z "${layout7_pid}" ]] ||
+       ! kill -0 "${layout7_pid}" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.02
+done
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --schedule-experiments --scheduler-once --recover-orphans-only \
+    --max-train-procs=0 --max-infer-procs=0 --max-analyze-procs=0 \
+    --semantic-worker-registry="${current_only_registry}" \
+    --scheduler-log-dir="${test_dir}/logs" \
+    >"${test_dir}/layout7-recovery.out" 2>&1
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "UPDATE experiment SET scheduler_priority='low'
+     WHERE experiment_id=917004"
+
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --schedule-experiments --scheduler-once --recover-orphans-only \
+    --max-train-procs=0 --max-infer-procs=0 --max-analyze-procs=0 \
+    --semantic-worker-registry="${semantic_worker_registry}" \
+    --legacy-layout6-infer-worker="${legacy_layout6_binary}" \
+    --scheduler-log-dir="${test_dir}/logs" \
+    >"${test_dir}/matching-legacy-assertion.out" 2>&1
+grep -Fq "legacy_layout6_identity_assertion=${legacy_layout6_binary}" \
+    "${test_dir}/matching-legacy-assertion.out"
+
+invocations_before_conflict="$(psql -X -At -d "${test_db}" -c \
+    'SELECT count(*) FROM experiment_scheduler_invocation')"
+set +e
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --schedule-experiments --scheduler-once --recover-orphans-only \
+    --max-train-procs=0 --max-infer-procs=0 --max-analyze-procs=0 \
+    --semantic-worker-registry="${semantic_worker_registry}" \
+    --legacy-layout6-infer-worker="${current_worker_binary}" \
+    --scheduler-log-dir="${test_dir}/logs" \
+    >"${test_dir}/conflicting-legacy-assertion.out" 2>&1
+conflict_rc=$?
+set -e
+test "${conflict_rc}" = 1
+grep -q 'SCHEDULER_START_REJECTED,diagnostic=legacy_layout6_worker_registry_conflict:.*authority_acquired=0,workers_launched=0' \
+    "${test_dir}/conflicting-legacy-assertion.out"
+test "$(psql -X -At -d "${test_db}" -c \
+    'SELECT count(*) FROM experiment_scheduler_invocation')" = \
+    "${invocations_before_conflict}"
 
     LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
         --schedule-experiments --scheduler-once \
         --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
-        --legacy-layout6-infer-worker="${legacy_layout6_binary}" \
+        --semantic-worker-registry="${semantic_worker_registry}" \
         --scheduler-log-dir="${test_dir}/logs" \
         >"${test_dir}/layout6-routing.out" 2>&1
 
-    grep -Fq "SCHEDULER_INFER_WORKER_SELECTED,experiment_id=917001,model_id=917011,model_input_width=77,model_input_semantic_layout_version=6,worker_semantic_layout_version=6,worker_executable=${legacy_layout6_binary},reason=legacy_semantic_layout" \
+    grep -Fq "SCHEDULER_INFER_WORKER_SELECTED,experiment_id=917001,model_id=917011,model_input_width=77,model_input_semantic_layout_version=6,worker_semantic_layout_version=6,worker_executable=${legacy_layout6_binary},reason=immutable_historical_semantic_worker" \
         "${test_dir}/layout6-routing.out"
     grep -q 'SCHEDULER_CHILD_LAUNCHED,.*experiment_id=917001,.*phase=infer' \
         "${test_dir}/layout6-routing.out"
@@ -292,12 +376,17 @@ if [[ -n "${legacy_layout6_binary}" ]]; then
          FROM experiment_scheduler_worker_attempt
          WHERE experiment_id=917001 ORDER BY worker_attempt_id DESC LIMIT 1")" = 0
     test "$(psql -X -At -d "${test_db}" -c \
+        "SELECT position('--semantic-worker-registry' IN command_line)
+         FROM experiment_scheduler_worker_attempt
+         WHERE experiment_id=917001 ORDER BY worker_attempt_id DESC LIMIT 1")" = 0
+    test "$(psql -X -At -d "${test_db}" -c \
         "SELECT worker_executable FROM experiment WHERE experiment_id=917001")" = \
         "${legacy_layout6_binary}"
     test "$(psql -X -At -d "${test_db}" -c \
         "SELECT canonical_executable_path
          FROM experiment_scheduler_invocation
-         WHERE command_line LIKE '%--legacy-layout6-infer-worker=%'
+         WHERE command_line LIKE '%--semantic-worker-registry=%'
+           AND command_line NOT LIKE '%--legacy-layout6-infer-worker=%'
          ORDER BY ownership_acquired_at DESC LIMIT 1")" = \
         "${scheduler_binary}"
 
@@ -323,7 +412,7 @@ if [[ -n "${legacy_layout6_binary}" ]]; then
     LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
         --schedule-experiments --scheduler-once --recover-orphans-only \
         --max-train-procs=0 --max-infer-procs=0 --max-analyze-procs=0 \
-        --legacy-layout6-infer-worker="${legacy_layout6_binary}" \
+        --semantic-worker-registry="${semantic_worker_registry}" \
         --scheduler-log-dir="${test_dir}/logs" \
         >"${test_dir}/layout6-final-recovery.out" 2>&1
     test "$(psql -X -At -d "${test_db}" -c \
@@ -341,11 +430,11 @@ if [[ -n "${legacy_layout6_binary}" ]]; then
     LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
         --schedule-experiments --scheduler-once \
         --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
-        --legacy-layout6-infer-worker="${legacy_layout6_binary}" \
+        --semantic-worker-registry="${semantic_worker_registry}" \
         --scheduler-log-dir="${test_dir}/logs" \
         >"${test_dir}/layout6-checkpoint-routing.out" 2>&1
 
-    grep -Fq "SCHEDULER_INFER_WORKER_SELECTED,experiment_id=917005,model_id=917016,model_input_width=77,model_input_semantic_layout_version=6,worker_semantic_layout_version=6,worker_executable=${legacy_layout6_binary},reason=legacy_semantic_layout" \
+    grep -Fq "SCHEDULER_INFER_WORKER_SELECTED,experiment_id=917005,model_id=917016,model_input_width=77,model_input_semantic_layout_version=6,worker_semantic_layout_version=6,worker_executable=${legacy_layout6_binary},reason=immutable_historical_semantic_worker" \
         "${test_dir}/layout6-checkpoint-routing.out"
     grep -q 'SCHEDULER_CHILD_LAUNCHED,.*experiment_id=917005,.*phase=infer,worker_kind=checkpoint_infer' \
         "${test_dir}/layout6-checkpoint-routing.out"
@@ -373,14 +462,19 @@ if [[ -n "${legacy_layout6_binary}" ]]; then
          WHERE checkpoint_eval_id=917101
          ORDER BY worker_attempt_id DESC LIMIT 1")" = 0
     test "$(psql -X -At -d "${test_db}" -c \
+        "SELECT position('--semantic-worker-registry' IN command_line)
+         FROM experiment_scheduler_worker_attempt
+         WHERE checkpoint_eval_id=917101
+         ORDER BY worker_attempt_id DESC LIMIT 1")" = 0
+    test "$(psql -X -At -d "${test_db}" -c \
         "SELECT worker_executable
          FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=917101")" = \
         "${legacy_layout6_binary}"
-fi
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once \
     --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
+    --semantic-worker-registry="${semantic_worker_registry}" \
     --scheduler-log-dir="${test_dir}/logs" \
     >"${test_dir}/legacy-train-admission.out" 2>&1
 
@@ -393,5 +487,16 @@ grep -q 'SCHEDULER_CHILD_LAUNCHED,.*experiment_id=917003,.*phase=train' \
 test "$(psql -X -At -d "${test_db}" -c \
     "SELECT count(*) FROM experiment_scheduler_worker_attempt
      WHERE experiment_id=917003")" = "1"
+
+test "$(psql -X -At -d "${test_db}" -c \
+    "SELECT canonical_executable_path
+     FROM experiment_scheduler_worker_attempt
+     WHERE experiment_id=917003 ORDER BY worker_attempt_id DESC LIMIT 1")" = \
+    "${current_worker_binary}"
+
+test "$(psql -X -At -d "${test_db}" -c \
+    "SELECT position('--semantic-worker-registry' IN command_line)
+     FROM experiment_scheduler_worker_attempt
+     WHERE experiment_id=917003 ORDER BY worker_attempt_id DESC LIMIT 1")" = 0
 
 printf '%s\n' "SchedulerSemanticAdmissionIntegrationTests passed"

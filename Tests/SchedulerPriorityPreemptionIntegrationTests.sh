@@ -3,7 +3,19 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:-${repo_root}/DerivedData/Development/SchedulerRecoveryRequeuePreemption/Build/Products/Debug/LSTM_Release}"
-legacy_layout6_binary="${2:-}"
+semantic_worker_registry="${2:-${repo_root}/Builds/SemanticWorkers/registry.json}"
+semantic_worker_registry="$(cd "$(dirname "${semantic_worker_registry}")" && pwd)/$(basename "${semantic_worker_registry}")"
+legacy_layout6_binary="$(/usr/bin/python3 - "${semantic_worker_registry}" <<'PY'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+registry = json.loads(path.read_text(encoding="utf-8"))
+entry = next(worker for worker in registry["workers"]
+             if worker["semantic_layout"] == 6)
+print((path.parent / entry["executable"]).resolve(strict=True))
+PY
+)"
 test_db="ea_scheduler_preemption_${$}"
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/ea-scheduler-preemption.XXXXXX")"
 process_binary="${test_dir}/GlobalExperimentControlProcessTests"
@@ -92,6 +104,7 @@ run_scheduler() {
         --schedule-experiments --scheduler-once \
         --max-train-procs="${train_capacity}" \
         --max-infer-procs="${infer_capacity}" --max-analyze-procs=0 \
+        --semantic-worker-registry="${semantic_worker_registry}" \
         --scheduler-log-dir="${test_dir}/logs" "$@" >"${output}" 2>&1
 }
 
@@ -350,11 +363,9 @@ assert_no_equal_preemption 994060 normal
 assert_no_equal_preemption 994070 low
 assert_no_equal_preemption 994075 high infer
 
-# A semantically eligible high-priority layout-6 candidate uses the ordinary
-# infer slot and preempts a low-priority layout-7 worker. This optional case
-# requires the audited historical worker executable.
+# A registry-selected high-priority layout-6 candidate uses the ordinary infer
+# slot and preempts a low-priority layout-7 worker without a per-layout flag.
 if [[ -n "${legacy_layout6_binary}" ]]; then
-    legacy_layout6_binary="$(cd "$(dirname "${legacy_layout6_binary}")" && pwd)/$(basename "${legacy_layout6_binary}")"
     test -x "${legacy_layout6_binary}"
     launch_and_persist 994140 9994140 infer running low none \
         '2026-03-02 00:00:00+00' 77 7
@@ -375,9 +386,10 @@ INSERT INTO experiment(
 );
 SQL
     attach_infer_model 994141 >/dev/null
-    run_scheduler 0 1 "${test_dir}/mixed-layout-priority.out" \
-        --legacy-layout6-infer-worker="${legacy_layout6_binary}"
+    run_scheduler 0 1 "${test_dir}/mixed-layout-priority.out"
     grep -q 'SCHEDULER_INFER_WORKER_SELECTED,experiment_id=994141,.*model_input_semantic_layout_version=6,worker_semantic_layout_version=6' \
+        "${test_dir}/mixed-layout-priority.out"
+    grep -Fq "worker_executable=${legacy_layout6_binary},reason=immutable_historical_semantic_worker" \
         "${test_dir}/mixed-layout-priority.out"
     grep -q 'SCHEDULER_PRIORITY_PREEMPTED,candidate_experiment_id=994141.*victim_experiment_id=994140' \
         "${test_dir}/mixed-layout-priority.out"

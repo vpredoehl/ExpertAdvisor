@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:?usage: $0 /path/to/isolated/LSTM_Release}"
 scheduler_binary="$(cd "$(dirname "${scheduler_binary}")" && pwd)/$(basename "${scheduler_binary}")"
+semantic_worker_registry="${2:-${repo_root}/Builds/SemanticWorkers/registry.json}"
+semantic_worker_registry="$(cd "$(dirname "${semantic_worker_registry}")" && pwd)/$(basename "${semantic_worker_registry}")"
 test_db="ea_scheduler_infer_orphan_result_test_${$}"
 test_dir="$(mktemp -d /tmp/ea_scheduler_infer_orphan_result.XXXXXX)"
 
@@ -182,6 +184,7 @@ SQL
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once --recover-orphans-only \
+    --semantic-worker-registry="${semantic_worker_registry}" \
     --scheduler-log-dir="${test_dir}/recovery-logs" \
     >"${test_dir}/recovery.out" 2>&1
 
@@ -235,6 +238,7 @@ first_snapshot="$(scalar "SELECT md5(string_agg(row_to_json(x)::text,'|' ORDER B
           WHERE e.experiment_id BETWEEN 918001 AND 918004) x")"
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once --recover-orphans-only \
+    --semantic-worker-registry="${semantic_worker_registry}" \
     --scheduler-log-dir="${test_dir}/second-recovery-logs" \
     >"${test_dir}/second-recovery.out" 2>&1
 second_snapshot="$(scalar "SELECT md5(string_agg(row_to_json(x)::text,'|' ORDER BY x.experiment_id))

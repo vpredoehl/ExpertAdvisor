@@ -1,6 +1,9 @@
 # Xcode build products
 DerivedData/
 Build/*
+# Durable operational semantic-worker artifacts are content-addressed but
+# intentionally live outside normal Git history.
+Builds/SemanticWorkers/
 ratedata.gaincapital.com
 *.swp
 xcuserdata/

@@ -1,65 +1,86 @@
-# Semantic-layout inference worker routing
+# Semantic-worker registry and executable identities
 
-The canonical scheduler remains the current `LSTM_Release` process and owns
-the generation-52 scheduler lease. Phase 20N adds one optional inference-only
-route:
+The scheduler reads `Builds/SemanticWorkers/registry.json` once, validates all
+entries before acquiring scheduler authority, and keeps the resulting typed
+`SemanticWorkerRegistry` in memory. The registry maps exact semantic layouts;
+it never derives compatibility from layout ordering, experiment IDs, directory
+contents, timestamps, or `layout <= current` rules.
 
-- semantic layout 7, width 77: the canonical scheduler executable;
-- semantic layout 6, width 77: the explicitly configured legacy executable;
-- every other layout, a missing/incomplete identity, or a width mismatch:
-  fail closed without reserving capacity or launching a child.
+The three executable identities are deliberately separate:
 
-Configure the legacy route only on the canonical scheduler invocation:
+- `schedulerExecutablePath` is the executable that owns the scheduler lease
+  and fencing identity.
+- `currentWorkerExecutablePath` is the registry's current published worker.
+  New train and final-analysis attempts use it. Checkpoint analysis remains
+  in-process scheduler work and therefore uses scheduler identity.
+- `selectedWorkerExecutablePath` is chosen per dispatch. Final and checkpoint
+  inference both resolve the model's exact semantic layout through the same
+  registry and persist that canonical immutable path before launch.
 
-```bash
---legacy-layout6-infer-worker=/absolute/canonical/path/to/LSTM_Release
-```
-
-The configured path is resolved with `realpath` and must identify an existing,
-executable regular file. No PATH search, directory scan, timestamp inference,
-or automatic binary discovery occurs. Train and analyze always use the
-canonical scheduler executable. Final and checkpoint inference use the same
-semantic selector.
-
-The selected executable is persisted on the reservation and exact worker
-attempt, copied to the experiment or checkpoint worker fields, and used by
-spawn persistence and process observation. Launch requires exact equality
-between the reserved path and `argv[0]`, re-canonicalizes the path, and checks
-that it remains executable. Scheduler invocation and lease identity continue
-to use the canonical scheduler executable and are not derived from the worker
-selection.
-
-## Historical layout-6 worker compatibility
-
-The approved historical source is commit
-`7645265bca0c2529523e1d2cdb37e7d023dfd559`. Its worker contract was audited
-against current HEAD:
-
-- it parses and requires `--scheduler-worker-attempt-id` for scheduler-managed
-  work;
-- it resolves its own canonical executable and performs exact active-attempt
-  registration against worker ID, experiment/checkpoint identity, worker kind,
-  phase, PID, process group, process-start identity, and persisted executable;
-- it persists final and checkpoint inference results through the same
-  attempt-aware inference workflow used by the current scheduler;
-- the inference argv emitted by the scheduler uses only options already
-  accepted by that commit.
-
-The verified binary at the time of the audit was:
+Every registered executable is stored at:
 
 ```text
-/Volumes/Developer SSD/ExpertAdvisor-layout6/DerivedData/Layout6/Build/Products/Release/LSTM_Release
-SHA-256 945225dd2a42f87a2a8dfbfe47b006708e3d90c88a858d25787e5a2237c62dd7
+Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/LSTM_Release
+Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/manifest.json
 ```
 
-Its source checkout is clean at the approved commit and declares semantic
-layout version 6. The binary contains the exact worker-attempt registration
-CLI and diagnostics. Layout 6 is not merely relabeled layout 7: the registry
-records layouts 6 and 7 as incompatible same-width siblings descending from
-layout 5. Layout 6 retains the historical exact-cutoff first-release surprise
-contract, while layout 7 applies the corrected half-open completed-bar cutoff.
+The operational registry and binaries are ignored by Git. The checked-in v1
+schema is `docs/semantic-worker-registry.schema.json`. Registry paths are
+artifact-root-relative and must exactly match the content-addressed structure.
+Startup canonicalizes them, rejects escapes and missing/non-executable files,
+compares each manifest, and hashes each executable once. Polling and dispatch
+reuse the validated in-memory identity, so immutable artifacts are not hashed
+on every scheduler poll.
 
-Do not use the layout-6 executable as a scheduler. Do not replace it in place
-while an attempt is active. A production change should verify the checkout,
-binary hash, executable permissions, and canonical path before starting the
-current scheduler with the option above.
+The publisher is the sole registry writer; schedulers are read-only consumers
+of the startup snapshot. A startup validation failure occurs before authority
+acquisition or dispatch. Recovery means restoring the accepted immutable
+artifact/manifest or republishing from a successful clean Release build, never
+editing a registered artifact in place. The `current` symlink is only an
+operator convenience; `registry.json` remains authoritative.
+
+Current layout 7 and historical layout 6 are explicit entries. Layout 6 is the
+accepted inference-only artifact from commit
+`7645265bca0c2529523e1d2cdb37e7d023dfd559`, SHA-256
+`945225dd2a42f87a2a8dfbfe47b006708e3d90c88a858d25787e5a2237c62dd7`.
+Normal routing does not depend on the separate layout-6 worktree.
+
+The optional scheduler-only setting is:
+
+```bash
+--semantic-worker-registry=/absolute/path/to/registry.json
+```
+
+Without it, the scheduler uses
+`$PWD/Builds/SemanticWorkers/registry.json`. This option is never placed in a
+child command. `--legacy-layout6-infer-worker` remains temporarily accepted as
+an identity assertion: the supplied canonical path must equal the registry's
+layout-6 path. It cannot override the registry and is never inherited by a
+child. Remove the flag after production launch configuration no longer passes
+the old external path and a registry-backed scheduler restart has been
+operationally validated.
+
+## Publishing and rollover
+
+`Publish LSTM Canonical` runs only after its normal Release dependency succeeds
+and calls `Scripts/PublishSemanticWorker.py`. Release provenance still requires
+a clean checkout. The publisher determines the current semantic contract from
+the source headers, obtains clean `HEAD`, verifies the commit is embedded in the
+built executable, and computes SHA-256. It then:
+
+1. copies into a same-filesystem staging directory;
+2. verifies the staged hash and fsyncs executable, manifest, and directory;
+3. atomically renames the completed directory into its immutable final path,
+   refusing to overwrite or repair a conflicting existing path;
+4. validates the prior registry, retains all prior artifacts, changes the old
+   current rule to historical on a layout rollover, and atomically replaces
+   `registry.json`;
+5. only after the registry replacement, atomically updates the `current`
+   convenience symlink.
+
+Any build, provenance, copy, hash, manifest, or registry failure leaves the
+previous registry authoritative. An artifact staged successfully before a
+registry failure is merely unreachable and safe. Already-running attempts keep
+their persisted immutable executable path across current-worker publication.
+Retention is indefinite/manual and reachability-based; the publisher performs
+no deletion.
