@@ -2,77 +2,56 @@
 #include "../Sources/SchedulerCore/SchedulerPolicy.hpp"
 #include "../Sources/SchedulerCore/SchedulerRuntimeContext.hpp"
 
-#include "../Headers/ExperimentScheduler.hpp"
-
 #include <cassert>
-#include <optional>
 #include <stdexcept>
 #include <string>
-
-namespace
-{
-int recognizedArgc = -1;
-int runArgc = -1;
-EA::SchedulerCore::WorkerAttemptRegistration observedRegistration;
-}
-
-namespace EA::ExperimentScheduler
-{
-
-bool IsExperimentSchedulerCommand(int argc, const char*[])
-{
-    recognizedArgc = argc;
-    return true;
-}
-
-int RunExperimentSchedulerCli(int argc, const char*[])
-{
-    runArgc = argc;
-    return 37;
-}
-
-bool RegisterSchedulerWorkerAttempt(
-    long long workerAttemptId,
-    const std::optional<long long>& experimentId,
-    const std::optional<long long>& checkpointEvalId,
-    const std::string& workerKind,
-    const std::string& lifecyclePhase)
-{
-    observedRegistration = {
-        workerAttemptId,
-        experimentId,
-        checkpointEvalId,
-        workerKind,
-        lifecyclePhase};
-    return true;
-}
-
-} // namespace EA::ExperimentScheduler
 
 int main()
 {
     using namespace EA::SchedulerCore;
 
-    const char* argv[] = {"LSTM_Release", "--scheduler-status"};
-    const CommandInvocation invocation{2, argv};
+    SchedulerDaemonConfiguration configuration;
+    configuration.schedulerOnce = true;
+    configuration.autoEvaluateContinuations = true;
+    int refreshCount = 0;
+    int cycleCount = 0;
+    int continuationCount = 0;
+    int reportedResult = -1;
+    bool reportedOwnershipLost = true;
+    bool reportedShutdown = true;
+    SchedulerDaemonOperations operations;
+    operations.stopRequested = [] { return false; };
+    operations.refreshAuthority = [&] {
+        ++refreshCount;
+        return true;
+    };
+    operations.runCycle = [&] {
+        ++cycleCount;
+        return 2;
+    };
+    operations.runAutomaticContinuationScan = [&] {
+        ++continuationCount;
+    };
+    operations.reportAuthorityLost = [](std::string_view) {
+        assert(false);
+    };
+    operations.sleepSeconds = [](unsigned int) { assert(false); };
+    operations.reportStop = [&] (
+        int result,
+        bool ownershipLost,
+        bool shutdownRequested) {
+        reportedResult = result;
+        reportedOwnershipLost = ownershipLost;
+        reportedShutdown = shutdownRequested;
+    };
     const SchedulerEngine engine;
-    assert(engine.recognizes(invocation));
-    assert(recognizedArgc == 2);
-    assert(engine.run(invocation) == 37);
-    assert(runArgc == 2);
-
-    const WorkerAttemptRegistration registration{
-        991,
-        618,
-        std::nullopt,
-        "experiment",
-        "train"};
-    assert(engine.registerWorkerAttempt(registration));
-    assert(observedRegistration.workerAttemptId == 991);
-    assert(observedRegistration.experimentId == 618);
-    assert(!observedRegistration.checkpointEvalId);
-    assert(observedRegistration.workerKind == "experiment");
-    assert(observedRegistration.lifecyclePhase == "train");
+    assert(engine.run(configuration, operations) == 2);
+    assert(refreshCount == 1);
+    assert(cycleCount == 1);
+    assert(continuationCount == 1);
+    assert(reportedResult == 2);
+    assert(!reportedOwnershipLost);
+    assert(!reportedShutdown);
 
     SchedulerRuntimeContext runtime;
     runtime.ownedChildren.emplace(

@@ -82,8 +82,11 @@
 #include "SchedulerCore/SchedulerAuthorityService.hpp"
 #include "SchedulerCore/SchedulerChildCompletionService.hpp"
 #include "SchedulerCore/SchedulerCycleService.hpp"
+#include "SchedulerCore/SchedulerDaemonCli.hpp"
+#include "SchedulerCore/SchedulerEngine.hpp"
 #include "SchedulerCore/SchedulerPolicy.hpp"
 #include "SchedulerCore/SchedulerRuntimeContext.hpp"
+#include "SchedulerCore/SchedulerWorkerRegistration.hpp"
 #include "SchedulerCore/WorkerControlService.hpp"
 #include "SchedulerCore/WorkerAttemptLifecycleService.hpp"
 #include "SchedulerCore/WorkerProcessController.hpp"
@@ -19513,7 +19516,10 @@ int RunSchedulerOnce(const SchedulerOptions& options,
     return service.runOnce();
 }
 
-int RunScheduler(SchedulerOptions options)
+int RunScheduler(
+    SchedulerOptions options,
+    const EA::SchedulerCore::SchedulerDaemonConfiguration&
+        daemonConfiguration)
 {
     EA::SchedulerCore::SchedulerRuntimeContext runtimeContext;
     options.runtimeContext = &runtimeContext;
@@ -19621,91 +19627,49 @@ int RunScheduler(SchedulerOptions options)
         return 0;
     }
 
-    int rc = 0;
-    bool ownershipLost = false;
     ContinuationAutoScanState continuationScanState;
-    do
-    {
-        if (gSchedulerStopRequested != 0)
-            break;
-        if (!RefreshSchedulerAuthority(options))
-        {
-            ownershipLost = true;
-            rc = 4;
-            break;
-        }
-        try
-        {
-            rc |= RunSchedulerOnce(options, &logState);
-        }
-        catch (const SchedulerAuthorityLost& error)
-        {
-            std::cerr << "SCHEDULER_OWNERSHIP_LOST"
-                      << ",scheduler_invocation_id="
-                      << options.schedulerAuthority.schedulerInvocationId
-                      << ",fencing_token="
-                      << options.schedulerAuthority.fencingToken
-                      << ",reason=" << error.what()
-                      << std::endl;
-            ownershipLost = true;
-            rc = 4;
-            break;
-        }
-        if (options.autoEvaluateContinuations &&
-            std::chrono::steady_clock::now() >= continuationScanState.nextScan)
-        {
-            try
-            {
-                continuationScanState.lastCounts =
-                    RunAutomaticContinuationScan(options);
-                continuationScanState.hasRun = true;
-                continuationScanState.lastScanAt =
-                    EA::RunMetadata::CurrentUtcTimestamp();
-                continuationScanState.nextScan =
-                    std::chrono::steady_clock::now() +
-                    std::chrono::seconds(options.continuationScanSeconds);
-            }
-            catch (const SchedulerAuthorityLost& error)
-            {
-                std::cerr << "SCHEDULER_OWNERSHIP_LOST"
-                          << ",scheduler_invocation_id="
-                          << options.schedulerAuthority.schedulerInvocationId
-                          << ",fencing_token="
-                          << options.schedulerAuthority.fencingToken
-                          << ",reason=" << error.what()
-                          << std::endl;
-                ownershipLost = true;
-                rc = 4;
-                break;
-            }
-        }
-        if (options.schedulerOnce)
-            break;
-        for (int elapsed = 0;
-             elapsed < options.schedulerPollSeconds &&
-             gSchedulerStopRequested == 0;
-             ++elapsed)
-        {
-            ::sleep(1);
-            if ((elapsed + 1) % (kSchedulerLeaseSeconds / 3) == 0 &&
-                !RefreshSchedulerAuthority(options))
-            {
-                ownershipLost = true;
-                rc = 4;
-                break;
-            }
-        }
-        if (ownershipLost)
-            break;
-    } while (true);
-
-    std::cout << "SCHEDULER_STOP"
-              << ",exit_code=" << rc
-              << ",ownership_lost=" << (ownershipLost ? 1 : 0)
-              << ",shutdown_requested="
-              << (gSchedulerStopRequested != 0 ? 1 : 0)
-              << std::endl;
-    return rc;
+    EA::SchedulerCore::SchedulerDaemonOperations operations;
+    operations.stopRequested = [] {
+        return gSchedulerStopRequested != 0;
+    };
+    operations.refreshAuthority = [&] {
+        return RefreshSchedulerAuthority(options);
+    };
+    operations.runCycle = [&] {
+        return RunSchedulerOnce(options, &logState);
+    };
+    operations.runAutomaticContinuationScan = [&] {
+        continuationScanState.lastCounts =
+            RunAutomaticContinuationScan(options);
+        continuationScanState.hasRun = true;
+        continuationScanState.lastScanAt =
+            EA::RunMetadata::CurrentUtcTimestamp();
+    };
+    operations.reportAuthorityLost = [&](std::string_view reason) {
+        std::cerr << "SCHEDULER_OWNERSHIP_LOST"
+                  << ",scheduler_invocation_id="
+                  << options.schedulerAuthority.schedulerInvocationId
+                  << ",fencing_token="
+                  << options.schedulerAuthority.fencingToken
+                  << ",reason=" << reason
+                  << std::endl;
+    };
+    operations.sleepSeconds = [](unsigned int seconds) {
+        ::sleep(seconds);
+    };
+    operations.reportStop = [](
+        int result,
+        bool ownershipLost,
+        bool shutdownRequested) {
+        std::cout << "SCHEDULER_STOP"
+                  << ",exit_code=" << result
+                  << ",ownership_lost=" << (ownershipLost ? 1 : 0)
+                  << ",shutdown_requested="
+                  << (shutdownRequested ? 1 : 0)
+                  << std::endl;
+    };
+    return EA::SchedulerCore::SchedulerEngine().run(
+        daemonConfiguration, operations);
 }
 
 int PrintLeaderboard(const SchedulerOptions& options)
@@ -24791,139 +24755,48 @@ bool IsExperimentSchedulerCommand(int argc, const char* argv[])
     return IsExperimentSchedulerCommandImpl(argc, argv);
 }
 
-bool RegisterSchedulerWorkerAttempt(
-    long long workerAttemptId,
-    const std::optional<long long>& expectedExperimentId,
-    const std::optional<long long>& expectedCheckpointEvalId,
-    const std::string& expectedWorkerKind,
-    const std::string& expectedLifecyclePhase)
+int RunSchedulerDaemon(
+    const EA::SchedulerCore::SchedulerDaemonConfiguration& configuration)
 {
-    if (workerAttemptId <= 0 ||
-        (!expectedExperimentId && !expectedCheckpointEvalId) ||
-        expectedWorkerKind.empty() ||
-        expectedLifecyclePhase.empty())
-        return false;
-    try
-    {
-        const int pid = static_cast<int>(::getpid());
-        const int processGroupId = static_cast<int>(::getpgrp());
-        const std::optional<std::string> processStartIdentity =
-            EA::GlobalExperimentControl::ReadProcessStartIdentity(pid);
-        if (!processStartIdentity)
-            throw std::runtime_error(
-                "worker_process_start_identity_unavailable");
-        const std::string executable =
-            EA::SchedulerCore::NativeWorkerProcessController()
-                .resolveExecutablePath();
-
-        pqxx::connection connection{LstmDbConnectionString()};
-        pqxx::work transaction{connection};
-        SetTransactionReadWrite(transaction);
-        pqxx::result identity = transaction.exec_params(
-            "SELECT experiment_id FROM "
-            "experiment_scheduler_worker_attempt "
-            "WHERE worker_attempt_id=$1;",
-            workerAttemptId);
-        if (identity.size() != 1)
-            throw std::runtime_error(
-                "worker_attempt_identity_missing");
-        const long long experimentId =
-            identity[0][0].as<long long>();
-        if (expectedExperimentId &&
-            *expectedExperimentId != experimentId)
-        {
-            throw std::runtime_error(
-                "worker_attempt_experiment_identity_mismatch");
-        }
-        EA::SchedulerOwnership::ExactAttemptExpectation expected;
-        expected.workerAttemptId = workerAttemptId;
-        expected.experimentId = experimentId;
-        expected.checkpointEvalId = expectedCheckpointEvalId;
-        expected.workerKind = expectedWorkerKind;
-        expected.lifecyclePhase = expectedLifecyclePhase;
-        expected.capacityClass =
-            expectedWorkerKind == "checkpoint_infer"
-                ? "infer"
-                : expectedLifecyclePhase;
-        expected.requireCompleteProcessIdentity = true;
-        const auto exact =
-            EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
-                transaction, expected, true);
-        if (!exact ||
-            exact->workerPid != std::optional<int>{pid} ||
-            exact->processGroupId !=
-                std::optional<int>{processGroupId} ||
-            exact->processStartIdentity != processStartIdentity ||
-            exact->canonicalExecutablePath !=
-                std::optional<std::string>{executable})
-        {
-            throw std::runtime_error(
-                "worker_attempt_exact_active_identity_mismatch");
-        }
-        pqxx::result registered = transaction.exec_params(
-            "UPDATE experiment_scheduler_worker_attempt SET "
-            "lifecycle_state='running',"
-            "registered_at=COALESCE(registered_at,clock_timestamp()),"
-            "last_observed_at=clock_timestamp() "
-            "WHERE worker_attempt_id=$1 AND worker_pid=$2 "
-            "AND worker_process_group_id=$3 "
-            "AND worker_process_start_identity=$4 "
-            "AND canonical_executable_path=$5 "
-            "AND experiment_id=$6 "
-            "AND checkpoint_eval_id IS NOT DISTINCT FROM $7 "
-            "AND worker_kind=$8 AND lifecycle_phase=$9 "
-            "AND lifecycle_state IN ('spawned','running') "
-            "RETURNING experiment_id,checkpoint_eval_id,worker_kind,"
-            "lifecycle_phase;",
-            workerAttemptId,
-            pid,
-            processGroupId,
-            *processStartIdentity,
-            executable,
-            experimentId,
-            expectedCheckpointEvalId,
-            expectedWorkerKind,
-            expectedLifecyclePhase);
-        if (registered.size() != 1)
-        {
-            transaction.abort();
-            std::cerr << "SCHEDULER_WORKER_REGISTRATION_REJECTED"
-                      << ",worker_attempt_id=" << workerAttemptId
-                      << ",pid=" << pid
-                      << ",reason=durable_identity_mismatch"
-                      << std::endl;
-            return false;
-        }
-        transaction.commit();
-        std::cout << "SCHEDULER_WORKER_REGISTERED"
-                  << ",worker_attempt_id=" << workerAttemptId
-                  << ",experiment_id="
-                  << registered[0][0].as<long long>()
-                  << ",checkpoint_eval_id="
-                  << (registered[0][1].is_null()
-                          ? "NULL"
-                          : registered[0][1].c_str())
-                  << ",worker_kind="
-                  << registered[0][2].as<std::string>()
-                  << ",phase="
-                  << registered[0][3].as<std::string>()
-                  << ",pid=" << pid
-                  << std::endl;
-        return true;
-    }
-    catch (const std::exception& error)
-    {
-        std::cerr << "SCHEDULER_WORKER_REGISTRATION_FAILED"
-                  << ",worker_attempt_id=" << workerAttemptId
-                  << ",pid=" << static_cast<int>(::getpid())
-                  << ",error=" << error.what()
-                  << std::endl;
-        return false;
-    }
+    SchedulerOptions options;
+    options.scheduleExperiments = true;
+    options.maxTrainProcs = configuration.maxTrainProcs;
+    options.maxInferProcs = configuration.maxInferProcs;
+    options.maxAnalyzeProcs = configuration.maxAnalyzeProcs;
+    options.schedulerPollSeconds = configuration.schedulerPollSeconds;
+    options.schedulerLogDir = configuration.schedulerLogDir;
+    options.experimentReportDir = configuration.experimentReportDir;
+    options.autoGenerateReports = configuration.autoGenerateReports;
+    options.lstmProfileHotspots = configuration.lstmProfileHotspots;
+    options.lstmProfileOutputPath = configuration.lstmProfileOutputPath;
+    options.schedulerVerbose = configuration.schedulerVerbose;
+    options.schedulerOnce = configuration.schedulerOnce;
+    options.dryRun = configuration.dryRun;
+    options.recoverOrphansOnly = configuration.recoverOrphansOnly;
+    options.autoEvaluateContinuations =
+        configuration.autoEvaluateContinuations;
+    options.autoQueueContinuations = configuration.autoQueueContinuations;
+    options.continuationDryRun = configuration.continuationDryRun;
+    options.continuationScanSeconds = configuration.continuationScanSeconds;
+    options.continuationMaxQueuesPerScan =
+        configuration.continuationMaxQueuesPerScan;
+    options.semanticWorkerRegistryPath =
+        configuration.semanticWorkerRegistryPath;
+    options.semanticWorkerRegistryPathSpecified = true;
+    options.legacyLayout6InferWorkerPath =
+        configuration.legacyLayout6InferWorkerPath;
+    options.invocationCommandLine = configuration.invocationCommandLine;
+    options.schedulerExecutablePath =
+        EA::SchedulerCore::NativeWorkerProcessController()
+            .resolveExecutablePath();
+    return RunScheduler(std::move(options), configuration);
 }
 
 int RunExperimentSchedulerCli(int argc, const char* argv[])
 {
+    if (EA::SchedulerCore::IsSchedulerDaemonCommand(argc, argv))
+        return EA::SchedulerCore::RunSchedulerDaemonCli(argc, argv);
+
     SchedulerOptions options;
     try
     {
@@ -24942,12 +24815,12 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
     try
     {
         if (options.schedulerWorkerAttemptId &&
-            !RegisterSchedulerWorkerAttempt(
+            !EA::SchedulerCore::RegisterSchedulerWorker({
                 *options.schedulerWorkerAttemptId,
                 options.analyzeExperimentId,
                 std::nullopt,
                 "experiment",
-                "analyze"))
+                "analyze"}))
         {
             return 125;
         }
@@ -25218,7 +25091,10 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
                 LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.scheduleExperiments)
-            return RunScheduler(options);
+        {
+            throw std::logic_error(
+                "scheduler daemon must use the typed compatibility adapter");
+        }
         if (options.completeSchedulerProtocolCutover)
             return CompleteSchedulerProtocolCutover(options);
         if (options.stopExperimentId.has_value() || options.stopAllExperiments)

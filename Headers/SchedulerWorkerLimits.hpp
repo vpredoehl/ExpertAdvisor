@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SchedulerDaemonDefaults.hpp"
+
 #include <limits>
 #include <optional>
 #include <regex>
@@ -9,9 +11,12 @@
 namespace EA::ExperimentScheduler
 {
 
-inline constexpr int kDefaultMaxTrainProcs = 1;
-inline constexpr int kDefaultMaxInferProcs = 1;
-inline constexpr int kDefaultMaxAnalyzeProcs = 1;
+inline constexpr int kDefaultMaxTrainProcs =
+    EA::SchedulerCore::kDefaultSchedulerMaxTrainProcs;
+inline constexpr int kDefaultMaxInferProcs =
+    EA::SchedulerCore::kDefaultSchedulerMaxInferProcs;
+inline constexpr int kDefaultMaxAnalyzeProcs =
+    EA::SchedulerCore::kDefaultSchedulerMaxAnalyzeProcs;
 
 inline int ParseNonNegativeSchedulerWorkerLimit(
     const std::string& optionName,

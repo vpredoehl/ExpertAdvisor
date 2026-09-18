@@ -18,10 +18,10 @@ clang++ \
 # Keep unrelated positive-only scheduler parsing isolated from the worker helper.
 grep -Fq \
     'options.schedulerPollSeconds = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));' \
-    "${repo_root}/Sources/ExperimentScheduler.cpp"
+    "${repo_root}/Sources/SchedulerCore/ExperimentScheduler.cpp"
 grep -Fq \
     'options.schedulerPollSeconds = ParsePositiveInt("--scheduler-poll-seconds", value);' \
-    "${repo_root}/Sources/ExperimentScheduler.cpp"
+    "${repo_root}/Sources/SchedulerCore/ExperimentScheduler.cpp"
 
 if [[ $# -eq 1 ]]; then
     scheduler_binary="$1"

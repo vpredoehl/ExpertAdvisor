@@ -335,6 +335,9 @@
 		0F2900103460000100AAA001 /* SchedulerCycleService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2900013460000100AAA001 /* SchedulerCycleService.cpp */; };
 		0F2A00103470000100AAA001 /* FinalExperimentDispatchService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2A00013470000100AAA001 /* FinalExperimentDispatchService.cpp */; };
 		0F2B00103480000100AAA001 /* SchedulerChildCompletionService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2B00013480000100AAA001 /* SchedulerChildCompletionService.cpp */; };
+		0F30001034A0000100AAA001 /* SchedulerDaemonConfiguration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F30000134A0000100AAA001 /* SchedulerDaemonConfiguration.cpp */; };
+		0F30001134A0000100AAA001 /* SchedulerDaemonCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F30000334A0000100AAA001 /* SchedulerDaemonCli.cpp */; };
+		0F30001234A0000100AAA001 /* SchedulerWorkerRegistration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F30000534A0000100AAA001 /* SchedulerWorkerRegistration.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -816,6 +819,12 @@
 		0F2A00023470000100AAA001 /* FinalExperimentDispatchService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FinalExperimentDispatchService.hpp; path = Sources/SchedulerCore/FinalExperimentDispatchService.hpp; sourceTree = SOURCE_ROOT; };
 		0F2B00013480000100AAA001 /* SchedulerChildCompletionService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerChildCompletionService.cpp; path = Sources/SchedulerCore/SchedulerChildCompletionService.cpp; sourceTree = SOURCE_ROOT; };
 		0F2B00023480000100AAA001 /* SchedulerChildCompletionService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerChildCompletionService.hpp; path = Sources/SchedulerCore/SchedulerChildCompletionService.hpp; sourceTree = SOURCE_ROOT; };
+		0F30000134A0000100AAA001 /* SchedulerDaemonConfiguration.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerDaemonConfiguration.cpp; path = Sources/SchedulerCore/SchedulerDaemonConfiguration.cpp; sourceTree = SOURCE_ROOT; };
+		0F30000234A0000100AAA001 /* SchedulerDaemonConfiguration.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerDaemonConfiguration.hpp; path = Sources/SchedulerCore/SchedulerDaemonConfiguration.hpp; sourceTree = SOURCE_ROOT; };
+		0F30000334A0000100AAA001 /* SchedulerDaemonCli.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerDaemonCli.cpp; path = Sources/SchedulerCore/SchedulerDaemonCli.cpp; sourceTree = SOURCE_ROOT; };
+		0F30000434A0000100AAA001 /* SchedulerDaemonCli.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerDaemonCli.hpp; path = Sources/SchedulerCore/SchedulerDaemonCli.hpp; sourceTree = SOURCE_ROOT; };
+		0F30000534A0000100AAA001 /* SchedulerWorkerRegistration.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerWorkerRegistration.cpp; path = Sources/SchedulerCore/SchedulerWorkerRegistration.cpp; sourceTree = SOURCE_ROOT; };
+		0F30000634A0000100AAA001 /* SchedulerWorkerRegistration.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerWorkerRegistration.hpp; path = Sources/SchedulerCore/SchedulerWorkerRegistration.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1272,8 +1281,14 @@
 			isa = PBXGroup;
 			children = (
 				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
+				0F30000334A0000100AAA001 /* SchedulerDaemonCli.cpp */,
+				0F30000434A0000100AAA001 /* SchedulerDaemonCli.hpp */,
+				0F30000134A0000100AAA001 /* SchedulerDaemonConfiguration.cpp */,
+				0F30000234A0000100AAA001 /* SchedulerDaemonConfiguration.hpp */,
 				0F20001033D0000100AAA001 /* SchedulerEngine.cpp */,
 				0F20001133D0000100AAA001 /* SchedulerEngine.hpp */,
+				0F30000534A0000100AAA001 /* SchedulerWorkerRegistration.cpp */,
+				0F30000634A0000100AAA001 /* SchedulerWorkerRegistration.hpp */,
 				0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */,
 				0F20001333D0000100AAA001 /* SchedulerPolicy.hpp */,
 				0F2C00003490000100AAA001 /* SemanticWorkerRegistry.cpp */,
@@ -1852,7 +1867,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0F30001134A0000100AAA001 /* SchedulerDaemonCli.cpp in Sources */,
+				0F30001034A0000100AAA001 /* SchedulerDaemonConfiguration.cpp in Sources */,
 				0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */,
+				0F30001234A0000100AAA001 /* SchedulerWorkerRegistration.cpp in Sources */,
 				0F20000933D0000100AAA001 /* SchedulerPolicy.cpp in Sources */,
 				0F2C00103490000100AAA001 /* SemanticWorkerRegistry.cpp in Sources */,
 				0F21001033E0000100AAA001 /* SchedulerRepository.cpp in Sources */,

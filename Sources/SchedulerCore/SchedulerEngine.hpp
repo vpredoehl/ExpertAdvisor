@@ -1,36 +1,33 @@
 #pragma once
 
-#include <optional>
-#include <string>
+#include "SchedulerDaemonConfiguration.hpp"
+
+#include <functional>
+#include <string_view>
 
 namespace EA::SchedulerCore
 {
 
-struct CommandInvocation
+// Concrete scheduler composition supplies the already-extracted services for
+// one cycle; the engine owns daemon timing, authority refresh cadence, stop
+// handling, continuation scan cadence, and terminal result aggregation.
+struct SchedulerDaemonOperations
 {
-    int argc = 0;
-    const char** argv = nullptr;
+    std::function<bool()> stopRequested;
+    std::function<bool()> refreshAuthority;
+    std::function<int()> runCycle;
+    std::function<void()> runAutomaticContinuationScan;
+    std::function<void(std::string_view)> reportAuthorityLost;
+    std::function<void(unsigned int)> sleepSeconds;
+    std::function<void(int, bool, bool)> reportStop;
 };
 
-struct WorkerAttemptRegistration
-{
-    long long workerAttemptId = 0;
-    std::optional<long long> experimentId;
-    std::optional<long long> checkpointEvalId;
-    std::string workerKind;
-    std::string lifecyclePhase;
-};
-
-// Typed process boundary for the existing production scheduler implementation.
-// The compatibility entrypoints remain available in ExperimentScheduler.hpp;
-// new executables can depend on this component without reading CLI globals.
 class SchedulerEngine final
 {
 public:
-    bool recognizes(const CommandInvocation& invocation) const;
-    int run(const CommandInvocation& invocation) const;
-    bool registerWorkerAttempt(
-        const WorkerAttemptRegistration& registration) const;
+    int run(
+        const SchedulerDaemonConfiguration& configuration,
+        const SchedulerDaemonOperations& operations) const;
 };
 
 } // namespace EA::SchedulerCore
