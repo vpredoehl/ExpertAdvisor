@@ -24,13 +24,31 @@ Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/LSTM_Release
 Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/manifest.json
 ```
 
-The operational registry and binaries are ignored by Git. The checked-in v1
+The executable directory also contains deterministic `default.metallib` and
+`MetaNN.metallib` symbolic links. They resolve to a shared, content-addressed
+runtime package:
+
+```text
+Builds/SemanticWorkers/runtime/<runtime-manifest-sha256>/default.metallib
+Builds/SemanticWorkers/runtime/<runtime-manifest-sha256>/MetaNN.metallib
+Builds/SemanticWorkers/runtime/<runtime-manifest-sha256>/manifest.json
+```
+
+`MetaNN_metal.metallib` is the build-product identity and is published under
+the runtime name `MetaNN.metallib` required by MetaNN. Each registry worker
+entry binds an exact runtime identity. Runtime packages may therefore be
+shared while different executable generations can retain different runtime
+identities if the Metal libraries change.
+
+The operational registry and binaries are ignored by Git. The checked-in v2
 schema is `docs/semantic-worker-registry.schema.json`. Registry paths are
 artifact-root-relative and must exactly match the content-addressed structure.
 Startup canonicalizes them, rejects escapes and missing/non-executable files,
-compares each manifest, and hashes each executable once. Polling and dispatch
-reuse the validated in-memory identity, so immutable artifacts are not hashed
-on every scheduler poll.
+compares each manifest, and hashes each executable and runtime resource.
+Admission revalidates the selected worker's two runtime links and resource
+hashes before capacity reservation or process spawn. An incomplete runtime is
+reported as `SCHEDULER_SEMANTIC_WORKER_RUNTIME_UNAVAILABLE`; the experiment is
+left pending and no worker attempt is created.
 
 The publisher is the sole registry writer; schedulers are read-only consumers
 of the startup snapshot. A startup validation failure occurs before authority
@@ -68,14 +86,18 @@ a clean checkout. The publisher determines the current semantic contract from
 the source headers, obtains clean `HEAD`, verifies the commit is embedded in the
 built executable, and computes SHA-256. It then:
 
-1. copies into a same-filesystem staging directory;
-2. verifies the staged hash and fsyncs executable, manifest, and directory;
-3. atomically renames the completed directory into its immutable final path,
+1. publishes and verifies the content-addressed shared runtime package;
+2. copies the executable into a same-filesystem staging directory;
+3. verifies the staged hash and fsyncs executable, manifest, and directory;
+4. atomically renames the completed directory into its immutable final path,
    refusing to overwrite or repair a conflicting existing path;
-4. validates the prior registry, retains all prior artifacts, changes the old
+5. attaches deterministic resource links to the new worker and, during the
+   v1-to-v2 migration, to existing worker directories without changing their
+   executable or manifest identity;
+6. validates the prior registry, retains all prior artifacts, changes the old
    current rule to historical on a layout rollover, and atomically replaces
    `registry.json`;
-5. only after the registry replacement, atomically updates the `current`
+7. only after the registry replacement, atomically updates the `current`
    convenience symlink.
 
 Any build, provenance, copy, hash, manifest, or registry failure leaves the

@@ -89,7 +89,26 @@ for field in ("executable", "manifest"):
         os.link(source_artifact, destination_artifact)
     except OSError:
         shutil.copy2(source_artifact, destination_artifact)
+runtime = next(item for item in registry["runtimes"]
+               if item["identity"] == entry["runtime_identity"])
+source_runtime = (source.parent / runtime["directory"]).resolve(strict=True)
+destination_runtime = destination / runtime["directory"]
+destination_runtime.mkdir(parents=True, exist_ok=True)
+for source_resource in source_runtime.iterdir():
+    if not source_resource.is_file():
+        continue
+    destination_resource = destination_runtime / source_resource.name
+    try:
+        os.link(source_resource, destination_resource)
+    except OSError:
+        shutil.copy2(source_resource, destination_resource)
+worker_directory = (destination / entry["executable"]).parent
+for runtime_name in ("default.metallib", "MetaNN.metallib"):
+    link = worker_directory / runtime_name
+    link.symlink_to(os.path.relpath(destination_runtime / runtime_name,
+                                    worker_directory))
 registry["workers"] = [entry]
+registry["runtimes"] = [runtime]
 (destination / "registry.json").write_text(
     json.dumps(registry, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print((destination / entry["executable"]).resolve(strict=True))
@@ -247,6 +266,36 @@ INSERT INTO experiment_checkpoint_eval(
     clock_timestamp()-interval '2 minutes',clock_timestamp()
 );
 SQL
+
+current_worker_directory="$(dirname "${current_only_worker_binary}")"
+mv "${current_worker_directory}/MetaNN.metallib" \
+   "${current_worker_directory}/MetaNN.metallib.missing"
+invocations_before_missing_runtime="$(psql -X -At -d "${test_db}" -c \
+    'SELECT count(*) FROM experiment_scheduler_invocation')"
+set +e
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --schedule-experiments --scheduler-once \
+    --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
+    --semantic-worker-registry="${current_only_registry}" \
+    --scheduler-log-dir="${test_dir}/logs" \
+    >"${test_dir}/missing-runtime.out" 2>&1
+missing_runtime_rc=$?
+set -e
+mv "${current_worker_directory}/MetaNN.metallib.missing" \
+   "${current_worker_directory}/MetaNN.metallib"
+test "${missing_runtime_rc}" = 1
+grep -Fq 'SCHEDULER_START_REJECTED,diagnostic=semantic_worker_runtime_dependency_missing:resource=MetaNN.metallib' \
+    "${test_dir}/missing-runtime.out"
+grep -Fq 'authority_acquired=0,workers_launched=0' \
+    "${test_dir}/missing-runtime.out"
+test "$(psql -X -At -d "${test_db}" -c \
+    'SELECT count(*) FROM experiment_scheduler_invocation')" = \
+    "${invocations_before_missing_runtime}"
+test "$(psql -X -At -d "${test_db}" -c \
+    'SELECT status||'\'':'\''||phase FROM experiment WHERE experiment_id=917002')" = \
+    'pending:infer'
+test "$(psql -X -At -d "${test_db}" -c \
+    'SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=917002')" = 0
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --schedule-experiments --scheduler-once \

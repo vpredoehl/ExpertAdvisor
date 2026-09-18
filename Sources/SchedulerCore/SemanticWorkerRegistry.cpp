@@ -413,6 +413,102 @@ std::filesystem::path ResolveArtifactPath(
     return resolved;
 }
 
+SemanticWorkerRuntimePackage ParseRuntime(
+    const JsonValue& value, const std::filesystem::path& root)
+{
+    const auto& object = Object(value, "runtime");
+    RequireOnlyFields(object, {"identity", "directory", "manifest"},
+                      "runtime");
+
+    SemanticWorkerRuntimePackage runtime;
+    runtime.identity = String(Required(object, "identity"), "identity");
+    if (!LowerHex(runtime.identity, 64U))
+        Fail("semantic_worker_registry_malformed:runtime_identity_invalid");
+
+    const std::string expectedPrefix = "runtime/" + runtime.identity;
+    const std::string directoryRelative =
+        String(Required(object, "directory"), "directory");
+    const std::string manifestRelative =
+        String(Required(object, "manifest"), "manifest");
+    if (directoryRelative != expectedPrefix ||
+        manifestRelative != expectedPrefix + "/manifest.json")
+        Fail("semantic_worker_registry_malformed:runtime_path_mismatch:identity=" +
+             runtime.identity);
+
+    const auto directory = ResolveArtifactPath(
+        root, directoryRelative, "semantic_worker_runtime_missing");
+    const auto manifest = ResolveArtifactPath(
+        root, manifestRelative, "semantic_worker_runtime_manifest_missing");
+    struct stat directoryStatus {};
+    if (::lstat(directory.c_str(), &directoryStatus) != 0 ||
+        !S_ISDIR(directoryStatus.st_mode))
+        Fail("semantic_worker_runtime_missing:" + directory.string());
+    if (Sha256(manifest) != runtime.identity)
+        Fail("semantic_worker_runtime_manifest_hash_mismatch:identity=" +
+             runtime.identity);
+
+    const JsonValue manifestValue = JsonParser{ReadFile(
+        manifest, "semantic_worker_runtime_manifest_unreadable")}.parse();
+    const auto& manifestObject = Object(manifestValue, "runtime_manifest");
+    RequireOnlyFields(manifestObject,
+        {"schema_version", "storage", "resources"}, "runtime_manifest");
+    if (Integer(Required(manifestObject, "schema_version"), "schema_version") !=
+            kSemanticWorkerRuntimeManifestSchemaVersion ||
+        String(Required(manifestObject, "storage"), "storage") != "immutable")
+        Fail("semantic_worker_runtime_manifest_mismatch:identity=" +
+             runtime.identity);
+
+    for (const auto& item : Array(
+             Required(manifestObject, "resources"), "resources"))
+    {
+        const auto& resourceObject = Object(item, "runtime_resource");
+        RequireOnlyFields(resourceObject,
+            {"built_identity", "runtime_name", "sha256"},
+            "runtime_resource");
+        SemanticWorkerRuntimeResource resource;
+        resource.builtIdentity = String(
+            Required(resourceObject, "built_identity"), "built_identity");
+        resource.runtimeName = String(
+            Required(resourceObject, "runtime_name"), "runtime_name");
+        resource.sha256 = String(
+            Required(resourceObject, "sha256"), "sha256");
+        if (!LowerHex(resource.sha256, 64U))
+            Fail("semantic_worker_runtime_manifest_mismatch:resource_hash");
+        const bool expectedDefault =
+            resource.builtIdentity == "default.metallib" &&
+            resource.runtimeName == "default.metallib";
+        const bool expectedMetaNN =
+            resource.builtIdentity == "MetaNN_metal.metallib" &&
+            resource.runtimeName == "MetaNN.metallib";
+        if (!expectedDefault && !expectedMetaNN)
+            Fail("semantic_worker_runtime_manifest_mismatch:resource=" +
+                 resource.runtimeName);
+        resource.canonicalPath = ResolveArtifactPath(
+            root,
+            expectedPrefix + "/" + resource.runtimeName,
+            "semantic_worker_runtime_dependency_missing").string();
+        struct stat resourceStatus {};
+        if (::lstat(resource.canonicalPath.c_str(), &resourceStatus) != 0 ||
+            !S_ISREG(resourceStatus.st_mode))
+            Fail("semantic_worker_runtime_dependency_unresolvable:resource=" +
+                 resource.runtimeName);
+        if (Sha256(resource.canonicalPath) != resource.sha256)
+            Fail("semantic_worker_runtime_dependency_hash_mismatch:resource=" +
+                 resource.runtimeName);
+        if (!runtime.resources.emplace(
+                resource.runtimeName, std::move(resource)).second)
+            Fail("semantic_worker_runtime_manifest_mismatch:duplicate_resource");
+    }
+    if (runtime.resources.size() != 2U ||
+        !runtime.resources.contains("default.metallib") ||
+        !runtime.resources.contains("MetaNN.metallib"))
+        Fail("semantic_worker_runtime_manifest_mismatch:required_resources");
+
+    runtime.canonicalDirectoryPath = directory.string();
+    runtime.canonicalManifestPath = manifest.string();
+    return runtime;
+}
+
 SemanticWorkerArtifact ParseWorker(
     const JsonValue& value, const std::filesystem::path& root)
 {
@@ -420,7 +516,7 @@ SemanticWorkerArtifact ParseWorker(
     RequireOnlyFields(object,
         {"semantic_layout", "worker_rule", "model_input_width",
          "source_commit", "sha256", "executable", "manifest",
-         "capabilities"},
+         "runtime_identity", "capabilities"},
         "worker");
     SemanticWorkerArtifact worker;
     worker.semanticLayoutVersion = PositiveInt(
@@ -435,10 +531,14 @@ SemanticWorkerArtifact ParseWorker(
     else Fail("semantic_worker_registry_malformed:worker_rule_invalid");
     worker.sourceCommit = String(Required(object, "source_commit"), "source_commit");
     worker.sha256 = String(Required(object, "sha256"), "sha256");
+    worker.runtimeIdentity = String(
+        Required(object, "runtime_identity"), "runtime_identity");
     if (!LowerHex(worker.sourceCommit, 40U))
         Fail("semantic_worker_registry_malformed:source_commit_invalid");
     if (!LowerHex(worker.sha256, 64U))
         Fail("semantic_worker_registry_malformed:sha256_invalid");
+    if (!LowerHex(worker.runtimeIdentity, 64U))
+        Fail("semantic_worker_registry_malformed:runtime_identity_invalid");
     worker.capabilities = Capabilities(Required(object, "capabilities"));
 
     const std::string expectedPrefix =
@@ -478,7 +578,7 @@ SemanticWorkerArtifact ParseWorker(
          "executable_identity", "capabilities"},
         "manifest");
     if (Integer(Required(manifestObject, "schema_version"), "schema_version") !=
-            kSemanticWorkerRegistrySchemaVersion ||
+            kSemanticWorkerArtifactManifestSchemaVersion ||
         PositiveInt(Required(manifestObject, "semantic_layout"), "semantic_layout") !=
             worker.semanticLayoutVersion ||
         PositiveSize(Required(manifestObject, "model_input_width"), "model_input_width") !=
@@ -533,8 +633,9 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
     const JsonValue parsed = JsonParser{ReadFile(
         registryPath, "semantic_worker_registry_unreadable")}.parse();
     const auto& object = Object(parsed, "registry");
-    RequireOnlyFields(object, {"schema_version", "current_layout", "workers"},
-                      "registry");
+    RequireOnlyFields(object,
+        {"schema_version", "current_layout", "runtimes", "workers"},
+        "registry");
     if (Integer(Required(object, "schema_version"), "schema_version") !=
         kSemanticWorkerRegistrySchemaVersion)
         Fail("semantic_worker_registry_schema_unsupported");
@@ -543,6 +644,15 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
     registry.canonicalRegistryPath_ = registryPath.string();
     registry.currentLayoutVersion_ = PositiveInt(
         Required(object, "current_layout"), "current_layout");
+    for (const auto& item : Array(Required(object, "runtimes"), "runtimes"))
+    {
+        SemanticWorkerRuntimePackage runtime = ParseRuntime(item, root);
+        if (!registry.runtimes_.emplace(
+                runtime.identity, std::move(runtime)).second)
+            Fail("semantic_worker_registry_duplicate_runtime");
+    }
+    if (registry.runtimes_.empty())
+        Fail("semantic_worker_registry_malformed:runtimes_empty");
     std::size_t currentEntries = 0;
     for (const auto& item : Array(Required(object, "workers"), "workers"))
     {
@@ -569,6 +679,14 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
         if (!worker.capabilities.contains("infer"))
             Fail("semantic_worker_capability_mismatch:layout=" +
                  std::to_string(layout) + ":infer_required");
+        if (!registry.runtimes_.contains(worker.runtimeIdentity))
+            Fail("semantic_worker_runtime_identity_unavailable:layout=" +
+                 std::to_string(layout) + ":identity=" +
+                 worker.runtimeIdentity);
+        const auto validation = registry.validateRuntimeForExecutable(
+            worker.canonicalExecutablePath);
+        if (!validation.ready)
+            Fail(validation.diagnostic);
     }
 
     if (request.legacyLayout6ExecutableAssertion)
@@ -604,6 +722,85 @@ const SemanticWorkerArtifact* SemanticWorkerRegistry::find(
 {
     const auto found = workers_.find(semanticLayoutVersion);
     return found == workers_.end() ? nullptr : &found->second;
+}
+
+SemanticWorkerRuntimeValidation
+SemanticWorkerRegistry::validateRuntimeForExecutable(
+    const std::string& canonicalExecutablePath) const
+{
+    const SemanticWorkerArtifact* selectedWorker = nullptr;
+    for (const auto& [layout, worker] : workers_)
+    {
+        (void)layout;
+        if (worker.canonicalExecutablePath == canonicalExecutablePath)
+        {
+            selectedWorker = &worker;
+            break;
+        }
+    }
+    if (selectedWorker == nullptr)
+        return {false,
+                "semantic_worker_runtime_unregistered_executable:path=" +
+                    canonicalExecutablePath,
+                {}};
+
+    const auto runtime = runtimes_.find(selectedWorker->runtimeIdentity);
+    if (runtime == runtimes_.end())
+        return {false,
+                "semantic_worker_runtime_identity_unavailable:layout=" +
+                    std::to_string(selectedWorker->semanticLayoutVersion) +
+                    ":identity=" + selectedWorker->runtimeIdentity,
+                {}};
+
+    const std::filesystem::path workerDirectory =
+        std::filesystem::path{canonicalExecutablePath}.parent_path();
+    for (const auto& [runtimeName, resource] : runtime->second.resources)
+    {
+        const std::filesystem::path presented = workerDirectory / runtimeName;
+        struct stat linkStatus {};
+        if (::lstat(presented.c_str(), &linkStatus) != 0)
+            return {false,
+                    "semantic_worker_runtime_dependency_missing:resource=" +
+                        runtimeName + ":worker=" + canonicalExecutablePath,
+                    {}};
+        if (!S_ISLNK(linkStatus.st_mode))
+            return {false,
+                    "semantic_worker_runtime_dependency_unresolvable:resource=" +
+                        runtimeName + ":worker=" + canonicalExecutablePath,
+                    {}};
+
+        std::error_code error;
+        const auto observedLink = std::filesystem::read_symlink(presented, error);
+        const auto expectedLink = std::filesystem::relative(
+            resource.canonicalPath, workerDirectory, error);
+        if (error || observedLink != expectedLink)
+            return {false,
+                    "semantic_worker_runtime_dependency_unresolvable:resource=" +
+                        runtimeName + ":worker=" + canonicalExecutablePath,
+                    {}};
+        const auto resolved = std::filesystem::canonical(presented, error);
+        if (error || resolved != std::filesystem::path{resource.canonicalPath})
+            return {false,
+                    "semantic_worker_runtime_dependency_unresolvable:resource=" +
+                        runtimeName + ":worker=" + canonicalExecutablePath,
+                    {}};
+        try
+        {
+            if (Sha256(resolved) != resource.sha256)
+                return {false,
+                        "semantic_worker_runtime_dependency_hash_mismatch:resource=" +
+                            runtimeName + ":worker=" + canonicalExecutablePath,
+                        {}};
+        }
+        catch (const std::invalid_argument&)
+        {
+            return {false,
+                    "semantic_worker_runtime_dependency_unresolvable:resource=" +
+                        runtimeName + ":worker=" + canonicalExecutablePath,
+                    {}};
+        }
+    }
+    return {true, "semantic_worker_runtime_ready", workerDirectory.string()};
 }
 
 SemanticWorkerSelection SemanticWorkerRegistry::selectInferenceWorker(

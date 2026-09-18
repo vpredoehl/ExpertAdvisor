@@ -9623,6 +9623,27 @@ bool SemanticWorkerPreflight(
     }
     if (decision.admissible)
     {
+        const std::string& executable = selection
+            ? selection->canonicalExecutablePath
+            : options.currentWorkerExecutablePath;
+        const auto runtime = SemanticWorkerRegistryFor(options)
+            .validateRuntimeForExecutable(executable);
+        if (!runtime.ready)
+        {
+            LogSkip(phase, experimentId, runtime.diagnostic, logState, verbose);
+            std::cout << "SCHEDULER_SEMANTIC_WORKER_RUNTIME_UNAVAILABLE"
+                      << ",experiment_id=" << experimentId
+                      << ",phase=" << phase
+                      << ",worker_executable=" << executable
+                      << ",diagnostic=" << runtime.diagnostic
+                      << ",capacity_consumed=0,child_launched=0,"
+                         "experiment_status_changed=false"
+                      << std::endl;
+            return false;
+        }
+    }
+    if (decision.admissible)
+    {
         if (selection)
         {
             std::ostringstream key;
@@ -10552,6 +10573,25 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
+    if (phase != "analyze")
+    {
+        const auto runtime = SemanticWorkerRegistryFor(options)
+            .validateRuntimeForExecutable(selectedWorkerExecutable);
+        if (!runtime.ready)
+        {
+            std::cout << "SCHEDULER_SEMANTIC_WORKER_RUNTIME_UNAVAILABLE"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",phase=" << phase
+                      << ",worker_executable=" << selectedWorkerExecutable
+                      << ",diagnostic=" << runtime.diagnostic
+                      << ",capacity_consumed=0,child_launched=0,"
+                         "experiment_status_changed=false"
+                      << std::endl;
+            transaction.commit();
+            return std::nullopt;
+        }
+    }
+
     if (!services.admission.hasCapacity(phase, maximumCapacity))
     {
         transaction.commit();
@@ -10600,6 +10640,22 @@ ReserveCheckpointWorkerAttempt(
                   << ",checkpoint_eval_id=" << eval.checkpointEvalId
                   << ",phase=infer,diagnostic="
                   << selection.diagnostic
+                  << ",capacity_consumed=0,child_launched=0,"
+                     "experiment_status_changed=false"
+                  << std::endl;
+        transaction.commit();
+        return std::nullopt;
+    }
+    const auto runtime = SemanticWorkerRegistryFor(options)
+        .validateRuntimeForExecutable(selection.canonicalExecutablePath);
+    if (!runtime.ready)
+    {
+        std::cout << "SCHEDULER_SEMANTIC_WORKER_RUNTIME_UNAVAILABLE"
+                  << ",experiment_id=" << eval.experiment.experimentId
+                  << ",checkpoint_eval_id=" << eval.checkpointEvalId
+                  << ",phase=infer,worker_executable="
+                  << selection.canonicalExecutablePath
+                  << ",diagnostic=" << runtime.diagnostic
                   << ",capacity_consumed=0,child_launched=0,"
                      "experiment_status_changed=false"
                   << std::endl;

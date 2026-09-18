@@ -7,6 +7,7 @@
 #include <string>
 
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace
@@ -21,7 +22,13 @@ constexpr const char* kCommit7 =
 constexpr const char* kHash6 =
     "4f330de39e18484e875518d51f1d60ebbc278db85b99111b70a68a3f1d538764";
 constexpr const char* kHash7 =
-    "a6496dd5198a58c7ecf91ce16a7edfb4b586e007429063c6ba47da6b66c68d25";
+    "fe0fc41298f0aab9a9e9665db1869a1c5f078774db34c40b5f60816656e4e6cc";
+constexpr const char* kRuntimeIdentity =
+    "769b8f08c5f9d83cd68cb6bbe049176cbdbf67afd0b68ea052d4dd5549bd4550";
+constexpr const char* kDefaultHash =
+    "1cccc7d9e2aad77b0b6bb6eb7705e1478fcd454ca02cc981a0f3d371139514e8";
+constexpr const char* kMetaNNHash =
+    "4ddd01395b253fb9bd1ad27a87ac2f299512b74e2fa2dcea4d445c4c22913f65";
 
 struct Fixture
 {
@@ -38,10 +45,18 @@ struct Fixture
         executable6 = artifact(6, kCommit6, kHash6) / "LSTM_Release";
         executable7 = artifact(7, kCommit7, kHash7) / "LSTM_Release";
         writeExecutable(executable6, "worker-six\n");
-        writeExecutable(executable7, "worker-seven\n");
+        writeExecutable(executable7,
+            "#!/bin/sh\n"
+            "worker_dir=${0%/*}\n"
+            "test -r \"$worker_dir/default.metallib\" || exit 40\n"
+            "test -r \"$worker_dir/MetaNN.metallib\" || exit 41\n"
+            "exit 0\n");
         writeManifest(6, kCommit6, kHash6, "historical", {"infer"});
         writeManifest(
             7, kCommit7, kHash7, "current", {"train", "infer", "analyze"});
+        writeRuntime();
+        linkRuntime(executable6.parent_path());
+        linkRuntime(executable7.parent_path());
         writeRegistry();
     }
 
@@ -72,6 +87,29 @@ struct Fixture
         assert(::chmod(path.c_str(), 0700) == 0);
     }
 
+    void writeRuntime()
+    {
+        const fs::path directory = root / "runtime" / kRuntimeIdentity;
+        write(directory / "MetaNN.metallib", "metann-library\n");
+        write(directory / "default.metallib", "default-library\n");
+        write(directory / "manifest.json",
+            "{\"resources\":[{\"built_identity\":\"MetaNN_metal.metallib\","
+            "\"runtime_name\":\"MetaNN.metallib\",\"sha256\":\"" +
+            std::string{kMetaNNHash} +
+            "\"},{\"built_identity\":\"default.metallib\",\"runtime_name\":"
+            "\"default.metallib\",\"sha256\":\"" + kDefaultHash +
+            "\"}],\"schema_version\":1,\"storage\":\"immutable\"}");
+    }
+
+    void linkRuntime(const fs::path& directory)
+    {
+        const fs::path runtime = root / "runtime" / kRuntimeIdentity;
+        fs::create_symlink(fs::relative(runtime / "default.metallib", directory),
+                           directory / "default.metallib");
+        fs::create_symlink(fs::relative(runtime / "MetaNN.metallib", directory),
+                           directory / "MetaNN.metallib");
+    }
+
     void writeManifest(
         int layout, const char* commit, const char* hash,
         const char* rule, std::initializer_list<const char*> capabilities)
@@ -95,20 +133,26 @@ struct Fixture
     void writeRegistry(const std::string& suffix = {})
     {
         write(root / "registry.json",
-            "{\"schema_version\":1,\"current_layout\":7,\"workers\":["
+            "{\"schema_version\":2,\"current_layout\":7,\"runtimes\":["
+            "{\"identity\":\"" + std::string{kRuntimeIdentity} +
+            "\",\"directory\":\"runtime/" + kRuntimeIdentity +
+            "\",\"manifest\":\"runtime/" + kRuntimeIdentity +
+            "/manifest.json\"}],\"workers\":["
             "{\"semantic_layout\":6,\"worker_rule\":\"historical\","
             "\"model_input_width\":77,\"source_commit\":\"" +
             std::string{kCommit6} + "\",\"sha256\":\"" + kHash6 +
             "\",\"executable\":\"layout6/" + kCommit6 + "/" + kHash6 +
             "/LSTM_Release\",\"manifest\":\"layout6/" + kCommit6 + "/" +
-            kHash6 + "/manifest.json\",\"capabilities\":[\"infer\"]},"
+            kHash6 + "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity + "\",\"capabilities\":[\"infer\"]},"
             "{\"semantic_layout\":7,\"worker_rule\":\"current\","
             "\"model_input_width\":77,\"source_commit\":\"" +
             std::string{kCommit7} + "\",\"sha256\":\"" + kHash7 +
             "\",\"executable\":\"layout7/" + kCommit7 + "/" + kHash7 +
             "/LSTM_Release\",\"manifest\":\"layout7/" + kCommit7 + "/" +
             kHash7 +
-            "/manifest.json\",\"capabilities\":[\"train\",\"infer\",\"analyze\"]}" +
+            "/manifest.json\",\"runtime_identity\":\"" + kRuntimeIdentity +
+            "\",\"capabilities\":[\"train\",\"infer\",\"analyze\"]}" +
             suffix + "]}");
     }
 
@@ -159,6 +203,26 @@ int main()
     assert(selected7.selected);
     assert(selected7.canonicalExecutablePath == fs::canonical(valid.executable7));
     assert(selected7.reason == "current_published_semantic_worker");
+    const auto runtime7 = registry.validateRuntimeForExecutable(
+        selected7.canonicalExecutablePath);
+    assert(runtime7.ready);
+    assert(runtime7.diagnostic == "semantic_worker_runtime_ready");
+    assert(runtime7.canonicalRuntimeDirectoryPath ==
+           fs::canonical(valid.executable7).parent_path());
+    const pid_t launched = ::fork();
+    assert(launched >= 0);
+    if (launched == 0)
+    {
+        assert(::chdir("/") == 0);
+        ::execl(selected7.canonicalExecutablePath.c_str(),
+                selected7.canonicalExecutablePath.c_str(),
+                static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    int launchStatus = 0;
+    assert(::waitpid(launched, &launchStatus, 0) == launched);
+    assert(WIFEXITED(launchStatus));
+    assert(WEXITSTATUS(launchStatus) == 0);
     const auto unknown = registry.selectInferenceWorker({{77}, {8}, true});
     assert(!unknown.selected);
     assert(Contains(unknown.diagnostic, "semantic_worker_layout_unsupported"));
@@ -182,7 +246,8 @@ int main()
         std::string{kCommit6} + "\",\"sha256\":\"" + kHash6 +
         "\",\"executable\":\"layout6/" + kCommit6 + "/" + kHash6 +
         "/LSTM_Release\",\"manifest\":\"layout6/" + kCommit6 + "/" +
-        kHash6 + "/manifest.json\",\"capabilities\":[\"infer\"]}");
+        kHash6 + "/manifest.json\",\"runtime_identity\":\"" +
+        kRuntimeIdentity + "\",\"capabilities\":[\"infer\"]}");
     assert(Contains(Failure([&] { (void)duplicate.load(); }),
                     "semantic_worker_registry_duplicate_layout"));
 
@@ -209,5 +274,21 @@ int main()
     fs::create_symlink(aliasedTarget.filename(), aliasedArtifact.executable6);
     assert(Contains(Failure([&] { (void)aliasedArtifact.load(); }),
                     "artifact_path_not_canonical"));
+
+    Fixture missingRuntime;
+    fs::remove(missingRuntime.executable7.parent_path() / "MetaNN.metallib");
+    assert(Contains(Failure([&] { (void)missingRuntime.load(); }),
+                    "semantic_worker_runtime_dependency_missing:resource=MetaNN.metallib"));
+
+    Fixture runtimeRemovedAfterLoad;
+    const auto loadedBeforeRemoval = runtimeRemovedAfterLoad.load();
+    fs::remove(runtimeRemovedAfterLoad.executable7.parent_path() /
+               "default.metallib");
+    const auto missingAtAdmission =
+        loadedBeforeRemoval.validateRuntimeForExecutable(
+            fs::canonical(runtimeRemovedAfterLoad.executable7).string());
+    assert(!missingAtAdmission.ready);
+    assert(Contains(missingAtAdmission.diagnostic,
+                    "semantic_worker_runtime_dependency_missing:resource=default.metallib"));
     return 0;
 }

@@ -15,10 +15,16 @@ import subprocess
 import tempfile
 
 
-SCHEMA_VERSION = 1
+REGISTRY_SCHEMA_VERSION = 2
+WORKER_MANIFEST_SCHEMA_VERSION = 1
+RUNTIME_MANIFEST_SCHEMA_VERSION = 1
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 VALID_CAPABILITIES = frozenset({"train", "infer", "analyze"})
+RUNTIME_RESOURCE_SPECS = (
+    ("MetaNN_metal.metallib", "MetaNN.metallib"),
+    ("default.metallib", "default.metallib"),
+)
 
 
 class PublishError(RuntimeError):
@@ -98,8 +104,7 @@ def fsync_directory(path: Path) -> None:
 
 def write_json(path: Path, value: object) -> None:
     with path.open("x", encoding="utf-8") as output:
-        json.dump(value, output, indent=2, sort_keys=True)
-        output.write("\n")
+        output.write(json_text(value))
         output.flush()
         os.fsync(output.fileno())
 
@@ -110,14 +115,17 @@ def atomic_write_json(path: Path, value: object) -> None:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            json.dump(value, output, indent=2, sort_keys=True)
-            output.write("\n")
+            output.write(json_text(value))
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
         fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def json_text(value: object) -> str:
+    return json.dumps(value, indent=2, sort_keys=True) + "\n"
 
 
 def verify_embedded_commit(executable: Path, commit: str) -> None:
@@ -167,17 +175,26 @@ def validate_inputs(
 
 def load_registry(path: Path) -> dict:
     if not path.exists():
-        return {"schema_version": SCHEMA_VERSION, "current_layout": None, "workers": []}
+        return {
+            "schema_version": REGISTRY_SCHEMA_VERSION,
+            "current_layout": None,
+            "runtimes": [],
+            "workers": [],
+        }
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise PublishError(f"existing semantic worker registry is malformed: {error}") from error
-    if not isinstance(value, dict) or set(value) != {
-        "schema_version", "current_layout", "workers"
-    }:
+    if not isinstance(value, dict):
         raise PublishError("existing semantic worker registry has an invalid shape")
-    if value["schema_version"] != SCHEMA_VERSION or not isinstance(value["workers"], list):
+    schema_version = value.get("schema_version")
+    expected_fields = {"schema_version", "current_layout", "workers"}
+    if schema_version == REGISTRY_SCHEMA_VERSION:
+        expected_fields.add("runtimes")
+    elif schema_version != 1:
         raise PublishError("existing semantic worker registry schema is unsupported")
+    if set(value) != expected_fields or not isinstance(value.get("workers"), list):
+        raise PublishError("existing semantic worker registry has an invalid shape")
     layouts = [worker.get("semantic_layout") for worker in value["workers"]
                if isinstance(worker, dict)]
     if len(layouts) != len(value["workers"]) or len(layouts) != len(set(layouts)):
@@ -189,6 +206,13 @@ def load_registry(path: Path) -> dict:
     ):
         raise PublishError("existing semantic worker registry current rule is invalid")
     validate_existing_registry(path.parent.resolve(), value)
+    if schema_version == 1:
+        value = {
+            "schema_version": REGISTRY_SCHEMA_VERSION,
+            "current_layout": value["current_layout"],
+            "runtimes": [],
+            "workers": value["workers"],
+        }
     return value
 
 
@@ -197,6 +221,26 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
         "semantic_layout", "worker_rule", "model_input_width", "source_commit",
         "sha256", "executable", "manifest", "capabilities",
     }
+    if registry["schema_version"] == REGISTRY_SCHEMA_VERSION:
+        required_fields.add("runtime_identity")
+        runtimes = registry.get("runtimes")
+        if not isinstance(runtimes, list) or not runtimes:
+            raise PublishError("existing semantic worker registry runtimes are invalid")
+        identities: set[str] = set()
+        for runtime in runtimes:
+            if not isinstance(runtime, dict) or set(runtime) != {
+                "identity", "directory", "manifest"
+            }:
+                raise PublishError("existing semantic worker runtime shape is invalid")
+            identity = runtime["identity"]
+            if (not isinstance(identity, str) or
+                    not SHA256_PATTERN.fullmatch(identity) or
+                    identity in identities):
+                raise PublishError("existing semantic worker runtime identity is invalid")
+            identities.add(identity)
+            verify_runtime_package(artifact_root, runtime)
+    else:
+        identities = set()
     current_layout = registry["current_layout"]
     if (not isinstance(current_layout, int) or isinstance(current_layout, bool) or
             current_layout <= 0):
@@ -212,6 +256,7 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
         digest = worker["sha256"]
         rule = worker["worker_rule"]
         capabilities = worker["capabilities"]
+        runtime_identity = worker.get("runtime_identity")
         if (not isinstance(layout, int) or isinstance(layout, bool) or layout <= 0 or
                 not isinstance(width, int) or isinstance(width, bool) or width <= 0 or
                 not isinstance(rule, str) or rule not in {"current", "historical"} or
@@ -221,7 +266,9 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
                 not all(isinstance(capability, str) for capability in capabilities) or
                 len(capabilities) != len(set(capabilities)) or
                 not set(capabilities) <= VALID_CAPABILITIES or
-                "infer" not in capabilities):
+                "infer" not in capabilities or
+                (registry["schema_version"] == REGISTRY_SCHEMA_VERSION and
+                 runtime_identity not in identities)):
             raise PublishError("existing semantic worker registry worker contract is invalid")
         if rule == "current" and set(capabilities) != VALID_CAPABILITIES:
             raise PublishError("existing current semantic worker capabilities are invalid")
@@ -239,7 +286,7 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
             raise PublishError(
                 f"existing semantic worker artifact is missing: {directory}") from error
         expected_manifest = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": WORKER_MANIFEST_SCHEMA_VERSION,
             "semantic_layout": layout,
             "storage": "immutable",
             "model_input_width": width,
@@ -249,6 +296,121 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
             "capabilities": capabilities,
         }
         verify_existing_artifact(directory, expected_manifest, digest)
+        if registry["schema_version"] == REGISTRY_SCHEMA_VERSION:
+            runtime = next(item for item in registry["runtimes"]
+                           if item["identity"] == runtime_identity)
+            verify_runtime_links(artifact_root, directory, runtime)
+
+
+def runtime_manifest(runtime_resources: dict[str, Path]) -> tuple[dict, str]:
+    resources = []
+    for built_identity, runtime_name in RUNTIME_RESOURCE_SPECS:
+        source = runtime_resources.get(built_identity)
+        if source is None:
+            raise PublishError(
+                f"required semantic worker runtime resource is missing: {built_identity}")
+        try:
+            source = source.resolve(strict=True)
+        except OSError as error:
+            raise PublishError(
+                f"required semantic worker runtime resource is missing: {built_identity}"
+            ) from error
+        if not source.is_file():
+            raise PublishError(
+                f"required semantic worker runtime resource is not a file: {built_identity}")
+        runtime_resources[built_identity] = source
+        resources.append({
+            "built_identity": built_identity,
+            "runtime_name": runtime_name,
+            "sha256": sha256(source),
+        })
+    manifest = {
+        "schema_version": RUNTIME_MANIFEST_SCHEMA_VERSION,
+        "storage": "immutable",
+        "resources": resources,
+    }
+    identity = hashlib.sha256(json_text(manifest).encode("utf-8")).hexdigest()
+    return manifest, identity
+
+
+def verify_runtime_package(artifact_root: Path, runtime: dict) -> None:
+    identity = runtime["identity"]
+    relative_directory = Path("runtime") / identity
+    if (runtime["directory"] != str(relative_directory) or
+            runtime["manifest"] != str(relative_directory / "manifest.json")):
+        raise PublishError("existing semantic worker runtime path is invalid")
+    directory = artifact_root / relative_directory
+    manifest_path = directory / "manifest.json"
+    try:
+        if (directory.resolve(strict=True) != directory or
+                manifest_path.resolve(strict=True) != manifest_path):
+            raise PublishError("existing semantic worker runtime path is not canonical")
+        raw_manifest = manifest_path.read_bytes()
+    except OSError as error:
+        raise PublishError(
+            f"existing semantic worker runtime is incomplete: {directory}") from error
+    if hashlib.sha256(raw_manifest).hexdigest() != identity:
+        raise PublishError("existing semantic worker runtime manifest hash conflict")
+    try:
+        manifest = json.loads(raw_manifest)
+    except json.JSONDecodeError as error:
+        raise PublishError("existing semantic worker runtime manifest is invalid") from error
+    if (not isinstance(manifest, dict) or set(manifest) != {
+            "schema_version", "storage", "resources"} or
+            manifest["schema_version"] != RUNTIME_MANIFEST_SCHEMA_VERSION or
+            manifest["storage"] != "immutable" or
+            not isinstance(manifest["resources"], list)):
+        raise PublishError("existing semantic worker runtime manifest is invalid")
+    expected_names = {runtime_name for _, runtime_name in RUNTIME_RESOURCE_SPECS}
+    observed_names: set[str] = set()
+    for resource in manifest["resources"]:
+        if not isinstance(resource, dict) or set(resource) != {
+            "built_identity", "runtime_name", "sha256"
+        }:
+            raise PublishError("existing semantic worker runtime manifest is invalid")
+        built_identity = resource["built_identity"]
+        runtime_name = resource["runtime_name"]
+        digest = resource["sha256"]
+        if ((built_identity, runtime_name) not in RUNTIME_RESOURCE_SPECS or
+                runtime_name in observed_names or
+                not isinstance(digest, str) or
+                not SHA256_PATTERN.fullmatch(digest)):
+            raise PublishError("existing semantic worker runtime manifest is invalid")
+        resource_path = directory / runtime_name
+        try:
+            if resource_path.resolve(strict=True) != resource_path:
+                raise PublishError("existing semantic worker runtime resource is aliased")
+        except OSError as error:
+            raise PublishError(
+                f"existing semantic worker runtime resource is missing: {runtime_name}"
+            ) from error
+        if sha256(resource_path) != digest:
+            raise PublishError(
+                f"existing semantic worker runtime resource hash conflict: {runtime_name}")
+        observed_names.add(runtime_name)
+    if observed_names != expected_names:
+        raise PublishError("existing semantic worker runtime required resources are invalid")
+
+
+def verify_runtime_links(
+    artifact_root: Path, worker_directory: Path, runtime: dict
+) -> None:
+    runtime_directory = artifact_root / runtime["directory"]
+    for _, runtime_name in RUNTIME_RESOURCE_SPECS:
+        link = worker_directory / runtime_name
+        expected_target = os.path.relpath(runtime_directory / runtime_name,
+                                          worker_directory)
+        if not link.is_symlink() or os.readlink(link) != expected_target:
+            raise PublishError(
+                f"semantic worker runtime dependency is unresolvable: {runtime_name}")
+        try:
+            if link.resolve(strict=True) != (runtime_directory / runtime_name):
+                raise PublishError(
+                    f"semantic worker runtime dependency is unresolvable: {runtime_name}")
+        except OSError as error:
+            raise PublishError(
+                f"semantic worker runtime dependency is missing: {runtime_name}"
+            ) from error
 
 
 def verify_existing_artifact(directory: Path, expected_manifest: dict, digest: str) -> None:
@@ -273,6 +435,68 @@ def verify_existing_artifact(directory: Path, expected_manifest: dict, digest: s
         raise PublishError(f"immutable artifact manifest conflict: {directory}")
 
 
+def stage_runtime_package(
+    artifact_root: Path,
+    runtime_resources: dict[str, Path],
+    manifest_value: dict,
+    identity: str,
+) -> dict:
+    relative_directory = Path("runtime") / identity
+    final_directory = artifact_root / relative_directory
+    runtime_value = {
+        "identity": identity,
+        "directory": str(relative_directory),
+        "manifest": str(relative_directory / "manifest.json"),
+    }
+    if final_directory.exists():
+        verify_runtime_package(artifact_root, runtime_value)
+        return runtime_value
+
+    final_directory.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(
+        prefix=f".{identity}.", suffix=".stage", dir=final_directory.parent))
+    try:
+        for resource in manifest_value["resources"]:
+            built_identity = resource["built_identity"]
+            staged_resource = staging / resource["runtime_name"]
+            shutil.copy2(runtime_resources[built_identity], staged_resource)
+            staged_resource.chmod(0o444)
+            if sha256(staged_resource) != resource["sha256"]:
+                raise PublishError(
+                    f"staged semantic worker runtime hash mismatch: {built_identity}")
+            fsync_file(staged_resource)
+        staged_manifest = staging / "manifest.json"
+        write_json(staged_manifest, manifest_value)
+        staged_manifest.chmod(0o444)
+        if sha256(staged_manifest) != identity:
+            raise PublishError("staged semantic worker runtime identity mismatch")
+        fsync_directory(staging)
+        os.rename(staging, final_directory)
+        fsync_directory(final_directory.parent)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+    verify_runtime_package(artifact_root, runtime_value)
+    return runtime_value
+
+
+def install_runtime_links(
+    artifact_root: Path, worker_directory: Path, runtime: dict
+) -> None:
+    runtime_directory = artifact_root / runtime["directory"]
+    for _, runtime_name in RUNTIME_RESOURCE_SPECS:
+        link = worker_directory / runtime_name
+        target = os.path.relpath(runtime_directory / runtime_name, worker_directory)
+        if os.path.lexists(link):
+            if not link.is_symlink() or os.readlink(link) != target:
+                raise PublishError(
+                    f"semantic worker runtime link conflict: {link}")
+            continue
+        os.symlink(target, link)
+    fsync_directory(worker_directory)
+    verify_runtime_links(artifact_root, worker_directory, runtime)
+
+
 def publish(
     artifact_root: Path,
     executable: Path,
@@ -282,6 +506,7 @@ def publish(
     commit: str,
     capabilities: list[str],
     check_embedded_commit: bool = True,
+    runtime_resources: dict[str, Path] | None = None,
 ) -> Path:
     artifact_root.mkdir(parents=True, exist_ok=True)
     artifact_root = artifact_root.resolve()
@@ -297,11 +522,17 @@ def publish(
     digest = sha256(executable)
     if not SHA256_PATTERN.fullmatch(digest):
         raise PublishError("computed SHA-256 is malformed")
+    if runtime_resources is None:
+        runtime_resources = {
+            built_identity: executable.parent / built_identity
+            for built_identity, _ in RUNTIME_RESOURCE_SPECS
+        }
+    runtime_manifest_value, runtime_identity = runtime_manifest(runtime_resources)
 
     relative_directory = Path(f"layout{layout}") / commit / digest
     final_directory = artifact_root / relative_directory
     manifest_value = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": WORKER_MANIFEST_SCHEMA_VERSION,
         "semantic_layout": layout,
         "storage": "immutable",
         "model_input_width": width,
@@ -318,6 +549,7 @@ def publish(
         "sha256": digest,
         "executable": str(relative_directory / "LSTM_Release"),
         "manifest": str(relative_directory / "manifest.json"),
+        "runtime_identity": runtime_identity,
         "capabilities": capabilities,
     }
 
@@ -326,6 +558,34 @@ def publish(
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         registry_path = artifact_root / "registry.json"
         registry = load_registry(registry_path)
+        runtime_value = stage_runtime_package(
+            artifact_root,
+            runtime_resources,
+            runtime_manifest_value,
+            runtime_identity,
+        )
+        if not any(item["identity"] == runtime_identity
+                   for item in registry["runtimes"]):
+            registry["runtimes"].append(runtime_value)
+            registry["runtimes"].sort(key=lambda item: item["identity"])
+
+        # Schema-v1 archives retain their executable and manifest identity.
+        # Publication attaches only deterministic links to the separately
+        # immutable runtime package, then binds those links in registry v2.
+        runtime_by_identity = {
+            item["identity"]: item for item in registry["runtimes"]
+        }
+        for existing_worker in registry["workers"]:
+            if "runtime_identity" not in existing_worker:
+                existing_worker["runtime_identity"] = runtime_identity
+            existing_directory = (
+                artifact_root / existing_worker["executable"]
+            ).parent
+            install_runtime_links(
+                artifact_root,
+                existing_directory,
+                runtime_by_identity[existing_worker["runtime_identity"]],
+            )
 
         if final_directory.exists():
             verify_existing_artifact(final_directory, manifest_value, digest)
@@ -349,6 +609,8 @@ def publish(
             finally:
                 if staging.exists():
                     shutil.rmtree(staging)
+
+        install_runtime_links(artifact_root, final_directory, runtime_value)
 
         workers = [worker for worker in registry["workers"]
                    if worker["semantic_layout"] != layout]

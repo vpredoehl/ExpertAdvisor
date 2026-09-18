@@ -23,6 +23,12 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         self.root = Path(self.temporary.name) / "SemanticWorkers"
         self.sources = Path(self.temporary.name) / "sources"
         self.sources.mkdir()
+        self.runtime_resources = {
+            "default.metallib": self.sources / "default.metallib",
+            "MetaNN_metal.metallib": self.sources / "MetaNN_metal.metallib",
+        }
+        self.runtime_resources["default.metallib"].write_bytes(b"default-metal")
+        self.runtime_resources["MetaNN_metal.metallib"].write_bytes(b"metann-metal")
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -46,6 +52,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
                 else ["infer"]
             ),
             check_embedded_commit=False,
+            runtime_resources=dict(self.runtime_resources),
         )
 
     def registry(self) -> dict:
@@ -71,6 +78,19 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         self.assertEqual(archived7.read_bytes(), original7)
         self.assertEqual(archived8.read_bytes(), b"layout-eight")
         self.assertEqual((self.root / "current").resolve(), archived8.parent)
+        self.assertEqual(registry["schema_version"], 2)
+        self.assertEqual(len(registry["runtimes"]), 1)
+        runtime_identity = by_layout[8]["runtime_identity"]
+        self.assertEqual(by_layout[6]["runtime_identity"], runtime_identity)
+        self.assertEqual(by_layout[7]["runtime_identity"], runtime_identity)
+        for archived in (archived6, archived7, archived8):
+            self.assertTrue((archived.parent / "default.metallib").is_symlink())
+            self.assertTrue((archived.parent / "MetaNN.metallib").is_symlink())
+            self.assertEqual(
+                (archived.parent / "default.metallib").resolve(),
+                (self.root / "runtime" / runtime_identity /
+                 "default.metallib").resolve(),
+            )
 
         archived7.chmod(0o700)
         archived7.write_bytes(b"tampered-in-place")
@@ -128,6 +148,85 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         ):
             self.publish(worker8, "current", 8, "8" * 40)
         self.assertEqual((self.root / "registry.json").read_bytes(), before)
+
+    def test_missing_runtime_resource_never_publishes_worker(self) -> None:
+        worker7 = self.executable("worker7", b"layout-seven")
+        self.runtime_resources["MetaNN_metal.metallib"].unlink()
+        with self.assertRaisesRegex(
+            publisher.PublishError,
+            "required semantic worker runtime resource is missing: MetaNN_metal.metallib",
+        ):
+            self.publish(worker7, "current", 7, "7" * 40)
+        self.assertFalse((self.root / "registry.json").exists())
+
+    def test_runtime_tamper_blocks_rollover(self) -> None:
+        worker7 = self.executable("worker7", b"layout-seven")
+        self.publish(worker7, "current", 7, "7" * 40)
+        registry = self.registry()
+        identity = registry["workers"][0]["runtime_identity"]
+        resource = self.root / "runtime" / identity / "default.metallib"
+        resource.chmod(0o600)
+        resource.write_bytes(b"tampered")
+        worker8 = self.executable("worker8", b"layout-eight")
+        with self.assertRaisesRegex(
+            publisher.PublishError,
+            "runtime resource hash conflict: default.metallib",
+        ):
+            self.publish(worker8, "current", 8, "8" * 40)
+
+    def test_v1_registry_upgrade_keeps_existing_executable_identity(self) -> None:
+        worker7 = self.executable("worker7", b"layout-seven")
+        commit7 = "7" * 40
+        digest7 = publisher.sha256(worker7)
+        relative7 = Path("layout7") / commit7 / digest7
+        archived7 = self.root / relative7 / "LSTM_Release"
+        archived7.parent.mkdir(parents=True)
+        archived7.write_bytes(worker7.read_bytes())
+        archived7.chmod(0o555)
+        manifest7 = {
+            "schema_version": 1,
+            "semantic_layout": 7,
+            "storage": "immutable",
+            "model_input_width": 77,
+            "source_commit": commit7,
+            "sha256": digest7,
+            "executable_identity": "LSTM_Release",
+            "capabilities": ["train", "infer", "analyze"],
+        }
+        (archived7.parent / "manifest.json").write_text(
+            json.dumps(manifest7, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        registry_v1 = {
+            "schema_version": 1,
+            "current_layout": 7,
+            "workers": [{
+                "semantic_layout": 7,
+                "worker_rule": "current",
+                "model_input_width": 77,
+                "source_commit": commit7,
+                "sha256": digest7,
+                "executable": str(relative7 / "LSTM_Release"),
+                "manifest": str(relative7 / "manifest.json"),
+                "capabilities": ["train", "infer", "analyze"],
+            }],
+        }
+        (self.root / "registry.json").write_text(
+            json.dumps(registry_v1, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        original = archived7.read_bytes()
+        worker8 = self.executable("worker8", b"layout-eight")
+        self.publish(worker8, "current", 8, "8" * 40)
+        upgraded = self.registry()
+        by_layout = {entry["semantic_layout"]: entry
+                     for entry in upgraded["workers"]}
+        self.assertEqual(upgraded["schema_version"], 2)
+        self.assertEqual(archived7.read_bytes(), original)
+        self.assertEqual(by_layout[7]["sha256"], digest7)
+        self.assertTrue((archived7.parent / "default.metallib").is_symlink())
+        self.assertTrue((archived7.parent / "MetaNN.metallib").is_symlink())
 
 
 if __name__ == "__main__":

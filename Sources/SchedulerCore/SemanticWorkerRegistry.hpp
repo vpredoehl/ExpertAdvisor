@@ -11,7 +11,9 @@
 namespace EA::Scheduler
 {
 
-inline constexpr int kSemanticWorkerRegistrySchemaVersion = 1;
+inline constexpr int kSemanticWorkerRegistrySchemaVersion = 2;
+inline constexpr int kSemanticWorkerArtifactManifestSchemaVersion = 1;
+inline constexpr int kSemanticWorkerRuntimeManifestSchemaVersion = 1;
 
 enum class SemanticWorkerArtifactKind
 {
@@ -28,7 +30,31 @@ struct SemanticWorkerArtifact
     std::string sha256;
     std::string canonicalExecutablePath;
     std::string canonicalManifestPath;
+    std::string runtimeIdentity;
     std::set<std::string> capabilities;
+};
+
+struct SemanticWorkerRuntimeResource
+{
+    std::string builtIdentity;
+    std::string runtimeName;
+    std::string sha256;
+    std::string canonicalPath;
+};
+
+struct SemanticWorkerRuntimePackage
+{
+    std::string identity;
+    std::string canonicalDirectoryPath;
+    std::string canonicalManifestPath;
+    std::map<std::string, SemanticWorkerRuntimeResource> resources;
+};
+
+struct SemanticWorkerRuntimeValidation
+{
+    bool ready = false;
+    std::string diagnostic;
+    std::string canonicalRuntimeDirectoryPath;
 };
 
 struct SemanticWorkerSelection
@@ -60,12 +86,15 @@ public:
     const std::string& canonicalRegistryPath() const noexcept;
     const SemanticWorkerArtifact& currentWorker() const;
     const SemanticWorkerArtifact* find(int semanticLayoutVersion) const noexcept;
+    SemanticWorkerRuntimeValidation validateRuntimeForExecutable(
+        const std::string& canonicalExecutablePath) const;
     SemanticWorkerSelection selectInferenceWorker(
         const PersistedWorkerSemanticIdentity& persisted) const;
 
 private:
     std::string canonicalRegistryPath_;
     int currentLayoutVersion_ = 0;
+    std::map<std::string, SemanticWorkerRuntimePackage> runtimes_;
     std::map<int, SemanticWorkerArtifact> workers_;
 };
 
