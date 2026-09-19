@@ -35,6 +35,7 @@
 
 #include "db_cursor_iterator.hpp"
 #include "MarketDataCore.hpp"
+#include "ModelInputPreparation.hpp"
 #include "Tensor.hpp"
 #include "LSTM.hpp"
 #include "PgModelIO.hpp"
@@ -8879,20 +8880,16 @@ int main(int argc, const char * argv[])
 
         for (const auto& rawPriceTableName : selectedSymbols)
         {
-            pqxx::work forexDataRead { c_forex };
-            forexDataRead.exec("SET TRANSACTION READ ONLY;");
             DiagnosticOut() << "SYMBOL_SELECTION"
                             << ",requested=" << (resumeConfig.has_value() ? resumeConfig->symbol : (inferenceConfig.has_value() ? inferenceConfig->symbol : (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none")))
                             << ",selected=" << rawPriceTableName
                             << ",available_count=" << availableSymbols.size()
                             << std::endl;
 
-            const bool fullHistoryWarmup =
-                featureWarmupScope == EA::FeatureWarmupScope::FullHistoryWarmup;
-            const std::string queryStart = fullHistoryWarmup
-                ? EA::kTensorFeatureHistoryQueryStart : fromDate;
             if (frozenOutcomeJob)
             {
+                pqxx::work forexDataRead { c_forex };
+                forexDataRead.exec("SET TRANSACTION READ ONLY;");
                 const auto coverage =
                     EA::MarketData::CheckProspectiveOutcomeCoverage(
                         forexDataRead, rawPriceTableName, fromDate, toDate);
@@ -8942,14 +8939,8 @@ int main(int argc, const char * argv[])
                 if (!complete)
                     throw std::runtime_error(
                         "campaign_profitability_outcome_market_data_incomplete");
+                forexDataRead.commit();
             }
-            const auto marketData = EA::MarketData::LoadCandlesticks(
-                forexDataRead,
-                {rawPriceTableName, queryStart, fromDate, toDate,
-                 rawPriceTableName + "_candlestick_stream", fullHistoryWarmup});
-            const size_t logicalOutputStartIndex =
-                marketData.logicalOutputStartIndex;
-            std::vector<EA::EconomicCalendar::EconomicEvent> economicEvents;
             std::optional<EA::EconomicCalendar::
                 EconomicCalendarSnapshotIdentity> economicCalendarSnapshot;
             {
@@ -8958,48 +8949,17 @@ int main(int argc, const char * argv[])
                 economicCalendarSnapshot =
                     ResolveRuntimeEconomicCalendarSnapshot(
                         economicEventRead, launchArgs);
-                economicEvents =
-                    EA::EconomicCalendar::LoadEconomicEventsForFeatureRange(
-                        economicEventRead,
-                        std::string{EA::EconomicCalendar::
-                            kEconomicEventFeatureCurrency},
-                        queryStart,
-                        toDate,
-                        economicCalendarSnapshot);
-                std::cout << "ECONOMIC_CALENDAR_CORPUS"
-                          << ",behavior="
-                          << (economicCalendarSnapshot
-                                  ? "immutable_snapshot"
-                                  : "legacy_live_corpus")
-                          << ",snapshot_id="
-                          << (economicCalendarSnapshot
-                                  ? std::to_string(
-                                        economicCalendarSnapshot->snapshotId)
-                                  : "NULL")
-                          << ",content_hash="
-                          << (economicCalendarSnapshot
-                                  ? economicCalendarSnapshot->contentHash
-                                  : "NULL")
-                          << std::endl;
                 economicEventRead.commit();
             }
-            Tensor t{ rawPriceTableName, runtimeDonchian20Mode,
-                      runtimeDonchianLookback, std::move(economicEvents) };
-            
-            DiagnosticOut() << "Candlestick query: " << marketData.query << "\n";
-            DiagnosticOut() << "FEATURE_WARMUP_SCOPE"
-                            << ",mode=" << EA::FeatureWarmupScopeText(featureWarmupScope)
-                            << ",source_start=" << queryStart
-                            << ",output_start=" << fromDate
-                            << ",output_end=" << toDate
-                            << ",warmup_rows=" << logicalOutputStartIndex
-                            << std::endl;
-            DiagnosticOut() << "Building tensor for table: " << rawPriceTableName << std::endl;
-            for (const auto& row : marketData.rows)
-                t.Add(row);
-            forexDataRead.commit();
-            if (logicalOutputStartIndex > t.RowCount())
-                throw std::runtime_error("feature warmup query returned more rows than the source tensor");
+            const auto preparedInput = EA::ModelInputPreparation::Prepare(
+                {rawPriceTableName, fromDate, toDate, featureWarmupScope,
+                 runtimeDonchian20Mode, runtimeDonchianLookback,
+                 economicCalendarSnapshot},
+                {ForexDbConnectionString(), LstmDbConnectionString()});
+            Tensor t = std::move(preparedInput.tensor);
+            const size_t logicalOutputStartIndex =
+                preparedInput.logicalOutputStartIndex;
+            economicCalendarSnapshot = preparedInput.calendarSnapshot;
             std::optional<std::size_t> persistedModelInputWidth =
                 resumeConfig.has_value()
                     ? std::optional<std::size_t>{
