@@ -1,6 +1,6 @@
 #include "SchedulerDaemonCli.hpp"
 
-#include "ExperimentScheduler.hpp"
+#include "ProductionSchedulerDaemon.hpp"
 #include "SchedulerDaemonConfiguration.hpp"
 
 #include <iostream>
@@ -35,7 +35,7 @@ int RunSchedulerDaemonCli(int argc, const char* argv[])
 
     try
     {
-        return EA::ExperimentScheduler::RunSchedulerDaemon(configuration);
+        return RunProductionSchedulerDaemon(configuration);
     }
     catch (const pqxx::failure& error)
     {

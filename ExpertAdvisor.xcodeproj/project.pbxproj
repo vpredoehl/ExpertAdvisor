@@ -338,6 +338,9 @@
 		0F30001034A0000100AAA001 /* SchedulerDaemonConfiguration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F30000134A0000100AAA001 /* SchedulerDaemonConfiguration.cpp */; };
 		0F30001134A0000100AAA001 /* SchedulerDaemonCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F30000334A0000100AAA001 /* SchedulerDaemonCli.cpp */; };
 		0F30001234A0000100AAA001 /* SchedulerWorkerRegistration.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F30000534A0000100AAA001 /* SchedulerWorkerRegistration.cpp */; };
+		0F31001034B0000100AAA001 /* ProductionSchedulerDaemon.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F31000134B0000100AAA001 /* ProductionSchedulerDaemon.cpp */; };
+		0F32001034C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
+		0F32001134C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -825,6 +828,11 @@
 		0F30000434A0000100AAA001 /* SchedulerDaemonCli.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerDaemonCli.hpp; path = Sources/SchedulerCore/SchedulerDaemonCli.hpp; sourceTree = SOURCE_ROOT; };
 		0F30000534A0000100AAA001 /* SchedulerWorkerRegistration.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerWorkerRegistration.cpp; path = Sources/SchedulerCore/SchedulerWorkerRegistration.cpp; sourceTree = SOURCE_ROOT; };
 		0F30000634A0000100AAA001 /* SchedulerWorkerRegistration.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerWorkerRegistration.hpp; path = Sources/SchedulerCore/SchedulerWorkerRegistration.hpp; sourceTree = SOURCE_ROOT; };
+		0F31000134B0000100AAA001 /* ProductionSchedulerDaemon.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProductionSchedulerDaemon.cpp; path = Sources/SchedulerCore/ProductionSchedulerDaemon.cpp; sourceTree = SOURCE_ROOT; };
+		0F31000234B0000100AAA001 /* ProductionSchedulerDaemon.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProductionSchedulerDaemon.hpp; path = Sources/SchedulerCore/ProductionSchedulerDaemon.hpp; sourceTree = SOURCE_ROOT; };
+		0F31000334B0000100AAA001 /* ProductionSchedulerRuntimeInternal.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProductionSchedulerRuntimeInternal.hpp; path = Sources/SchedulerCore/ProductionSchedulerRuntimeInternal.hpp; sourceTree = SOURCE_ROOT; };
+		0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LstmRuntimeLogging.cpp; path = Sources/LstmRuntimeLogging.cpp; sourceTree = SOURCE_ROOT; };
+		0F32000234C0000100AAA001 /* LstmRuntimeLogging.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = LstmRuntimeLogging.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -935,6 +943,7 @@
 			children = (
 				08B33BEA2F4213DB0015F9CF /* Answers.txt */,
 				084426892ED8E755002DEB21 /* main.cpp */,
+				0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */,
 				0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */,
 				0EC201113320000100AAA001 /* EconomicEventConsensusImport.hpp */,
 				0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */,
@@ -1208,6 +1217,7 @@
 			isa = PBXGroup;
 			children = (
 				0F1C001433F0000100AAA001 /* ModelInputFeatureSemantics.hpp */,
+				0F32000234C0000100AAA001 /* LstmRuntimeLogging.hpp */,
 				08B33BDE2F4185280015F9CF /* BuildConfig.hpp */,
 				0889D74F2FB0C51E00F7F150 /* TargetLabel.hpp */,
 				086BEC082F397572009326B6 /* MatrixUtils.hpp */,
@@ -1281,6 +1291,9 @@
 			isa = PBXGroup;
 			children = (
 				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
+				0F31000134B0000100AAA001 /* ProductionSchedulerDaemon.cpp */,
+				0F31000234B0000100AAA001 /* ProductionSchedulerDaemon.hpp */,
+				0F31000334B0000100AAA001 /* ProductionSchedulerRuntimeInternal.hpp */,
 				0F30000334A0000100AAA001 /* SchedulerDaemonCli.cpp */,
 				0F30000434A0000100AAA001 /* SchedulerDaemonCli.hpp */,
 				0F30000134A0000100AAA001 /* SchedulerDaemonConfiguration.cpp */,
@@ -1560,6 +1573,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F32001034C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
 				0EC201003320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */,
 				0EC201013320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */,
 				0EC2002632E1000100AAA001 /* EconomicEventImportValidation.cpp in Sources */,
@@ -1702,6 +1716,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F32001134C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
 				0EC201023320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */,
 				0EC201033320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */,
 				0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */,
@@ -1867,6 +1882,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0F31001034B0000100AAA001 /* ProductionSchedulerDaemon.cpp in Sources */,
 				0F30001134A0000100AAA001 /* SchedulerDaemonCli.cpp in Sources */,
 				0F30001034A0000100AAA001 /* SchedulerDaemonConfiguration.cpp in Sources */,
 				0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */,

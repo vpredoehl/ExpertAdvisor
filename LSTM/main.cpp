@@ -49,6 +49,7 @@
 #include "ExperimentCurrentOperation.hpp"
 #include "FxPriceSanity.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
+#include "LstmRuntimeLogging.hpp"
 #include "Donchian20Mode.hpp"
 #include "DonchianLookback.hpp"
 #include "FeatureWarmupScope.hpp"
@@ -116,24 +117,17 @@ const char* GateStateModeLabel()
     }
 }
 
-enum class RuntimeLogLevel
-{
-    Quiet = 0,
-    Summary = 1,
-    Diagnostic = 2
-};
-
-RuntimeLogLevel gRuntimeLogLevel = RuntimeLogLevel::Summary;
+using EA::RuntimeLogLevel;
 bool gRuntimeInferenceMode = default_runtime_inference_mode;
 
 bool LogSummary()
 {
-    return static_cast<int>(gRuntimeLogLevel) >= static_cast<int>(RuntimeLogLevel::Summary);
+    return EA::RuntimeSummaryLoggingEnabled();
 }
 
 bool LogDiagnostic()
 {
-    return gRuntimeLogLevel == RuntimeLogLevel::Diagnostic;
+    return EA::RuntimeDiagnosticLoggingEnabled();
 }
 
 RuntimeLogLevel ParseRuntimeLogLevel(const std::string& value)
@@ -4702,7 +4696,7 @@ void ApplyLaunchRuntimeConfig(const LaunchArgs& launchArgs)
     if (launchArgs.thresholdLogret.has_value())
         c_next_threshold = static_cast<float>(*launchArgs.thresholdLogret);
     if (launchArgs.logLevel.has_value())
-        gRuntimeLogLevel = *launchArgs.logLevel;
+        EA::SetRuntimeLogLevel(*launchArgs.logLevel);
     if (launchArgs.windowSize.has_value())
         window_size = *launchArgs.windowSize;
     if (launchArgs.hiddenSize.has_value())
@@ -5165,7 +5159,8 @@ void PrintRuntimeConfig()
     std::cout << "RUNTIME_CONFIG"
               << ",train=" << (gRuntimeInferenceMode ? "false" : "true")
               << ",infer=" << (gRuntimeInferenceMode ? "true" : "false")
-              << ",log_level=" << RuntimeLogLevelName(gRuntimeLogLevel)
+              << ",log_level="
+              << RuntimeLogLevelName(EA::RuntimeLogLevelValue())
               << ",prediction_horizon=" << prediction_horizon
               << ",threshold=" << c_next_threshold
               << ",window_size=" << window_size
@@ -8351,11 +8346,6 @@ int RunInferAllForSymbol(pqxx::work& w,
 }
 }
 
-extern "C" bool LstmRuntimeDiagnosticLoggingEnabled()
-{
-    return LogDiagnostic();
-}
-
 std::optional<int> RunCheckpointStopOwnershipTestBoundary(
     const LaunchArgs& launchArgs)
 {
@@ -8492,7 +8482,7 @@ int main(int argc, const char * argv[])
             return *testBoundary;
         }
         if (launchArgs.logLevel.has_value())
-            gRuntimeLogLevel = *launchArgs.logLevel;
+            EA::SetRuntimeLogLevel(*launchArgs.logLevel);
         if (launchArgs.schedulerCheckpointEvalId.has_value())
         {
             EA::ExperimentScheduler::LogWorkerStarted(
