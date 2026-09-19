@@ -15,8 +15,10 @@ import subprocess
 import tempfile
 
 
-REGISTRY_SCHEMA_VERSION = 2
-WORKER_MANIFEST_SCHEMA_VERSION = 1
+REGISTRY_SCHEMA_VERSION = 3
+LEGACY_REGISTRY_SCHEMA_VERSION = 2
+LEGACY_WORKER_MANIFEST_SCHEMA_VERSION = 1
+WORKER_MANIFEST_SCHEMA_VERSION = 2
 RUNTIME_MANIFEST_SCHEMA_VERSION = 1
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
@@ -149,6 +151,7 @@ def validate_inputs(
     width: int,
     commit: str,
     capabilities: list[str],
+    worker_role: str,
 ) -> None:
     if not executable.is_absolute() or not executable.is_file():
         raise PublishError("worker executable must be an absolute existing regular file")
@@ -164,13 +167,10 @@ def validate_inputs(
         raise PublishError("capabilities must be nonempty and unique")
     if not set(capabilities) <= VALID_CAPABILITIES:
         raise PublishError("capabilities contain an unsupported phase")
-    if "infer" not in capabilities:
-        raise PublishError("all semantic workers must support inference")
-    if worker_rule == "current":
-        if set(capabilities) != VALID_CAPABILITIES:
-            raise PublishError("current worker must support train, infer, and analyze")
-    elif set(capabilities) != {"infer"}:
-        raise PublishError("historical workers are inference-only")
+    if worker_role != "infer":
+        raise PublishError("Phase 22E publication supports only the infer worker role")
+    if set(capabilities) != {"infer"}:
+        raise PublishError("role-aware inference workers must support only infer")
 
 
 def load_registry(path: Path) -> dict:
@@ -189,7 +189,7 @@ def load_registry(path: Path) -> dict:
         raise PublishError("existing semantic worker registry has an invalid shape")
     schema_version = value.get("schema_version")
     expected_fields = {"schema_version", "current_layout", "workers"}
-    if schema_version == REGISTRY_SCHEMA_VERSION:
+    if schema_version in {REGISTRY_SCHEMA_VERSION, LEGACY_REGISTRY_SCHEMA_VERSION}:
         expected_fields.add("runtimes")
     elif schema_version != 1:
         raise PublishError("existing semantic worker registry schema is unsupported")
@@ -206,12 +206,18 @@ def load_registry(path: Path) -> dict:
     ):
         raise PublishError("existing semantic worker registry current rule is invalid")
     validate_existing_registry(path.parent.resolve(), value)
-    if schema_version == 1:
+    if schema_version != REGISTRY_SCHEMA_VERSION:
+        workers = []
+        for worker in value["workers"]:
+            upgraded = dict(worker)
+            upgraded["worker_role"] = "infer"
+            upgraded["artifact_manifest_schema_version"] = LEGACY_WORKER_MANIFEST_SCHEMA_VERSION
+            workers.append(upgraded)
         value = {
             "schema_version": REGISTRY_SCHEMA_VERSION,
             "current_layout": value["current_layout"],
-            "runtimes": [],
-            "workers": value["workers"],
+            "runtimes": value.get("runtimes", []),
+            "workers": workers,
         }
     return value
 
@@ -221,7 +227,7 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
         "semantic_layout", "worker_rule", "model_input_width", "source_commit",
         "sha256", "executable", "manifest", "capabilities",
     }
-    if registry["schema_version"] == REGISTRY_SCHEMA_VERSION:
+    if registry["schema_version"] in {REGISTRY_SCHEMA_VERSION, LEGACY_REGISTRY_SCHEMA_VERSION}:
         required_fields.add("runtime_identity")
         runtimes = registry.get("runtimes")
         if not isinstance(runtimes, list) or not runtimes:
@@ -248,7 +254,11 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
     if not registry["workers"]:
         raise PublishError("existing semantic worker registry has no workers")
     for worker in registry["workers"]:
-        if set(worker) != required_fields:
+        expected_worker_fields = set(required_fields)
+        if registry["schema_version"] == REGISTRY_SCHEMA_VERSION:
+            expected_worker_fields.add("worker_role")
+            expected_worker_fields.add("artifact_manifest_schema_version")
+        if set(worker) != expected_worker_fields:
             raise PublishError("existing semantic worker registry worker shape is invalid")
         layout = worker["semantic_layout"]
         width = worker["model_input_width"]
@@ -267,13 +277,27 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
                 len(capabilities) != len(set(capabilities)) or
                 not set(capabilities) <= VALID_CAPABILITIES or
                 "infer" not in capabilities or
-                (registry["schema_version"] == REGISTRY_SCHEMA_VERSION and
+                (registry["schema_version"] in {REGISTRY_SCHEMA_VERSION, LEGACY_REGISTRY_SCHEMA_VERSION} and
                  runtime_identity not in identities)):
             raise PublishError("existing semantic worker registry worker contract is invalid")
-        if rule == "current" and set(capabilities) != VALID_CAPABILITIES:
+        if (registry["schema_version"] == REGISTRY_SCHEMA_VERSION and
+                worker.get("worker_role") != "infer"):
+            raise PublishError("existing semantic worker role is invalid")
+        if (registry["schema_version"] == REGISTRY_SCHEMA_VERSION and
+                set(capabilities) != {"infer"}):
+            raise PublishError("existing role-aware inference worker capabilities are invalid")
+        if (registry["schema_version"] != REGISTRY_SCHEMA_VERSION and
+                rule == "current" and set(capabilities) != VALID_CAPABILITIES):
             raise PublishError("existing current semantic worker capabilities are invalid")
-        relative_directory = Path(f"layout{layout}") / commit / digest
-        expected_executable = str(relative_directory / "LSTM_Release")
+        role = worker.get("worker_role")
+        manifest_schema = worker.get("artifact_manifest_schema_version")
+        relative_directory = (Path(f"layout{layout}") / role / commit / digest
+                              if manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION
+                              else Path(f"layout{layout}") / commit / digest)
+        executable_name = ("lstm-infer-worker"
+                           if manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION and role == "infer"
+                           else "LSTM_Release")
+        expected_executable = str(relative_directory / executable_name)
         expected_manifest_path = str(relative_directory / "manifest.json")
         if (worker["executable"] != expected_executable or
                 worker["manifest"] != expected_manifest_path):
@@ -286,15 +310,17 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
             raise PublishError(
                 f"existing semantic worker artifact is missing: {directory}") from error
         expected_manifest = {
-            "schema_version": WORKER_MANIFEST_SCHEMA_VERSION,
+            "schema_version": (manifest_schema if role else LEGACY_WORKER_MANIFEST_SCHEMA_VERSION),
             "semantic_layout": layout,
             "storage": "immutable",
             "model_input_width": width,
             "source_commit": commit,
             "sha256": digest,
-            "executable_identity": "LSTM_Release",
+            "executable_identity": executable_name,
             "capabilities": capabilities,
         }
+        if manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION:
+            expected_manifest["worker_role"] = role
         verify_existing_artifact(directory, expected_manifest, digest)
         if registry["schema_version"] == REGISTRY_SCHEMA_VERSION:
             runtime = next(item for item in registry["runtimes"]
@@ -414,7 +440,7 @@ def verify_runtime_links(
 
 
 def verify_existing_artifact(directory: Path, expected_manifest: dict, digest: str) -> None:
-    executable = directory / "LSTM_Release"
+    executable = directory / expected_manifest["executable_identity"]
     manifest = directory / "manifest.json"
     try:
         canonical_executable = executable.resolve(strict=True)
@@ -505,6 +531,7 @@ def publish(
     width: int,
     commit: str,
     capabilities: list[str],
+    worker_role: str = "infer",
     check_embedded_commit: bool = True,
     runtime_resources: dict[str, Path] | None = None,
 ) -> Path:
@@ -516,7 +543,7 @@ def publish(
         raise PublishError(
             "worker executable must be an absolute existing regular file"
         ) from error
-    validate_inputs(executable, worker_rule, layout, width, commit, capabilities)
+    validate_inputs(executable, worker_rule, layout, width, commit, capabilities, worker_role)
     if check_embedded_commit:
         verify_embedded_commit(executable, commit)
     digest = sha256(executable)
@@ -529,7 +556,7 @@ def publish(
         }
     runtime_manifest_value, runtime_identity = runtime_manifest(runtime_resources)
 
-    relative_directory = Path(f"layout{layout}") / commit / digest
+    relative_directory = Path(f"layout{layout}") / worker_role / commit / digest
     final_directory = artifact_root / relative_directory
     manifest_value = {
         "schema_version": WORKER_MANIFEST_SCHEMA_VERSION,
@@ -538,16 +565,19 @@ def publish(
         "model_input_width": width,
         "source_commit": commit,
         "sha256": digest,
-        "executable_identity": "LSTM_Release",
+        "executable_identity": "lstm-infer-worker",
+        "worker_role": worker_role,
         "capabilities": capabilities,
     }
     worker_value = {
         "semantic_layout": layout,
+        "worker_role": worker_role,
+        "artifact_manifest_schema_version": WORKER_MANIFEST_SCHEMA_VERSION,
         "worker_rule": worker_rule,
         "model_input_width": width,
         "source_commit": commit,
         "sha256": digest,
-        "executable": str(relative_directory / "LSTM_Release"),
+        "executable": str(relative_directory / "lstm-infer-worker"),
         "manifest": str(relative_directory / "manifest.json"),
         "runtime_identity": runtime_identity,
         "capabilities": capabilities,
@@ -594,7 +624,7 @@ def publish(
             staging = Path(tempfile.mkdtemp(
                 prefix=f".{digest}.", suffix=".stage", dir=final_directory.parent))
             try:
-                staged_executable = staging / "LSTM_Release"
+                staged_executable = staging / "lstm-infer-worker"
                 shutil.copy2(executable, staged_executable)
                 staged_executable.chmod(0o555)
                 if sha256(staged_executable) != digest:
@@ -613,7 +643,8 @@ def publish(
         install_runtime_links(artifact_root, final_directory, runtime_value)
 
         workers = [worker for worker in registry["workers"]
-                   if worker["semantic_layout"] != layout]
+                   if (worker["semantic_layout"], worker.get("worker_role", "infer")) !=
+                   (layout, worker_role)]
         if worker_rule == "current":
             for worker in workers:
                 if worker.get("worker_rule") == "current":
@@ -636,7 +667,7 @@ def publish(
             os.symlink(relative_directory, temporary_link)
             os.replace(temporary_link, current_link)
             fsync_directory(artifact_root)
-    return final_directory / "LSTM_Release"
+    return final_directory / "lstm-infer-worker"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -649,6 +680,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--model-input-width", type=int)
     parser.add_argument("--source-commit")
     parser.add_argument("--capability", action="append", dest="capabilities")
+    parser.add_argument("--worker-role", choices=("infer",), default="infer")
     return parser.parse_args()
 
 
@@ -677,10 +709,7 @@ def main() -> int:
         if arguments.source_commit is None:
             raise PublishError("historical import requires an explicit source commit")
         commit = arguments.source_commit
-    capabilities = arguments.capabilities or (
-        ["train", "infer", "analyze"] if arguments.worker_rule == "current"
-        else ["infer"]
-    )
+    capabilities = arguments.capabilities or ["infer"]
     published = publish(
         artifact_root=artifact_root,
         executable=arguments.built_executable,
@@ -689,6 +718,7 @@ def main() -> int:
         width=width,
         commit=commit,
         capabilities=capabilities,
+        worker_role=arguments.worker_role,
         check_embedded_commit=True,
     )
     print(f"Semantic worker published: {published}")

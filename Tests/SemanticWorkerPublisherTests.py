@@ -47,10 +47,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
             layout=layout,
             width=77,
             commit=commit,
-            capabilities=(
-                ["train", "infer", "analyze"] if rule == "current"
-                else ["infer"]
-            ),
+            capabilities=["infer"],
             check_embedded_commit=False,
             runtime_resources=dict(self.runtime_resources),
         )
@@ -78,7 +75,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         self.assertEqual(archived7.read_bytes(), original7)
         self.assertEqual(archived8.read_bytes(), b"layout-eight")
         self.assertEqual((self.root / "current").resolve(), archived8.parent)
-        self.assertEqual(registry["schema_version"], 2)
+        self.assertEqual(registry["schema_version"], 3)
         self.assertEqual(len(registry["runtimes"]), 1)
         runtime_identity = by_layout[8]["runtime_identity"]
         self.assertEqual(by_layout[6]["runtime_identity"], runtime_identity)
@@ -222,7 +219,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         upgraded = self.registry()
         by_layout = {entry["semantic_layout"]: entry
                      for entry in upgraded["workers"]}
-        self.assertEqual(upgraded["schema_version"], 2)
+        self.assertEqual(upgraded["schema_version"], 3)
         self.assertEqual(archived7.read_bytes(), original)
         self.assertEqual(by_layout[7]["sha256"], digest7)
         self.assertTrue((archived7.parent / "default.metallib").is_symlink())

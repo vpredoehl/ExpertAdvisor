@@ -11,8 +11,10 @@
 namespace EA::Scheduler
 {
 
-inline constexpr int kSemanticWorkerRegistrySchemaVersion = 2;
-inline constexpr int kSemanticWorkerArtifactManifestSchemaVersion = 1;
+inline constexpr int kSemanticWorkerRegistrySchemaVersion = 3;
+inline constexpr int kLegacySemanticWorkerRegistrySchemaVersion = 2;
+inline constexpr int kLegacySemanticWorkerArtifactManifestSchemaVersion = 1;
+inline constexpr int kSemanticWorkerArtifactManifestSchemaVersion = 2;
 inline constexpr int kSemanticWorkerRuntimeManifestSchemaVersion = 1;
 
 enum class SemanticWorkerArtifactKind
@@ -21,11 +23,15 @@ enum class SemanticWorkerArtifactKind
     Historical
 };
 
+enum class SemanticWorkerRole { Infer, Train };
+
 struct SemanticWorkerArtifact
 {
     int semanticLayoutVersion = 0;
     std::size_t modelInputWidth = 0;
     SemanticWorkerArtifactKind kind = SemanticWorkerArtifactKind::Historical;
+    SemanticWorkerRole role = SemanticWorkerRole::Infer;
+    int artifactManifestSchemaVersion = kSemanticWorkerArtifactManifestSchemaVersion;
     std::string sourceCommit;
     std::string sha256;
     std::string canonicalExecutablePath;

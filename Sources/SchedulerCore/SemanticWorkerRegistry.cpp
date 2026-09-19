@@ -510,11 +510,16 @@ SemanticWorkerRuntimePackage ParseRuntime(
 }
 
 SemanticWorkerArtifact ParseWorker(
-    const JsonValue& value, const std::filesystem::path& root)
+    const JsonValue& value, const std::filesystem::path& root,
+    const int registrySchemaVersion)
 {
     const auto& object = Object(value, "worker");
     RequireOnlyFields(object,
-        {"semantic_layout", "worker_rule", "model_input_width",
+        registrySchemaVersion == kSemanticWorkerRegistrySchemaVersion
+            ? std::set<std::string>{"semantic_layout", "worker_role", "artifact_manifest_schema_version", "worker_rule", "model_input_width",
+         "source_commit", "sha256", "executable", "manifest",
+         "runtime_identity", "capabilities"}
+            : std::set<std::string>{"semantic_layout", "worker_rule", "model_input_width",
          "source_commit", "sha256", "executable", "manifest",
          "runtime_identity", "capabilities"},
         "worker");
@@ -541,14 +546,47 @@ SemanticWorkerArtifact ParseWorker(
         Fail("semantic_worker_registry_malformed:runtime_identity_invalid");
     worker.capabilities = Capabilities(Required(object, "capabilities"));
 
-    const std::string expectedPrefix =
-        "layout" + std::to_string(worker.semanticLayoutVersion) + "/" +
-        worker.sourceCommit + "/" + worker.sha256 + "/";
+    if (registrySchemaVersion == kSemanticWorkerRegistrySchemaVersion)
+    {
+        const std::string role = String(Required(object, "worker_role"), "worker_role");
+        if (role == "infer") worker.role = SemanticWorkerRole::Infer;
+        else if (role == "train") worker.role = SemanticWorkerRole::Train;
+        else Fail("semantic_worker_registry_malformed:worker_role_invalid");
+        worker.artifactManifestSchemaVersion = static_cast<int>(Integer(
+            Required(object, "artifact_manifest_schema_version"),
+            "artifact_manifest_schema_version"));
+        if (worker.artifactManifestSchemaVersion !=
+                kLegacySemanticWorkerArtifactManifestSchemaVersion &&
+            worker.artifactManifestSchemaVersion !=
+                kSemanticWorkerArtifactManifestSchemaVersion)
+            Fail("semantic_worker_registry_malformed:artifact_manifest_schema_version_invalid");
+    }
+    else
+    {
+        // Registry v2 predates role-aware artifacts.  Its single binding is
+        // explicitly interpreted as the immutable inference binding.
+        worker.artifactManifestSchemaVersion =
+            kLegacySemanticWorkerArtifactManifestSchemaVersion;
+    }
+
+    const std::string roleComponent = worker.role == SemanticWorkerRole::Infer
+        ? "infer" : "train";
+    const bool roleAwareArtifact = registrySchemaVersion ==
+        kSemanticWorkerRegistrySchemaVersion && worker.artifactManifestSchemaVersion ==
+        kSemanticWorkerArtifactManifestSchemaVersion;
+    const std::string expectedPrefix = roleAwareArtifact
+        ? "layout" + std::to_string(worker.semanticLayoutVersion) + "/" +
+              roleComponent + "/" + worker.sourceCommit + "/" + worker.sha256 + "/"
+        : "layout" + std::to_string(worker.semanticLayoutVersion) + "/" +
+              worker.sourceCommit + "/" + worker.sha256 + "/";
     const std::string executableRelative =
         String(Required(object, "executable"), "executable");
     const std::string manifestRelative =
         String(Required(object, "manifest"), "manifest");
-    if (executableRelative != expectedPrefix + "LSTM_Release" ||
+    const std::string executableIdentity = roleAwareArtifact
+        ? (worker.role == SemanticWorkerRole::Infer ? "lstm-infer-worker" : "LSTM_Release")
+        : "LSTM_Release";
+    if (executableRelative != expectedPrefix + executableIdentity ||
         manifestRelative != expectedPrefix + "manifest.json")
         Fail("semantic_worker_registry_malformed:content_addressed_path_mismatch:layout=" +
              std::to_string(worker.semanticLayoutVersion));
@@ -573,12 +611,16 @@ SemanticWorkerArtifact ParseWorker(
         manifest, "semantic_worker_manifest_unreadable")}.parse();
     const auto& manifestObject = Object(manifestValue, "manifest");
     RequireOnlyFields(manifestObject,
-        {"schema_version", "semantic_layout", "storage",
+        roleAwareArtifact
+            ? std::set<std::string>{"schema_version", "semantic_layout", "storage",
+         "model_input_width", "source_commit", "sha256", "executable_identity",
+         "worker_role", "capabilities"}
+            : std::set<std::string>{"schema_version", "semantic_layout", "storage",
          "model_input_width", "source_commit", "sha256",
          "executable_identity", "capabilities"},
         "manifest");
     if (Integer(Required(manifestObject, "schema_version"), "schema_version") !=
-            kSemanticWorkerArtifactManifestSchemaVersion ||
+            worker.artifactManifestSchemaVersion ||
         PositiveInt(Required(manifestObject, "semantic_layout"), "semantic_layout") !=
             worker.semanticLayoutVersion ||
         PositiveSize(Required(manifestObject, "model_input_width"), "model_input_width") !=
@@ -588,7 +630,9 @@ SemanticWorkerArtifact ParseWorker(
             worker.sourceCommit ||
         String(Required(manifestObject, "sha256"), "sha256") != worker.sha256 ||
         String(Required(manifestObject, "executable_identity"), "executable_identity") !=
-            "LSTM_Release" ||
+            executableIdentity ||
+        (roleAwareArtifact &&
+         String(Required(manifestObject, "worker_role"), "worker_role") != roleComponent) ||
         Capabilities(Required(manifestObject, "capabilities")) !=
             worker.capabilities)
         Fail("semantic_worker_manifest_mismatch:layout=" +
@@ -636,8 +680,10 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
     RequireOnlyFields(object,
         {"schema_version", "current_layout", "runtimes", "workers"},
         "registry");
-    if (Integer(Required(object, "schema_version"), "schema_version") !=
-        kSemanticWorkerRegistrySchemaVersion)
+    const int registrySchemaVersion = static_cast<int>(
+        Integer(Required(object, "schema_version"), "schema_version"));
+    if (registrySchemaVersion != kSemanticWorkerRegistrySchemaVersion &&
+        registrySchemaVersion != kLegacySemanticWorkerRegistrySchemaVersion)
         Fail("semantic_worker_registry_schema_unsupported");
 
     SemanticWorkerRegistry registry;
@@ -656,7 +702,7 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
     std::size_t currentEntries = 0;
     for (const auto& item : Array(Required(object, "workers"), "workers"))
     {
-        SemanticWorkerArtifact worker = ParseWorker(item, root);
+        SemanticWorkerArtifact worker = ParseWorker(item, root, registrySchemaVersion);
         if (worker.kind == SemanticWorkerArtifactKind::Current)
             ++currentEntries;
         if (!registry.workers_.emplace(
@@ -670,9 +716,10 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
     if (registry.currentLayoutVersion_ !=
             request.expectedCurrentSemanticLayoutVersion ||
         current->second.modelInputWidth != request.expectedCurrentModelInputWidth ||
-        !current->second.capabilities.contains("train") ||
         !current->second.capabilities.contains("infer") ||
-        !current->second.capabilities.contains("analyze"))
+        (registrySchemaVersion == kLegacySemanticWorkerRegistrySchemaVersion &&
+         (!current->second.capabilities.contains("train") ||
+          !current->second.capabilities.contains("analyze"))))
         Fail("semantic_worker_capability_mismatch:current_rule");
     for (const auto& [layout, worker] : registry.workers_)
     {
