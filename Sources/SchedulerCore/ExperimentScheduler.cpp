@@ -14566,4 +14566,102 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
     return 1;
 }
 
+int RunStandaloneAnalyzeWorkerCli(int argc, const char* argv[])
+{
+    SchedulerOptions options;
+    try
+    {
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string arg{argv[i]};
+            std::string value;
+            if (arg == "--analyze-experiment")
+            {
+                if (options.analyzeExperimentId)
+                    throw std::invalid_argument(
+                        "--analyze-experiment specified more than once");
+                options.analyzeExperimentId = ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            }
+            else if (arg == "--scheduler-worker-attempt-id")
+            {
+                if (options.schedulerWorkerAttemptId)
+                    throw std::invalid_argument(
+                        "--scheduler-worker-attempt-id specified more than once");
+                options.schedulerWorkerAttemptId = ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            }
+            else if (arg == "--auto-generate-reports")
+            {
+                options.autoGenerateReports = true;
+            }
+            else if (arg == "--experiment-report-dir")
+            {
+                options.experimentReportDir =
+                    RequireNextArg(argc, argv, i, arg);
+            }
+            else if (SplitOptionWithValue(arg, "--analyze-experiment", value))
+            {
+                if (options.analyzeExperimentId)
+                    throw std::invalid_argument(
+                        "--analyze-experiment specified more than once");
+                options.analyzeExperimentId = ParsePositiveLongLong(
+                    "--analyze-experiment", value);
+            }
+            else if (SplitOptionWithValue(
+                         arg, "--scheduler-worker-attempt-id", value))
+            {
+                if (options.schedulerWorkerAttemptId)
+                    throw std::invalid_argument(
+                        "--scheduler-worker-attempt-id specified more than once");
+                options.schedulerWorkerAttemptId = ParsePositiveLongLong(
+                    "--scheduler-worker-attempt-id", value);
+            }
+            else if (SplitOptionWithValue(
+                         arg, "--experiment-report-dir", value))
+            {
+                options.experimentReportDir = value;
+            }
+            else
+            {
+                throw std::invalid_argument(
+                    "unsupported analyze worker option '" + arg + "'");
+            }
+        }
+
+        if (!options.analyzeExperimentId)
+            throw std::invalid_argument("--analyze-experiment is required");
+        if (!options.schedulerWorkerAttemptId)
+        {
+            std::cerr << "DIRECT_CLI_MANAGED_WORK_REJECTED"
+                      << ",operation=analyze"
+                      << ",experiment_id=" << *options.analyzeExperimentId
+                      << ",reason=exact_worker_attempt_required"
+                      << std::endl;
+            return 1;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Argument error: " << e.what() << "\n"
+                  << "Usage: " << (argc > 0 ? argv[0] : "lstm-analyze-worker")
+                  << " --analyze-experiment=EXPERIMENT_ID"
+                  << " --scheduler-worker-attempt-id=ATTEMPT_ID"
+                  << " [--auto-generate-reports]"
+                  << " [--experiment-report-dir=PATH]\n";
+        return 1;
+    }
+
+    if (!EA::SchedulerCore::RegisterSchedulerWorker({
+            *options.schedulerWorkerAttemptId,
+            options.analyzeExperimentId,
+            std::nullopt,
+            "experiment",
+            "analyze"}))
+    {
+        return 125;
+    }
+    return AnalyzeExperimentById(*options.analyzeExperimentId, options);
+}
+
 } // namespace EA::ExperimentScheduler
