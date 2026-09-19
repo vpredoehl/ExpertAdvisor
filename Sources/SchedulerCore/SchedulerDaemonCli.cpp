@@ -4,6 +4,7 @@
 #include "SchedulerDaemonConfiguration.hpp"
 
 #include <iostream>
+#include <vector>
 
 #include <pqxx/pqxx>
 
@@ -63,6 +64,18 @@ int RunSchedulerDaemonCli(int argc, const char* argv[])
         std::cerr.flush();
         return 1;
     }
+}
+
+int RunStandaloneSchedulerDaemonCli(int argc, const char* argv[])
+{
+    std::vector<const char*> daemonArguments;
+    daemonArguments.reserve(static_cast<size_t>(argc) + 1);
+    daemonArguments.push_back(argc > 0 ? argv[0] : "lstm-scheduler");
+    daemonArguments.push_back("--schedule-experiments");
+    for (int index = 1; index < argc; ++index)
+        daemonArguments.push_back(argv[index]);
+    return RunSchedulerDaemonCli(
+        static_cast<int>(daemonArguments.size()), daemonArguments.data());
 }
 
 } // namespace EA::SchedulerCore

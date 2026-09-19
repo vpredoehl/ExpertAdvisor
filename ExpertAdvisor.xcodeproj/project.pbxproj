@@ -341,6 +341,22 @@
 		0F31001034B0000100AAA001 /* ProductionSchedulerDaemon.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F31000134B0000100AAA001 /* ProductionSchedulerDaemon.cpp */; };
 		0F32001034C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
 		0F32001134C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
+		0F40000134D0000100AAA001 /* SchedulerMain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F40000234D0000100AAA001 /* SchedulerMain.cpp */; };
+		0F40000334D0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
+		0F40000434D0000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
+		0F40000534D0000100AAA001 /* ContinuationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */; };
+		0F40000634D0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000022FC0000100AAA001 /* ContinuationPolicyInheritance.cpp */; };
+		0F40000734D0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A50000B2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp */; };
+		0F40000834D0000100AAA001 /* EconomicEventRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200383311000100AAA001 /* EconomicEventRepository.cpp */; };
+		0F40000934D0000100AAA001 /* GlobalExperimentControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */; };
+		0F40000A34D0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
+		0F40000B34D0000100AAA001 /* RunMetadata.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A4000002FB0000100AAA001 /* RunMetadata.cpp */; };
+		0F40000C34D0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
+		0F40000D34D0000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
+		0F40000E34D0000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
+		0F40000F34D0000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
+		0F40001034D0000100AAA001 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
+		0F40001134D0000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -833,6 +849,8 @@
 		0F31000334B0000100AAA001 /* ProductionSchedulerRuntimeInternal.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProductionSchedulerRuntimeInternal.hpp; path = Sources/SchedulerCore/ProductionSchedulerRuntimeInternal.hpp; sourceTree = SOURCE_ROOT; };
 		0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LstmRuntimeLogging.cpp; path = Sources/LstmRuntimeLogging.cpp; sourceTree = SOURCE_ROOT; };
 		0F32000234C0000100AAA001 /* LstmRuntimeLogging.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = LstmRuntimeLogging.hpp; sourceTree = "<group>"; };
+		0F40000234D0000100AAA001 /* SchedulerMain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerMain.cpp; path = LSTM/SchedulerMain.cpp; sourceTree = SOURCE_ROOT; };
+		0F40001234D0000100AAA001 /* lstm-scheduler */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-scheduler"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -863,6 +881,19 @@
 				0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */,
 				0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */,
 				0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0F40001334D0000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F40000C34D0000100AAA001 /* libSchedulerCore.a in Frameworks */,
+				0F40000D34D0000100AAA001 /* libProfitabilityCore.a in Frameworks */,
+				0F40000E34D0000100AAA001 /* libMetaNN.a in Frameworks */,
+				0F40000F34D0000100AAA001 /* libMetalBuffer.a in Frameworks */,
+				0F40001034D0000100AAA001 /* Foundation.framework in Frameworks */,
+				0F40001134D0000100AAA001 /* Metal.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -922,6 +953,7 @@
 				0F1700013370000100AAA001 /* libProfitabilityCore.a */,
 				084426802ED8DD46002DEB21 /* LSTM_Debug */,
 				0A10000B2F70000100AAA001 /* LSTM_Release */,
+				0F40001234D0000100AAA001 /* lstm-scheduler */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -943,6 +975,7 @@
 			children = (
 				08B33BEA2F4213DB0015F9CF /* Answers.txt */,
 				084426892ED8E755002DEB21 /* main.cpp */,
+				0F40000234D0000100AAA001 /* SchedulerMain.cpp */,
 				0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */,
 				0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */,
 				0EC201113320000100AAA001 /* EconomicEventConsensusImport.hpp */,
@@ -1391,6 +1424,25 @@
 			productReference = 0A10000B2F70000100AAA001 /* LSTM_Release */;
 			productType = "com.apple.product-type.tool";
 		};
+		0F40001434D0000100AAA001 /* lstm-scheduler */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0F40001534D0000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-scheduler" */;
+			buildPhases = (
+				0F40001634D0000100AAA001 /* Sources */,
+				0F40001334D0000100AAA001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0F40001734D0000100AAA001 /* PBXTargetDependency */,
+				0F40001834D0000100AAA001 /* PBXTargetDependency */,
+				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+			);
+			name = "lstm-scheduler";
+			productName = "lstm-scheduler";
+			productReference = 0F40001234D0000100AAA001 /* lstm-scheduler */;
+			productType = "com.apple.product-type.tool";
+		};
 		0F1700003370000100AAA001 /* ProfitabilityCore */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0F1700043370000100AAA001 /* Build configuration list for PBXNativeTarget "ProfitabilityCore" */;
@@ -1483,6 +1535,7 @@
 				0F1700003370000100AAA001 /* ProfitabilityCore */,
 				0F1800003380000100AAA001 /* StrategyEvaluationCore */,
 				0F20000033D0000100AAA001 /* SchedulerCore */,
+				0F40001434D0000100AAA001 /* lstm-scheduler */,
 			);
 		};
 /* End PBXProject section */
@@ -1907,6 +1960,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F40001634D0000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F40000134D0000100AAA001 /* SchedulerMain.cpp in Sources */,
+				0F40000334D0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
+				0F40000434D0000100AAA001 /* CheckpointPolicy.cpp in Sources */,
+				0F40000534D0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
+				0F40000634D0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
+				0F40000734D0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */,
+				0F40000834D0000100AAA001 /* EconomicEventRepository.cpp in Sources */,
+				0F40000934D0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
+				0F40000A34D0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
+				0F40000B34D0000100AAA001 /* RunMetadata.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1967,6 +2037,18 @@
 			name = SchedulerCore;
 			target = 0F20000033D0000100AAA001 /* SchedulerCore */;
 			targetProxy = 0F20000D33D0000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F40001734D0000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = SchedulerCore;
+			target = 0F20000033D0000100AAA001 /* SchedulerCore */;
+			targetProxy = 0F20000C33D0000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F40001834D0000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ProfitabilityCore;
+			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
+			targetProxy = 0F17000C3370000100AAA001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2483,6 +2565,71 @@
 			};
 			name = Release;
 		};
+		0F40001934D0000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"LSTM_BUILD=1",
+					"LSTM_TARGET_RELEASE=1",
+					"$(inherited)",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"/opt/homebrew/opt/libpqxx@7.10.1/lib",
+					/opt/homebrew/opt/libpq/lib,
+					/opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx");
+				PRODUCT_NAME = "lstm-scheduler";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include,
+				);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+			};
+			name = Debug;
+		};
+		0F40001A34D0000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_STANDARD_LIBRARY_HARDENING = fast;
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				DEAD_CODE_STRIPPING = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NDEBUG=1",
+					"LSTM_BUILD=1",
+					"LSTM_TARGET_RELEASE=1",
+					"$(inherited)",
+				);
+				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/lstm-scheduler.map";
+				LD_GENERATE_MAP_FILE = YES;
+				LIBRARY_SEARCH_PATHS = (
+					"/opt/homebrew/opt/libpqxx@7.10.1/lib",
+					/opt/homebrew/opt/libpq/lib,
+					/opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx");
+				PRODUCT_NAME = "lstm-scheduler";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include,
+				);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2545,6 +2692,15 @@
 			buildConfigurations = (
 				0F20000533D0000100AAA001 /* Debug */,
 				0F20000633D0000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0F40001534D0000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-scheduler" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F40001934D0000100AAA001 /* Debug */,
+				0F40001A34D0000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
