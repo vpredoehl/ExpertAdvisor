@@ -80,11 +80,10 @@ rg -q -- '--scheduler-worker-attempt-id' \
 rg -q -- '--scheduler-worker-attempt-id' \
     "${repo_root}/Sources/SchedulerCore/ExperimentScheduler.cpp"
 
-if rg -q -- 'lstm-analyze-worker' \
-    "${repo_root}/Sources/SchedulerCore/ProductionSchedulerDaemon.cpp"; then
-    echo "production scheduler routing changed unexpectedly" >&2
-    exit 1
-fi
+rg -q -- 'analyzeWorkerExecutablePath' \
+    "${repo_root}/Sources/SchedulerCore/ProductionSchedulerDaemon.cpp"
+rg -q -- 'lstm-analyze-worker' \
+    "${repo_root}/Sources/SchedulerCore/ProductionSchedulerDaemon.cpp"
 
 if git -C "${repo_root}" diff --name-only | rg -q '^Builds/SemanticWorkers/'; then
     echo "semantic-worker artifacts were unexpectedly modified" >&2

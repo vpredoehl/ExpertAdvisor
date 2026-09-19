@@ -72,6 +72,7 @@ int main()
         (std::filesystem::current_path() / "Builds" /
          "SemanticWorkers" / "registry.json").string());
     assert(!defaults.legacyLayout6InferWorkerPath);
+    assert(!defaults.analyzeWorkerExecutablePath);
     assert(
         defaults.invocationCommandLine ==
         "LSTM_Release --schedule-experiments");
@@ -86,6 +87,7 @@ int main()
         "--scheduler-once",
         "--semantic-worker-registry=/tmp/semantic-workers.json",
         "--legacy-layout6-infer-worker=/bin/sh",
+        "--analyze-worker", "/bin/sh",
         "--scheduler-log-dir", "/tmp/scheduler logs",
         "--auto-generate-reports",
         "--experiment-report-dir=/tmp/reports",
@@ -111,6 +113,9 @@ int main()
     assert(
         std::filesystem::equivalent(
             *configured.legacyLayout6InferWorkerPath, "/bin/sh"));
+    assert(configured.analyzeWorkerExecutablePath);
+    assert(std::filesystem::equivalent(
+        *configured.analyzeWorkerExecutablePath, "/bin/sh"));
     assert(configured.schedulerLogDir == "/tmp/scheduler logs");
     assert(configured.autoGenerateReports);
     assert(configured.experimentReportDir == "/tmp/reports");
@@ -161,6 +166,10 @@ int main()
          "--semantic-worker-registry=/tmp/one",
          "--semantic-worker-registry=/tmp/two"},
         "--semantic-worker-registry specified more than once");
+    ExpectInvalid(
+        {"LSTM_Release", "--schedule-experiments",
+         "--analyze-worker=/bin/sh", "--analyze-worker=/bin/sh"},
+        "--analyze-worker specified more than once");
 
     return 0;
 }

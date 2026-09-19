@@ -87,6 +87,7 @@ SchedulerDaemonConfiguration ParseSchedulerDaemonConfiguration(
 
     bool commandSeen = false;
     bool semanticWorkerRegistrySpecified = false;
+    bool analyzeWorkerExecutableSpecified = false;
     for (int index = 0; index < argc; ++index)
     {
         if (index != 0)
@@ -172,6 +173,17 @@ SchedulerDaemonConfiguration ParseSchedulerDaemonConfiguration(
                     RequireNextArgument(argc, argv, index, argument),
                     argument);
         }
+        else if (argument == "--analyze-worker")
+        {
+            if (analyzeWorkerExecutableSpecified)
+                throw std::invalid_argument(
+                    "--analyze-worker specified more than once");
+            configuration.analyzeWorkerExecutablePath =
+                EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
+                    RequireNextArgument(argc, argv, index, argument),
+                    argument);
+            analyzeWorkerExecutableSpecified = true;
+        }
         else if (SplitOptionWithValue(
                      argument, "--scheduler-poll-seconds", value))
             configuration.schedulerPollSeconds =
@@ -216,6 +228,16 @@ SchedulerDaemonConfiguration ParseSchedulerDaemonConfiguration(
                 EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
                     value, "--legacy-layout6-infer-worker");
         }
+        else if (SplitOptionWithValue(argument, "--analyze-worker", value))
+        {
+            if (analyzeWorkerExecutableSpecified)
+                throw std::invalid_argument(
+                    "--analyze-worker specified more than once");
+            configuration.analyzeWorkerExecutablePath =
+                EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
+                    value, "--analyze-worker");
+            analyzeWorkerExecutableSpecified = true;
+        }
         else if (argument.rfind("--", 0) == 0)
             throw std::invalid_argument(
                 "unknown scheduler option '" + argument + "'");
@@ -252,6 +274,7 @@ void PrintSchedulerDaemonHelp(const char* executable)
         << "[--scheduler-poll-seconds=N] [--scheduler-once] "
         << "[--semantic-worker-registry=/absolute/path/to/registry.json] "
         << "[--legacy-layout6-infer-worker=/absolute/path/to/LSTM_Release] "
+        << "[--analyze-worker=/absolute/path/to/lstm-analyze-worker] "
         << "[--scheduler-log-dir=PATH] [--auto-generate-reports] "
         << "[--experiment-report-dir=PATH] [--lstm-profile-hotspots] "
         << "[--lstm-profile-output=PATH] [--scheduler-verbose] [--dry-run] "

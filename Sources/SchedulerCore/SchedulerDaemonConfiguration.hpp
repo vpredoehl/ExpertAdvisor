@@ -34,6 +34,10 @@ struct SchedulerDaemonConfiguration
     int continuationMaxQueuesPerScan = 1;
     std::string semanticWorkerRegistryPath;
     std::optional<std::string> legacyLayout6InferWorkerPath;
+    // Analyze workers are an independent scheduler role, not semantic
+    // inference artifacts. When absent, production composition resolves the
+    // dedicated sibling product of the scheduler executable.
+    std::optional<std::string> analyzeWorkerExecutablePath;
 
     // Invocation evidence is captured once by the compatibility adapter and
     // consumed by scheduler authority registration.

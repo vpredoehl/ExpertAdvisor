@@ -2852,7 +2852,10 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
-    std::string selectedWorkerExecutable = options.currentWorkerExecutablePath;
+    std::string selectedWorkerExecutable =
+        phase == "analyze"
+            ? options.analyzeWorkerExecutablePath
+            : options.currentWorkerExecutablePath;
     EA::Scheduler::SemanticAdmissionDecision semanticAdmission;
     if (phase == "infer")
     {
@@ -3460,7 +3463,7 @@ std::vector<std::string> BuildAnalyzeCommand(const SchedulerOptions& options,
                                                     const ExperimentRow& experiment)
 {
     std::vector<std::string> argv;
-    argv.push_back(options.currentWorkerExecutablePath);
+    argv.push_back(options.analyzeWorkerExecutablePath);
     AddCliOption(argv, "--analyze-experiment", std::to_string(experiment.experimentId));
     if (options.autoGenerateReports)
         AddCliFlag(argv, "--auto-generate-reports");
@@ -10373,6 +10376,23 @@ int RunSchedulerOnce(const SchedulerOptions& options,
     return service.runOnce();
 }
 
+std::string ResolveAnalyzeWorkerExecutablePath(
+    const SchedulerOptions& options,
+    const EA::SchedulerCore::SchedulerDaemonConfiguration& configuration)
+{
+    if (configuration.analyzeWorkerExecutablePath.has_value())
+        return *configuration.analyzeWorkerExecutablePath;
+
+    // Both scheduler entry products are emitted beside the dedicated worker.
+    // This is a role-specific product resolution, independent of the semantic
+    // worker registry and its layout selection.
+    const std::filesystem::path defaultPath =
+        std::filesystem::path{options.schedulerExecutablePath}.parent_path() /
+        "lstm-analyze-worker";
+    return EA::Scheduler::ValidateAndCanonicalizeWorkerExecutable(
+        defaultPath.string(), "default analyze worker executable");
+}
+
 int RunScheduler(
     SchedulerOptions options,
     const EA::SchedulerCore::SchedulerDaemonConfiguration&
@@ -10383,6 +10403,8 @@ int RunScheduler(
     gSchedulerStopRequested = 0;
     try
     {
+        options.analyzeWorkerExecutablePath =
+            ResolveAnalyzeWorkerExecutablePath(options, daemonConfiguration);
         options.semanticWorkerRegistry =
             EA::Scheduler::SemanticWorkerRegistry::Load({
                 options.semanticWorkerRegistryPath,
@@ -10448,6 +10470,8 @@ int RunScheduler(
               << options.semanticWorkerRegistry->canonicalRegistryPath()
               << ",current_worker_canonical_executable="
               << options.currentWorkerExecutablePath
+              << ",analyze_worker_canonical_executable="
+              << options.analyzeWorkerExecutablePath
               << ",legacy_layout6_identity_assertion="
               << options.legacyLayout6InferWorkerPath.value_or("NULL")
               << ",auto_evaluate_continuations="

@@ -329,6 +329,7 @@ struct SchedulerOptions
     std::string semanticWorkerRegistryPath;
     bool semanticWorkerRegistryPathSpecified = false;
     std::string currentWorkerExecutablePath;
+    std::string analyzeWorkerExecutablePath;
     std::optional<EA::Scheduler::SemanticWorkerRegistry> semanticWorkerRegistry;
     std::optional<std::string> legacyLayout6InferWorkerPath;
     std::string invocationCommandLine;
