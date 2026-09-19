@@ -34,6 +34,7 @@
 #include <conv.h>
 
 #include "db_cursor_iterator.hpp"
+#include "MarketDataCore.hpp"
 #include "Tensor.hpp"
 #include "LSTM.hpp"
 #include "PgModelIO.hpp"
@@ -1878,19 +1879,20 @@ int RunLabelGridDiagnostic3Class(const std::string& fromDate, const std::string&
 
     pqxx::connection c_forex { ForexDbConnectionString() };
     pqxx::work w_forex { c_forex };
-    pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
+    const auto tables = EA::MarketData::DiscoverRawPriceTables(w_forex);
     if (tables.empty())
     {
         std::cerr << "LABEL_GRID_ERROR,no_rmp_tables=1" << std::endl;
         return 1;
     }
 
-    const std::string rawPriceTableName{ tables[0][0].c_str() };
-    const std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
-    db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_label_grid_candlestick_stream" };
-    db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
+    const std::string rawPriceTableName{ tables.front() };
+    const auto marketData = EA::MarketData::LoadCandlesticks(
+        w_forex, {rawPriceTableName, fromDate, fromDate, toDate,
+                  rawPriceTableName + "_label_grid_candlestick_stream", false});
+    const std::string& query = marketData.query;
     Tensor tensor{ rawPriceTableName };
-    while (csb != cse) tensor.Add(*csb++);
+    for (const auto& row : marketData.rows) tensor.Add(row);
 
     const size_t rows = tensor.RowCount();
     const size_t baseFeatureCount = rows ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
@@ -2070,19 +2072,20 @@ int RunBaseline3Class(const std::string& fromDate, const std::string& toDate)
 {
     pqxx::connection c_forex { ForexDbConnectionString() };
     pqxx::work w_forex { c_forex };
-    pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
+    const auto tables = EA::MarketData::DiscoverRawPriceTables(w_forex);
     if (tables.empty())
     {
         std::cerr << "BASELINE_3CLASS_ERROR,no_rmp_tables=1" << std::endl;
         return 1;
     }
 
-    const std::string rawPriceTableName{ tables[0][0].c_str() };
-    const std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
-    db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_baseline_candlestick_stream" };
-    db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
+    const std::string rawPriceTableName{ tables.front() };
+    const auto marketData = EA::MarketData::LoadCandlesticks(
+        w_forex, {rawPriceTableName, fromDate, fromDate, toDate,
+                  rawPriceTableName + "_baseline_candlestick_stream", false});
+    const std::string& query = marketData.query;
     Tensor tensor{ rawPriceTableName };
-    while (csb != cse) tensor.Add(*csb++);
+    for (const auto& row : marketData.rows) tensor.Add(row);
 
     const size_t rows = tensor.RowCount();
     const size_t baseFeatureCount = rows ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
@@ -2305,19 +2308,20 @@ int RunFeatureTrainability3Class(const std::string& fromDate, const std::string&
 {
     pqxx::connection c_forex { ForexDbConnectionString() };
     pqxx::work w_forex { c_forex };
-    pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
+    const auto tables = EA::MarketData::DiscoverRawPriceTables(w_forex);
     if (tables.empty())
     {
         std::cerr << "FEATURE_TRAINABILITY_ERROR,no_rmp_tables=1" << std::endl;
         return 1;
     }
 
-    const std::string rawPriceTableName{ tables[0][0].c_str() };
-    const std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
-    db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_feature_trainability_candlestick_stream" };
-    db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
+    const std::string rawPriceTableName{ tables.front() };
+    const auto marketData = EA::MarketData::LoadCandlesticks(
+        w_forex, {rawPriceTableName, fromDate, fromDate, toDate,
+                  rawPriceTableName + "_feature_trainability_candlestick_stream", false});
+    const std::string& query = marketData.query;
     Tensor tensor{ rawPriceTableName };
-    while (csb != cse) tensor.Add(*csb++);
+    for (const auto& row : marketData.rows) tensor.Add(row);
 
     const size_t rows = tensor.RowCount();
     const size_t baseFeatureCount = rows ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
@@ -8690,10 +8694,8 @@ int main(int argc, const char * argv[])
         {
             pqxx::work forexMetadataRead { c_forex };
             forexMetadataRead.exec("SET TRANSACTION READ ONLY;");
-            pqxx::result tables = forexMetadataRead.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp' order by table_name;");
-            availableSymbols.reserve(tables.size());
-            for (auto tbl : tables)
-                availableSymbols.emplace_back(EA::CanonicalSymbol::Normalize(tbl[0].c_str()));
+            availableSymbols = EA::MarketData::DiscoverRawPriceTables(
+                forexMetadataRead);
             forexMetadataRead.commit();
         }
 
@@ -8889,27 +8891,14 @@ int main(int argc, const char * argv[])
                 featureWarmupScope == EA::FeatureWarmupScope::FullHistoryWarmup;
             const std::string queryStart = fullHistoryWarmup
                 ? EA::kTensorFeatureHistoryQueryStart : fromDate;
-            const std::string query =
-                "select * from candlestick(" + forexDataRead.quote(rawPriceTableName) +
-                ", 15, 'minute', " + forexDataRead.quote(queryStart) + ", " +
-                forexDataRead.quote(toDate) + ") order by dt;";
             if (frozenOutcomeJob)
             {
-                const std::string coverageSql =
-                    "WITH bars AS (SELECT dt FROM candlestick(" +
-                    forexDataRead.quote(rawPriceTableName) +
-                    ",15,'minute'," + forexDataRead.quote(fromDate) + "," +
-                    forexDataRead.quote(toDate) + ")) "
-                    "SELECT min(dt)::text,max(dt)::text,count(*),"
-                    "COALESCE(min(dt) <= " + forexDataRead.quote(fromDate) +
-                    "::timestamp,false),COALESCE(max(dt) >= (" +
-                    forexDataRead.quote(toDate) +
-                    "::timestamp - interval '15 minutes'),false) FROM bars";
-                const pqxx::row coverage =
-                    forexDataRead.exec(coverageSql).one_row();
-                const long long barCount = coverage[2].as<long long>();
-                const bool coversStart = coverage[3].as<bool>();
-                const bool coversEnd = coverage[4].as<bool>();
+                const auto coverage =
+                    EA::MarketData::CheckProspectiveOutcomeCoverage(
+                        forexDataRead, rawPriceTableName, fromDate, toDate);
+                const long long barCount = coverage.barCount;
+                const bool coversStart = coverage.coversStart;
+                const bool coversEnd = coverage.coversEnd;
                 const long long minimumBars = static_cast<long long>(
                     window_size + prediction_horizon + 1);
                 const bool complete = coversStart && coversEnd &&
@@ -8938,11 +8927,9 @@ int main(int argc, const char * argv[])
                     << (complete ? "ready_to_execute" : "partially_available")
                     << ",market_data_coverage_checked=true"
                     << ",market_data_first="
-                    << (coverage[0].is_null() ? "NULL" :
-                        coverage[0].as<std::string>())
+                    << (coverage.first.empty() ? "NULL" : coverage.first)
                     << ",market_data_last="
-                    << (coverage[1].is_null() ? "NULL" :
-                        coverage[1].as<std::string>())
+                    << (coverage.last.empty() ? "NULL" : coverage.last)
                     << ",market_bar_count=" << barCount
                     << ",minimum_required_bar_count=" << minimumBars
                     << ",activation=false,live_profitability_weight=0"
@@ -8956,15 +8943,12 @@ int main(int argc, const char * argv[])
                     throw std::runtime_error(
                         "campaign_profitability_outcome_market_data_incomplete");
             }
-            const std::string warmupCountQuery = fullHistoryWarmup
-                ? "select count(*) from candlestick(" +
-                    forexDataRead.quote(rawPriceTableName) + ", 15, 'minute', " +
-                    forexDataRead.quote(EA::kTensorFeatureHistoryQueryStart) + ", " +
-                    forexDataRead.quote(toDate) + ") where dt < " +
-                    forexDataRead.quote(fromDate) + ";"
-                : "SELECT 0;";
+            const auto marketData = EA::MarketData::LoadCandlesticks(
+                forexDataRead,
+                {rawPriceTableName, queryStart, fromDate, toDate,
+                 rawPriceTableName + "_candlestick_stream", fullHistoryWarmup});
             const size_t logicalOutputStartIndex =
-                forexDataRead.exec1(warmupCountQuery)[0].as<size_t>();
+                marketData.logicalOutputStartIndex;
             std::vector<EA::EconomicCalendar::EconomicEvent> economicEvents;
             std::optional<EA::EconomicCalendar::
                 EconomicCalendarSnapshotIdentity> economicCalendarSnapshot;
@@ -9002,7 +8986,7 @@ int main(int argc, const char * argv[])
             Tensor t{ rawPriceTableName, runtimeDonchian20Mode,
                       runtimeDonchianLookback, std::move(economicEvents) };
             
-            DiagnosticOut() << "Candlestick query: " << query << "\n";
+            DiagnosticOut() << "Candlestick query: " << marketData.query << "\n";
             DiagnosticOut() << "FEATURE_WARMUP_SCOPE"
                             << ",mode=" << EA::FeatureWarmupScopeText(featureWarmupScope)
                             << ",source_start=" << queryStart
@@ -9011,15 +8995,8 @@ int main(int argc, const char * argv[])
                             << ",warmup_rows=" << logicalOutputStartIndex
                             << std::endl;
             DiagnosticOut() << "Building tensor for table: " << rawPriceTableName << std::endl;
-            {
-                db_cursor_stream<Feature> cs_cur{
-                    forexDataRead,
-                    query,
-                    rawPriceTableName + "_candlestick_stream"};
-                db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
-                while (csb != cse)
-                    t.Add(*csb++);
-            }
+            for (const auto& row : marketData.rows)
+                t.Add(row);
             forexDataRead.commit();
             if (logicalOutputStartIndex > t.RowCount())
                 throw std::runtime_error("feature warmup query returned more rows than the source tensor");

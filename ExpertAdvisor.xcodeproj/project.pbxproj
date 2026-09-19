@@ -320,6 +320,9 @@
 		0F2C00103490000100AAA001 /* SemanticWorkerRegistry.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2C00003490000100AAA001 /* SemanticWorkerRegistry.cpp */; };
 		0F20000E33D0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
 		0F20000F33D0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
+		0F5000013500000100AAA001 /* MarketDataCore.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F5000113500000100AAA001 /* MarketDataCore.cpp */; };
+		0F5000023500000100AAA001 /* libMarketDataCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F5000103500000100AAA001 /* libMarketDataCore.a */; };
+		0F5000033500000100AAA001 /* libMarketDataCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F5000103500000100AAA001 /* libMarketDataCore.a */; };
 		0F21001033E0000100AAA001 /* SchedulerRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F21000133E0000100AAA001 /* SchedulerRepository.cpp */; };
 		0F21001133E0000100AAA001 /* PostgresSchedulerRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F21000333E0000100AAA001 /* PostgresSchedulerRepository.cpp */; };
 		0F21001233E0000100AAA001 /* WorkerProcessController.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F21000533E0000100AAA001 /* WorkerProcessController.cpp */; };
@@ -471,6 +474,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 0F20000033D0000100AAA001;
 			remoteInfo = SchedulerCore;
+		};
+		0F5000093500000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F5000043500000100AAA001;
+			remoteInfo = MarketDataCore;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -801,6 +811,9 @@
 		0F1A001033A0000100AAA001 /* SchedulerSemanticAdmission.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerSemanticAdmission.hpp; path = Sources/SchedulerCore/SchedulerSemanticAdmission.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A002033A0000100AAA001 /* SchedulerInferenceResultRecovery.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerInferenceResultRecovery.hpp; path = Sources/SchedulerCore/SchedulerInferenceResultRecovery.hpp; sourceTree = SOURCE_ROOT; };
 		0F20000133D0000100AAA001 /* libSchedulerCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libSchedulerCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F5000103500000100AAA001 /* libMarketDataCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libMarketDataCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F5000113500000100AAA001 /* MarketDataCore.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Sources/MarketDataCore/MarketDataCore.cpp; sourceTree = SOURCE_ROOT; };
+		0F5000123500000100AAA001 /* MarketDataCore.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Sources/MarketDataCore/MarketDataCore.hpp; sourceTree = SOURCE_ROOT; };
 		0F20001033D0000100AAA001 /* SchedulerEngine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerEngine.cpp; path = Sources/SchedulerCore/SchedulerEngine.cpp; sourceTree = SOURCE_ROOT; };
 		0F20001133D0000100AAA001 /* SchedulerEngine.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerEngine.hpp; path = Sources/SchedulerCore/SchedulerEngine.hpp; sourceTree = SOURCE_ROOT; };
 		0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerPolicy.cpp; path = Sources/SchedulerCore/SchedulerPolicy.cpp; sourceTree = SOURCE_ROOT; };
@@ -858,6 +871,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F5000023500000100AAA001 /* libMarketDataCore.a in Frameworks */,
 				0F20000E33D0000100AAA001 /* libSchedulerCore.a in Frameworks */,
 				0F1800083380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
 				0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
@@ -873,6 +887,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F5000033500000100AAA001 /* libMarketDataCore.a in Frameworks */,
 				0F20000F33D0000100AAA001 /* libSchedulerCore.a in Frameworks */,
 				0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
 				0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */,
@@ -918,6 +933,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F5000073500000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -948,6 +969,7 @@
 		0845055A2047962100A0B88F /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				0F5000103500000100AAA001 /* libMarketDataCore.a */,
 				0F20000133D0000100AAA001 /* libSchedulerCore.a */,
 				0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */,
 				0F1700013370000100AAA001 /* libProfitabilityCore.a */,
@@ -1009,6 +1031,7 @@
 				0F1900003390000100AAA001 /* StrategyEvaluationCore */,
 				0F1900013390000100AAA001 /* StrategyEvaluationAdapters */,
 				0F1A000033A0000100AAA001 /* SchedulerCore */,
+				0F5000003500000100AAA001 /* MarketDataCore */,
 				0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */,
 				0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */,
 				0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */,
@@ -1376,6 +1399,15 @@
 			name = SchedulerCore;
 			sourceTree = "<group>";
 		};
+		0F5000003500000100AAA001 /* MarketDataCore */ = {
+			isa = PBXGroup;
+			children = (
+				0F5000113500000100AAA001 /* MarketDataCore.cpp */,
+				0F5000123500000100AAA001 /* MarketDataCore.hpp */,
+			);
+			name = MarketDataCore;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -1390,6 +1422,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				0F5000153500000100AAA001 /* PBXTargetDependency */,
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				0F17000A3370000100AAA001 /* PBXTargetDependency */,
@@ -1413,6 +1446,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				0F5000053500000100AAA001 /* PBXTargetDependency */,
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				0F17000B3370000100AAA001 /* PBXTargetDependency */,
@@ -1423,6 +1457,20 @@
 			productName = LSTM_Release;
 			productReference = 0A10000B2F70000100AAA001 /* LSTM_Release */;
 			productType = "com.apple.product-type.tool";
+		};
+		0F5000043500000100AAA001 /* MarketDataCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0F5000083500000100AAA001 /* Build configuration list for PBXNativeTarget "MarketDataCore" */;
+			buildPhases = (
+				0F5000063500000100AAA001 /* Sources */,
+				0F5000073500000100AAA001 /* Frameworks */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = MarketDataCore;
+			productName = MarketDataCore;
+			productReference = 0F5000103500000100AAA001 /* libMarketDataCore.a */;
+			productType = "com.apple.product-type.library.static";
 		};
 		0F40001434D0000100AAA001 /* lstm-scheduler */ = {
 			isa = PBXNativeTarget;
@@ -1535,6 +1583,7 @@
 				0F1700003370000100AAA001 /* ProfitabilityCore */,
 				0F1800003380000100AAA001 /* StrategyEvaluationCore */,
 				0F20000033D0000100AAA001 /* SchedulerCore */,
+				0F5000043500000100AAA001 /* MarketDataCore */,
 				0F40001434D0000100AAA001 /* lstm-scheduler */,
 			);
 		};
@@ -1977,6 +2026,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F5000063500000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F5000013500000100AAA001 /* MarketDataCore.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -2037,6 +2094,18 @@
 			name = SchedulerCore;
 			target = 0F20000033D0000100AAA001 /* SchedulerCore */;
 			targetProxy = 0F20000D33D0000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F5000053500000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MarketDataCore;
+			target = 0F5000043500000100AAA001 /* MarketDataCore */;
+			targetProxy = 0F5000093500000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F5000153500000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MarketDataCore;
+			target = 0F5000043500000100AAA001 /* MarketDataCore */;
+			targetProxy = 0F5000093500000100AAA001 /* PBXContainerItemProxy */;
 		};
 		0F40001734D0000100AAA001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -2565,6 +2634,38 @@
 			};
 			name = Release;
 		};
+		0F5000133500000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = MarketDataCore;
+				SKIP_INSTALL = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					/opt/homebrew/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
+					/opt/homebrew/opt/libpq/include,
+				);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+			};
+			name = Debug;
+		};
+		0F5000143500000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = MarketDataCore;
+				SKIP_INSTALL = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					/opt/homebrew/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
+					/opt/homebrew/opt/libpq/include,
+				);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+			};
+			name = Release;
+		};
 		0F40001934D0000100AAA001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2692,6 +2793,15 @@
 			buildConfigurations = (
 				0F20000533D0000100AAA001 /* Debug */,
 				0F20000633D0000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0F5000083500000100AAA001 /* Build configuration list for PBXNativeTarget "MarketDataCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F5000133500000100AAA001 /* Debug */,
+				0F5000143500000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
