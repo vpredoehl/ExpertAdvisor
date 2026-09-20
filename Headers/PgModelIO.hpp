@@ -799,6 +799,9 @@ public:
     struct PersistedModelMaterializationReadOptions
     {
         std::function<void()> afterFirstRead;
+        // Optional observability only. The reader retains sole ownership of
+        // its query sequence and never changes the caller's transaction.
+        std::function<void(const char*)> afterStage;
     };
 
     // Load model_meta and prove that its structural width agrees with the
@@ -1022,6 +1025,7 @@ public:
             result.identity.featureAblationCanonicalText =
                 result.identity.featureAblationMask.CanonicalText();
         }
+        if (options.afterStage) options.afterStage("materialization_identity_decoded");
 
         const bool modelCalendarNull = identityRow[5].is_null() &&
             identityRow[6].is_null();
@@ -1053,6 +1057,7 @@ public:
                 throw std::runtime_error(
                     "economic_calendar_snapshot_identity_invalid");
         }
+        if (options.afterStage) options.afterStage("materialization_calendar_validated");
 
         const pqxx::result ancestryRows = transaction.exec_params(
             "WITH RECURSIVE ancestry(model_id,parent_model_id) AS ("
@@ -1064,6 +1069,7 @@ public:
         result.identity.ancestryModelIds.reserve(ancestryRows.size());
         for (const pqxx::row& row : ancestryRows)
             result.identity.ancestryModelIds.push_back(row[0].as<long long>());
+        if (options.afterStage) options.afterStage("materialization_ancestry_read");
 
         if (result.identity.experimentId.has_value())
         {
@@ -1082,6 +1088,7 @@ public:
             loadModelInputSemanticMetadata(transaction, modelId);
         result.inputWidthExpansionProvenance =
             validateModelInputSemanticsForLoad(transaction, modelId);
+        if (options.afterStage) options.afterStage("materialization_model_contract_read");
 
         const bool hasObjectiveCanonical = persistedParameterExists(
             transaction, modelId, "training_objective_canonical_meta");
@@ -1095,6 +1102,7 @@ public:
                 transaction, modelId, "training_objective_hash_meta");
         result.trainingObjective = EA::TrainingObjective::ResolvePersisted(
             result.trainingObjectiveCanonical, result.trainingObjectiveHash);
+        if (options.afterStage) options.afterStage("materialization_objective_resolved");
 
         result.param = readPersistedMatrix(transaction, modelId, "param");
         result.bias = readPersistedMatrix(transaction, modelId, "bias");
@@ -1136,6 +1144,8 @@ public:
              !result.returnHeadDirBias.has_value()))
             throw std::runtime_error(
                 "classification model requires complete directional head parameters");
+
+        if (options.afterStage) options.afterStage("materialization_parameter_matrices_read");
 
         if (persistedParameterExists(transaction, modelId, "train_config_meta"))
         {
@@ -1181,6 +1191,7 @@ public:
         result.donchian20Mode = loadDonchian20ModeMeta(transaction, modelId);
         result.featureWarmupScope = loadFeatureWarmupScopeMeta(transaction, modelId);
         result.donchianLookback = loadDonchianLookbackMeta(transaction, modelId);
+        if (options.afterStage) options.afterStage("materialization_runtime_config_read");
         return result;
     }
 

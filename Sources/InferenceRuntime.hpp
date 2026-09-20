@@ -6,6 +6,7 @@
 #include "PgModelIO.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -32,6 +33,10 @@ struct RuntimeRequest
     const ::Tensor& tensor;
     const DBIO::PgModelIO::PersistedModelMaterialization& materialization;
     RuntimeConfiguration configuration;
+    // Optional application-owned observability hook. It has no database or
+    // lifecycle authority and is invoked only at deterministic runtime
+    // boundaries.
+    std::function<void(const char*)> stageObserver;
 };
 
 struct RuntimeResult

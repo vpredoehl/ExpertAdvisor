@@ -19,6 +19,16 @@ namespace EA::Inference
 {
 namespace
 {
+void LogManagedInferenceStage(const char* stage,
+                              const ManagedInferenceRequest& request)
+{
+    std::cout << "MANAGED_INFERENCE_STAGE"
+              << ",stage=" << stage
+              << ",model_id=" << request.modelId
+              << ",worker_attempt_id=" << request.workerAttemptId
+              << std::endl;
+}
+
 struct Binding
 {
     bool checkpoint = false;
@@ -145,7 +155,13 @@ Binding ReadBinding(pqxx::work& transaction, const ManagedInferenceRequest& requ
 Snapshot Materialize(pqxx::work& transaction, const ManagedInferenceRequest& request)
 {
     Snapshot snapshot;
-    snapshot.model = DBIO::PgModelIO::ReadPersistedModelMaterialization(transaction, request.modelId);
+    snapshot.model = DBIO::PgModelIO::ReadPersistedModelMaterialization(
+        transaction, request.modelId,
+        {.afterStage = [&request](const char* stage)
+         {
+             LogManagedInferenceStage(stage, request);
+         }});
+    LogManagedInferenceStage("detached_materialization_state_transferred", request);
     if (!snapshot.model.trainConfigMeta || snapshot.model.trainConfigMeta->rows != 1 ||
         snapshot.model.trainConfigMeta->values.size() < DBIO::PgModelIO::kTrainConfigMetaFieldCount)
         throw std::runtime_error("managed_inference_train_config_meta_missing");
@@ -153,9 +169,16 @@ Snapshot Materialize(pqxx::work& transaction, const ManagedInferenceRequest& req
     if (std::llround(values[0]) != DBIO::PgModelIO::kTrainConfigMetaSchemaVersion ||
         std::llround(values[4]) != DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId)
         throw std::runtime_error("managed_inference_train_config_meta_unsupported");
+    LogManagedInferenceStage("detached_materialization_train_config_validated", request);
     if (!snapshot.model.trainSymbol && !request.requestedSymbol)
         throw std::runtime_error("managed_inference_symbol_missing");
-    snapshot.symbol = EA::CanonicalSymbol::Normalize(snapshot.model.trainSymbol.value_or(*request.requestedSymbol));
+    // A scheduler-managed request intentionally omits --symbol when the
+    // persisted model carries its immutable training symbol.  Do not evaluate
+    // the optional CLI fallback unless it is actually needed.
+    const std::string& symbol = snapshot.model.trainSymbol
+        ? *snapshot.model.trainSymbol
+        : *request.requestedSymbol;
+    snapshot.symbol = EA::CanonicalSymbol::Normalize(symbol);
     snapshot.horizon = static_cast<std::size_t>(std::llround(values[1]));
     snapshot.threshold = static_cast<float>(values[2]);
     snapshot.window = static_cast<std::size_t>(std::llround(values[3]));
@@ -163,7 +186,9 @@ Snapshot Materialize(pqxx::work& transaction, const ManagedInferenceRequest& req
     snapshot.completedEpochs = snapshot.model.completedEpoch;
     if (snapshot.horizon == 0 || snapshot.window == 0) throw std::runtime_error("managed_inference_invalid_persisted_runtime_config");
     ValidateOptional(request, snapshot);
+    LogManagedInferenceStage("managed_request_persisted_config_validated", request);
     snapshot.binding = ReadBinding(transaction, request, snapshot.symbol, snapshot.horizon, snapshot.threshold);
+    LogManagedInferenceStage("detached_materialization_snapshot_validated", request);
     return snapshot;
 }
 
@@ -198,7 +223,8 @@ long long PersistResult(pqxx::work& transaction, const ManagedInferenceRequest& 
     }
     else
         row = Execute(transaction, "INSERT INTO inference_eval_result (model_id,symbol,prediction_horizon,threshold_logret,window_size,label_rule_id,target_type,from_date,to_date,completed_epochs,accuracy,accept_model,reject_reason,pred_down,pred_neutral,pred_up,status,completed_at,inference_scope,checkpoint_eval_id,parent_experiment_id,checkpoint_epoch) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10::bigint,-1),$11,$12,$13,$14,$15,$16,'completed',now(),'final',NULL,NULL,NULL) ON CONFLICT (model_id,symbol,prediction_horizon,threshold_logret,window_size,label_rule_id,target_type,from_date,to_date) WHERE status='completed' AND inference_scope='final' DO UPDATE SET completed_epochs=EXCLUDED.completed_epochs,accuracy=EXCLUDED.accuracy,accept_model=EXCLUDED.accept_model,reject_reason=EXCLUDED.reject_reason,pred_down=EXCLUDED.pred_down,pred_neutral=EXCLUDED.pred_neutral,pred_up=EXCLUDED.pred_up,completed_at=now() RETURNING id;", request.modelId,snapshot.symbol,static_cast<long long>(snapshot.horizon),snapshot.threshold,static_cast<long long>(snapshot.window),DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId,static_cast<int>(snapshot.targetType),DatePrefix(request.fromDate),DatePrefix(request.toDate),epochs,facts.accuracy,a.acceptModel,a.rejectReason,a.predFrac[0],a.predFrac[1],a.predFrac[2]);
-    if (row.size() != 1) throw std::runtime_error("managed_inference_result_not_returned");
+    if (row.size() != 1 || row.one_row()[0].is_null())
+        throw std::runtime_error("managed_inference_result_not_returned");
     return row.one_row()[0].as<long long>();
 }
 
@@ -220,6 +246,7 @@ void PersistProfitability(pqxx::work& transaction, long long resultId, const Man
 
 ManagedInferenceResult RunManagedInference(const ManagedInferenceRequest& request)
 {
+    LogManagedInferenceStage("managed_application_entry", request);
     ValidateRequest(request);
     const bool checkpoint = request.checkpointEvalId.has_value();
     if (!EA::SchedulerCore::RegisterSchedulerWorker({request.workerAttemptId, request.finalExperimentId, request.checkpointEvalId, checkpoint ? "checkpoint_infer" : "experiment", "infer"}))
@@ -236,10 +263,15 @@ ManagedInferenceResult RunManagedInference(const ManagedInferenceRequest& reques
     Snapshot snapshot;
     { // RR/RO admission must finish before market input or Tensor/LSTM work.
         pqxx::connection connection{request.database.lstmConnectionString};
+        LogManagedInferenceStage("database_connection_established", request);
         pqxx::work read{connection};
         read.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+        LogManagedInferenceStage("repeatable_read_transaction_begun", request);
+        LogManagedInferenceStage("detached_materialization_read_begun", request);
         snapshot = Materialize(read, request);
+        LogManagedInferenceStage("detached_materialization_read_completed", request);
         read.commit();
+        LogManagedInferenceStage("repeatable_read_transaction_committed", request);
     }
     std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity> calendar;
     if (snapshot.model.identity.economicCalendarSnapshotId.has_value() !=
@@ -247,18 +279,37 @@ ManagedInferenceResult RunManagedInference(const ManagedInferenceRequest& reques
         throw std::runtime_error("economic_calendar_snapshot_identity_incomplete");
     if (snapshot.model.identity.economicCalendarSnapshotId)
         calendar = {*snapshot.model.identity.economicCalendarSnapshotId, *snapshot.model.identity.economicCalendarSnapshotHash};
+    LogManagedInferenceStage("inference_input_tensor_preparation_begun", request);
     const auto input = PrepareInferenceInput({snapshot.symbol, request.fromDate, request.toDate, snapshot.model.featureWarmupScope, snapshot.model.donchian20Mode, snapshot.model.donchianLookback, calendar}, request.database);
-    const RuntimeResult runtime = RunInferenceRuntime({input.tensor, snapshot.model, {snapshot.window, snapshot.horizon, snapshot.threshold, input.logicalOutputStartIndex, snapshot.targetType, false}});
+    LogManagedInferenceStage("inference_input_tensor_preparation_completed", request);
+    LogManagedInferenceStage("runtime_request_constructed", request);
+    const RuntimeResult runtime = RunInferenceRuntime(
+        {input.tensor, snapshot.model,
+         {snapshot.window, snapshot.horizon, snapshot.threshold,
+          input.logicalOutputStartIndex, snapshot.targetType, false},
+         [&request](const char* stage)
+         {
+             LogManagedInferenceStage(stage, request);
+         }});
 
     ManagedInferenceResult result;
     result.checkpoint = checkpoint;
     pqxx::connection connection{request.database.lstmConnectionString};
     pqxx::work write{connection};
     write.exec("SET TRANSACTION READ WRITE;");
+    LogManagedInferenceStage("fresh_read_write_persistence_transaction_begun", request);
     RevalidateForWrite(write, request, snapshot);
+    LogManagedInferenceStage("scheduler_identity_state_revalidation_completed", request);
+    LogManagedInferenceStage("result_persistence_begun", request);
     result.inferenceEvalResultId = PersistResult(write, request, snapshot, runtime.evaluationFacts, result.idempotentExisting);
+    LogManagedInferenceStage("result_persistence_completed", request);
+    LogManagedInferenceStage("profitability_persistence_begun", request);
     PersistProfitability(write, result.inferenceEvalResultId, request, snapshot, runtime.evaluationFacts);
+    LogManagedInferenceStage("profitability_persistence_completed", request);
+    LogManagedInferenceStage("result_profitability_persistence_completed", request);
     write.commit();
+    LogManagedInferenceStage("persistence_transaction_committed", request);
+    LogManagedInferenceStage("managed_application_success_return", request);
     return result;
 }
 } // namespace EA::Inference

@@ -19,8 +19,13 @@ ModelInputPreparation::Result PrepareInferenceInput(
 
 RuntimeResult RunInferenceRuntime(const RuntimeRequest& request)
 {
+    const auto stage = [&request](const char* name)
+    {
+        if (request.stageObserver) request.stageObserver(name);
+    };
     const auto& persisted = request.materialization;
     const auto& configuration = request.configuration;
+    stage("model_config_validation_begun");
     if (configuration.windowSize == 0 || configuration.predictionHorizon == 0)
         throw std::invalid_argument("inference_runtime_invalid_window_or_horizon");
     if (persisted.identity.modelId <= 0)
@@ -64,20 +69,27 @@ RuntimeResult RunInferenceRuntime(const RuntimeRequest& request)
             : 0;
     const auto inputContract = EA::ResolveModelInputContract(
         persisted.modelMeta.inputWidth, tensorFeatureWidth);
+    stage("model_config_validation_completed");
+    stage("lstm_construction_begun");
     auto model = std::make_unique<EA::LSTM>(
         request.tensor, persisted.modelMeta.hiddenSize, 1.0f, 0.0f,
         configuration.targetType, inputContract.modelInputWidth,
         persisted.identity.featureAblationMask);
+    stage("lstm_construction_completed");
 
     // The detached applier deliberately accepts no transaction or connection.
+    stage("detached_materialization_apply_begun");
     DBIO::PgModelIO::ApplyPersistedModelMaterialization(persisted, *model);
+    stage("detached_materialization_apply_completed");
 
     RuntimeResult result;
+    stage("evaluation_begun");
     result.evaluationFacts = InferenceEvaluationFacts::Evaluate(
         *model, request.tensor,
         {configuration.windowSize, configuration.predictionHorizon,
          configuration.thresholdLogret, configuration.logicalOutputStartIndex,
          configuration.captureStrategyDecisions});
+    stage("evaluation_completed");
     result.model = std::move(model);
     return result;
 }
