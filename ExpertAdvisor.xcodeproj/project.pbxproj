@@ -1887,7 +1887,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"\\n";
+			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"\n";
 		};
 		0C0A000130524C260005882D /* Publish Canonical LSTM Binary */ = {
 			isa = PBXShellScriptBuildPhase;
