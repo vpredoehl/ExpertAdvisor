@@ -367,6 +367,38 @@
 		0F32001134C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
 		0F40000134D0000100AAA001 /* SchedulerMain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F40000234D0000100AAA001 /* SchedulerMain.cpp */; };
 		0F6000013600000100AAA001 /* AnalyzeWorkerMain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6000023600000100AAA001 /* AnalyzeWorkerMain.cpp */; };
+		0F8000013800000100AAA001 /* InferWorkerMain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000023800000100AAA001 /* InferWorkerMain.cpp */; };
+		0F8000203800000100AAA001 /* ManagedInferenceWorkerCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000403800000100AAA001 /* ManagedInferenceWorkerCli.cpp */; };
+		0F8000213800000100AAA001 /* ManagedInferenceWorkerCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000403800000100AAA001 /* ManagedInferenceWorkerCli.cpp */; };
+		0F8000223800000100AAA001 /* ManagedInferenceWorkerCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F8000403800000100AAA001 /* ManagedInferenceWorkerCli.cpp */; };
+		0F8000233800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200093800000100AAA001 /* ManagedInferenceApplication.cpp */; };
+		0F8000243800000100AAA001 /* InferenceRuntime.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200073800000100AAA001 /* InferenceRuntime.cpp */; };
+		0F8000253800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200003800000100AAA001 /* InferenceEvaluationFacts.cpp */; };
+		0F8000263800000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
+		0F8000273800000100AAA001 /* EconomicEventRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200383311000100AAA001 /* EconomicEventRepository.cpp */; };
+		0F8000283800000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
+		0F8000293800000100AAA001 /* GlobalExperimentControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */; };
+		0F80002A3800000100AAA001 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
+		0F80002B3800000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
+		0F80002C3800000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp */; };
+		0F80002D3800000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
+		0F80002E3800000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
+		0F80002F3800000100AAA001 /* ContinuationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */; };
+		0F8000303800000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000022FC0000100AAA001 /* ContinuationPolicyInheritance.cpp */; };
+		0F8000313800000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A50000B2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp */; };
+		0F8000323800000100AAA001 /* RunMetadata.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A4000002FB0000100AAA001 /* RunMetadata.cpp */; };
+		0F8000333800000100AAA001 /* EconomicEventFeatures.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200343310000100AAA001 /* EconomicEventFeatures.cpp */; };
+		0F8000343800000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
+		0F8000103800000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
+		0F8000113800000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
+		0F8000123800000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1800013380000100AAA001 /* libStrategyEvaluationCore.a */; };
+		0F8000133800000100AAA001 /* libModelInputPreparation.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F5100103601000100AAA001 /* libModelInputPreparation.a */; };
+		0F8000143800000100AAA001 /* libMarketDataCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F5000103500000100AAA001 /* libMarketDataCore.a */; };
+		0F8000153800000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
+		0F8000163800000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
+		0F8000173800000100AAA001 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
+		0F8000183800000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
+		0F8000193800000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */; };
 		0F40000334D0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
 		0F40000434D0000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
 		0F40000534D0000100AAA001 /* ContinuationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */; };
@@ -903,6 +935,10 @@
 		0F40001234D0000100AAA001 /* lstm-scheduler */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-scheduler"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0F6000023600000100AAA001 /* AnalyzeWorkerMain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = AnalyzeWorkerMain.cpp; path = LSTM/AnalyzeWorkerMain.cpp; sourceTree = SOURCE_ROOT; };
 		0F6000123600000100AAA001 /* lstm-analyze-worker */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-analyze-worker"; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F8000023800000100AAA001 /* InferWorkerMain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferWorkerMain.cpp; path = LSTM/InferWorkerMain.cpp; sourceTree = SOURCE_ROOT; };
+		0F8000033800000100AAA001 /* lstm-infer-worker */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-infer-worker"; sourceTree = BUILT_PRODUCTS_DIR; };
+		0F8000403800000100AAA001 /* ManagedInferenceWorkerCli.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ManagedInferenceWorkerCli.cpp; path = Sources/ManagedInferenceWorkerCli.cpp; sourceTree = SOURCE_ROOT; };
+		0F8000413800000100AAA001 /* ManagedInferenceWorkerCli.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ManagedInferenceWorkerCli.hpp; path = Sources/ManagedInferenceWorkerCli.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -965,6 +1001,23 @@
 				0F40001034D0000100AAA001 /* Foundation.framework in Frameworks */,
 				0F40001134D0000100AAA001 /* Metal.framework in Frameworks */,
 				0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0F8000073800000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F8000133800000100AAA001 /* libModelInputPreparation.a in Frameworks */,
+				0F8000143800000100AAA001 /* libMarketDataCore.a in Frameworks */,
+				0F8000103800000100AAA001 /* libSchedulerCore.a in Frameworks */,
+				0F8000123800000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
+				0F8000113800000100AAA001 /* libProfitabilityCore.a in Frameworks */,
+				0F8000173800000100AAA001 /* Foundation.framework in Frameworks */,
+				0F8000183800000100AAA001 /* Metal.framework in Frameworks */,
+				0F8000193800000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */,
+				0F8000163800000100AAA001 /* libMetalBuffer.a in Frameworks */,
+				0F8000153800000100AAA001 /* libMetaNN.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1040,6 +1093,7 @@
 				0A10000B2F70000100AAA001 /* LSTM_Release */,
 				0F40001234D0000100AAA001 /* lstm-scheduler */,
 				0F6000123600000100AAA001 /* lstm-analyze-worker */,
+				0F8000033800000100AAA001 /* lstm-infer-worker */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -1063,6 +1117,7 @@
 				084426892ED8E755002DEB21 /* main.cpp */,
 				0F40000234D0000100AAA001 /* SchedulerMain.cpp */,
 				0F6000023600000100AAA001 /* AnalyzeWorkerMain.cpp */,
+				0F8000023800000100AAA001 /* InferWorkerMain.cpp */,
 				0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */,
 				0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */,
 				0EC201113320000100AAA001 /* EconomicEventConsensusImport.hpp */,
@@ -1095,6 +1150,8 @@
 				0F2200083800000100AAA001 /* InferenceRuntime.hpp */,
 				0F2200093800000100AAA001 /* ManagedInferenceApplication.cpp */,
 				0F22000C3800000100AAA001 /* ManagedInferenceApplication.hpp */,
+				0F8000403800000100AAA001 /* ManagedInferenceWorkerCli.cpp */,
+				0F8000413800000100AAA001 /* ManagedInferenceWorkerCli.hpp */,
 				0E73000130E0000100AAA001 /* InferenceProfitability.hpp */,
 				0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */,
 				0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */,
@@ -1609,6 +1666,28 @@
 			productReference = 0F6000123600000100AAA001 /* lstm-analyze-worker */;
 			productType = "com.apple.product-type.tool";
 		};
+		0F8000043800000100AAA001 /* lstm-infer-worker */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0F8000053800000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-infer-worker" */;
+			buildPhases = (
+				0F8000083800000100AAA001 /* Generate infer worker build provenance */,
+				0F8000063800000100AAA001 /* Sources */,
+				0F8000073800000100AAA001 /* Frameworks */,
+			);
+			buildRules = ();
+			dependencies = (
+				0F8000093800000100AAA001 /* PBXTargetDependency */,
+				0F80000A3800000100AAA001 /* PBXTargetDependency */,
+				0F80000B3800000100AAA001 /* PBXTargetDependency */,
+				0F80000C3800000100AAA001 /* PBXTargetDependency */,
+				0F80000D3800000100AAA001 /* PBXTargetDependency */,
+				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+			);
+			name = "lstm-infer-worker";
+			productName = "lstm-infer-worker";
+			productReference = 0F8000033800000100AAA001 /* lstm-infer-worker */;
+			productType = "com.apple.product-type.tool";
+		};
 		0F1700003370000100AAA001 /* ProfitabilityCore */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0F1700043370000100AAA001 /* Build configuration list for PBXNativeTarget "ProfitabilityCore" */;
@@ -1705,6 +1784,7 @@
 				0F5100043601000100AAA001 /* ModelInputPreparation */,
 				0F40001434D0000100AAA001 /* lstm-scheduler */,
 				0F6000143600000100AAA001 /* lstm-analyze-worker */,
+				0F8000043800000100AAA001 /* lstm-infer-worker */,
 				0F7000013700000100AAA001 /* LSTM Scheduler Bundle */,
 			);
 		};
@@ -1792,6 +1872,23 @@
 			shellPath = /bin/sh;
 			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"\n";
 		};
+		0F8000083800000100AAA001 /* Generate infer worker build provenance */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py",
+				"$(PROJECT_DIR)/.git",
+			);
+			name = "Generate infer worker build provenance";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"\\n";
+		};
 		0C0A000130524C260005882D /* Publish Canonical LSTM Binary */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -1833,6 +1930,7 @@
 				0F2200013800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200053800000100AAA001 /* InferenceRuntime.cpp in Sources */,
 				0F22000A3800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */,
+				0F8000203800000100AAA001 /* ManagedInferenceWorkerCli.cpp in Sources */,
 				0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
 				0E7F00103330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
 				0E7F00123330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */,
@@ -1979,6 +2077,7 @@
 				0F2200023800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200063800000100AAA001 /* InferenceRuntime.cpp in Sources */,
 				0F22000B3800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */,
+				0F8000213800000100AAA001 /* ManagedInferenceWorkerCli.cpp in Sources */,
 				0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
 				0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
 				0E7F00133330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */,
@@ -2315,6 +2414,33 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F8000063800000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F8000013800000100AAA001 /* InferWorkerMain.cpp in Sources */,
+				0F8000223800000100AAA001 /* ManagedInferenceWorkerCli.cpp in Sources */,
+				0F8000233800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */,
+				0F8000243800000100AAA001 /* InferenceRuntime.cpp in Sources */,
+				0F8000253800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
+				0F8000263800000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
+				0F8000273800000100AAA001 /* EconomicEventRepository.cpp in Sources */,
+				0F8000283800000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
+				0F8000293800000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
+				0F80002A3800000100AAA001 /* PricePoint.cpp in Sources */,
+				0F80002B3800000100AAA001 /* Tensor.cpp in Sources */,
+				0F80002C3800000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */,
+				0F80002D3800000100AAA001 /* LSTM.cpp in Sources */,
+				0F80002E3800000100AAA001 /* CheckpointPolicy.cpp in Sources */,
+				0F80002F3800000100AAA001 /* ContinuationPolicy.cpp in Sources */,
+				0F8000303800000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
+				0F8000313800000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */,
+				0F8000323800000100AAA001 /* RunMetadata.cpp in Sources */,
+				0F8000333800000100AAA001 /* EconomicEventFeatures.cpp in Sources */,
+				0F8000343800000100AAA001 /* db_cursor.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		0F5000063500000100AAA001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2447,6 +2573,35 @@
 			name = StrategyEvaluationCore;
 			target = 0F1800003380000100AAA001 /* StrategyEvaluationCore */;
 			targetProxy = 0F18000F3380000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F8000093800000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = SchedulerCore;
+			target = 0F20000033D0000100AAA001 /* SchedulerCore */;
+			targetProxy = 0F20000C33D0000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F80000A3800000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ProfitabilityCore;
+			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
+			targetProxy = 0F17000C3370000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F80000B3800000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = StrategyEvaluationCore;
+			target = 0F1800003380000100AAA001 /* StrategyEvaluationCore */;
+			targetProxy = 0F18000C3380000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F80000C3800000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ModelInputPreparation;
+			target = 0F5100043601000100AAA001 /* ModelInputPreparation */;
+		};
+		0F80000D3800000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MarketDataCore;
+			target = 0F5000043500000100AAA001 /* MarketDataCore */;
+			targetProxy = 0F5000093500000100AAA001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -3148,6 +3303,48 @@
 			};
 			name = Release;
 		};
+		0F8000503800000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
+				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)");
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx");
+				PRODUCT_NAME = "lstm-infer-worker";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include, "/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources", "$(DERIVED_FILE_DIR)");
+			};
+			name = Debug;
+		};
+		0F8000513800000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_STANDARD_LIBRARY_HARDENING = fast;
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = ("NDEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
+				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/lstm-infer-worker.map";
+				LD_GENERATE_MAP_FILE = YES;
+				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)");
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx");
+				PRODUCT_NAME = "lstm-infer-worker";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include, "/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources", "$(DERIVED_FILE_DIR)");
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -3255,6 +3452,15 @@
 			buildConfigurations = (
 				0F6000193600000100AAA001 /* Debug */,
 				0F60001A3600000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0F8000053800000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-infer-worker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F8000503800000100AAA001 /* Debug */,
+				0F8000513800000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

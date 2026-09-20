@@ -63,6 +63,7 @@
 #include "../Sources/InferenceEvaluationFacts.hpp"
 #include "../Sources/InferenceRuntime.hpp"
 #include "../Sources/ManagedInferenceApplication.hpp"
+#include "../Sources/ManagedInferenceWorkerCli.hpp"
 #include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
 #include "../Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.hpp"
 #include "../Sources/StrategyEvaluationCore/Phase19CCausalPathPredictability.hpp"
@@ -8701,39 +8702,13 @@ int main(int argc, const char * argv[])
             (launchArgs.schedulerExperimentId.has_value() ||
              launchArgs.schedulerCheckpointEvalId.has_value()))
         {
-            if (launchArgs.logLevel.has_value())
-                EA::SetRuntimeLogLevel(*launchArgs.logLevel);
-            EA::Inference::ManagedInferenceRequest request;
-            request.modelId = *launchArgs.modelId;
-            request.finalExperimentId = launchArgs.schedulerExperimentId;
-            request.checkpointEvalId = launchArgs.schedulerCheckpointEvalId;
-            request.workerAttemptId = *launchArgs.schedulerWorkerAttemptId;
-            request.fromDate = launchArgs.fromDate;
-            request.toDate = launchArgs.toDate;
-            request.requestedSymbol = launchArgs.symbol;
-            request.requestedPredictionHorizon = launchArgs.predictionHorizon;
-            request.requestedThresholdLogret = launchArgs.thresholdLogret;
-            request.requestedWindowSize = launchArgs.windowSize;
-            request.requestedHiddenSize = launchArgs.hiddenSize;
-            request.requestedDonchianLookback = launchArgs.donchianLookback;
-            request.requestedDonchian20Mode = launchArgs.donchian20Mode;
-            request.requestedFeatureWarmupScope = launchArgs.featureWarmupScope;
-            request.database = {ForexDbConnectionString(), LstmDbConnectionString()};
-            try
-            {
-                (void)EA::Inference::RunManagedInference(request);
-                return 0;
-            }
-            catch (const std::exception& error)
-            {
-                if (std::string{error.what()} ==
-                    "managed_inference_worker_registration_failed")
-                    return 125;
-                std::cerr << "SCHEDULER_INFER_RESULT_PERSIST_FAILED"
-                          << ",model_id=" << request.modelId
-                          << ",error=" << error.what() << std::endl;
-                return 1;
-            }
+            // Keep scheduler-managed argv conversion and exit semantics shared
+            // with lstm-infer-worker.  General LaunchArgs still owns legacy
+            // compatibility parsing for every other LSTM_Release mode.
+            return EA::Inference::RunManagedInferenceWorker(
+                EA::Inference::ParseManagedInferenceWorkerArgs(
+                    argc, argv,
+                    {ForexDbConnectionString(), LstmDbConnectionString()}));
         }
         if (launchArgs.schedulerWorkerAttemptId.has_value() &&
             !EA::SchedulerCore::RegisterSchedulerWorker({

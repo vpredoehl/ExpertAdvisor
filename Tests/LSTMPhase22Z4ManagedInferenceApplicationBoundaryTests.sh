@@ -36,12 +36,15 @@ rg -q 'ON CONFLICT \(model_id,symbol' "${application_source}"
 rg -U -q 'PersistResult\([\s\S]{0,1600}PersistProfitability\([\s\S]{0,500}write\.commit\(\)' "${application_source}"
 ! rg -n 'InferenceEvaluationFacts::Evaluate|ComputeAcceptanceSummary|EvaluateClassificationBatch' "${application_source}"
 
-# main is an adapter consumer; its non-managed direct/infer-all paths remain
-# present and no worker target/registry publication is introduced.
-rg -U -q 'ManagedInferenceRequest request;[\s\S]{0,1600}RunManagedInference\(request\)' "${main_file}"
+# main is an adapter consumer; Phase 22Z5 centralizes scheduler-managed argv
+# construction in the shared thin-adapter helper while direct/infer-all paths
+# remain below on their established routes.
+rg -U -q 'RunManagedInferenceWorker\([\s\S]{0,800}ParseManagedInferenceWorkerArgs' "${main_file}"
 rg -q 'return RunInferAllForSymbol\(c_LSTM' "${main_file}"
 rg -q 'else if \(gRuntimeInferenceMode && launchArgs\.modelId\.has_value\(\)\)' "${main_file}"
-! git -C "${repo_root}" diff -- "${project_file}" \
+# Phase 22Z5 may add a standalone target, but semantic-worker publication is
+# still prohibited until Phase 23A.
+! git -C "${repo_root}" diff -- \
     "Sources/SchedulerCore/SemanticWorkerRegistry.cpp" | rg -q 'lstm-infer-worker'
 rg -q 'ManagedInferenceApplication.cpp in Sources' "${project_file}"
 
