@@ -62,6 +62,7 @@
 #include "InferenceProfitabilityRepository.hpp"
 #include "../Sources/InferenceEvaluationFacts.hpp"
 #include "../Sources/InferenceRuntime.hpp"
+#include "../Sources/ManagedInferenceApplication.hpp"
 #include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
 #include "../Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.hpp"
 #include "../Sources/StrategyEvaluationCore/Phase19CCausalPathPredictability.hpp"
@@ -8690,6 +8691,49 @@ int main(int argc, const char * argv[])
                 "direct CLI execution of scheduler-managed work is "
                 "prohibited; an exact --scheduler-worker-attempt-id "
                 "is required");
+        }
+        // Scheduler-managed final/checkpoint inference has its own reusable
+        // application boundary.  Keep this executable as a parser/adapter;
+        // direct inference, infer-all, and training remain below on their
+        // established paths.
+        if (launchArgs.inferenceMode.value_or(false) &&
+            launchArgs.modelId.has_value() &&
+            (launchArgs.schedulerExperimentId.has_value() ||
+             launchArgs.schedulerCheckpointEvalId.has_value()))
+        {
+            if (launchArgs.logLevel.has_value())
+                EA::SetRuntimeLogLevel(*launchArgs.logLevel);
+            EA::Inference::ManagedInferenceRequest request;
+            request.modelId = *launchArgs.modelId;
+            request.finalExperimentId = launchArgs.schedulerExperimentId;
+            request.checkpointEvalId = launchArgs.schedulerCheckpointEvalId;
+            request.workerAttemptId = *launchArgs.schedulerWorkerAttemptId;
+            request.fromDate = launchArgs.fromDate;
+            request.toDate = launchArgs.toDate;
+            request.requestedSymbol = launchArgs.symbol;
+            request.requestedPredictionHorizon = launchArgs.predictionHorizon;
+            request.requestedThresholdLogret = launchArgs.thresholdLogret;
+            request.requestedWindowSize = launchArgs.windowSize;
+            request.requestedHiddenSize = launchArgs.hiddenSize;
+            request.requestedDonchianLookback = launchArgs.donchianLookback;
+            request.requestedDonchian20Mode = launchArgs.donchian20Mode;
+            request.requestedFeatureWarmupScope = launchArgs.featureWarmupScope;
+            request.database = {ForexDbConnectionString(), LstmDbConnectionString()};
+            try
+            {
+                (void)EA::Inference::RunManagedInference(request);
+                return 0;
+            }
+            catch (const std::exception& error)
+            {
+                if (std::string{error.what()} ==
+                    "managed_inference_worker_registration_failed")
+                    return 125;
+                std::cerr << "SCHEDULER_INFER_RESULT_PERSIST_FAILED"
+                          << ",model_id=" << request.modelId
+                          << ",error=" << error.what() << std::endl;
+                return 1;
+            }
         }
         if (launchArgs.schedulerWorkerAttemptId.has_value() &&
             !EA::SchedulerCore::RegisterSchedulerWorker({

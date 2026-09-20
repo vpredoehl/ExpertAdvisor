@@ -313,6 +313,8 @@
 		0F2200023800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200003800000100AAA001 /* InferenceEvaluationFacts.cpp */; };
 		0F2200053800000100AAA001 /* InferenceRuntime.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200073800000100AAA001 /* InferenceRuntime.cpp */; };
 		0F2200063800000100AAA001 /* InferenceRuntime.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200073800000100AAA001 /* InferenceRuntime.cpp */; };
+		0F22000A3800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200093800000100AAA001 /* ManagedInferenceApplication.cpp */; };
+		0F22000B3800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2200093800000100AAA001 /* ManagedInferenceApplication.cpp */; };
 		0F1700083370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
 		0F1700093370000100AAA001 /* libProfitabilityCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F1700013370000100AAA001 /* libProfitabilityCore.a */; };
 		0F1800073380000100AAA001 /* StrategyEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1800103380000100AAA001 /* StrategyEvaluation.cpp */; };
@@ -751,6 +753,8 @@
 		0F2200003800000100AAA001 /* InferenceEvaluationFacts.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceEvaluationFacts.cpp; path = Sources/InferenceEvaluationFacts.cpp; sourceTree = SOURCE_ROOT; };
 		0F2200073800000100AAA001 /* InferenceRuntime.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceRuntime.cpp; path = Sources/InferenceRuntime.cpp; sourceTree = SOURCE_ROOT; };
 		0F2200083800000100AAA001 /* InferenceRuntime.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceRuntime.hpp; path = Sources/InferenceRuntime.hpp; sourceTree = SOURCE_ROOT; };
+		0F2200093800000100AAA001 /* ManagedInferenceApplication.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ManagedInferenceApplication.cpp; path = Sources/ManagedInferenceApplication.cpp; sourceTree = SOURCE_ROOT; };
+		0F22000C3800000100AAA001 /* ManagedInferenceApplication.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ManagedInferenceApplication.hpp; path = Sources/ManagedInferenceApplication.hpp; sourceTree = SOURCE_ROOT; };
 		0E73000130E0000100AAA001 /* InferenceProfitability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitability.hpp; path = Sources/InferenceProfitability.hpp; sourceTree = SOURCE_ROOT; };
 		0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitabilityRepository.cpp; path = Sources/InferenceProfitabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
 		0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitabilityRepository.hpp; path = Sources/InferenceProfitabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
@@ -1089,6 +1093,8 @@
 				0F2200003800000100AAA001 /* InferenceEvaluationFacts.cpp */,
 				0F2200073800000100AAA001 /* InferenceRuntime.cpp */,
 				0F2200083800000100AAA001 /* InferenceRuntime.hpp */,
+				0F2200093800000100AAA001 /* ManagedInferenceApplication.cpp */,
+				0F22000C3800000100AAA001 /* ManagedInferenceApplication.hpp */,
 				0E73000130E0000100AAA001 /* InferenceProfitability.hpp */,
 				0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */,
 				0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */,
@@ -1826,6 +1832,7 @@
 				0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0F2200013800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200053800000100AAA001 /* InferenceRuntime.cpp in Sources */,
+				0F22000A3800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */,
 				0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
 				0E7F00103330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
 				0E7F00123330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */,
@@ -1971,6 +1978,7 @@
 				0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0F2200023800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200063800000100AAA001 /* InferenceRuntime.cpp in Sources */,
+				0F22000B3800000100AAA001 /* ManagedInferenceApplication.cpp in Sources */,
 				0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
 				0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
 				0E7F00133330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */,
