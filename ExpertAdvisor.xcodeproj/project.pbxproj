@@ -19,6 +19,18 @@
 			name = "Publish LSTM Canonical";
 			productName = "Publish LSTM Canonical";
 		};
+		0F7000013700000100AAA001 /* LSTM Scheduler Bundle */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 0F7000023700000100AAA001 /* Build configuration list for PBXAggregateTarget "LSTM Scheduler Bundle" */;
+			buildPhases = (
+			);
+			dependencies = (
+				0F7000053700000100AAA001 /* PBXTargetDependency */,
+				0F7000063700000100AAA001 /* PBXTargetDependency */,
+			);
+			name = "LSTM Scheduler Bundle";
+			productName = "LSTM Scheduler Bundle";
+		};
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
@@ -936,10 +948,12 @@
 			files = (
 				0F40000C34D0000100AAA001 /* libSchedulerCore.a in Frameworks */,
 				0F40000D34D0000100AAA001 /* libProfitabilityCore.a in Frameworks */,
+				0F1800093380000100AAA001 /* libStrategyEvaluationCore.a in Frameworks */,
 				0F40000E34D0000100AAA001 /* libMetaNN.a in Frameworks */,
 				0F40000F34D0000100AAA001 /* libMetalBuffer.a in Frameworks */,
 				0F40001034D0000100AAA001 /* Foundation.framework in Frameworks */,
 				0F40001134D0000100AAA001 /* Metal.framework in Frameworks */,
+				0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1544,6 +1558,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0F40001534D0000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-scheduler" */;
 			buildPhases = (
+				0F7000033700000100AAA001 /* Generate scheduler build provenance */,
 				0F40001634D0000100AAA001 /* Sources */,
 				0F40001334D0000100AAA001 /* Frameworks */,
 			);
@@ -1570,6 +1585,7 @@
 			dependencies = (
 				0F40001734D0000100AAA001 /* PBXTargetDependency */,
 				0F40001834D0000100AAA001 /* PBXTargetDependency */,
+				0F7000093700000100AAA001 /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 			);
 			name = "lstm-analyze-worker";
@@ -1673,6 +1689,7 @@
 				0F5100043601000100AAA001 /* ModelInputPreparation */,
 				0F40001434D0000100AAA001 /* lstm-scheduler */,
 				0F6000143600000100AAA001 /* lstm-analyze-worker */,
+				0F7000013700000100AAA001 /* LSTM Scheduler Bundle */,
 			);
 		};
 /* End PBXProject section */
@@ -1734,6 +1751,24 @@
 				"$(PROJECT_DIR)/.git",
 			);
 			name = "Generate build provenance";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"\n";
+		};
+		0F7000033700000100AAA001 /* Generate scheduler build provenance */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py",
+				"$(PROJECT_DIR)/.git",
+			);
+			name = "Generate scheduler build provenance";
 			outputPaths = (
 				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
 			);
@@ -2119,15 +2154,142 @@
 			buildActionMask = 2147483647;
 			files = (
 				0F6000013600000100AAA001 /* AnalyzeWorkerMain.cpp in Sources */,
-				0F40000334D0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
-				0F40000434D0000100AAA001 /* CheckpointPolicy.cpp in Sources */,
-				0F40000534D0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
-				0F40000634D0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
-				0F40000734D0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */,
-				0F40000834D0000100AAA001 /* EconomicEventRepository.cpp in Sources */,
-				0F40000934D0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
-				0F40000A34D0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
-				0F40000B34D0000100AAA001 /* RunMetadata.cpp in Sources */,
+				0F32001134C0000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
+				0EC201023320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */,
+				0EC201033320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */,
+				0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */,
+				0EC2002132C0000100AAA001 /* EconomicEventImportRepository.cpp in Sources */,
+				0EC2002232C0000100AAA001 /* EconomicEventImportService.cpp in Sources */,
+				0EC2002332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp in Sources */,
+				0EC2002432D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */,
+				0EC2002532E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */,
+				0EC2002D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */,
+				0EC200323300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */,
+				0EC200373310000100AAA001 /* EconomicEventFeatures.cpp in Sources */,
+				0EC2003B3311000100AAA001 /* EconomicEventRepository.cpp in Sources */,
+				0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */,
+				0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
+				0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
+				0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
+				0E7F00133330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */,
+				0E7F00153330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */,
+				0E7F00173330000100AAA001 /* ProfitabilityCalibration.cpp in Sources */,
+				0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */,
+				0E7A000531A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */,
+				0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */,
+				0E7D000731D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */,
+				0E7D000931D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */,
+				0E7D000B31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */,
+				0E8100073350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */,
+				0E8100093350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */,
+				0E81000B3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */,
+				0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */,
+				0E7E000731E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */,
+				0E8200053360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuation.cpp in Sources */,
+				0E8200073360000100AAA001 /* CorrectedCausalSurpriseReplicationContinuationService.cpp in Sources */,
+				0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
+				0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
+				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
+				0F1900213390000100AAA001 /* TensorMarketPathAdapter.cpp in Sources */,
+				0F19002533C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */,
+				0F1C000333F0000100AAA001 /* TensorPhase19CCausalAdapter.cpp in Sources */,
+				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
+				0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
+				0A31000330A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
+				0A5000052FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
+				0A5000072FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
+				0A50000A2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */,
+				0A6000052FD0000100AAA001 /* ExperimentRecommendation.cpp in Sources */,
+				0A7000052FE0000100AAA001 /* ExperimentRecommendationCandidateGenerator.cpp in Sources */,
+				0A8000052FF0000100AAA001 /* ExperimentRecommendationRepository.cpp in Sources */,
+				0A8000072FF0000100AAA001 /* ExperimentRecommendationService.cpp in Sources */,
+				0A9000053000000100AAA001 /* ExperimentRecommendationScoring.cpp in Sources */,
+				0A9000073000000100AAA001 /* ExperimentRecommendationScoringService.cpp in Sources */,
+				0AA000053010000100AAA001 /* ExperimentRecommendationReview.cpp in Sources */,
+				0AB000073020000100AAA001 /* ExperimentRecommendationEvaluation.cpp in Sources */,
+				0AB000093020000100AAA001 /* ExperimentRecommendationEvaluationRepository.cpp in Sources */,
+				0AB0000B3020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp in Sources */,
+				0AC000073030000100AAA001 /* ExperimentRecommendationRanking.cpp in Sources */,
+				0AC000093030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp in Sources */,
+				0AC0000B3030000100AAA001 /* ExperimentRecommendationRankingService.cpp in Sources */,
+				0AD000073040000100AAA001 /* ExperimentRecommendationConversion.cpp in Sources */,
+				0AE000053050000100AAA001 /* ExperimentRecommendationConversionRepository.cpp in Sources */,
+				0AF000073060000100AAA001 /* ExperimentRecommendationConversionProposalReview.cpp in Sources */,
+				0AF000093060000100AAA001 /* ExperimentRecommendationConversionProposalReviewRepository.cpp in Sources */,
+				0AF0000B3060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp in Sources */,
+				0B0000073070000100AAA001 /* ExperimentRecommendationConversionExecution.cpp in Sources */,
+				0B0000093070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp in Sources */,
+				0B00000B3070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp in Sources */,
+				0B1000073071000100AAA001 /* ExperimentRecommendationConversionActivation.cpp in Sources */,
+				0B1000093071000100AAA001 /* ExperimentRecommendationConversionActivationRepository.cpp in Sources */,
+				0B10000B3071000100AAA001 /* ExperimentRecommendationConversionActivationService.cpp in Sources */,
+				0B2000073072000100AAA001 /* ExperimentRecommendationConversionWorkflow.cpp in Sources */,
+				0B2000093072000100AAA001 /* ExperimentRecommendationConversionWorkflowRepository.cpp in Sources */,
+				0B20000B3072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp in Sources */,
+				0B3000073073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp in Sources */,
+				0B3000093073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp in Sources */,
+				0B30000B3073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp in Sources */,
+				0B4000053074000100AAA001 /* ExperimentRecommendationCampaignReview.cpp in Sources */,
+				0B4000073074000100AAA001 /* ExperimentRecommendationCampaignReviewService.cpp in Sources */,
+				0B5000073075000100AAA001 /* ExperimentRecommendationCampaignApproval.cpp in Sources */,
+				0B5000093075000100AAA001 /* ExperimentRecommendationCampaignApprovalRepository.cpp in Sources */,
+				0B50000B3075000100AAA001 /* ExperimentRecommendationCampaignApprovalService.cpp in Sources */,
+				0B5100073076000100AAA001 /* ExperimentRecommendationCampaignMaterialization.cpp in Sources */,
+				0B5100093076000100AAA001 /* ExperimentRecommendationCampaignMaterializationRepository.cpp in Sources */,
+				0B51000B3076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp in Sources */,
+				0B5200073077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp in Sources */,
+				0B5200093077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp in Sources */,
+				0B52000B3077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp in Sources */,
+				0B5300073078000100AAA001 /* ExperimentRecommendationCampaignProposalReview.cpp in Sources */,
+				0B5300093078000100AAA001 /* ExperimentRecommendationCampaignProposalReviewRepository.cpp in Sources */,
+				0B53000B3078000100AAA001 /* ExperimentRecommendationCampaignProposalReviewService.cpp in Sources */,
+				0B5400073079000100AAA001 /* ExperimentRecommendationCampaignExecution.cpp in Sources */,
+				0B5400093079000100AAA001 /* ExperimentRecommendationCampaignExecutionRepository.cpp in Sources */,
+				0B54000B3079000100AAA001 /* ExperimentRecommendationCampaignExecutionService.cpp in Sources */,
+				0B550007307A000100AAA001 /* ExperimentRecommendationCampaignActivation.cpp in Sources */,
+				0B550009307A000100AAA001 /* ExperimentRecommendationCampaignActivationRepository.cpp in Sources */,
+				0B55000B307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp in Sources */,
+				0B560007307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp in Sources */,
+				0B560009307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp in Sources */,
+				0B56000B307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp in Sources */,
+				0B570007307C000100AAA001 /* ExperimentRecommendationCampaignStatus.cpp in Sources */,
+				0B570009307C000100AAA001 /* ExperimentRecommendationCampaignStatusRepository.cpp in Sources */,
+				0B57000B307C000100AAA001 /* ExperimentRecommendationCampaignStatusService.cpp in Sources */,
+				0B580003307D000100AAA001 /* ExperimentRecommendationCampaignOutcomeAssessment.cpp in Sources */,
+				0B590005307E000100AAA001 /* ExperimentRecommendationCampaignOutcomeAssessmentRepository.cpp in Sources */,
+				0B590007307E000100AAA001 /* ExperimentRecommendationCampaignOutcomeAssessmentService.cpp in Sources */,
+				0B5A0003307F000100AAA001 /* ExperimentRecommendationCampaignOutcomePolicy.cpp in Sources */,
+				0B5B00033080000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposal.cpp in Sources */,
+				0B5C00053081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRepository.cpp in Sources */,
+				0B5C00073081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp in Sources */,
+				0B5D00073082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp in Sources */,
+				0B5D00093082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp in Sources */,
+				0B5D000B3082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp in Sources */,
+				0B5E00073083000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRatification.cpp in Sources */,
+				0B5E00093083000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRatificationRepository.cpp in Sources */,
+				0B5E000B3083000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRatificationService.cpp in Sources */,
+				0B5F00053084000100AAA001 /* CampaignOperations.cpp in Sources */,
+				0B5F00073084000100AAA001 /* CampaignOperationsRepository.cpp in Sources */,
+				0B6000053085000100AAA001 /* CampaignOperationsService.cpp in Sources */,
+				0B61000B3086000100AAA001 /* CampaignOperationsDispatch.cpp in Sources */,
+				0B61000D3086000100AAA001 /* CampaignOperationsDispatchRepository.cpp in Sources */,
+				0B61000F3086000100AAA001 /* CampaignOperationsBindingRepository.cpp in Sources */,
+				0B6100113086000100AAA001 /* CampaignOperationsDispatchService.cpp in Sources */,
+				0B6200073087000100AAA001 /* CampaignOperationsControl.cpp in Sources */,
+				0B6200093087000100AAA001 /* CampaignOperationsControlRepository.cpp in Sources */,
+				0B62000B3087000100AAA001 /* CampaignOperationsControlService.cpp in Sources */,
+				0B6300073088000100AAA001 /* CampaignOperationsCompletion.cpp in Sources */,
+				0B6300093088000100AAA001 /* CampaignOperationsCompletionRepository.cpp in Sources */,
+				0B63000B3088000100AAA001 /* CampaignOperationsCompletionService.cpp in Sources */,
+				0B6400073089000100AAA001 /* CampaignOperationsProductionAdmission.cpp in Sources */,
+				0B6400093089000100AAA001 /* CampaignOperationsProductionAdmissionRepository.cpp in Sources */,
+				0B64000B3089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp in Sources */,
+				0B6500053090000100AAA001 /* CampaignOperationsManager.cpp in Sources */,
+				0B6500073090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */,
+				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
+				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
+				0E72000230D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */,
+				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2247,6 +2409,22 @@
 			name = ProfitabilityCore;
 			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
 			targetProxy = 0F17000C3370000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F7000053700000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "lstm-scheduler";
+			target = 0F40001434D0000100AAA001 /* lstm-scheduler */;
+		};
+		0F7000063700000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "lstm-analyze-worker";
+			target = 0F6000143600000100AAA001 /* lstm-analyze-worker */;
+		};
+		0F7000093700000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = StrategyEvaluationCore;
+			target = 0F1800003380000100AAA001 /* StrategyEvaluationCore */;
+			targetProxy = 0F18000F3380000100AAA001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2662,6 +2840,18 @@
 			};
 			name = Release;
 		};
+		0F7000073700000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		0F7000083700000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Release;
+		};
 		0F1700053370000100AAA001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2855,7 +3045,7 @@
 					"$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include,
 					"/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include,
 				);
-				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources", "$(DERIVED_FILE_DIR)");
 			};
 			name = Debug;
 		};
@@ -2869,6 +3059,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"NDEBUG=1",
 					"LSTM_BUILD=1",
@@ -2890,7 +3081,7 @@
 					"$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include,
 					"/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include,
 				);
-				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources", "$(DERIVED_FILE_DIR)");
 			};
 			name = Release;
 		};
@@ -2970,6 +3161,15 @@
 			buildConfigurations = (
 				0C0A000530524C260005882D /* Debug */,
 				0C0A000630524C260005882D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0F7000023700000100AAA001 /* Build configuration list for PBXAggregateTarget "LSTM Scheduler Bundle" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F7000073700000100AAA001 /* Debug */,
+				0F7000083700000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

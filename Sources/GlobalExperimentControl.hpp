@@ -390,6 +390,15 @@ int RunWorkerAttemptReconciliationCommand(
     std::ostream& output,
     std::ostream& error);
 
+bool IsWorkerAttemptReconciliationCli(int argc, const char* argv[]);
+
+int RunWorkerAttemptReconciliationCli(
+    int argc,
+    const char* argv[],
+    const std::string& connectionString,
+    std::ostream& output,
+    std::ostream& error);
+
 int RunWorkerAttemptReconciliationCommandWithProcessOperationsForTesting(
     const std::string& connectionString,
     const WorkerAttemptReconciliationCommand& command,

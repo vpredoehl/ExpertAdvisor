@@ -20,13 +20,20 @@ COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def git_output(repository_root: Path, *arguments: str) -> str:
+    command = ["/usr/bin/git", "-C", str(repository_root), *arguments]
     result = subprocess.run(
-        ["/usr/bin/git", "-C", str(repository_root), *arguments],
-        check=True,
+        command,
+        check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    if result.returncode != 0:
+        stderr = result.stderr.rstrip("\r\n")
+        raise RuntimeError(
+            f"git command failed with exit status {result.returncode}: "
+            f"{' '.join(command)}; stderr: {stderr}"
+        )
     return result.stdout.rstrip("\r\n")
 
 
