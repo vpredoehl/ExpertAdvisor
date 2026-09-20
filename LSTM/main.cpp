@@ -6904,6 +6904,60 @@ SchedulerInferencePersistenceContext ResolveSchedulerInferencePersistenceContext
     return context;
 }
 
+// The RR/RO materialization snapshot admits one exact scheduler binding before
+// computation.  Result persistence must not reuse that snapshot: lock the
+// mutable scheduler rows in a new short RW transaction, then prove that their
+// binding is still exactly the admitted one before attaching the result.
+void RevalidateSchedulerInferencePersistenceContextForWrite(
+    pqxx::work& w,
+    const LaunchArgs& launchArgs,
+    const SchedulerInferencePersistenceContext& admitted,
+    const std::string& resolvedSymbol,
+    const std::string& fromDate,
+    const std::string& toDate)
+{
+    EA::GlobalExperimentControl::AcquireCoordinationLock(w);
+    if (admitted.inferenceScope == "checkpoint")
+    {
+        if (!admitted.checkpointEvalId.has_value())
+            throw std::runtime_error("checkpoint_revalidation_identity_missing");
+        const pqxx::result locked = w.exec_params(
+            "SELECT ce.checkpoint_eval_id FROM experiment_checkpoint_eval ce "
+            "JOIN experiment e ON e.experiment_id = "
+            "COALESCE(ce.parent_experiment_id, ce.experiment_id) "
+            "JOIN model m ON m.model_id = ce.checkpoint_model_id "
+            "WHERE ce.checkpoint_eval_id=$1 FOR UPDATE OF ce,e,m;",
+            *admitted.checkpointEvalId);
+        if (locked.empty())
+            throw std::runtime_error("checkpoint_inference_binding_stale");
+    }
+    else
+    {
+        if (!admitted.schedulerExperimentId.has_value())
+            throw std::runtime_error("final_inference_revalidation_identity_missing");
+        const pqxx::result locked = w.exec_params(
+            "SELECT e.experiment_id FROM experiment e JOIN model m "
+            "ON m.model_id=$2 WHERE e.experiment_id=$1 FOR UPDATE OF e,m;",
+            *admitted.schedulerExperimentId, admitted.modelId);
+        if (locked.empty())
+            throw std::runtime_error("scheduler_final_inference_binding_stale");
+    }
+
+    const SchedulerInferencePersistenceContext current =
+        ResolveSchedulerInferencePersistenceContext(
+            w, launchArgs, resolvedSymbol, fromDate, toDate);
+    if (current.inferenceScope != admitted.inferenceScope ||
+        current.modelId != admitted.modelId ||
+        current.schedulerExperimentId != admitted.schedulerExperimentId ||
+        current.checkpointEvalId != admitted.checkpointEvalId ||
+        current.parentExperimentId != admitted.parentExperimentId ||
+        current.checkpointModelId != admitted.checkpointModelId ||
+        current.checkpointEpoch != admitted.checkpointEpoch)
+    {
+        throw std::runtime_error("scheduler_inference_binding_stale");
+    }
+}
+
 struct InferAllSkipDetail
 {
     std::string reason = "CONFIG_MISMATCH";
@@ -7407,7 +7461,7 @@ void ExtractPhase19CCausalDataset(
               << ",production_rows_modified=false" << std::endl;
 }
 
-InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
+InferenceEvaluationResult RunInferenceEvaluation(pqxx::work* w,
                                                  const LaunchArgs& launchArgs,
                                                  EA::LSTM& lstm,
                                                  const Tensor& tensor,
@@ -7426,12 +7480,18 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
     ModelConfigValidationResult modelConfigValidation;
     if (loadedModelId.has_value())
     {
-        modelConfigValidation = materialized
-            ? PrintMaterializedModelConfigValidation(
-                *materialized, requestedTargetType, tensor, rawPriceTableName)
-            : PrintModelConfigValidation(
-                w, *loadedModelId, requestedTargetType, tensor,
+        if (materialized)
+            modelConfigValidation = PrintMaterializedModelConfigValidation(
+                *materialized, requestedTargetType, tensor, rawPriceTableName);
+        else
+        {
+            if (!w)
+                throw std::runtime_error(
+                    "database_model_validation_requires_transaction");
+            modelConfigValidation = PrintModelConfigValidation(
+                *w, *loadedModelId, requestedTargetType, tensor,
                 rawPriceTableName);
+        }
         if (failOnConfigMismatch && modelConfigValidation.hasMismatch)
             throw std::runtime_error("candidate became incompatible during validation");
     }
@@ -7821,7 +7881,7 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
             const auto marketPath = EA::StrategyEvaluationAdapters::
                 AdaptTensorMarketPath(tensor, context, strategyDecisions);
 
-            const pqxx::result modelRows = w.exec(
+            const pqxx::result modelRows = w->exec(
                 "SELECT experiment_id FROM model WHERE model_id=$1;",
                 pqxx::params{*loadedModelId});
             if (modelRows.size() != 1)
@@ -8329,7 +8389,7 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                     << std::endl;
 
     const InferenceEvaluationResult evaluation =
-        RunInferenceEvaluation(w,
+        RunInferenceEvaluation(&w,
                                launchArgs,
                                lstm,
                                tensor,
@@ -8935,14 +8995,67 @@ int main(int argc, const char * argv[])
             forexMetadataRead.commit();
         }
 
-        const bool useDetachedDirectInference =
+        // A selected scheduler model has the same materialization boundary as
+        // direct inference.  Scheduler binding facts are captured in this
+        // same short snapshot below; the later scheduler transaction is only
+        // result-time admission revalidation and persistence.
+        const bool useDetachedSelectedInference =
             !resumeConfig.has_value() && gRuntimeInferenceMode &&
-            !launchArgs.inferAll && !launchArgs.schedulerExperimentId.has_value() &&
-            !launchArgs.schedulerCheckpointEvalId.has_value() &&
+            !launchArgs.inferAll &&
             !launchArgs.phase19CCausalPathPredictabilityDirectory.has_value();
         std::optional<PersistedInferenceConfig> inferenceConfig;
-        if (useDetachedDirectInference)
+        std::optional<EA::FeatureAblationMask> schedulerFeatureAblationMask;
+        std::optional<SchedulerModelInputIdentity> schedulerModelInputIdentity;
+        const bool schedulerDetachedSnapshot =
+            useDetachedSelectedInference &&
+            (launchArgs.schedulerExperimentId.has_value() ||
+             launchArgs.schedulerCheckpointEvalId.has_value());
+        if (schedulerDetachedSnapshot)
         {
+            pqxx::work schedulerMaterializationRead { c_LSTM };
+            schedulerMaterializationRead.exec(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+            const auto anchorModelId = InferenceAnchorModelId(
+                schedulerMaterializationRead, launchArgs);
+            if (anchorModelId.has_value())
+            {
+                selectedModelMaterialization =
+                    DBIO::PgModelIO::ReadPersistedModelMaterialization(
+                        schedulerMaterializationRead, *anchorModelId);
+                inferenceConfig = LoadPersistedInferenceConfig(
+                    *selectedModelMaterialization, launchArgs, availableSymbols);
+                ApplyPersistedInferenceRuntimeConfig(*inferenceConfig);
+                featureWarmupScope = inferenceConfig->featureWarmupScope;
+                PrintResolvedInferenceConfig(*inferenceConfig);
+                schedulerInferenceContext =
+                    ResolveSchedulerInferencePersistenceContext(
+                        schedulerMaterializationRead, launchArgs,
+                        inferenceConfig->symbol, fromDate, toDate);
+                ValidateSchedulerDonchian20Mode(
+                    schedulerMaterializationRead, launchArgs,
+                    inferenceConfig->donchian20Mode);
+                ValidateSchedulerFeatureWarmupScope(
+                    schedulerMaterializationRead, launchArgs,
+                    inferenceConfig->featureWarmupScope);
+                ValidateSchedulerDonchianLookback(
+                    schedulerMaterializationRead, launchArgs,
+                    inferenceConfig->donchianLookback);
+                schedulerModelInputIdentity = LoadSchedulerModelInputIdentity(
+                    schedulerMaterializationRead, launchArgs);
+                schedulerFeatureAblationMask =
+                    LoadSchedulerFeatureAblationMask(
+                        schedulerMaterializationRead, launchArgs);
+                ValidateSchedulerModelFeatureAblationMask(
+                    inferenceConfig->featureAblationMask,
+                    *schedulerFeatureAblationMask,
+                    inferenceConfig->modelId);
+            }
+            schedulerMaterializationRead.commit();
+        }
+        else if (useDetachedSelectedInference)
+        {
+            // Retain the Phase 22U direct-inference boundary verbatim: its
+            // selected-model snapshot is independent of scheduler bindings.
             pqxx::work directMaterializationRead { c_LSTM };
             directMaterializationRead.exec(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
@@ -8999,7 +9112,7 @@ int main(int argc, const char * argv[])
             }
         }
 
-        if (gRuntimeInferenceMode &&
+        if (!schedulerInferenceContext.has_value() && gRuntimeInferenceMode &&
             (launchArgs.schedulerExperimentId.has_value() ||
              launchArgs.schedulerCheckpointEvalId.has_value()))
         {
@@ -9047,17 +9160,19 @@ int main(int argc, const char * argv[])
                 std::string{"Donchian-20 mode mismatch: persisted="} +
                 Donchian20ModeText(runtimeDonchian20Mode) + ", runtime=" +
                 Donchian20ModeText(*launchArgs.donchian20Mode));
-        ValidateSchedulerDonchian20Mode(
-            configurationRead, launchArgs, runtimeDonchian20Mode);
-        ValidateSchedulerFeatureWarmupScope(
-            configurationRead, launchArgs, featureWarmupScope);
-        ValidateSchedulerDonchianLookback(
-            configurationRead, launchArgs, runtimeDonchianLookback);
+        if (!schedulerDetachedSnapshot)
+        {
+            ValidateSchedulerDonchian20Mode(
+                configurationRead, launchArgs, runtimeDonchian20Mode);
+            ValidateSchedulerFeatureWarmupScope(
+                configurationRead, launchArgs, featureWarmupScope);
+            ValidateSchedulerDonchianLookback(
+                configurationRead, launchArgs, runtimeDonchianLookback);
+        }
 
-        std::optional<EA::FeatureAblationMask> schedulerFeatureAblationMask;
-        std::optional<SchedulerModelInputIdentity> schedulerModelInputIdentity;
-        if (launchArgs.schedulerExperimentId.has_value() ||
-            launchArgs.schedulerCheckpointEvalId.has_value())
+        if (!schedulerDetachedSnapshot &&
+            (launchArgs.schedulerExperimentId.has_value() ||
+             launchArgs.schedulerCheckpointEvalId.has_value()))
         {
             schedulerModelInputIdentity =
                 LoadSchedulerModelInputIdentity(configurationRead, launchArgs);
@@ -9274,11 +9389,19 @@ int main(int argc, const char * argv[])
                 }
             }
 
-            pqxx::work runtimeDatabaseWork { c_LSTM };
-            runtimeDatabaseWork.exec(
-                HasControlledStrategyEvaluation(launchArgs)
-                    ? "SET TRANSACTION READ ONLY;"
-                    : "SET TRANSACTION READ WRITE;");
+            // Scheduler final/checkpoint inference must not retain a database
+            // transaction while Tensor/LSTM inference runs.  Its fresh RW
+            // transaction is opened only below, immediately before locked
+            // revalidation and result persistence.
+            std::optional<pqxx::work> runtimeDatabaseWork;
+            if (!schedulerInferenceContext.has_value())
+            {
+                runtimeDatabaseWork.emplace(c_LSTM);
+                runtimeDatabaseWork->exec(
+                    HasControlledStrategyEvaluation(launchArgs)
+                        ? "SET TRANSACTION READ ONLY;"
+                        : "SET TRANSACTION READ WRITE;");
+            }
   
             const auto requestedTargetType = resumeConfig.has_value()
                 ? resumeConfig->targetType
@@ -9291,7 +9414,7 @@ int main(int argc, const char * argv[])
                     ? inferenceConfig->modelHiddenSize
                     : hidden_size);
             if (launchArgs.inferAll)
-                return RunInferAllForSymbol(runtimeDatabaseWork,
+                return RunInferAllForSymbol(*runtimeDatabaseWork,
                                             launchArgs,
                                             rawPriceTableName,
                                             fromDate,
@@ -9310,9 +9433,9 @@ int main(int argc, const char * argv[])
             if (launchArgs.phase19CCausalPathPredictabilityDirectory)
             {
                 ExtractPhase19CCausalDataset(
-                    runtimeDatabaseWork, launchArgs, t, *launchArgs.modelId,
+                    *runtimeDatabaseWork, launchArgs, t, *launchArgs.modelId,
                     rawPriceTableName, fromDate, toDate);
-                runtimeDatabaseWork.commit();
+                runtimeDatabaseWork->commit();
                 return 0;
             }
             EA::LSTM l = CreateLstmForRuntimeLogLevel(
@@ -9355,7 +9478,7 @@ int main(int argc, const char * argv[])
                 else if (requestedModel) modelIdToLoad = *launchArgs.modelId;
                 else if (load_latest || gRuntimeInferenceMode)
                 {
-                    pqxx::result r = runtimeDatabaseWork.exec("SELECT max(model_id) FROM model;");
+                    pqxx::result r = runtimeDatabaseWork->exec("SELECT max(model_id) FROM model;");
                     if (!r.empty() && !r[0][0].is_null()) modelIdToLoad = r[0][0].as<long long>();
                     else DiagnosticOut() << "No models found; using default-initialized parameters" << std::endl;
                 }
@@ -9381,13 +9504,13 @@ int main(int argc, const char * argv[])
                         {
                             const auto persistedObjective =
                                 DBIO::PgModelIO::loadTrainingObjectiveMeta(
-                                    runtimeDatabaseWork, modelIdToLoad);
+                                    *runtimeDatabaseWork, modelIdToLoad);
                             EA::TrainingObjective::RequireResumeCompatible(
                                 persistedObjective, runtimeTrainingObjective);
                         }
                         ScopedDiagnosticCoutSilencer silence;
                         DBIO::PgModelIO::loadAll(
-                            runtimeDatabaseWork, modelIdToLoad, l,
+                            *runtimeDatabaseWork, modelIdToLoad, l,
                             resumeConfig.has_value() &&
                                 resumeConfig->parameterExpansionRequired);
                     }
@@ -9395,7 +9518,7 @@ int main(int argc, const char * argv[])
                         !selectedModelMaterialization.has_value())
                     {
                         ScopedDiagnosticCoutSilencer silence;
-                        DBIO::PgModelIO::loadOptimizerMeta(runtimeDatabaseWork, modelIdToLoad, l);
+                        DBIO::PgModelIO::loadOptimizerMeta(*runtimeDatabaseWork, modelIdToLoad, l);
                         l.completedEpochs = resumeConfig->completedEpoch;
                         std::cout << "RESUME_OPTIMIZER_STATE_RESTORED=1" << std::endl;
                     }
@@ -9403,7 +9526,7 @@ int main(int argc, const char * argv[])
                         selectedModelMaterialization.has_value()
                             ? selectedModelMaterialization->donchian20Mode
                             : DBIO::PgModelIO::loadDonchian20ModeMeta(
-                                runtimeDatabaseWork, modelIdToLoad);
+                                *runtimeDatabaseWork, modelIdToLoad);
                     if (modelMode != runtimeDonchian20Mode)
                         throw std::runtime_error(
                             std::string{"model/runtime Donchian-20 mode mismatch: model="} +
@@ -9467,13 +9590,16 @@ int main(int argc, const char * argv[])
                 }
                 else
                     ValidateLoadedModelSymbolForSelectedTable(
-                        runtimeDatabaseWork, *loadedModelId, rawPriceTableName);
+                        *runtimeDatabaseWork, *loadedModelId, rawPriceTableName);
             }
 
             if (gRuntimeInferenceMode)
             {
                 const InferenceEvaluationResult evaluation =
-                    RunInferenceEvaluation(runtimeDatabaseWork,
+                    RunInferenceEvaluation(
+                                           schedulerInferenceContext.has_value()
+                                               ? nullptr
+                                               : &*runtimeDatabaseWork,
                                            launchArgs,
                                            l,
                                            t,
@@ -9493,7 +9619,7 @@ int main(int argc, const char * argv[])
                     // This transaction was declared READ ONLY before any model
                     // or evaluation work. Commit it here so this application
                     // path cannot fall through into any persistence workflow.
-                    runtimeDatabaseWork.commit();
+                    runtimeDatabaseWork->commit();
                     DiagnosticOut()
                         << "controlled_strategy_evaluation=true; "
                            "read_only_transaction_committed=true; skipping "
@@ -9535,7 +9661,7 @@ int main(int argc, const char * argv[])
                             evaluation.profitabilitySourceContentHash;
                         const auto persisted = EA::ProfitabilityVerification::
                             PersistCampaignProfitabilityOutcomeIdempotently(
-                                runtimeDatabaseWork, request);
+                                *runtimeDatabaseWork, request);
                         const std::string identityPrefix =
                             ",validation_cohort_identity_hash=" +
                             frozenOutcomeJob->validationCohortIdentityHash +
@@ -9607,7 +9733,7 @@ int main(int argc, const char * argv[])
                             << ",recommendation_count="
                             << frozenOutcomeJob->recommendationIds.size()
                             << safety << std::endl;
-                        runtimeDatabaseWork.commit();
+                        runtimeDatabaseWork->commit();
                     }
                     catch (const std::exception& error)
                     {
@@ -9652,17 +9778,28 @@ int main(int argc, const char * argv[])
                         row.profitabilitySourceContentHash =
                             evaluation.profitabilitySourceContentHash;
 
+                        // This is intentionally a new transaction.  The
+                        // selected model and initial admission were committed
+                        // before Tensor/LSTM construction; only mutable
+                        // scheduler eligibility is read and locked here.
+                        pqxx::work schedulerPersistenceWork { c_LSTM };
+                        schedulerPersistenceWork.exec("SET TRANSACTION READ WRITE;");
+                        RevalidateSchedulerInferencePersistenceContextForWrite(
+                            schedulerPersistenceWork, launchArgs,
+                            *schedulerInferenceContext, rawPriceTableName,
+                            fromDate, toDate);
+
                         long long inferenceEvalResultId = -1;
                         if (schedulerInferenceContext->inferenceScope == "checkpoint")
                         {
                             inferenceEvalResultId =
                                 PersistCompletedCheckpointInferenceResult(
-                                    runtimeDatabaseWork,
+                                    schedulerPersistenceWork,
                                     identity,
                                     row,
                                     *schedulerInferenceContext);
                             PersistInferenceProfitabilityObservation(
-                                runtimeDatabaseWork,
+                                schedulerPersistenceWork,
                                 inferenceEvalResultId,
                                 identity,
                                 row,
@@ -9674,9 +9811,9 @@ int main(int argc, const char * argv[])
                         {
                             inferenceEvalResultId =
                                 PersistCompletedInferenceResult(
-                                    runtimeDatabaseWork, identity, row);
+                                    schedulerPersistenceWork, identity, row);
                             PersistInferenceProfitabilityObservation(
-                                runtimeDatabaseWork,
+                                schedulerPersistenceWork,
                                 inferenceEvalResultId,
                                 identity,
                                 row,
@@ -9691,7 +9828,7 @@ int main(int argc, const char * argv[])
                                       << ",status=completed"
                                       << std::endl;
                         }
-                        runtimeDatabaseWork.commit();
+                        schedulerPersistenceWork.commit();
                     }
                     catch (const std::exception& e)
                     {
@@ -9721,7 +9858,7 @@ int main(int argc, const char * argv[])
                         *selectedModelMaterialization, requestedTargetType, t,
                         rawPriceTableName)
                     : PrintModelConfigValidation(
-                        runtimeDatabaseWork, *loadedModelId,
+                        *runtimeDatabaseWork, *loadedModelId,
                         requestedTargetType, t, rawPriceTableName);
             PrintEvalLabelConfig();
 
@@ -9731,7 +9868,7 @@ int main(int argc, const char * argv[])
             // AccessShareLock (and MVCC snapshot) on experiment for hours.
             // Checkpoint persistence already uses its own short transaction;
             // final model persistence opens another short transaction below.
-            runtimeDatabaseWork.commit();
+            runtimeDatabaseWork->commit();
 
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
             PrintPhase2TensorDiagnostics(l, t, fromDate, toDate);
