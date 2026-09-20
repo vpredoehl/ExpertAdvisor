@@ -743,8 +743,12 @@ public:
     struct PersistedModelIdentity
     {
         long long modelId = -1;
+        std::string modelName;
         std::optional<long long> experimentId;
         std::optional<long long> parentModelId;
+        // Owned ancestry captured with the selected-model snapshot.  Resume
+        // retry validation must not reopen a selected-model read after commit.
+        std::vector<long long> ancestryModelIds;
         EA::FeatureAblationMask featureAblationMask;
         std::string featureAblationCanonicalText;
 
@@ -765,6 +769,8 @@ public:
 
         EA::TrainingObjective::Configuration trainingObjective =
             EA::TrainingObjective::Legacy();
+        std::optional<EA::TrainingObjective::Configuration>
+            experimentTrainingObjective;
         std::optional<std::string> trainingObjectiveCanonical;
         std::optional<std::string> trainingObjectiveHash;
         std::optional<PersistedTargetMeta> targetMeta;
@@ -987,10 +993,11 @@ public:
     {
         PersistedModelMaterialization result;
         const pqxx::result identityRows = transaction.exec_params(
-            "SELECT m.model_id,m.experiment_id,m.parent_model_id,"
+            "SELECT m.model_id,COALESCE(m.name,''),m.experiment_id,m.parent_model_id,"
             "e.feature_ablation_mask,m.economic_calendar_snapshot_id,"
             "m.economic_calendar_snapshot_hash,"
-            "e.economic_calendar_snapshot_id,e.economic_calendar_snapshot_hash "
+            "e.economic_calendar_snapshot_id,e.economic_calendar_snapshot_hash,"
+            "e.training_objective_canonical,e.training_objective_hash "
             "FROM model m LEFT JOIN experiment e ON e.experiment_id=m.experiment_id "
             "WHERE m.model_id=$1;",
             modelId);
@@ -1000,41 +1007,42 @@ public:
 
         const pqxx::row identityRow = identityRows.one_row();
         result.identity.modelId = identityRow[0].as<long long>();
-        if (!identityRow[1].is_null())
-            result.identity.experimentId = identityRow[1].as<long long>();
+        result.identity.modelName = identityRow[1].as<std::string>();
         if (!identityRow[2].is_null())
-            result.identity.parentModelId = identityRow[2].as<long long>();
+            result.identity.experimentId = identityRow[2].as<long long>();
+        if (!identityRow[3].is_null())
+            result.identity.parentModelId = identityRow[3].as<long long>();
         if (result.identity.experimentId.has_value())
         {
-            if (identityRow[3].is_null())
+            if (identityRow[4].is_null())
                 throw std::runtime_error(
                     "model_experiment_lineage_missing_feature_ablation_mask");
             result.identity.featureAblationMask = EA::FeatureAblationMask::Parse(
-                identityRow[3].as<std::string>());
+                identityRow[4].as<std::string>());
             result.identity.featureAblationCanonicalText =
                 result.identity.featureAblationMask.CanonicalText();
         }
 
-        const bool modelCalendarNull = identityRow[4].is_null() &&
-            identityRow[5].is_null();
-        const bool experimentCalendarNull = identityRow[6].is_null() &&
-            identityRow[7].is_null();
-        if (identityRow[4].is_null() != identityRow[5].is_null() ||
-            identityRow[6].is_null() != identityRow[7].is_null())
+        const bool modelCalendarNull = identityRow[5].is_null() &&
+            identityRow[6].is_null();
+        const bool experimentCalendarNull = identityRow[7].is_null() &&
+            identityRow[8].is_null();
+        if (identityRow[5].is_null() != identityRow[6].is_null() ||
+            identityRow[7].is_null() != identityRow[8].is_null())
             throw std::runtime_error(
                 "economic_calendar_snapshot_identity_incomplete");
         if (modelCalendarNull != experimentCalendarNull ||
             (!modelCalendarNull &&
-             (identityRow[4].as<long long>() != identityRow[6].as<long long>() ||
-              identityRow[5].as<std::string>() != identityRow[7].as<std::string>())))
+             (identityRow[5].as<long long>() != identityRow[7].as<long long>() ||
+              identityRow[6].as<std::string>() != identityRow[8].as<std::string>())))
             throw std::runtime_error(
                 "model_experiment_economic_calendar_snapshot_mismatch");
         if (!modelCalendarNull)
         {
             result.identity.economicCalendarSnapshotId =
-                identityRow[4].as<long long>();
+                identityRow[5].as<long long>();
             result.identity.economicCalendarSnapshotHash =
-                identityRow[5].as<std::string>();
+                identityRow[6].as<std::string>();
             const pqxx::result snapshot = transaction.exec_params(
                 "SELECT 1 FROM economic_calendar_snapshot WHERE "
                 "economic_calendar_snapshot_id=$1 AND content_hash=$2 "
@@ -1044,6 +1052,29 @@ public:
             if (snapshot.empty())
                 throw std::runtime_error(
                     "economic_calendar_snapshot_identity_invalid");
+        }
+
+        const pqxx::result ancestryRows = transaction.exec_params(
+            "WITH RECURSIVE ancestry(model_id,parent_model_id) AS ("
+            " SELECT model_id,parent_model_id FROM model WHERE model_id=$1"
+            " UNION"
+            " SELECT m.model_id,m.parent_model_id FROM model m"
+            " JOIN ancestry a ON m.model_id=a.parent_model_id"
+            ") SELECT model_id FROM ancestry;", modelId);
+        result.identity.ancestryModelIds.reserve(ancestryRows.size());
+        for (const pqxx::row& row : ancestryRows)
+            result.identity.ancestryModelIds.push_back(row[0].as<long long>());
+
+        if (result.identity.experimentId.has_value())
+        {
+            if (identityRow[9].is_null() != identityRow[10].is_null())
+                throw std::runtime_error(
+                    "experiment_training_objective_identity_incomplete");
+            if (!identityRow[9].is_null())
+                result.experimentTrainingObjective =
+                    EA::TrainingObjective::ResolvePersisted(
+                        identityRow[9].as<std::string>(),
+                        identityRow[10].as<std::string>());
         }
 
         result.modelMeta = loadRequiredModelMeta(transaction, modelId);

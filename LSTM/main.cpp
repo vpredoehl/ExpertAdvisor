@@ -3880,6 +3880,22 @@ ResolveRuntimeEconomicCalendarSnapshot(
     return experimentSnapshot ? experimentSnapshot : modelSnapshot;
 }
 
+std::optional<EA::EconomicCalendar::EconomicCalendarSnapshotIdentity>
+EconomicCalendarSnapshotFromMaterialization(
+    const DBIO::PgModelIO::PersistedModelMaterialization& persisted)
+{
+    const bool hasId = persisted.identity.economicCalendarSnapshotId.has_value();
+    const bool hasHash =
+        persisted.identity.economicCalendarSnapshotHash.has_value();
+    if (hasId != hasHash)
+        throw std::runtime_error(
+            "economic_calendar_snapshot_identity_incomplete");
+    if (!hasId) return std::nullopt;
+    return EA::EconomicCalendar::EconomicCalendarSnapshotIdentity{
+        *persisted.identity.economicCalendarSnapshotId,
+        *persisted.identity.economicCalendarSnapshotHash};
+}
+
 struct LSTMHotspotProfileFinalizer
 {
     bool enabled = false;
@@ -4812,7 +4828,8 @@ EA::TrainingObjective::Configuration LoadExperimentTrainingObjective(
         rows[0][0].as<std::string>(), rows[0][1].as<std::string>());
 }
 
-void ConfigureInputWidthExpansionForResume(pqxx::work& w,
+void ConfigureInputWidthExpansionForResume(
+                                           const DBIO::PgModelIO::PersistedModelMaterialization& persisted,
                                            ResumeCheckpointConfig& cfg,
                                            bool requested,
                                            std::optional<long long>
@@ -4821,8 +4838,6 @@ void ConfigureInputWidthExpansionForResume(pqxx::work& w,
     cfg.expandInputWidthRequested = requested;
     if (!requested) return;
 
-    DBIO::PgModelIO::validateModelInputSemanticsForExpansion(
-        w, cfg.sourceModelId);
     const std::size_t sourceWidth =
         static_cast<std::size_t>(cfg.modelInputWidth);
     if (sourceWidth < EA::kCurrentModelInputWidth)
@@ -4850,34 +4865,26 @@ void ConfigureInputWidthExpansionForResume(pqxx::work& w,
             std::to_string(sourceWidth) + ",target_n_in=" +
             std::to_string(EA::kCurrentModelInputWidth));
     }
-    const pqxx::result owningExperiment = w.exec(
-        "SELECT 1 FROM model WHERE model_id=$1 AND experiment_id=$2;",
-        pqxx::params{cfg.sourceModelId, *schedulerExperimentId});
-    if (owningExperiment.empty())
+    if (persisted.identity.experimentId != schedulerExperimentId)
     {
         throw std::runtime_error(
             "MODEL_INPUT_EXPANSION_RETRY_EXPERIMENT_LINEAGE_MISMATCH");
     }
+    if (!persisted.inputWidthExpansionProvenance.has_value())
+        throw std::runtime_error(
+            "MODEL_INPUT_EXPANSION_RETRY_PROVENANCE_MISSING");
     cfg.inputWidthExpansionProvenance =
-        DBIO::PgModelIO::loadRequiredInputWidthExpansionMeta(
-            w, cfg.sourceModelId);
+        persisted.inputWidthExpansionProvenance;
     if (cfg.inputWidthExpansionProvenance->expandedInputWidth !=
         EA::kCurrentModelInputWidth)
     {
         throw std::runtime_error(
             "MODEL_INPUT_EXPANSION_RETRY_PROVENANCE_TARGET_MISMATCH");
     }
-    const pqxx::result lineage = w.exec(
-        "WITH RECURSIVE ancestry(model_id,parent_model_id) AS ("
-        " SELECT model_id,parent_model_id FROM model WHERE model_id=$1"
-        " UNION"
-        " SELECT m.model_id,m.parent_model_id FROM model m"
-        " JOIN ancestry a ON m.model_id=a.parent_model_id"
-        ") SELECT 1 FROM ancestry WHERE model_id=$2 LIMIT 1;",
-        pqxx::params{
-            cfg.sourceModelId,
-            cfg.inputWidthExpansionProvenance->sourceModelId});
-    if (lineage.empty())
+    if (std::find(persisted.identity.ancestryModelIds.begin(),
+                  persisted.identity.ancestryModelIds.end(),
+                  cfg.inputWidthExpansionProvenance->sourceModelId) ==
+        persisted.identity.ancestryModelIds.end())
     {
         throw std::runtime_error(
             "MODEL_INPUT_EXPANSION_RETRY_SOURCE_LINEAGE_MISMATCH");
@@ -5048,14 +5055,17 @@ void ValidateSchedulerResumeFeatureAblationMask(
         static_cast<std::size_t>(resume.modelInputWidth));
 }
 
-TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long modelId)
+TrainConfigMeta ParseTrainConfigMeta(const DBIO::PgModelIO::PersistedMatrix& matrix,
+                                     bool requireExtended,
+                                     const char* failure)
 {
-    auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "train_config_meta");
-    auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "train_config_meta");
-    if (dims.n_rows != 1 ||
-        dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount ||
-        vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount))
-        throw std::runtime_error("resume requires complete train_config_meta with 14 fields");
+    const std::size_t required = requireExtended
+        ? static_cast<std::size_t>(DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount)
+        : static_cast<std::size_t>(DBIO::PgModelIO::kTrainConfigMetaFieldCount);
+    if (matrix.rows != 1 || matrix.cols < required ||
+        matrix.values.size() < required)
+        throw std::runtime_error(failure);
+    const auto& vals = matrix.values;
 
     TrainConfigMeta meta;
     meta.schemaVersion = static_cast<int>(std::llround(vals[0]));
@@ -5076,54 +5086,45 @@ TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long mo
 }
 
 ResumeCheckpointConfig LoadResumeCheckpointConfig(
-    pqxx::work& w,
-    long long modelId,
+    const DBIO::PgModelIO::PersistedModelMaterialization& persisted,
     const EA::TrainingObjective::Configuration& requestedObjective)
 {
-    DBIO::PgModelIO::validateTrainingResumeState(w, modelId);
-
     ResumeCheckpointConfig cfg;
-    cfg.sourceModelId = modelId;
-    cfg.trainingObjective =
-        DBIO::PgModelIO::loadTrainingObjectiveMeta(w, modelId);
+    cfg.sourceModelId = persisted.identity.modelId;
+    cfg.trainingObjective = persisted.trainingObjective;
     EA::TrainingObjective::RequireResumeCompatible(
         cfg.trainingObjective, requestedObjective);
-    cfg.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(w, modelId);
-    cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
-    cfg.donchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(w, modelId);
-    cfg.featureAblationMask = LoadModelFeatureAblationMask(w, modelId);
-    cfg.trainConfig = LoadRequiredTrainConfigMetaForResume(w, modelId);
+    if (persisted.experimentTrainingObjective.has_value())
+        EA::TrainingObjective::RequireResumeCompatible(
+            cfg.trainingObjective, *persisted.experimentTrainingObjective);
+    cfg.featureWarmupScope = persisted.featureWarmupScope;
+    cfg.donchian20Mode = persisted.donchian20Mode;
+    cfg.donchianLookback = persisted.donchianLookback;
+    cfg.featureAblationMask = persisted.identity.featureAblationMask;
+    if (!persisted.trainConfigMeta.has_value())
+        throw std::runtime_error("resume requires complete train_config_meta with 14 fields");
+    cfg.trainConfig = ParseTrainConfigMeta(*persisted.trainConfigMeta, true,
+        "resume requires complete train_config_meta with 14 fields");
     cfg.completedEpoch = cfg.trainConfig.epochsTrained.value_or(0);
-    cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
-    PrintDatabaseModelSymbol(modelId, cfg.symbol);
-    const auto range = DBIO::PgModelIO::decodeTrainRangeMeta(w, modelId);
-    cfg.fromDate = range.first;
-    cfg.toDate = range.second;
-
-    {
-        const auto modelMeta =
-            DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
-        cfg.modelInputWidth = static_cast<int>(modelMeta.inputWidth);
-        cfg.modelHiddenSize = modelMeta.hiddenSize;
-    }
-
-    {
-        cfg.targetType =
-            DBIO::PgModelIO::loadRequiredTargetMeta(w, modelId).targetType;
-    }
-
-    auto optimizerDims = DBIO::PgModelIO::loadParameterDims(w, modelId, "optimizer_meta");
-    auto optimizerVals = DBIO::PgModelIO::loadParameterValues(w, modelId, "optimizer_meta");
-    if (optimizerDims.n_rows != 1 ||
-        optimizerDims.n_cols < DBIO::PgModelIO::kOptimizerMetaFieldCount ||
-        optimizerVals.size() < static_cast<size_t>(DBIO::PgModelIO::kOptimizerMetaFieldCount))
+    if (!persisted.trainSymbol.has_value() || !persisted.trainRange.has_value())
+        throw std::runtime_error("resume requires persisted training symbol and range");
+    cfg.symbol = *persisted.trainSymbol;
+    PrintDatabaseModelSymbol(cfg.sourceModelId, cfg.symbol);
+    cfg.fromDate = persisted.trainRange->first;
+    cfg.toDate = persisted.trainRange->second;
+    cfg.modelInputWidth = static_cast<int>(persisted.modelMeta.inputWidth);
+    cfg.modelHiddenSize = persisted.modelMeta.hiddenSize;
+    if (!persisted.targetMeta.has_value())
+        throw std::runtime_error("resume requires valid target_meta");
+    cfg.targetType = persisted.targetMeta->targetType;
+    if (!persisted.optimizerMeta.has_value())
         throw std::runtime_error("resume requires valid optimizer_meta");
-    const int optimizerSchema = static_cast<int>(std::llround(optimizerVals[0]));
-    const int optimizerType = static_cast<int>(std::llround(optimizerVals[1]));
+    const int optimizerSchema = persisted.optimizerMeta->schemaVersion;
+    const int optimizerType = persisted.optimizerMeta->optimizerType;
     if (optimizerSchema != DBIO::PgModelIO::kOptimizerMetaSchemaVersion ||
         optimizerType != DBIO::PgModelIO::kOptimizerTypeSgd)
         throw std::runtime_error("resume optimizer_meta is not supported by this binary");
-    cfg.optimizerUpdateCount = static_cast<size_t>(std::llround(optimizerVals[2]));
+    cfg.optimizerUpdateCount = persisted.optimizerMeta->updateCount;
     return cfg;
 }
 
@@ -6062,6 +6063,140 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     return result;
 }
 
+// Snapshot-only counterpart for resume and direct selected-model inference.
+// It deliberately has no pqxx argument: diagnostics and compatibility checks
+// cannot accidentally reopen correctness reads after the RR/RO commit.
+ModelConfigValidationResult PrintMaterializedModelConfigValidation(
+    const DBIO::PgModelIO::PersistedModelMaterialization& persisted,
+    EA::LSTM::TargetType requestedTargetType,
+    const Tensor& tensor,
+    const std::string& runtimeSymbol)
+{
+    ModelConfigValidationResult result;
+    const long long modelId = persisted.identity.modelId;
+    std::vector<std::string> names{"bias", "model_meta", "param"};
+    if (persisted.targetMeta) names.push_back("target_meta");
+    if (persisted.trainConfigMeta) names.push_back("train_config_meta");
+    if (persisted.trainSymbol) names.push_back("train_symbol_meta");
+    if (persisted.trainRange) names.push_back("train_range_meta");
+    if (persisted.optimizerMeta) names.push_back("optimizer_meta");
+    if (persisted.returnHeadWeight) names.push_back("returnHeadWeight");
+    if (persisted.returnHeadBias) names.push_back("returnHeadBias");
+    if (persisted.returnHeadDirWeight) names.push_back("returnHeadDirWeight");
+    if (persisted.returnHeadDirBias) names.push_back("returnHeadDirBias");
+    if (persisted.trainingObjectiveCanonical)
+        names.push_back("training_objective_canonical_meta");
+    if (persisted.trainingObjectiveHash)
+        names.push_back("training_objective_hash_meta");
+    std::sort(names.begin(), names.end());
+    DiagnosticOut() << "MODEL_TRAIN_CONFIG_META_FIELDS,"
+                    << TrainConfigMetaFieldMapping() << std::endl;
+    DiagnosticOut() << "MODEL_METADATA_PERSISTED"
+                    << ",model_id=" << modelId
+                    << ",param_names=" << JoinStrings(names, ";")
+                    << ",metadata=detached_materialization_snapshot"
+                    << std::endl;
+
+    bool mismatch = false;
+    const auto report = [&](const char* field, const auto& modelValue,
+                            const auto& runtimeValue)
+    {
+        mismatch = true;
+        if (LogSummary())
+            std::cout << "MODEL_CONFIG_MISMATCH,field=" << field
+                      << ",model=" << modelValue << ",runtime="
+                      << runtimeValue << std::endl;
+    };
+    bool symbolMatches = true;
+    if (persisted.trainSymbol)
+    {
+        PrintDatabaseModelSymbol(modelId, *persisted.trainSymbol);
+        symbolMatches = EA::CanonicalSymbol::Normalize(*persisted.trainSymbol) ==
+            EA::CanonicalSymbol::Normalize(runtimeSymbol);
+        if (!symbolMatches) report("symbol", *persisted.trainSymbol, runtimeSymbol);
+    }
+    else
+        PrintMissingModelSymbol(modelId);
+
+    bool targetMatches = false;
+    if (persisted.targetMeta)
+    {
+        targetMatches = persisted.targetMeta->targetType == requestedTargetType;
+        if (!targetMatches)
+            report("target_type", TargetTypeName(persisted.targetMeta->targetType),
+                   TargetTypeName(requestedTargetType));
+    }
+
+    bool modelMatches = persisted.modelMeta.schemaVersion == 1;
+    const int runtimeInput = static_cast<int>(RuntimeModelInputWidth(
+        tensor, persisted.modelMeta.inputWidth));
+    if (static_cast<int>(persisted.modelMeta.inputWidth) != runtimeInput)
+    {
+        report("feature_count", persisted.modelMeta.inputWidth, runtimeInput);
+        modelMatches = false;
+    }
+    if (persisted.modelMeta.hiddenSize != static_cast<std::size_t>(hidden_size))
+    {
+        report("hidden_size", persisted.modelMeta.hiddenSize, hidden_size);
+        modelMatches = false;
+    }
+    if (persisted.donchian20Mode != tensor.GetDonchian20Mode())
+        report("donchian20_mode", Donchian20ModeText(persisted.donchian20Mode),
+               Donchian20ModeText(tensor.GetDonchian20Mode()));
+
+    bool trainMatches = false;
+    if (persisted.trainConfigMeta)
+    {
+        try
+        {
+            TrainConfigMeta meta = ParseTrainConfigMeta(*persisted.trainConfigMeta,
+                false, "train_config_meta missing required 1x8 inference fields");
+            if (persisted.trainSymbol) meta.symbol = *persisted.trainSymbol;
+            result.trainConfigMeta = meta;
+            const auto& values = persisted.trainConfigMeta->values;
+            const auto sameInt = [](double a, long long b) {
+                return std::llround(a) == b;
+            };
+            const auto sameFloat = [](double a, double b) {
+                return std::fabs(a - b) <= 1e-7;
+            };
+            trainMatches = sameInt(values[0], DBIO::PgModelIO::kTrainConfigMetaSchemaVersion) &&
+                sameInt(values[1], prediction_horizon) &&
+                sameFloat(values[2], c_next_threshold) &&
+                sameInt(values[3], window_size) &&
+                sameInt(values[4], DirectionLabelRuleId()) &&
+                sameFloat(values[5], kClassWeightDown) &&
+                sameFloat(values[6], kClassWeightNeutral) &&
+                sameFloat(values[7], kClassWeightUp);
+            if (values.size() >= 9) trainMatches = trainMatches && sameInt(values[8], num_layers);
+            if (values.size() >= 10) trainMatches = trainMatches && sameInt(values[9], normalization_version);
+            if (values.size() >= 12) trainMatches = trainMatches && sameFloat(values[11], EA::LSTM::CoreLrMultForTarget(requestedTargetType));
+            if (values.size() >= 13) trainMatches = trainMatches && sameFloat(values[12], head_weight_lr_mult);
+            if (values.size() >= 14) trainMatches = trainMatches && sameFloat(values[13], head_bias_lr_mult);
+            if (!trainMatches) report("train_config_meta", "persisted", "runtime");
+        }
+        catch (const std::exception& error)
+        {
+            report("train_config_meta", error.what(), "supported persisted model");
+        }
+    }
+    std::vector<std::string> missing;
+    if (!persisted.targetMeta) missing.push_back("target_type");
+    if (!persisted.trainSymbol) missing.push_back("symbol");
+    if (!persisted.trainConfigMeta) missing.push_back("train_config_meta");
+    result.hasMismatch = mismatch;
+    result.metadataGap = !missing.empty();
+    result.configMatch = targetMatches && modelMatches && symbolMatches &&
+        trainMatches && !mismatch && missing.empty();
+    if (result.configMatch && LogSummary()) std::cout << "MODEL_CONFIG_MATCH=1" << std::endl;
+    if (!missing.empty() && LogSummary())
+        std::cout << "MODEL_CONFIG_METADATA_GAP,model_id=" << modelId
+                  << ",missing=" << JoinStrings(missing, ";")
+                  << ",recommend_minimum_additions=" << JoinStrings(missing, ";")
+                  << std::endl;
+    return result;
+}
+
 struct PersistedInferenceConfig
 {
     long long modelId = -1;
@@ -6384,6 +6519,87 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
     if (cfg.trainConfig.headBiasLrMult.has_value())
         ValidateRedundantCliFloat("--head-bias-lr-mult", launchArgs.headBiasLrMult, *cfg.trainConfig.headBiasLrMult);
 
+    return cfg;
+}
+
+// Direct selected-model inference consumes only the owned Phase 22T snapshot.
+// The database-backed overload above remains for scheduler and infer-all paths
+// intentionally deferred from this migration.
+PersistedInferenceConfig LoadPersistedInferenceConfig(
+    const DBIO::PgModelIO::PersistedModelMaterialization& persisted,
+    const LaunchArgs& launchArgs,
+    const std::vector<std::string>& availableSymbols)
+{
+    PersistedInferenceConfig cfg;
+    cfg.modelId = persisted.identity.modelId;
+    cfg.modelName = persisted.identity.modelName;
+    cfg.featureWarmupScope = persisted.featureWarmupScope;
+    if (launchArgs.featureWarmupScope.has_value() &&
+        *launchArgs.featureWarmupScope != cfg.featureWarmupScope)
+        throw std::runtime_error("feature warmup scope mismatch: persisted/runtime");
+
+    if (persisted.trainSymbol.has_value())
+    {
+        cfg.symbol = *persisted.trainSymbol;
+        cfg.symbolSource = "database";
+        ValidateRuntimeSymbolMatchesModel(launchArgs.symbol, cfg.symbol);
+        PrintDatabaseModelSymbol(cfg.modelId, cfg.symbol);
+    }
+    else
+    {
+        cfg.symbol = ResolveLegacyModelSymbol(cfg.modelId, cfg.modelName,
+                                              launchArgs.symbol,
+                                              availableSymbols);
+        cfg.symbolSource = "legacy";
+    }
+
+    if (!persisted.trainConfigMeta.has_value())
+        throw std::runtime_error(
+            "train_config_meta missing required 1x8 inference fields");
+    cfg.trainConfig = ParseTrainConfigMeta(*persisted.trainConfigMeta, false,
+        "train_config_meta missing required 1x8 inference fields");
+    cfg.hasCompleteTrainConfigMeta =
+        persisted.trainConfigMeta->values.size() >=
+        static_cast<std::size_t>(
+            DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount);
+    cfg.hasTrainConfigMeta = true;
+    cfg.trainConfig.symbol = cfg.symbol;
+    if (cfg.trainConfig.schemaVersion !=
+        DBIO::PgModelIO::kTrainConfigMetaSchemaVersion)
+        throw std::runtime_error("unsupported train_config_meta schema_version");
+    if (cfg.trainConfig.labelRuleId !=
+        DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId)
+        throw std::runtime_error("unsupported train_config_meta label_rule_id");
+    if (cfg.trainConfig.numLayers != 1)
+        throw std::runtime_error(
+            "unsupported persisted num_layers; this binary supports only 1");
+
+    cfg.modelInputWidth = static_cast<int>(persisted.modelMeta.inputWidth);
+    cfg.modelHiddenSize = persisted.modelMeta.hiddenSize;
+    cfg.hasModelMeta = true;
+    cfg.donchian20Mode = persisted.donchian20Mode;
+    cfg.donchianLookback = persisted.donchianLookback;
+    cfg.featureAblationMask = persisted.identity.featureAblationMask;
+    if (launchArgs.donchianLookback.has_value() &&
+        *launchArgs.donchianLookback != cfg.donchianLookback)
+        throw std::runtime_error("Donchian lookback mismatch: persisted/runtime");
+    if (persisted.targetMeta.has_value())
+    {
+        cfg.targetType = persisted.targetMeta->targetType;
+        cfg.hasTargetMeta = true;
+    }
+
+    ValidateRedundantCliInteger("--prediction-horizon", launchArgs.predictionHorizon, cfg.trainConfig.predictionHorizon);
+    ValidateRedundantCliFloat("--threshold", launchArgs.thresholdLogret, cfg.trainConfig.thresholdLogret);
+    ValidateRedundantCliInteger("--window-size", launchArgs.windowSize, cfg.trainConfig.windowSize);
+    ValidateRedundantCliInteger("--hidden-size", launchArgs.hiddenSize, cfg.modelHiddenSize);
+    ValidateRedundantCliInteger("--num-layers", launchArgs.numLayers, cfg.trainConfig.numLayers);
+    if (cfg.trainConfig.coreLrMult.has_value())
+        ValidateRedundantCliFloat("--core-lr-mult", launchArgs.coreLrMult, *cfg.trainConfig.coreLrMult);
+    if (cfg.trainConfig.headWeightLrMult.has_value())
+        ValidateRedundantCliFloat("--head-weight-lr-mult", launchArgs.headWeightLrMult, *cfg.trainConfig.headWeightLrMult);
+    if (cfg.trainConfig.headBiasLrMult.has_value())
+        ValidateRedundantCliFloat("--head-bias-lr-mult", launchArgs.headBiasLrMult, *cfg.trainConfig.headBiasLrMult);
     return cfg;
 }
 
@@ -7202,14 +7418,20 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
                                                  const std::string& fromDate,
                                                  const std::string& toDate,
                                                  size_t logicalOutputStartIndex,
-                                                 bool failOnConfigMismatch)
+                                                 bool failOnConfigMismatch,
+                                                 const DBIO::PgModelIO::PersistedModelMaterialization*
+                                                     materialized = nullptr)
 {
     UseRuntimeDefaultEvalLabelConfig();
     ModelConfigValidationResult modelConfigValidation;
     if (loadedModelId.has_value())
     {
-        modelConfigValidation =
-            PrintModelConfigValidation(w, *loadedModelId, requestedTargetType, tensor, rawPriceTableName);
+        modelConfigValidation = materialized
+            ? PrintMaterializedModelConfigValidation(
+                *materialized, requestedTargetType, tensor, rawPriceTableName)
+            : PrintModelConfigValidation(
+                w, *loadedModelId, requestedTargetType, tensor,
+                rawPriceTableName);
         if (failOnConfigMismatch && modelConfigValidation.hasMismatch)
             throw std::runtime_error("candidate became incompatible during validation");
     }
@@ -8641,6 +8863,8 @@ int main(int argc, const char * argv[])
     EA::FeatureWarmupScope featureWarmupScope =
         launchArgs.featureWarmupScope.value_or(EA::kDefaultFeatureWarmupScope);
     std::optional<ResumeCheckpointConfig> resumeConfig;
+    std::optional<DBIO::PgModelIO::PersistedModelMaterialization>
+        selectedModelMaterialization;
     std::optional<SchedulerInferencePersistenceContext> schedulerInferenceContext;
 
     if (launchArgs.resumeModelId.has_value())
@@ -8648,12 +8872,16 @@ int main(int argc, const char * argv[])
         try
         {
             pqxx::work resumeRead { c_LSTM };
-            resumeRead.exec("SET TRANSACTION READ ONLY;");
+            resumeRead.exec(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+            selectedModelMaterialization =
+                DBIO::PgModelIO::ReadPersistedModelMaterialization(
+                    resumeRead, *launchArgs.resumeModelId);
             resumeConfig = LoadResumeCheckpointConfig(
-                resumeRead, *launchArgs.resumeModelId,
+                *selectedModelMaterialization,
                 runtimeTrainingObjective);
             ConfigureInputWidthExpansionForResume(
-                resumeRead, *resumeConfig,
+                *selectedModelMaterialization, *resumeConfig,
                 launchArgs.resumeExpandInputWidth,
                 launchArgs.schedulerExperimentId);
             resumeRead.commit();
@@ -8707,10 +8935,37 @@ int main(int argc, const char * argv[])
             forexMetadataRead.commit();
         }
 
+        const bool useDetachedDirectInference =
+            !resumeConfig.has_value() && gRuntimeInferenceMode &&
+            !launchArgs.inferAll && !launchArgs.schedulerExperimentId.has_value() &&
+            !launchArgs.schedulerCheckpointEvalId.has_value() &&
+            !launchArgs.phase19CCausalPathPredictabilityDirectory.has_value();
+        std::optional<PersistedInferenceConfig> inferenceConfig;
+        if (useDetachedDirectInference)
+        {
+            pqxx::work directMaterializationRead { c_LSTM };
+            directMaterializationRead.exec(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+            const auto anchorModelId = InferenceAnchorModelId(
+                directMaterializationRead, launchArgs);
+            if (anchorModelId.has_value())
+            {
+                selectedModelMaterialization =
+                    DBIO::PgModelIO::ReadPersistedModelMaterialization(
+                        directMaterializationRead, *anchorModelId);
+                inferenceConfig = LoadPersistedInferenceConfig(
+                    *selectedModelMaterialization, launchArgs, availableSymbols);
+                ApplyPersistedInferenceRuntimeConfig(*inferenceConfig);
+                featureWarmupScope = inferenceConfig->featureWarmupScope;
+                PrintResolvedInferenceConfig(*inferenceConfig);
+            }
+            directMaterializationRead.commit();
+        }
+
         pqxx::work configurationRead { c_LSTM };
         configurationRead.exec("SET TRANSACTION READ ONLY;");
-        std::optional<PersistedInferenceConfig> inferenceConfig;
-        if (!resumeConfig.has_value() && gRuntimeInferenceMode)
+        if (!resumeConfig.has_value() && gRuntimeInferenceMode &&
+            !selectedModelMaterialization.has_value())
         {
             const auto anchorModelId = InferenceAnchorModelId(
                 configurationRead, launchArgs);
@@ -8950,6 +9205,13 @@ int main(int argc, const char * argv[])
             }
             std::optional<EA::EconomicCalendar::
                 EconomicCalendarSnapshotIdentity> economicCalendarSnapshot;
+            if (selectedModelMaterialization.has_value())
+            {
+                economicCalendarSnapshot =
+                    EconomicCalendarSnapshotFromMaterialization(
+                        *selectedModelMaterialization);
+            }
+            else
             {
                 pqxx::work economicEventRead { c_LSTM };
                 economicEventRead.exec("SET TRANSACTION READ ONLY;");
@@ -9088,7 +9350,8 @@ int main(int argc, const char * argv[])
                 long long modelIdToLoad = -1;
                 const bool requestedModel = launchArgs.modelId.has_value();
 
-                if (resumeConfig.has_value()) modelIdToLoad = resumeConfig->sourceModelId;
+                if (selectedModelMaterialization.has_value())
+                    modelIdToLoad = selectedModelMaterialization->identity.modelId;
                 else if (requestedModel) modelIdToLoad = *launchArgs.modelId;
                 else if (load_latest || gRuntimeInferenceMode)
                 {
@@ -9100,22 +9363,36 @@ int main(int argc, const char * argv[])
 
                 if (modelIdToLoad > 0)
                 {
-                    if (!gRuntimeInferenceMode)
+                    if (selectedModelMaterialization.has_value())
                     {
-                        const auto persistedObjective =
-                            DBIO::PgModelIO::loadTrainingObjectiveMeta(
-                                runtimeDatabaseWork, modelIdToLoad);
-                        EA::TrainingObjective::RequireResumeCompatible(
-                            persistedObjective, runtimeTrainingObjective);
+                        if (!gRuntimeInferenceMode)
+                            EA::TrainingObjective::RequireResumeCompatible(
+                                selectedModelMaterialization->trainingObjective,
+                                runtimeTrainingObjective);
+                        ScopedDiagnosticCoutSilencer silence;
+                        DBIO::PgModelIO::ApplyPersistedModelMaterialization(
+                            *selectedModelMaterialization, l,
+                            resumeConfig.has_value() &&
+                                resumeConfig->parameterExpansionRequired);
                     }
+                    else
                     {
+                        if (!gRuntimeInferenceMode)
+                        {
+                            const auto persistedObjective =
+                                DBIO::PgModelIO::loadTrainingObjectiveMeta(
+                                    runtimeDatabaseWork, modelIdToLoad);
+                            EA::TrainingObjective::RequireResumeCompatible(
+                                persistedObjective, runtimeTrainingObjective);
+                        }
                         ScopedDiagnosticCoutSilencer silence;
                         DBIO::PgModelIO::loadAll(
                             runtimeDatabaseWork, modelIdToLoad, l,
                             resumeConfig.has_value() &&
                                 resumeConfig->parameterExpansionRequired);
                     }
-                    if (resumeConfig.has_value())
+                    if (resumeConfig.has_value() &&
+                        !selectedModelMaterialization.has_value())
                     {
                         ScopedDiagnosticCoutSilencer silence;
                         DBIO::PgModelIO::loadOptimizerMeta(runtimeDatabaseWork, modelIdToLoad, l);
@@ -9123,7 +9400,10 @@ int main(int argc, const char * argv[])
                         std::cout << "RESUME_OPTIMIZER_STATE_RESTORED=1" << std::endl;
                     }
                     const Donchian20Mode modelMode =
-                        DBIO::PgModelIO::loadDonchian20ModeMeta(runtimeDatabaseWork, modelIdToLoad);
+                        selectedModelMaterialization.has_value()
+                            ? selectedModelMaterialization->donchian20Mode
+                            : DBIO::PgModelIO::loadDonchian20ModeMeta(
+                                runtimeDatabaseWork, modelIdToLoad);
                     if (modelMode != runtimeDonchian20Mode)
                         throw std::runtime_error(
                             std::string{"model/runtime Donchian-20 mode mismatch: model="} +
@@ -9165,8 +9445,30 @@ int main(int argc, const char * argv[])
             }
 
             if (loadedModelId.has_value())
-                ValidateLoadedModelSymbolForSelectedTable(
-                    runtimeDatabaseWork, *loadedModelId, rawPriceTableName);
+            {
+                if (selectedModelMaterialization.has_value())
+                {
+                    if (selectedModelMaterialization->trainSymbol.has_value())
+                    {
+                        PrintDatabaseModelSymbol(
+                            *loadedModelId,
+                            *selectedModelMaterialization->trainSymbol);
+                        ValidateRuntimeSymbolMatchesModel(
+                            EA::CanonicalSymbol::Normalize(rawPriceTableName),
+                            *selectedModelMaterialization->trainSymbol);
+                    }
+                    else
+                    {
+                        PrintMissingModelSymbol(*loadedModelId);
+                        PrintLegacyModelSymbol(
+                            *loadedModelId,
+                            EA::CanonicalSymbol::Normalize(rawPriceTableName));
+                    }
+                }
+                else
+                    ValidateLoadedModelSymbolForSelectedTable(
+                        runtimeDatabaseWork, *loadedModelId, rawPriceTableName);
+            }
 
             if (gRuntimeInferenceMode)
             {
@@ -9182,7 +9484,10 @@ int main(int argc, const char * argv[])
                                            fromDate,
                                            toDate,
                                            logicalOutputStartIndex,
-                                           false);
+                                           false,
+                                           selectedModelMaterialization.has_value()
+                                               ? &*selectedModelMaterialization
+                                               : nullptr);
                 if (HasControlledStrategyEvaluation(launchArgs))
                 {
                     // This transaction was declared READ ONLY before any model
@@ -9411,12 +9716,13 @@ int main(int argc, const char * argv[])
             UseRuntimeDefaultEvalLabelConfig();
             ModelConfigValidationResult modelConfigValidation;
             if (loadedModelId.has_value())
-                modelConfigValidation = PrintModelConfigValidation(
-                    runtimeDatabaseWork,
-                    *loadedModelId,
-                    requestedTargetType,
-                    t,
-                    rawPriceTableName);
+                modelConfigValidation = selectedModelMaterialization.has_value()
+                    ? PrintMaterializedModelConfigValidation(
+                        *selectedModelMaterialization, requestedTargetType, t,
+                        rawPriceTableName)
+                    : PrintModelConfigValidation(
+                        runtimeDatabaseWork, *loadedModelId,
+                        requestedTargetType, t, rawPriceTableName);
             PrintEvalLabelConfig();
 
             // All startup/configuration/model reads from the LSTM database are
