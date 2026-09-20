@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <memory>
 #include <tuple>
 #include <unordered_map>
 #include <random>
@@ -59,6 +60,8 @@
 #include "ModelInputExpansion.hpp"
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
+#include "../Sources/InferenceEvaluationFacts.hpp"
+#include "../Sources/InferenceRuntime.hpp"
 #include "../Sources/StrategyEvaluationCore/StrategyEvaluation.hpp"
 #include "../Sources/StrategyEvaluationCore/Phase19BPostEntryPathMechanismExtractor.hpp"
 #include "../Sources/StrategyEvaluationCore/Phase19CCausalPathPredictability.hpp"
@@ -2782,7 +2785,7 @@ void PrintModelAcceptanceDiagnostic(const size_t confusion[direction_output_size
               << std::endl;
 }
 
-static PredictionStats ProcessBatchPredict(
+[[maybe_unused]] static PredictionStats ProcessBatchPredict(
     EA::LSTM& l,
     const Tensor& tensor,
     const Window& b,
@@ -6698,7 +6701,7 @@ struct InferAllSummaryRow
     std::string name;
     std::optional<size_t> completedEpochs;
     double accuracy = 0.0;
-    ModelAcceptanceSummary acceptance;
+    EA::InferenceEvaluationFacts::AcceptanceSummary acceptance;
     std::optional<EA::InferenceProfitability::Statistics> profitability;
     std::string profitabilitySourceContentHash;
 };
@@ -6971,7 +6974,7 @@ struct InferenceEvaluationResult
 {
     double accuracy = 0.0;
     std::optional<size_t> completedEpochs;
-    ModelAcceptanceSummary acceptance;
+    EA::InferenceEvaluationFacts::AcceptanceSummary acceptance;
     std::optional<EA::InferenceProfitability::Statistics> profitability;
     std::string profitabilitySourceContentHash;
 };
@@ -7474,7 +7477,9 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work* w,
                                                  size_t logicalOutputStartIndex,
                                                  bool failOnConfigMismatch,
                                                  const DBIO::PgModelIO::PersistedModelMaterialization*
-                                                     materialized = nullptr)
+                                                     materialized = nullptr,
+                                                 const EA::InferenceEvaluationFacts::EvaluationFacts*
+                                                     runtimeFacts = nullptr)
 {
     UseRuntimeDefaultEvalLabelConfig();
     ModelConfigValidationResult modelConfigValidation;
@@ -7506,38 +7511,27 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work* w,
     PrintClassificationProofDiagnostics(lstm, tensor, fromDate, toDate);
     PrintPhase2TensorDiagnostics(lstm, tensor, fromDate, toDate);
 
-    size_t totalCorrectLog = 0;
-    size_t totalActedLog = 0;
-    size_t totalWindows = 0;
-    double totalAbsErrMove = 0.0;
-    size_t totalCorrectDir = 0;
-    size_t totalActedDir = 0;
-    size_t totalConfusion[direction_output_size][direction_output_size] = {};
-    EA::InferenceProfitability::Accumulator profitability;
+    // Phase 22Z3 supplies these facts from the reusable runtime.  The local
+    // fallback is retained only for non-detached training-era call paths.
+    const EA::InferenceEvaluationFacts::EvaluationFacts evaluationFacts =
+        runtimeFacts ? *runtimeFacts :
+        EA::InferenceEvaluationFacts::Evaluate(
+            lstm, tensor,
+            {ActiveEvalLabelConfig().windowSize,
+             ActiveEvalLabelConfig().predictionHorizon,
+             ActiveEvalLabelConfig().thresholdLogret,
+             logicalOutputStartIndex,
+             HasControlledStrategyEvaluation(launchArgs)});
+    const auto& totalConfusion = evaluationFacts.confusion;
     std::vector<EA::StrategyEvaluationAdapters::TensorInferenceDecision>
         strategyDecisions;
-
+    strategyDecisions.reserve(evaluationFacts.strategyDecisions.size());
+    for (const auto& decision : evaluationFacts.strategyDecisions)
     {
-        ScopedDiagnosticCoutSilencer silence;
-        tensor.ForEachBatchFrom(logicalOutputStartIndex, [&](auto b)
-        {
-            const auto predictionStats =
-                ProcessBatchPredict(
-                    lstm, tensor, b, profitability,
-                    HasControlledStrategyEvaluation(launchArgs)
-                        ? &strategyDecisions : nullptr);
-            totalCorrectLog += predictionStats.correctLog;
-            totalActedLog += predictionStats.actedLog;
-            totalWindows += predictionStats.windows;
-            totalAbsErrMove += predictionStats.absErrMove;
-            totalCorrectDir += predictionStats.correctDir;
-            totalActedDir += predictionStats.actedDir;
-
-            for (size_t actual = 0; actual < direction_output_size; ++actual)
-                for (size_t pred = 0; pred < direction_output_size; ++pred)
-                    totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
-
-        });
+        strategyDecisions.push_back({
+            decision.windowStartRow,
+            EA::StrategyEvaluation::PredictionProbabilities{
+                decision.probabilities}});
     }
 
     if (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
@@ -7554,30 +7548,31 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work* w,
 
     if (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
     {
-        if (profitability.statistics().predictionCount != totalWindows)
-            throw std::runtime_error(
-                "inference_profitability_prediction_count_mismatch");
-        result.accuracy = totalWindows
-            ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalWindows))
-            : 0.0;
+        size_t printableConfusion[direction_output_size][direction_output_size] = {};
+        for (size_t actual = 0; actual < direction_output_size; ++actual)
+            for (size_t predicted = 0; predicted < direction_output_size; ++predicted)
+                printableConfusion[actual][predicted] =
+                    totalConfusion[actual][predicted];
+        result.accuracy = evaluationFacts.accuracy;
         if (LogSummary())
         {
             std::cout << "Overall 3-class accuracy: " << (result.accuracy * 100.0)
-                      << "% over " << totalWindows << " windows" << std::endl;
+                      << "% over " << evaluationFacts.windowCount << " windows" << std::endl;
             std::cout << "Overall 3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
                       << "[[" << totalConfusion[0][0] << ", " << totalConfusion[0][1] << ", " << totalConfusion[0][2] << "], "
                       << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
                       << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
                       << std::endl;
         }
-        PrintModelAcceptanceDiagnostic(totalConfusion);
-        result.acceptance = ComputeModelAcceptanceSummary(totalConfusion);
-        result.profitability = profitability.statistics();
+        PrintModelAcceptanceDiagnostic(printableConfusion);
+        result.acceptance = evaluationFacts.acceptance;
+        result.profitability = evaluationFacts.profitability;
         result.profitabilitySourceContentHash =
-            profitability.SourceContentHash();
+            evaluationFacts.profitabilitySourceContentHash;
 
         if (launchArgs.evalTrading)
-            PrintEvalTradingMetrics(profitability.statistics(), totalConfusion);
+            PrintEvalTradingMetrics(evaluationFacts.profitability,
+                                    printableConfusion);
 
         if (launchArgs.controlledFixedStopEvaluationPath)
         {
@@ -7962,28 +7957,30 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work* w,
     }
     else
     {
-        result.accuracy = totalActedLog
-            ? (static_cast<double>(totalCorrectLog) / static_cast<double>(totalActedLog))
+        result.accuracy = evaluationFacts.accuracy;
+        const double overallCovLog = evaluationFacts.windowCount
+            ? (static_cast<double>(evaluationFacts.actedLog) /
+               static_cast<double>(evaluationFacts.windowCount) * 100.0)
             : 0.0;
-        const double overallCovLog = totalWindows
-            ? (static_cast<double>(totalActedLog) / static_cast<double>(totalWindows) * 100.0)
+        const double overallMaeMove = evaluationFacts.windowCount
+            ? (evaluationFacts.absoluteRelativeMoveErrorSum /
+               static_cast<double>(evaluationFacts.windowCount))
             : 0.0;
-        const double overallMaeMove = totalWindows
-            ? (totalAbsErrMove / static_cast<double>(totalWindows))
+        const double overallAccDir = evaluationFacts.actedDirection
+            ? (static_cast<double>(evaluationFacts.correctDirection) /
+               static_cast<double>(evaluationFacts.actedDirection) * 100.0)
             : 0.0;
-        const double overallAccDir = totalActedDir
-            ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalActedDir) * 100.0)
-            : 0.0;
-        const double overallCovDir = totalWindows
-            ? (static_cast<double>(totalActedDir) / static_cast<double>(totalWindows) * 100.0)
+        const double overallCovDir = evaluationFacts.windowCount
+            ? (static_cast<double>(evaluationFacts.actedDirection) /
+               static_cast<double>(evaluationFacts.windowCount) * 100.0)
             : 0.0;
 
         DiagnosticOut() << "Overall direction accuracy (log-return): " << (result.accuracy * 100.0)
-                        << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
+                        << "% over " << evaluationFacts.actedLog << " acted (of " << evaluationFacts.windowCount << ")"
                         << " coverage=" << overallCovLog << "%" << std::endl;
         DiagnosticOut() << "Overall MAE (relative move fraction): " << overallMaeMove
                         << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
-                        << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
+                        << "% over " << evaluationFacts.actedDirection << " acted (of " << evaluationFacts.windowCount << ")"
                         << " coverage=" << overallCovDir << "%" << std::endl;
     }
 
@@ -8263,10 +8260,13 @@ InferAllSummaryRow RunInferAllModel(
                         << " reason=metadata_gap_included"
                         << std::endl;
 
-    EA::LSTM lstm = CreateLstmForRuntimeLogLevel(
-        tensor, candidate.modelHiddenSize, 1, 0, requestedTargetType,
-        candidate.modelInputWidth,
-        materialized.identity.featureAblationMask);
+    EA::Inference::RuntimeResult runtime =
+        EA::Inference::RunInferenceRuntime(
+            {tensor, materialized,
+             {window_size, prediction_horizon, c_next_threshold,
+              logicalOutputStartIndex, requestedTargetType,
+              HasControlledStrategyEvaluation(launchArgs)}});
+    EA::LSTM& lstm = *runtime.model;
     PrintRuntimeLrConfig(lstm);
     DiagnosticOut() << "DIAG_LSTM_BINDING"
                     << ",table=" << rawPriceTableName
@@ -8277,10 +8277,9 @@ InferAllSummaryRow RunInferAllModel(
                     << ",reused=0"
                     << std::endl;
 
-    {
-        ScopedDiagnosticCoutSilencer silence;
-        DBIO::PgModelIO::ApplyPersistedModelMaterialization(materialized, lstm);
-    }
+    // The runtime owns the query-free detached application:
+    // DBIO::PgModelIO::ApplyPersistedModelMaterialization(materialized, lstm)
+    // before RunInferenceEvaluation(nullptr, ...) presents its facts.
     DiagnosticOut() << "Loaded model_id=" << candidate.modelId
                     << " source=--infer-all"
                     << std::endl;
@@ -8298,7 +8297,8 @@ InferAllSummaryRow RunInferAllModel(
                                toDate,
                                logicalOutputStartIndex,
                                true,
-                               &materialized);
+                               &materialized,
+                               &runtime.evaluationFacts);
 
     InferAllSummaryRow row;
     row.modelId = candidate.modelId;
@@ -9273,7 +9273,7 @@ int main(int argc, const char * argv[])
                         economicEventRead, launchArgs);
                 economicEventRead.commit();
             }
-            const auto preparedInput = EA::ModelInputPreparation::Prepare(
+            const auto preparedInput = EA::Inference::PrepareInferenceInput(
                 {rawPriceTableName, fromDate, toDate, featureWarmupScope,
                  runtimeDonchian20Mode, runtimeDonchianLookback,
                  economicCalendarSnapshot},
@@ -9377,12 +9377,41 @@ int main(int argc, const char * argv[])
                 runtimeDatabaseWork->commit();
                 return 0;
             }
-            EA::LSTM l = CreateLstmForRuntimeLogLevel(
-                t, runtimeLstmHiddenSize, 1, 0, requestedTargetType,
-                persistedModelInputWidth,
-                runtimeFeatureAblationMask);
-            if (!gRuntimeInferenceMode)
-                l.SetTrainingObjective(runtimeTrainingObjective);
+            // Track whether we started from scratch (no model loaded).
+            // Detached direct and scheduler inference run entirely through
+            // the reusable runtime; training retains its existing loader.
+            std::optional<long long> loadedModelId;
+            bool startedFromScratch = true;
+            const std::string loadSource = resumeConfig.has_value()
+                ? "--resume-model-id"
+                : (launchArgs.modelId.has_value() ? "--model" : "latest");
+            std::optional<EA::Inference::RuntimeResult> inferenceRuntime;
+            std::unique_ptr<EA::LSTM> runtimeModel;
+            if (gRuntimeInferenceMode &&
+                selectedModelMaterialization.has_value())
+            {
+                inferenceRuntime.emplace(EA::Inference::RunInferenceRuntime(
+                    {t, *selectedModelMaterialization,
+                     {window_size, prediction_horizon, c_next_threshold,
+                      logicalOutputStartIndex, requestedTargetType,
+                      HasControlledStrategyEvaluation(launchArgs)}}));
+                runtimeModel = std::move(inferenceRuntime->model);
+                loadedModelId = selectedModelMaterialization->identity.modelId;
+                startedFromScratch = false;
+                // ApplyPersistedModelMaterialization is owned by the runtime.
+                DiagnosticOut() << "Loaded model_id=" << *loadedModelId
+                                << " source=" << loadSource << std::endl;
+            }
+            else
+            {
+                runtimeModel = std::make_unique<EA::LSTM>(
+                    CreateLstmForRuntimeLogLevel(
+                        t, runtimeLstmHiddenSize, 1, 0, requestedTargetType,
+                        persistedModelInputWidth, runtimeFeatureAblationMask));
+                if (!gRuntimeInferenceMode)
+                    runtimeModel->SetTrainingObjective(runtimeTrainingObjective);
+            }
+            EA::LSTM& l = *runtimeModel;
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;
@@ -9399,14 +9428,8 @@ int main(int argc, const char * argv[])
                 ++s_lstmBindingDiagCount;
             }
 
-            // Track whether we started from scratch (no model loaded)
-            std::optional<long long> loadedModelId;
-            bool startedFromScratch = true;
-            const std::string loadSource = resumeConfig.has_value()
-                ? "--resume-model-id"
-                : (launchArgs.modelId.has_value() ? "--model" : "latest");
-
             // Load an explicitly requested model, or default to the latest stored model.
+            if (!inferenceRuntime.has_value())
             try
             {
                 long long modelIdToLoad = -1;
@@ -9552,6 +9575,9 @@ int main(int argc, const char * argv[])
                                            false,
                                            selectedModelMaterialization.has_value()
                                                ? &*selectedModelMaterialization
+                                               : nullptr,
+                                           inferenceRuntime.has_value()
+                                               ? &inferenceRuntime->evaluationFacts
                                                : nullptr);
                 if (HasControlledStrategyEvaluation(launchArgs))
                 {
