@@ -515,7 +515,7 @@ SemanticWorkerArtifact ParseWorker(
 {
     const auto& object = Object(value, "worker");
     RequireOnlyFields(object,
-        registrySchemaVersion == kSemanticWorkerRegistrySchemaVersion
+        registrySchemaVersion >= kRoleAwareSemanticWorkerRegistrySchemaVersion
             ? std::set<std::string>{"semantic_layout", "worker_role", "artifact_manifest_schema_version", "worker_rule", "model_input_width",
          "source_commit", "sha256", "executable", "manifest",
          "runtime_identity", "capabilities"}
@@ -546,7 +546,7 @@ SemanticWorkerArtifact ParseWorker(
         Fail("semantic_worker_registry_malformed:runtime_identity_invalid");
     worker.capabilities = Capabilities(Required(object, "capabilities"));
 
-    if (registrySchemaVersion == kSemanticWorkerRegistrySchemaVersion)
+    if (registrySchemaVersion >= kRoleAwareSemanticWorkerRegistrySchemaVersion)
     {
         const std::string role = String(Required(object, "worker_role"), "worker_role");
         if (role == "infer") worker.role = SemanticWorkerRole::Infer;
@@ -571,8 +571,8 @@ SemanticWorkerArtifact ParseWorker(
 
     const std::string roleComponent = worker.role == SemanticWorkerRole::Infer
         ? "infer" : "train";
-    const bool roleAwareArtifact = registrySchemaVersion ==
-        kSemanticWorkerRegistrySchemaVersion && worker.artifactManifestSchemaVersion ==
+    const bool roleAwareArtifact = registrySchemaVersion >=
+        kRoleAwareSemanticWorkerRegistrySchemaVersion && worker.artifactManifestSchemaVersion ==
         kSemanticWorkerArtifactManifestSchemaVersion;
     const std::string expectedPrefix = roleAwareArtifact
         ? "layout" + std::to_string(worker.semanticLayoutVersion) + "/" +
@@ -683,6 +683,7 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
     const int registrySchemaVersion = static_cast<int>(
         Integer(Required(object, "schema_version"), "schema_version"));
     if (registrySchemaVersion != kSemanticWorkerRegistrySchemaVersion &&
+        registrySchemaVersion != kRoleAwareSemanticWorkerRegistrySchemaVersion &&
         registrySchemaVersion != kLegacySemanticWorkerRegistrySchemaVersion)
         Fail("semantic_worker_registry_schema_unsupported");
 
@@ -699,33 +700,48 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
     }
     if (registry.runtimes_.empty())
         Fail("semantic_worker_registry_malformed:runtimes_empty");
-    std::size_t currentEntries = 0;
+    std::map<SemanticWorkerRole, std::size_t> currentEntries;
     for (const auto& item : Array(Required(object, "workers"), "workers"))
     {
         SemanticWorkerArtifact worker = ParseWorker(item, root, registrySchemaVersion);
         if (worker.kind == SemanticWorkerArtifactKind::Current)
-            ++currentEntries;
+            ++currentEntries[worker.role];
         if (!registry.workers_.emplace(
-                worker.semanticLayoutVersion, std::move(worker)).second)
-            Fail("semantic_worker_registry_duplicate_layout");
+                std::make_pair(worker.semanticLayoutVersion, worker.role),
+                std::move(worker)).second)
+            Fail("semantic_worker_registry_duplicate_layout_role");
     }
-    const auto current = registry.workers_.find(registry.currentLayoutVersion_);
-    if (currentEntries != 1U || current == registry.workers_.end() ||
-        current->second.kind != SemanticWorkerArtifactKind::Current)
+    const auto currentInference = registry.workers_.find(
+        {registry.currentLayoutVersion_, SemanticWorkerRole::Infer});
+    if (currentEntries[SemanticWorkerRole::Infer] != 1U ||
+        currentInference == registry.workers_.end() ||
+        currentInference->second.kind != SemanticWorkerArtifactKind::Current)
         Fail("semantic_worker_registry_current_rule_invalid");
+    if (registrySchemaVersion == kSemanticWorkerRegistrySchemaVersion)
+    {
+        const auto currentTraining = registry.workers_.find(
+            {registry.currentLayoutVersion_, SemanticWorkerRole::Train});
+        if (currentEntries[SemanticWorkerRole::Train] != 1U ||
+            currentTraining == registry.workers_.end() ||
+            currentTraining->second.kind != SemanticWorkerArtifactKind::Current)
+            Fail("semantic_worker_registry_training_reference_current_rule_invalid");
+    }
     if (registry.currentLayoutVersion_ !=
             request.expectedCurrentSemanticLayoutVersion ||
-        current->second.modelInputWidth != request.expectedCurrentModelInputWidth ||
-        !current->second.capabilities.contains("infer") ||
+        currentInference->second.modelInputWidth != request.expectedCurrentModelInputWidth ||
+        !currentInference->second.capabilities.contains("infer") ||
         (registrySchemaVersion == kLegacySemanticWorkerRegistrySchemaVersion &&
-         (!current->second.capabilities.contains("train") ||
-          !current->second.capabilities.contains("analyze"))))
+         (!currentInference->second.capabilities.contains("train") ||
+          !currentInference->second.capabilities.contains("analyze"))))
         Fail("semantic_worker_capability_mismatch:current_rule");
-    for (const auto& [layout, worker] : registry.workers_)
+    for (const auto& [key, worker] : registry.workers_)
     {
-        if (!worker.capabilities.contains("infer"))
+        const int layout = key.first;
+        const char* requiredCapability = worker.role == SemanticWorkerRole::Infer
+            ? "infer" : "train";
+        if (!worker.capabilities.contains(requiredCapability))
             Fail("semantic_worker_capability_mismatch:layout=" +
-                 std::to_string(layout) + ":infer_required");
+                 std::to_string(layout) + ":role_required=" + requiredCapability);
         if (!registry.runtimes_.contains(worker.runtimeIdentity))
             Fail("semantic_worker_runtime_identity_unavailable:layout=" +
                  std::to_string(layout) + ":identity=" +
@@ -738,7 +754,7 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
 
     if (request.legacyLayout6ExecutableAssertion)
     {
-        const auto legacy = registry.workers_.find(6);
+        const auto legacy = registry.workers_.find({6, SemanticWorkerRole::Infer});
         if (legacy == registry.workers_.end())
             Fail("legacy_layout6_worker_assertion_without_registry_entry");
         const std::string asserted = ValidateAndCanonicalizeWorkerExecutable(
@@ -758,16 +774,25 @@ const std::string& SemanticWorkerRegistry::canonicalRegistryPath() const noexcep
 
 const SemanticWorkerArtifact& SemanticWorkerRegistry::currentWorker() const
 {
-    const auto found = workers_.find(currentLayoutVersion_);
-    if (found == workers_.end())
-        throw std::logic_error("semantic worker registry has no current worker");
-    return found->second;
+    const auto found = workers_.find(
+        {currentLayoutVersion_, SemanticWorkerRole::Train});
+    if (found != workers_.end()) return found->second;
+    const auto legacy = workers_.find(
+        {currentLayoutVersion_, SemanticWorkerRole::Infer});
+    if (legacy != workers_.end()) return legacy->second;
+    throw std::logic_error("semantic worker registry has no current worker");
 }
 
 const SemanticWorkerArtifact* SemanticWorkerRegistry::find(
     int semanticLayoutVersion) const noexcept
 {
-    const auto found = workers_.find(semanticLayoutVersion);
+    return find(semanticLayoutVersion, SemanticWorkerRole::Infer);
+}
+
+const SemanticWorkerArtifact* SemanticWorkerRegistry::find(
+    int semanticLayoutVersion, SemanticWorkerRole role) const noexcept
+{
+    const auto found = workers_.find({semanticLayoutVersion, role});
     return found == workers_.end() ? nullptr : &found->second;
 }
 
@@ -776,9 +801,9 @@ SemanticWorkerRegistry::validateRuntimeForExecutable(
     const std::string& canonicalExecutablePath) const
 {
     const SemanticWorkerArtifact* selectedWorker = nullptr;
-    for (const auto& [layout, worker] : workers_)
+    for (const auto& [key, worker] : workers_)
     {
-        (void)layout;
+        (void)key;
         if (worker.canonicalExecutablePath == canonicalExecutablePath)
         {
             selectedWorker = &worker;
@@ -850,20 +875,26 @@ SemanticWorkerRegistry::validateRuntimeForExecutable(
     return {true, "semantic_worker_runtime_ready", workerDirectory.string()};
 }
 
-SemanticWorkerSelection SemanticWorkerRegistry::selectInferenceWorker(
-    const PersistedWorkerSemanticIdentity& persisted) const
+namespace
+{
+SemanticWorkerSelection SelectWorkerForRole(
+    const SemanticWorkerRegistry& registry,
+    const PersistedWorkerSemanticIdentity& persisted,
+    SemanticWorkerRole role)
 {
     if (!persisted.inputWidth && !persisted.layoutVersion)
         return {false, "semantic_worker_identity_unavailable", {}, 0, 0, {}};
     if (!persisted.inputWidth || !persisted.layoutVersion)
         return {false, "semantic_worker_identity_incomplete", {}, 0, 0, {}};
-    const SemanticWorkerArtifact* worker = find(*persisted.layoutVersion);
+    const SemanticWorkerArtifact* worker = registry.find(
+        *persisted.layoutVersion, role);
     if (worker == nullptr)
         return {false,
                 "semantic_worker_layout_unsupported:layout=" +
                     std::to_string(*persisted.layoutVersion),
                 {}, 0, 0, {}};
-    if (!worker->capabilities.contains("infer") ||
+    const char* phase = role == SemanticWorkerRole::Infer ? "infer" : "train";
+    if (!worker->capabilities.contains(phase) ||
         *persisted.inputWidth != worker->modelInputWidth)
         return {false, "semantic_worker_incompatible", {},
                 worker->semanticLayoutVersion, worker->modelInputWidth, {}};
@@ -871,7 +902,7 @@ SemanticWorkerSelection SemanticWorkerRegistry::selectInferenceWorker(
     capability.layoutVersion = worker->semanticLayoutVersion;
     capability.maximumInputWidth = worker->modelInputWidth;
     const auto admission = EvaluateSemanticWorkerAdmission(
-        "infer", persisted, capability);
+        phase, persisted, capability);
     if (!admission.admissible)
         return {false, admission.diagnostic, {}, 0, 0, {}};
     return {true, "semantic_worker_compatible",
@@ -881,6 +912,19 @@ SemanticWorkerSelection SemanticWorkerRegistry::selectInferenceWorker(
             worker->kind == SemanticWorkerArtifactKind::Current
                 ? "current_published_semantic_worker"
                 : "immutable_historical_semantic_worker"};
+}
+} // namespace
+
+SemanticWorkerSelection SemanticWorkerRegistry::selectInferenceWorker(
+    const PersistedWorkerSemanticIdentity& persisted) const
+{
+    return SelectWorkerForRole(*this, persisted, SemanticWorkerRole::Infer);
+}
+
+SemanticWorkerSelection SemanticWorkerRegistry::selectTrainingReferenceWorker(
+    const PersistedWorkerSemanticIdentity& persisted) const
+{
+    return SelectWorkerForRole(*this, persisted, SemanticWorkerRole::Train);
 }
 
 } // namespace EA::Scheduler

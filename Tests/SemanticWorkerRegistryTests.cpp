@@ -1,6 +1,7 @@
 #include "../Sources/SchedulerCore/SemanticWorkerRegistry.hpp"
 
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -23,6 +24,10 @@ constexpr const char* kHash6 =
     "4f330de39e18484e875518d51f1d60ebbc278db85b99111b70a68a3f1d538764";
 constexpr const char* kHash7 =
     "fe0fc41298f0aab9a9e9665db1869a1c5f078774db34c40b5f60816656e4e6cc";
+constexpr const char* kInferCommit7 =
+    "8888888888888888888888888888888888888888";
+constexpr const char* kInferHash7 =
+    "4f63f256ba59195f21f95070086d23c9e5293d824e69d89fc7164902a8a09319";
 constexpr const char* kRuntimeIdentity =
     "769b8f08c5f9d83cd68cb6bbe049176cbdbf67afd0b68ea052d4dd5549bd4550";
 constexpr const char* kDefaultHash =
@@ -35,6 +40,7 @@ struct Fixture
     fs::path root;
     fs::path executable6;
     fs::path executable7;
+    fs::path inferenceExecutable7;
 
     Fixture()
     {
@@ -44,6 +50,8 @@ struct Fixture
         root = created;
         executable6 = artifact(6, kCommit6, kHash6) / "LSTM_Release";
         executable7 = artifact(7, kCommit7, kHash7) / "LSTM_Release";
+        inferenceExecutable7 = roleArtifact(7, "infer", kInferCommit7,
+                                            kInferHash7) / "lstm-infer-worker";
         writeExecutable(executable6, "worker-six\n");
         writeExecutable(executable7,
             "#!/bin/sh\n"
@@ -69,6 +77,12 @@ struct Fixture
     fs::path artifact(int layout, const char* commit, const char* hash) const
     {
         return root / ("layout" + std::to_string(layout)) / commit / hash;
+    }
+
+    fs::path roleArtifact(int layout, const char* role, const char* commit,
+                          const char* hash) const
+    {
+        return root / ("layout" + std::to_string(layout)) / role / commit / hash;
     }
 
     static void write(const fs::path& path, const std::string& contents)
@@ -156,6 +170,49 @@ struct Fixture
             suffix + "]}");
     }
 
+    void writeRoleAwareRegistry()
+    {
+        writeExecutable(inferenceExecutable7, "infer-worker\n");
+        write(inferenceExecutable7.parent_path() / "manifest.json",
+            "{\"schema_version\":2,\"semantic_layout\":7,\"storage\":\"immutable\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kInferCommit7} + "\",\"sha256\":\"" + kInferHash7 +
+            "\",\"executable_identity\":\"lstm-infer-worker\","
+            "\"worker_role\":\"infer\",\"capabilities\":[\"infer\"]}");
+        linkRuntime(inferenceExecutable7.parent_path());
+        write(root / "registry.json",
+            "{\"schema_version\":4,\"current_layout\":7,\"runtimes\":["
+            "{\"identity\":\"" + std::string{kRuntimeIdentity} +
+            "\",\"directory\":\"runtime/" + kRuntimeIdentity +
+            "\",\"manifest\":\"runtime/" + kRuntimeIdentity +
+            "/manifest.json\"}],\"workers\":["
+            "{\"semantic_layout\":6,\"worker_role\":\"infer\","
+            "\"artifact_manifest_schema_version\":1,\"worker_rule\":\"historical\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kCommit6} + "\",\"sha256\":\"" + kHash6 +
+            "\",\"executable\":\"layout6/" + kCommit6 + "/" + kHash6 +
+            "/LSTM_Release\",\"manifest\":\"layout6/" + kCommit6 + "/" +
+            kHash6 + "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity + "\",\"capabilities\":[\"infer\"]},"
+            "{\"semantic_layout\":7,\"worker_role\":\"train\","
+            "\"artifact_manifest_schema_version\":1,\"worker_rule\":\"current\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kCommit7} + "\",\"sha256\":\"" + kHash7 +
+            "\",\"executable\":\"layout7/" + kCommit7 + "/" + kHash7 +
+            "/LSTM_Release\",\"manifest\":\"layout7/" + kCommit7 + "/" +
+            kHash7 + "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity + "\",\"capabilities\":[\"train\",\"infer\",\"analyze\"]},"
+            "{\"semantic_layout\":7,\"worker_role\":\"infer\","
+            "\"artifact_manifest_schema_version\":2,\"worker_rule\":\"current\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kInferCommit7} + "\",\"sha256\":\"" + kInferHash7 +
+            "\",\"executable\":\"layout7/infer/" + kInferCommit7 + "/" +
+            kInferHash7 + "/lstm-infer-worker\",\"manifest\":\"layout7/infer/" +
+            kInferCommit7 + "/" + kInferHash7 +
+            "/manifest.json\",\"runtime_identity\":\"" + kRuntimeIdentity +
+            "\",\"capabilities\":[\"infer\"]}]}");
+    }
+
     EA::Scheduler::SemanticWorkerRegistry load(
         std::optional<std::string> assertion = std::nullopt) const
     {
@@ -228,6 +285,40 @@ int main()
     assert(Contains(unknown.diagnostic, "semantic_worker_layout_unsupported"));
     assert(!registry.selectInferenceWorker({{76}, {7}, true}).selected);
     assert(!registry.selectInferenceWorker(PersistedWorkerSemanticIdentity{}).selected);
+
+    Fixture roleAware;
+    roleAware.writeRoleAwareRegistry();
+    const auto roleAwareRegistry = roleAware.load();
+    const auto roleAwareInference =
+        roleAwareRegistry.selectInferenceWorker({{77}, {7}, true});
+    const auto roleAwareTraining =
+        roleAwareRegistry.selectTrainingReferenceWorker({{77}, {7}, true});
+    assert(roleAwareInference.selected);
+    assert(roleAwareTraining.selected);
+    assert(roleAwareInference.canonicalExecutablePath ==
+           fs::canonical(roleAware.inferenceExecutable7));
+    assert(roleAwareTraining.canonicalExecutablePath ==
+           fs::canonical(roleAware.executable7));
+    assert(roleAwareRegistry.currentWorker().canonicalExecutablePath ==
+           fs::canonical(roleAware.executable7));
+    assert(roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Infer) !=
+           roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Train));
+
+    if (const char* externalRegistry = std::getenv("EA_SEMANTIC_REGISTRY_UNDER_TEST"))
+    {
+        const auto published = EA::Scheduler::SemanticWorkerRegistry::Load({
+            externalRegistry, std::nullopt, 7, 77});
+        const auto publishedInference =
+            published.selectInferenceWorker({{77}, {7}, true});
+        const auto publishedTraining =
+            published.selectTrainingReferenceWorker({{77}, {7}, true});
+        assert(publishedInference.selected);
+        assert(publishedTraining.selected);
+        assert(publishedInference.canonicalExecutablePath !=
+               publishedTraining.canonicalExecutablePath);
+        assert(published.currentWorker().canonicalExecutablePath ==
+               publishedTraining.canonicalExecutablePath);
+    }
 
     assert(valid.load(valid.executable6.string()).find(6) != nullptr);
     assert(Contains(Failure([&] {

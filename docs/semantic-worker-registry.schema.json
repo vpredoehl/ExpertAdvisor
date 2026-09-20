@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://expertadvisor.local/schemas/semantic-worker-registry-v2.json",
+  "$id": "https://expertadvisor.local/schemas/semantic-worker-registry-v4.json",
   "title": "ExpertAdvisor Semantic Worker Registry",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "current_layout", "runtimes", "workers"],
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 4},
     "current_layout": {"type": "integer", "minimum": 1},
     "runtimes": {
       "type": "array",
@@ -30,6 +30,8 @@
         "additionalProperties": false,
         "required": [
           "semantic_layout",
+          "worker_role",
+          "artifact_manifest_schema_version",
           "worker_rule",
           "model_input_width",
           "source_commit",
@@ -41,6 +43,8 @@
         ],
         "properties": {
           "semantic_layout": {"type": "integer", "minimum": 1},
+          "worker_role": {"enum": ["train", "infer"]},
+          "artifact_manifest_schema_version": {"enum": [1, 2]},
           "worker_rule": {"enum": ["current", "historical"]},
           "model_input_width": {"type": "integer", "minimum": 1},
           "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},

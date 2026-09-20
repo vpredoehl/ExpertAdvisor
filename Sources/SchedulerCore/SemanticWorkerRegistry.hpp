@@ -11,7 +11,8 @@
 namespace EA::Scheduler
 {
 
-inline constexpr int kSemanticWorkerRegistrySchemaVersion = 3;
+inline constexpr int kSemanticWorkerRegistrySchemaVersion = 4;
+inline constexpr int kRoleAwareSemanticWorkerRegistrySchemaVersion = 3;
 inline constexpr int kLegacySemanticWorkerRegistrySchemaVersion = 2;
 inline constexpr int kLegacySemanticWorkerArtifactManifestSchemaVersion = 1;
 inline constexpr int kSemanticWorkerArtifactManifestSchemaVersion = 2;
@@ -90,18 +91,24 @@ public:
         const SemanticWorkerRegistryLoadRequest& request);
 
     const std::string& canonicalRegistryPath() const noexcept;
+    // Preserves the historical current-worker meaning: training/reference,
+    // with an inference fallback only for legacy layout-only registries.
     const SemanticWorkerArtifact& currentWorker() const;
     const SemanticWorkerArtifact* find(int semanticLayoutVersion) const noexcept;
+    const SemanticWorkerArtifact* find(
+        int semanticLayoutVersion, SemanticWorkerRole role) const noexcept;
     SemanticWorkerRuntimeValidation validateRuntimeForExecutable(
         const std::string& canonicalExecutablePath) const;
     SemanticWorkerSelection selectInferenceWorker(
+        const PersistedWorkerSemanticIdentity& persisted) const;
+    SemanticWorkerSelection selectTrainingReferenceWorker(
         const PersistedWorkerSemanticIdentity& persisted) const;
 
 private:
     std::string canonicalRegistryPath_;
     int currentLayoutVersion_ = 0;
     std::map<std::string, SemanticWorkerRuntimePackage> runtimes_;
-    std::map<int, SemanticWorkerArtifact> workers_;
+    std::map<std::pair<int, SemanticWorkerRole>, SemanticWorkerArtifact> workers_;
 };
 
 std::string ValidateAndCanonicalizeWorkerExecutable(

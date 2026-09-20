@@ -96,11 +96,11 @@ rg -U -q 'PersistResult\([\s\S]{0,1600}PersistProfitability\([\s\S]{0,500}write\
 rg -q 'ON CONFLICT \(checkpoint_eval_id\)' "${application}"
 rg -q 'ON CONFLICT \(model_id,symbol' "${application}"
 
-# Semantic admission and immutable registry are untouched.
-! git -C "${repo_root}" diff -- "Builds/SemanticWorkers" | rg -q .
-! git -C "${repo_root}" diff -- "Sources/SchedulerCore/SemanticWorkerRegistry.cpp" | rg -q .
+# Phase 23A may publish the worker and add role-aware registry selection, but
+# the Phase 22Z5 worker still has no scheduler lifecycle implementation.
 rg -q 'selectInferenceWorker' "${repo_root}/Sources/SchedulerCore/SemanticWorkerRegistry.hpp"
-! rg -q 'lstm-infer-worker' "${repo_root}/Builds/SemanticWorkers/registry.json"
+! rg -q 'RegisterSchedulerWorker|PrepareInferenceInput|RunInferenceRuntime' \
+    "${repo_root}/LSTM/InferWorkerMain.cpp"
 
 "${worker}" --build-identity >"${out}"
 grep -q 'artifact_role=lstm-infer-worker' "${out}"

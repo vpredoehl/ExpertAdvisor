@@ -29,6 +29,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         }
         self.runtime_resources["default.metallib"].write_bytes(b"default-metal")
         self.runtime_resources["MetaNN_metal.metallib"].write_bytes(b"metann-metal")
+        self.seed_legacy_training_reference()
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -38,6 +39,48 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         path.write_bytes(contents)
         path.chmod(0o700)
         return path
+
+    def seed_legacy_training_reference(self) -> None:
+        self.root.mkdir(parents=True)
+        self.root = self.root.resolve()
+        executable = self.executable("legacy-training", b"legacy-training")
+        commit = "a" * 40
+        digest = publisher.sha256(executable)
+        directory = self.root / "layout7" / commit / digest
+        directory.mkdir(parents=True)
+        archived = directory / "LSTM_Release"
+        archived.write_bytes(executable.read_bytes())
+        archived.chmod(0o555)
+        (directory / "manifest.json").write_text(json.dumps({
+            "schema_version": 1,
+            "semantic_layout": 7,
+            "storage": "immutable",
+            "model_input_width": 77,
+            "source_commit": commit,
+            "sha256": digest,
+            "executable_identity": "LSTM_Release",
+            "capabilities": ["train", "infer", "analyze"],
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        manifest, identity = publisher.runtime_manifest(dict(self.runtime_resources))
+        runtime = publisher.stage_runtime_package(
+            self.root, dict(self.runtime_resources), manifest, identity)
+        publisher.install_runtime_links(self.root, directory, runtime)
+        (self.root / "registry.json").write_text(json.dumps({
+            "schema_version": 2,
+            "current_layout": 7,
+            "runtimes": [runtime],
+            "workers": [{
+                "semantic_layout": 7,
+                "worker_rule": "current",
+                "model_input_width": 77,
+                "source_commit": commit,
+                "sha256": digest,
+                "executable": str(Path("layout7") / commit / digest / "LSTM_Release"),
+                "manifest": str(Path("layout7") / commit / digest / "manifest.json"),
+                "runtime_identity": identity,
+                "capabilities": ["train", "infer", "analyze"],
+            }],
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def publish(self, executable: Path, rule: str, layout: int, commit: str) -> Path:
         return publisher.publish(
@@ -55,7 +98,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
     def registry(self) -> dict:
         return json.loads((self.root / "registry.json").read_text(encoding="utf-8"))
 
-    def test_rollover_preserves_prior_layout_and_never_overwrites(self) -> None:
+    def test_role_publication_preserves_training_reference_and_never_overwrites(self) -> None:
         worker7 = self.executable("worker7", b"layout-seven")
         commit7 = "7" * 40
         archived7 = self.publish(worker7, "current", 7, commit7)
@@ -66,20 +109,21 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         self.assertEqual(archived6.read_bytes(), b"layout-six")
 
         worker8 = self.executable("worker8", b"layout-eight")
-        archived8 = self.publish(worker8, "current", 8, "8" * 40)
+        archived8 = self.publish(worker8, "current", 7, "8" * 40)
         registry = self.registry()
-        self.assertEqual(registry["current_layout"], 8)
-        by_layout = {entry["semantic_layout"]: entry for entry in registry["workers"]}
-        self.assertEqual(by_layout[7]["worker_rule"], "historical")
-        self.assertEqual(by_layout[8]["worker_rule"], "current")
+        self.assertEqual(registry["current_layout"], 7)
+        by_role = {(entry["semantic_layout"], entry["worker_role"]): entry
+                   for entry in registry["workers"]}
+        self.assertEqual(by_role[7, "infer"]["worker_rule"], "current")
+        self.assertEqual(by_role[7, "train"]["worker_rule"], "current")
         self.assertEqual(archived7.read_bytes(), original7)
         self.assertEqual(archived8.read_bytes(), b"layout-eight")
         self.assertEqual((self.root / "current").resolve(), archived8.parent)
-        self.assertEqual(registry["schema_version"], 3)
+        self.assertEqual(registry["schema_version"], 4)
         self.assertEqual(len(registry["runtimes"]), 1)
-        runtime_identity = by_layout[8]["runtime_identity"]
-        self.assertEqual(by_layout[6]["runtime_identity"], runtime_identity)
-        self.assertEqual(by_layout[7]["runtime_identity"], runtime_identity)
+        runtime_identity = by_role[7, "infer"]["runtime_identity"]
+        self.assertEqual(by_role[6, "infer"]["runtime_identity"], runtime_identity)
+        self.assertEqual(by_role[7, "train"]["runtime_identity"], runtime_identity)
         for archived in (archived6, archived7, archived8):
             self.assertTrue((archived.parent / "default.metallib").is_symlink())
             self.assertTrue((archived.parent / "MetaNN.metallib").is_symlink())
@@ -107,7 +151,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
             side_effect=OSError("injected registry replace failure"),
         ):
             with self.assertRaisesRegex(OSError, "injected registry replace failure"):
-                self.publish(worker8, "current", 8, "8" * 40)
+                self.publish(worker8, "current", 7, "8" * 40)
         self.assertEqual((self.root / "registry.json").read_bytes(), before)
         self.assertEqual(self.registry()["current_layout"], 7)
 
@@ -129,7 +173,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(
             publisher.PublishError, "immutable artifact path is incomplete"
         ):
-            self.publish(worker8, "current", 8, "8" * 40)
+            self.publish(worker8, "current", 7, "8" * 40)
         self.assertEqual((self.root / "registry.json").read_bytes(), before)
 
     def test_aliased_outgoing_registry_artifact_blocks_rollover(self) -> None:
@@ -154,7 +198,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
             "required semantic worker runtime resource is missing: MetaNN_metal.metallib",
         ):
             self.publish(worker7, "current", 7, "7" * 40)
-        self.assertFalse((self.root / "registry.json").exists())
+        self.assertEqual(self.registry()["schema_version"], 2)
 
     def test_runtime_tamper_blocks_rollover(self) -> None:
         worker7 = self.executable("worker7", b"layout-seven")
@@ -169,7 +213,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
             publisher.PublishError,
             "runtime resource hash conflict: default.metallib",
         ):
-            self.publish(worker8, "current", 8, "8" * 40)
+            self.publish(worker8, "current", 7, "8" * 40)
 
     def test_v1_registry_upgrade_keeps_existing_executable_identity(self) -> None:
         worker7 = self.executable("worker7", b"layout-seven")
@@ -215,11 +259,11 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
 
         original = archived7.read_bytes()
         worker8 = self.executable("worker8", b"layout-eight")
-        self.publish(worker8, "current", 8, "8" * 40)
+        self.publish(worker8, "current", 7, "8" * 40)
         upgraded = self.registry()
         by_layout = {entry["semantic_layout"]: entry
                      for entry in upgraded["workers"]}
-        self.assertEqual(upgraded["schema_version"], 3)
+        self.assertEqual(upgraded["schema_version"], 4)
         self.assertEqual(archived7.read_bytes(), original)
         self.assertEqual(by_layout[7]["sha256"], digest7)
         self.assertTrue((archived7.parent / "default.metallib").is_symlink())

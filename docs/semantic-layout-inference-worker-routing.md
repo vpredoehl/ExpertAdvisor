@@ -2,7 +2,8 @@
 
 The scheduler reads `Builds/SemanticWorkers/registry.json` once, validates all
 entries before acquiring scheduler authority, and keeps the resulting typed
-`SemanticWorkerRegistry` in memory. The registry maps exact semantic layouts;
+`SemanticWorkerRegistry` in memory. The registry maps exact semantic-layout and
+executable-role pairs; it
 it never derives compatibility from layout ordering, experiment IDs, directory
 contents, timestamps, or `layout <= current` rules.
 
@@ -10,9 +11,10 @@ The three executable identities are deliberately separate:
 
 - `schedulerExecutablePath` is the executable that owns the scheduler lease
   and fencing identity.
-- `currentWorkerExecutablePath` is the registry's current published worker.
-  New train and final-analysis attempts use it. Checkpoint analysis remains
-  in-process scheduler work and therefore uses scheduler identity.
+- `currentWorkerExecutablePath` remains the existing immutable training/reference
+  `LSTM_Release` binding. New train and final-analysis attempts use it.
+  Checkpoint analysis remains in-process scheduler work and therefore uses
+  scheduler identity.
 - `selectedWorkerExecutablePath` is chosen per dispatch. Final and checkpoint
   inference both resolve the model's exact semantic layout through the same
   registry and persist that canonical immutable path before launch.
@@ -20,8 +22,8 @@ The three executable identities are deliberately separate:
 Every registered executable is stored at:
 
 ```text
-Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/LSTM_Release
-Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/manifest.json
+Builds/SemanticWorkers/layout<N>/<role>/<git-commit>/<sha256>/<executable>
+Builds/SemanticWorkers/layout<N>/<role>/<git-commit>/<sha256>/manifest.json
 ```
 
 The executable directory also contains deterministic `default.metallib` and
@@ -40,7 +42,7 @@ entry binds an exact runtime identity. Runtime packages may therefore be
 shared while different executable generations can retain different runtime
 identities if the Metal libraries change.
 
-The operational registry and binaries are ignored by Git. The checked-in v2
+The operational registry and binaries are ignored by Git. The checked-in v4
 schema is `docs/semantic-worker-registry.schema.json`. Registry paths are
 artifact-root-relative and must exactly match the content-addressed structure.
 Startup canonicalizes them, rejects escapes and missing/non-executable files,
@@ -57,7 +59,11 @@ artifact/manifest or republishing from a successful clean Release build, never
 editing a registered artifact in place. The `current` symlink is only an
 operator convenience; `registry.json` remains authoritative.
 
-Current layout 7 and historical layout 6 are explicit entries. Layout 6 is the
+Current layout 7 has two explicit bindings: `train` points at the preserved
+immutable `LSTM_Release` training/reference artifact and `infer` points at the
+immutable `lstm-infer-worker`. Historical v2/v3 layout-only entries remain
+readable: their established capability binding is interpreted as the legacy
+`LSTM_Release` artifact and is never inferred from its filename. Layout 6 is the
 accepted inference-only artifact from commit
 `7645265bca0c2529523e1d2cdb37e7d023dfd559`, SHA-256
 `945225dd2a42f87a2a8dfbfe47b006708e3d90c88a858d25787e5a2237c62dd7`.
@@ -91,12 +97,12 @@ built executable, and computes SHA-256. It then:
 3. verifies the staged hash and fsyncs executable, manifest, and directory;
 4. atomically renames the completed directory into its immutable final path,
    refusing to overwrite or repair a conflicting existing path;
-5. attaches deterministic resource links to the new worker and, during the
-   v1-to-v2 migration, to existing worker directories without changing their
+5. attaches deterministic resource links to the new worker and, during legacy
+   registry migration, to existing worker directories without changing their
    executable or manifest identity;
-6. validates the prior registry, retains all prior artifacts, changes the old
-   current rule to historical on a layout rollover, and atomically replaces
-   `registry.json`;
+6. validates the prior registry, retains all prior artifacts, changes only the
+   old current binding for the same role to historical on a role/layout rollover,
+   and atomically replaces `registry.json`;
 7. only after the registry replacement, atomically updates the `current`
    convenience symlink.
 

@@ -15,7 +15,8 @@ import subprocess
 import tempfile
 
 
-REGISTRY_SCHEMA_VERSION = 3
+REGISTRY_SCHEMA_VERSION = 4
+ROLE_AWARE_REGISTRY_SCHEMA_VERSION = 3
 LEGACY_REGISTRY_SCHEMA_VERSION = 2
 LEGACY_WORKER_MANIFEST_SCHEMA_VERSION = 1
 WORKER_MANIFEST_SCHEMA_VERSION = 2
@@ -144,6 +145,24 @@ def verify_embedded_commit(executable: Path, commit: str) -> None:
             f"built executable does not contain exact source commit {commit}")
 
 
+def verify_inference_build_identity(executable: Path, commit: str, digest: str) -> None:
+    result = subprocess.run(
+        [str(executable), "--build-identity"], check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if result.returncode != 0:
+        raise PublishError("inference worker build identity is unavailable")
+    fields = {}
+    for field in result.stdout.strip().split(","):
+        key, separator, value = field.partition("=")
+        if separator:
+            fields[key] = value
+    if (fields.get("artifact_role") != "lstm-infer-worker" or
+            fields.get("source_commit") != commit or
+            fields.get("executable_sha256") != f"sha256:{digest}"):
+        raise PublishError("inference worker build identity mismatch")
+
+
 def validate_inputs(
     executable: Path,
     worker_rule: str,
@@ -189,30 +208,32 @@ def load_registry(path: Path) -> dict:
         raise PublishError("existing semantic worker registry has an invalid shape")
     schema_version = value.get("schema_version")
     expected_fields = {"schema_version", "current_layout", "workers"}
-    if schema_version in {REGISTRY_SCHEMA_VERSION, LEGACY_REGISTRY_SCHEMA_VERSION}:
+    if schema_version in {REGISTRY_SCHEMA_VERSION,
+                          ROLE_AWARE_REGISTRY_SCHEMA_VERSION,
+                          LEGACY_REGISTRY_SCHEMA_VERSION}:
         expected_fields.add("runtimes")
     elif schema_version != 1:
         raise PublishError("existing semantic worker registry schema is unsupported")
     if set(value) != expected_fields or not isinstance(value.get("workers"), list):
         raise PublishError("existing semantic worker registry has an invalid shape")
-    layouts = [worker.get("semantic_layout") for worker in value["workers"]
-               if isinstance(worker, dict)]
-    if len(layouts) != len(value["workers"]) or len(layouts) != len(set(layouts)):
-        raise PublishError("existing semantic worker registry has duplicate/malformed layouts")
-    current = [worker for worker in value["workers"]
-               if worker.get("worker_rule") == "current"]
-    if value["current_layout"] is not None and (
-        len(current) != 1 or current[0].get("semantic_layout") != value["current_layout"]
-    ):
-        raise PublishError("existing semantic worker registry current rule is invalid")
+    keys = [(worker.get("semantic_layout"), worker.get("worker_role", "infer"))
+            for worker in value["workers"] if isinstance(worker, dict)]
+    if len(keys) != len(value["workers"]) or len(keys) != len(set(keys)):
+        raise PublishError("existing semantic worker registry has duplicate/malformed layout roles")
     validate_existing_registry(path.parent.resolve(), value)
     if schema_version != REGISTRY_SCHEMA_VERSION:
         workers = []
         for worker in value["workers"]:
-            upgraded = dict(worker)
-            upgraded["worker_role"] = "infer"
-            upgraded["artifact_manifest_schema_version"] = LEGACY_WORKER_MANIFEST_SCHEMA_VERSION
-            workers.append(upgraded)
+            roles = ["infer"]
+            if "train" in worker["capabilities"]:
+                roles.append("train")
+            for role in roles:
+                upgraded = dict(worker)
+                upgraded["worker_role"] = role
+                upgraded["artifact_manifest_schema_version"] = (
+                    worker.get("artifact_manifest_schema_version",
+                               LEGACY_WORKER_MANIFEST_SCHEMA_VERSION))
+                workers.append(upgraded)
         value = {
             "schema_version": REGISTRY_SCHEMA_VERSION,
             "current_layout": value["current_layout"],
@@ -227,7 +248,9 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
         "semantic_layout", "worker_rule", "model_input_width", "source_commit",
         "sha256", "executable", "manifest", "capabilities",
     }
-    if registry["schema_version"] in {REGISTRY_SCHEMA_VERSION, LEGACY_REGISTRY_SCHEMA_VERSION}:
+    if registry["schema_version"] in {REGISTRY_SCHEMA_VERSION,
+                                      ROLE_AWARE_REGISTRY_SCHEMA_VERSION,
+                                      LEGACY_REGISTRY_SCHEMA_VERSION}:
         required_fields.add("runtime_identity")
         runtimes = registry.get("runtimes")
         if not isinstance(runtimes, list) or not runtimes:
@@ -255,7 +278,7 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
         raise PublishError("existing semantic worker registry has no workers")
     for worker in registry["workers"]:
         expected_worker_fields = set(required_fields)
-        if registry["schema_version"] == REGISTRY_SCHEMA_VERSION:
+        if registry["schema_version"] >= ROLE_AWARE_REGISTRY_SCHEMA_VERSION:
             expected_worker_fields.add("worker_role")
             expected_worker_fields.add("artifact_manifest_schema_version")
         if set(worker) != expected_worker_fields:
@@ -276,21 +299,27 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
                 not all(isinstance(capability, str) for capability in capabilities) or
                 len(capabilities) != len(set(capabilities)) or
                 not set(capabilities) <= VALID_CAPABILITIES or
-                "infer" not in capabilities or
-                (registry["schema_version"] in {REGISTRY_SCHEMA_VERSION, LEGACY_REGISTRY_SCHEMA_VERSION} and
+                (registry["schema_version"] in {REGISTRY_SCHEMA_VERSION,
+                                                ROLE_AWARE_REGISTRY_SCHEMA_VERSION,
+                                                LEGACY_REGISTRY_SCHEMA_VERSION} and
                  runtime_identity not in identities)):
             raise PublishError("existing semantic worker registry worker contract is invalid")
-        if (registry["schema_version"] == REGISTRY_SCHEMA_VERSION and
-                worker.get("worker_role") != "infer"):
+        role = worker.get("worker_role", "infer")
+        manifest_schema = worker.get(
+            "artifact_manifest_schema_version",
+            LEGACY_WORKER_MANIFEST_SCHEMA_VERSION)
+        if (registry["schema_version"] >= ROLE_AWARE_REGISTRY_SCHEMA_VERSION and
+                role not in {"infer", "train"}):
             raise PublishError("existing semantic worker role is invalid")
-        if (registry["schema_version"] == REGISTRY_SCHEMA_VERSION and
+        if role not in capabilities:
+            raise PublishError("existing semantic worker role capability is invalid")
+        if (registry["schema_version"] >= ROLE_AWARE_REGISTRY_SCHEMA_VERSION and
+                role == "infer" and manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION and
                 set(capabilities) != {"infer"}):
             raise PublishError("existing role-aware inference worker capabilities are invalid")
         if (registry["schema_version"] != REGISTRY_SCHEMA_VERSION and
                 rule == "current" and set(capabilities) != VALID_CAPABILITIES):
             raise PublishError("existing current semantic worker capabilities are invalid")
-        role = worker.get("worker_role")
-        manifest_schema = worker.get("artifact_manifest_schema_version")
         relative_directory = (Path(f"layout{layout}") / role / commit / digest
                               if manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION
                               else Path(f"layout{layout}") / commit / digest)
@@ -326,6 +355,18 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
             runtime = next(item for item in registry["runtimes"]
                            if item["identity"] == runtime_identity)
             verify_runtime_links(artifact_root, directory, runtime)
+
+    current_roles = {
+        worker.get("worker_role", "infer")
+        for worker in registry["workers"]
+        if worker["worker_rule"] == "current" and
+        worker["semantic_layout"] == current_layout
+    }
+    if registry["schema_version"] == REGISTRY_SCHEMA_VERSION:
+        if current_roles != {"infer", "train"}:
+            raise PublishError("existing semantic worker registry current role bindings are invalid")
+    elif current_roles != {"infer"}:
+        raise PublishError("existing semantic worker registry current rule is invalid")
 
 
 def runtime_manifest(runtime_resources: dict[str, Path]) -> tuple[dict, str]:
@@ -549,6 +590,8 @@ def publish(
     digest = sha256(executable)
     if not SHA256_PATTERN.fullmatch(digest):
         raise PublishError("computed SHA-256 is malformed")
+    if check_embedded_commit:
+        verify_inference_build_identity(executable, commit, digest)
     if runtime_resources is None:
         runtime_resources = {
             built_identity: executable.parent / built_identity
@@ -588,6 +631,12 @@ def publish(
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         registry_path = artifact_root / "registry.json"
         registry = load_registry(registry_path)
+        if registry["current_layout"] is None:
+            raise PublishError(
+                "inference publication requires an existing training/reference binding")
+        if worker_rule == "current" and registry["current_layout"] != layout:
+            raise PublishError(
+                "inference publication cannot change current layout without a training/reference binding")
         runtime_value = stage_runtime_package(
             artifact_root,
             runtime_resources,
@@ -647,13 +696,15 @@ def publish(
                    (layout, worker_role)]
         if worker_rule == "current":
             for worker in workers:
-                if worker.get("worker_rule") == "current":
+                if (worker.get("worker_rule") == "current" and
+                        worker["worker_role"] == worker_role):
                     worker["worker_rule"] = "historical"
             registry["current_layout"] = layout
         elif registry["current_layout"] == layout:
             raise PublishError("cannot replace the current layout with a historical rule")
         workers.append(worker_value)
-        workers.sort(key=lambda worker: worker["semantic_layout"])
+        workers.sort(key=lambda worker: (worker["semantic_layout"],
+                                         worker["worker_role"]))
         registry["workers"] = workers
         if registry["current_layout"] is None:
             raise PublishError("historical publication requires an existing current worker")
