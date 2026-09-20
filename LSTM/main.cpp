@@ -2442,7 +2442,8 @@ int RunFeatureTrainability3Class(const std::string& fromDate, const std::string&
                          EvaluatePredictions(labels, trainCount, examples.size(),
                                              PredictRandomStumpForest(lastFeatures, trainCount, examples.size(), modelFeatureCount, forest)));
 
-    EA::LSTM lstm { tensor, 1, 0, EA::LSTM::TargetType::UpNeutralDownReturn };
+    EA::LSTM lstm { tensor, hidden_size, 1, 0,
+                    EA::LSTM::TargetType::UpNeutralDownReturn };
     auto hiddenBefore = BuildHiddenStateFeatureMatrix(lstm, tensor, examples, hiddenDiagIndices, modelFeatureCount, baseFeatureCount);
     PrintSeparabilityStats("FEATURE_HIDDEN_SEPARABILITY",
                            "lstm_last_hidden_state",
@@ -6469,6 +6470,7 @@ struct InferAllCandidate
     long long modelId = -1;
     std::string name;
     std::size_t modelInputWidth = 0;
+    std::size_t modelHiddenSize = 0;
     std::optional<size_t> completedEpochs;
     bool legacyMissingSymbol = false;
     bool metadataGap = false;
@@ -6705,6 +6707,7 @@ struct InferenceEvaluationResult
 };
 
 EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
+                                      std::size_t hiddenSize,
                                       float initialLongTerm,
                                       float initialShortTerm,
                                       EA::LSTM::TargetType targetType,
@@ -6712,7 +6715,7 @@ EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
                                       EA::FeatureAblationMask ablationMask = {})
 {
     ScopedDiagnosticCoutSilencer silence;
-    return EA::LSTM { tensor, initialLongTerm, initialShortTerm, targetType,
+    return EA::LSTM { tensor, hiddenSize, initialLongTerm, initialShortTerm, targetType,
                       modelInputWidth, std::move(ablationMask) };
 }
 
@@ -7826,6 +7829,7 @@ bool InferAllCandidateCompatible(pqxx::work& w,
                 modelMeta.inputWidth,
                 RuntimeTensorFeatureWidth(tensor));
             candidate.modelInputWidth = inputContract.modelInputWidth;
+            candidate.modelHiddenSize = modelMeta.hiddenSize;
             if (modelMeta.hiddenSize != static_cast<std::size_t>(hidden_size))
                 return configMismatch("hidden_size", hidden_size, modelMeta.hiddenSize);
         }
@@ -7849,6 +7853,8 @@ bool InferAllCandidateCompatible(pqxx::work& w,
                 return invalidMetadata("param", "invalid_lstm_gate_matrix_shape");
             candidate.modelInputWidth = static_cast<std::size_t>(
                 paramDims.n_rows - paramDims.n_cols / 4);
+            candidate.modelHiddenSize = static_cast<std::size_t>(
+                paramDims.n_cols / 4);
             (void)EA::ResolveModelInputContract(
                 candidate.modelInputWidth,
                 RuntimeTensorFeatureWidth(tensor));
@@ -8079,7 +8085,8 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                         << std::endl;
 
     EA::LSTM lstm = CreateLstmForRuntimeLogLevel(
-        tensor, 1, 0, requestedTargetType, candidate.modelInputWidth,
+        tensor, candidate.modelHiddenSize, 1, 0, requestedTargetType,
+        candidate.modelInputWidth,
         LoadModelFeatureAblationMask(w, candidate.modelId));
     PrintRuntimeLrConfig(lstm);
     DiagnosticOut() << "DIAG_LSTM_BINDING"
@@ -9016,6 +9023,11 @@ int main(int argc, const char * argv[])
                 : (inferenceConfig.has_value()
                    ? inferenceConfig->targetType
                    : EA::LSTM::TargetType::UpNeutralDownReturn);
+            const std::size_t runtimeLstmHiddenSize = resumeConfig.has_value()
+                ? resumeConfig->modelHiddenSize
+                : (inferenceConfig.has_value()
+                    ? inferenceConfig->modelHiddenSize
+                    : hidden_size);
             if (launchArgs.inferAll)
                 return RunInferAllForSymbol(runtimeDatabaseWork,
                                             launchArgs,
@@ -9042,7 +9054,8 @@ int main(int argc, const char * argv[])
                 return 0;
             }
             EA::LSTM l = CreateLstmForRuntimeLogLevel(
-                t, 1, 0, requestedTargetType, persistedModelInputWidth,
+                t, runtimeLstmHiddenSize, 1, 0, requestedTargetType,
+                persistedModelInputWidth,
                 runtimeFeatureAblationMask);
             if (!gRuntimeInferenceMode)
                 l.SetTrainingObjective(runtimeTrainingObjective);

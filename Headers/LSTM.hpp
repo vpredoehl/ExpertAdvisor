@@ -48,6 +48,7 @@ namespace EA
 class LSTM
 {
     const ::Tensor& t;
+    const std::size_t hiddenSize_;
     int n_in = 0;
 
     static inline int ClassFromLogReturn(float r, float threshold)
@@ -74,13 +75,13 @@ class LSTM
     inline void ApplyForgetGateBiasOffset(float offset)
     {
         // Gate column order is i, f, g, o.  The forget gate occupies
-        // bias columns [n_out, 2*n_out).  Use this immediately after the
+        // bias columns [H, 2H). Use this immediately after the
         // bias matrix is zero-filled or otherwise initialized.
-        LSTM_ASSERT(bias.Shape()[0] == 1 && bias.Shape()[1] == 4 * n_out,
+        LSTM_ASSERT(bias.Shape()[0] == 1 && bias.Shape()[1] == 4 * hiddenSize_,
                     "ApplyForgetGateBiasOffset: bias shape mismatch");
-        for (size_t j = 0; j < static_cast<size_t>(n_out); ++j)
+        for (size_t j = 0; j < hiddenSize_; ++j)
         {
-            const size_t forgetCol = static_cast<size_t>(n_out) + j;
+            const size_t forgetCol = hiddenSize_ + j;
             bias.SetValue(0, forgetCol, bias(0, forgetCol) + offset);
         }
     }
@@ -89,9 +90,9 @@ public:
 
     inline void ResetPreviousState()
     {
-        LSTM_ASSERT(prevHiddenState.Shape()[0] == 1 && prevHiddenState.Shape()[1] == hidden_size, "prevHiddenState shape mismatch");
-        LSTM_ASSERT(prevCellState.Shape()[0] == 1 && prevCellState.Shape()[1] == hidden_size, "prevCellState shape mismatch");
-        for (size_t j = 0; j < hidden_size; ++j)
+        LSTM_ASSERT(prevHiddenState.Shape()[0] == 1 && prevHiddenState.Shape()[1] == hiddenSize_, "prevHiddenState shape mismatch");
+        LSTM_ASSERT(prevCellState.Shape()[0] == 1 && prevCellState.Shape()[1] == hiddenSize_, "prevCellState shape mismatch");
+        for (size_t j = 0; j < hiddenSize_; ++j)
         {
             prevHiddenState.SetValue(0, j, 0.0f);
             prevCellState.SetValue(0, j, 0.0f);
@@ -127,15 +128,15 @@ public:
     
     float long_term, short_term, in;
     EAMatrix param;
-    EAMatrix prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };
-    EAMatrix bias { 1, 4 * n_out };
+    EAMatrix prevHiddenState, prevCellState;
+    EAMatrix bias;
     
     // Output head for next-step return regression: y_hat = h_T · returnHeadWeight + returnHeadBias
-    EAMatrix returnHeadWeight { hidden_size, 1 };
-    EAMatrix returnHeadBias { 1, 1 };
+    EAMatrix returnHeadWeight;
+    EAMatrix returnHeadBias;
     // 3-class classification head (down / neutral / up)
-    EAMatrix returnHeadDirWeight { hidden_size, direction_output_size };
-    EAMatrix returnHeadDirBias { 1, direction_output_size };
+    EAMatrix returnHeadDirWeight;
+    EAMatrix returnHeadDirBias;
     
     // Simple SGD learning rate for head-only training
     float learning_rate = 1e-3f / 3; // or /2 or /4
@@ -146,7 +147,8 @@ public:
         EA::TrainingObjective::Legacy();
     static bool suppressPhase3HiddenGeometryDiagnostics;
     
-    LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0,
+    LSTM(const ::Tensor&, std::size_t hiddenSize,
+         float initial_long_term = 1, float initial_short_term = 0,
          TargetType explicitTargetType = TargetType::UpNeutralDownReturn,
          std::optional<std::size_t> modelInputWidth = std::nullopt,
          EA::FeatureAblationMask ablationMask = {});
@@ -155,9 +157,9 @@ public:
     {
         // Keep the base gate biases at zero, then bias only the forget gate.
         // Gate column order is i, f, g, o; ApplyForgetGateBiasOffset targets f.
-        LSTM_ASSERT(bias.Shape()[0] == 1 && bias.Shape()[1] == 4 * n_out,
+        LSTM_ASSERT(bias.Shape()[0] == 1 && bias.Shape()[1] == 4 * hiddenSize_,
                     "InitializeBiasWithForgetGateOffset: bias shape mismatch");
-        for (size_t j = 0; j < static_cast<size_t>(4 * n_out); ++j) bias.SetValue(0, j, 0.0f);
+        for (size_t j = 0; j < 4 * hiddenSize_; ++j) bias.SetValue(0, j, 0.0f);
         ApplyForgetGateBiasOffset(forgetBiasOffset);
     }
 
@@ -169,6 +171,7 @@ public:
         const EA::TrainingObjective::Configuration& objective,
         bool initializeAuxiliaryHead = true);
     int InputFeatureCount() const { return n_in; }
+    std::size_t HiddenSize() const { return hiddenSize_; }
     const ::Tensor* BoundTensorAddress() const { return &t; }
     
     std::tuple<float, size_t, size_t> CalculateBatch(const Window, unsigned short);
@@ -220,7 +223,8 @@ private:
         EAMatrix& m;
         size_t colOffset;
         size_t inputCols;
-        inline size_t rows() const { return static_cast<size_t>(n_out); }
+        size_t hiddenSize;
+        inline size_t rows() const { return hiddenSize; }
         inline size_t cols() const { return inputCols; }
         inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
         inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
@@ -232,7 +236,8 @@ private:
         const EAMatrix& m;
         size_t colOffset;
         size_t inputCols;
-        inline size_t rows() const { return static_cast<size_t>(n_out); }
+        size_t hiddenSize;
+        inline size_t rows() const { return hiddenSize; }
         inline size_t cols() const { return inputCols; }
         inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
         inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
@@ -262,12 +267,12 @@ private:
     inline GateMatrixView gateMatrix(size_t gateIndex)
     {
         LSTM_ASSERT(gateIndex < 4, "gateMatrix: gateIndex must be < 4");
-        return GateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
+        return GateMatrixView{ param, gateIndex * hiddenSize_, static_cast<size_t>(n_in), hiddenSize_ };
     }
     inline ConstGateMatrixView gateMatrix(size_t gateIndex) const
     {
         LSTM_ASSERT(gateIndex < 4, "gateMatrix const: gateIndex must be < 4");
-        return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
+        return ConstGateMatrixView{ param, gateIndex * hiddenSize_, static_cast<size_t>(n_in), hiddenSize_ };
     }
 
     WindowWeights hoistWindowWeights() const;

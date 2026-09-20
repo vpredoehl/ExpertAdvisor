@@ -1463,15 +1463,15 @@ inline double L2NormAccum(const MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::
 struct EA::LSTM::BatchStepCache
 {
     EA::LSTM::EAMatrix x;      // (B, input_size)
-    EA::LSTM::EAMatrix h_prev; // (B, hidden_size)
-    EA::LSTM::EAMatrix c_prev; // (B, hidden_size)
-    EA::LSTM::EAMatrix i;      // (B, hidden_size)
-    EA::LSTM::EAMatrix f;      // (B, hidden_size)
-    EA::LSTM::EAMatrix g;      // (B, hidden_size)
-    EA::LSTM::EAMatrix o;      // (B, hidden_size)
-    EA::LSTM::EAMatrix c;      // (B, hidden_size)
-    EA::LSTM::EAMatrix h;      // (B, hidden_size)
-    EA::LSTM::EAMatrix z_f;      // (B, hidden_size)
+    EA::LSTM::EAMatrix h_prev; // (B, hiddenSize_)
+    EA::LSTM::EAMatrix c_prev; // (B, hiddenSize_)
+    EA::LSTM::EAMatrix i;      // (B, hiddenSize_)
+    EA::LSTM::EAMatrix f;      // (B, hiddenSize_)
+    EA::LSTM::EAMatrix g;      // (B, hiddenSize_)
+    EA::LSTM::EAMatrix o;      // (B, hiddenSize_)
+    EA::LSTM::EAMatrix c;      // (B, hiddenSize_)
+    EA::LSTM::EAMatrix h;      // (B, hiddenSize_)
+    EA::LSTM::EAMatrix z_f;      // (B, hiddenSize_)
 };
 
 struct EA::LSTM::WindowBatch
@@ -1541,7 +1541,7 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
         ResetPreviousState();
 
     auto ww = hoistWindowWeights();
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hiddenSize_));
     const size_t physicalTensorFeatureCount = (w.begin() != w.end())
         ? static_cast<size_t>((*w.begin()).Shape()[1])
         : 0;
@@ -1908,8 +1908,8 @@ inline void EA::LSTM::AccumulateHeadGradsBatch(EAMatrix& dW_accum,
 
 inline auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
 {
-    const auto W_x = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::Metal>(param, param.Shape()[0] - hidden_size);
-    const auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::Metal>(param, hidden_size);
+    const auto W_x = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::Metal>(param, param.Shape()[0] - hiddenSize_);
+    const auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::Metal>(param, hiddenSize_);
     const auto W_xh = param; // full (n_in + H) x (4H) matrix; dynamic row views taken later
     return WindowWeights{ W_xh, W_x, W_h };
 }
@@ -3057,19 +3057,30 @@ inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
 }
 
 EA::LSTM::LSTM(const Tensor& tt,
+               std::size_t hiddenSize,
                float lt,
                float st,
                TargetType explicitTargetType,
                std::optional<std::size_t> modelInputWidth,
                EA::FeatureAblationMask ablationMask)
   : t{ tt },
+    hiddenSize_{ hiddenSize },
     n_in { static_cast<int>(EA::ResolveModelInputContract(
         modelInputWidth.value_or(TensorFeatureCount(tt) + kReturnFeatureCount),
         TensorFeatureCount(tt)).modelInputWidth) },
     targetType { explicitTargetType },
     featureAblationMask { std::move(ablationMask) },
-    param  { static_cast<size_t>(n_in), 4 * n_out } // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out];
+    param  { static_cast<size_t>(n_in), 4 * hiddenSize_ },
+    prevHiddenState { 1, hiddenSize_ },
+    prevCellState { 1, hiddenSize_ },
+    bias { 1, 4 * hiddenSize_ },
+    returnHeadWeight { hiddenSize_, 1 },
+    returnHeadBias { 1, 1 },
+    returnHeadDirWeight { hiddenSize_, direction_output_size },
+    returnHeadDirBias { 1, direction_output_size }
 {
+    if (hiddenSize_ == 0)
+        throw std::runtime_error("LSTM ctor: hidden size must be positive");
     const size_t baseFeatureCount = TensorFeatureCount(tt);
     const auto inputContract = EA::ResolveModelInputContract(
         static_cast<size_t>(n_in), baseFeatureCount);
@@ -3086,50 +3097,50 @@ EA::LSTM::LSTM(const Tensor& tt,
                 "LSTM ctor: model input contract width mismatch");
 
     // Rebuild all size-dependent tensors from the resolved runtime input width.
-    param = EAMatrix(static_cast<size_t>(n_in + hidden_size), static_cast<size_t>(4 * n_out));
-    bias = EAMatrix(1, static_cast<size_t>(4 * n_out));
-    prevHiddenState = EAMatrix(1, hidden_size);
-    prevCellState = EAMatrix(1, hidden_size);
-    returnHeadWeight = EAMatrix(hidden_size, 1);
+    param = EAMatrix(static_cast<size_t>(n_in + hiddenSize_), static_cast<size_t>(4 * hiddenSize_));
+    bias = EAMatrix(1, static_cast<size_t>(4 * hiddenSize_));
+    prevHiddenState = EAMatrix(1, hiddenSize_);
+    prevCellState = EAMatrix(1, hiddenSize_);
+    returnHeadWeight = EAMatrix(hiddenSize_, 1);
     returnHeadBias = EAMatrix(1, 1);
-    returnHeadDirWeight = EAMatrix(hidden_size, direction_output_size);
+    returnHeadDirWeight = EAMatrix(hiddenSize_, direction_output_size);
     returnHeadDirBias = EAMatrix(1, direction_output_size);
 #if 0
     // Deterministic constant initialization for verification
     const float weightInit = 0.1f;
     const float biasInit   = 0.0f; // used below when initializing bias
     for (int r = 0; r < n_in; ++r)
-        for (int c = 0; c < 4 * n_out; ++c)
+        for (int c = 0; c < 4 * hiddenSize_; ++c)
             param.SetValue(r, c, weightInit);
     
         // initialize bias, previous hidden and previous cell state
-    for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, biasInit);
-    for (size_t j = 0; j < hidden_size; ++j)
+    for (size_t j = 0; j < 4 * hiddenSize_; ++j) bias.SetValue(0, j, biasInit);
+    for (size_t j = 0; j < hiddenSize_; ++j)
     {
         prevHiddenState.SetValue(0, j, 0.0f);
         prevCellState.SetValue(0, j, 0.0f);
     }
     
     // Initialize output head (small weights, zero bias)
-    for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
+    for (size_t i = 0; i < hiddenSize_; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
     returnHeadBias.SetValue(0, 0, 0.0f);
 
 #if LSTM_DEBUG_PRINTS
     std::cout << "LSTM ctor: baseFeatureCount=" << baseFeatureCount
               << " resolved_n_in=" << n_in
-              << " hidden_size=" << hidden_size
+              << " hidden_size=" << hiddenSize_
               << std::endl;
 #endif
     long_term = lt; short_term = st;
 #else
     // Xavier/Glorot uniform initialization limit
-    float limit = std::sqrt(6.0f / (static_cast<float>(n_in) + static_cast<float>(n_out)));
+    float limit = std::sqrt(6.0f / (static_cast<float>(n_in) + static_cast<float>(hiddenSize_)));
 
     {
         auto low = MetaNN::LowerAccess(param);
         float* p = low.MutableRawMemory();
-        const size_t cols = static_cast<size_t>(4 * n_out);
-        for (int r = 0; r < n_in + hidden_size; ++r)
+        const size_t cols = static_cast<size_t>(4 * hiddenSize_);
+        for (int r = 0; r < n_in + hiddenSize_; ++r)
         {
             const size_t rowOff = static_cast<size_t>(r) * cols;
             for (size_t c = 0; c < cols; ++c) p[rowOff + c] = uniform_symmetric(0.01f);
@@ -3139,7 +3150,7 @@ EA::LSTM::LSTM(const Tensor& tt,
     {
         auto low = MetaNN::LowerAccess(bias);
         float* bp = low.MutableRawMemory();
-        std::fill(bp, bp + static_cast<size_t>(4 * n_out), 0.0f);
+        std::fill(bp, bp + static_cast<size_t>(4 * hiddenSize_), 0.0f);
     }
     InitializeBiasWithForgetGateOffset(1.5f);
     ResetPreviousState();
@@ -3151,7 +3162,7 @@ EA::LSTM::LSTM(const Tensor& tt,
             {
                 auto lowW = MetaNN::LowerAccess(returnHeadWeight);
                 float* wp = lowW.MutableRawMemory();
-                std::fill(wp, wp + hidden_size, 0.01f);
+                std::fill(wp, wp + hiddenSize_, 0.01f);
             }
             {
                 auto lowB = MetaNN::LowerAccess(returnHeadBias);
@@ -3165,7 +3176,7 @@ EA::LSTM::LSTM(const Tensor& tt,
                 float* wp = lowW.MutableRawMemory();
                 const size_t cols = returnHeadDirWeight.Shape()[1];
                 const float scale = 0.05f; // small random init to break symmetry
-                for (size_t i = 0; i < hidden_size; ++i)
+                for (size_t i = 0; i < hiddenSize_; ++i)
                 {
                     for (size_t j = 0; j < cols; ++j)
                     {
@@ -3209,7 +3220,7 @@ void EA::LSTM::SetTrainingObjective(
     {
         auto lowW = MetaNN::LowerAccess(returnHeadWeight);
         float* weights = lowW.MutableRawMemory();
-        std::fill(weights, weights + hidden_size, 0.01f);
+        std::fill(weights, weights + hiddenSize_, 0.01f);
         auto lowB = MetaNN::LowerAccess(returnHeadBias);
         lowB.MutableRawMemory()[0] = 0.0f;
     }
@@ -3221,7 +3232,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     const size_t calcBatchCallIdx = s_calcBatchCalls++;
     const bool isFirstBatchCall = (calcBatchCallIdx == 0);
     EAMatrix head_logits_batch(effectiveMiniBatchWindows, direction_output_size);
-    EAMatrix phase3HeadDeltaH(1, hidden_size);
+    EAMatrix phase3HeadDeltaH(1, hiddenSize_);
     EAMatrix phase3HeadDeltaLogitsBefore(1, direction_output_size);
     EAMatrix phase3HeadDeltaProbsBefore(1, direction_output_size);
     std::vector<int> phase3HeadDeltaActualClasses;
@@ -3260,42 +3271,42 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     size_t bucket3_70p_correct = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_batch(effectiveMiniBatchWindows, static_cast<size_t>(n_in + hidden_size));
-    EAMatrix h_batch(effectiveMiniBatchWindows, hidden_size);
-    EAMatrix c_batch(effectiveMiniBatchWindows, hidden_size);
-    EAMatrix d_h_batch(effectiveMiniBatchWindows, hidden_size);
-    EAMatrix d_c_batch(effectiveMiniBatchWindows, hidden_size);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_batch(effectiveMiniBatchWindows, static_cast<size_t>(n_in + hiddenSize_));
+    EAMatrix h_batch(effectiveMiniBatchWindows, hiddenSize_);
+    EAMatrix c_batch(effectiveMiniBatchWindows, hiddenSize_);
+    EAMatrix d_h_batch(effectiveMiniBatchWindows, hiddenSize_);
+    EAMatrix d_c_batch(effectiveMiniBatchWindows, hiddenSize_);
     ForwardBatchScratch forward_scratch;
 
     GateAccumulators G_bin {
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_)
     };
     GateAccumulators G_reg {
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_),
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hiddenSize_)
     };
 
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hidden_size, returnHeadDirWeight.Shape()[1]);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hiddenSize_, returnHeadDirWeight.Shape()[1]);
     // Head gradient accumulators across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headW_accum_f(hidden_size, 1);
-    { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f); }
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headW_accum_f(hiddenSize_, 1);
+    { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hiddenSize_, 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
-    { auto low = MetaNN::LowerAccess(d_headDirW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * returnHeadDirWeight.Shape()[1], 0.0f); }
+    { auto low = MetaNN::LowerAccess(d_headDirW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hiddenSize_ * returnHeadDirWeight.Shape()[1], 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirB_accum_f(1, returnHeadDirBias.Shape()[1]);
     { auto low = MetaNN::LowerAccess(d_headDirB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + returnHeadDirBias.Shape()[1], 0.0f); }
 
@@ -3651,15 +3662,15 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         ++profile.mini_batches;
 #endif
 
-        if (h_batch.Shape()[0] != B || h_batch.Shape()[1] != hidden_size)
-            h_batch = EAMatrix(B, hidden_size);
-        if (c_batch.Shape()[0] != B || c_batch.Shape()[1] != hidden_size)
-            c_batch = EAMatrix(B, hidden_size);
+        if (h_batch.Shape()[0] != B || h_batch.Shape()[1] != hiddenSize_)
+            h_batch = EAMatrix(B, hiddenSize_);
+        if (c_batch.Shape()[0] != B || c_batch.Shape()[1] != hiddenSize_)
+            c_batch = EAMatrix(B, hiddenSize_);
         {
             auto lowH = MetaNN::LowerAccess(h_batch);
             auto lowC = MetaNN::LowerAccess(c_batch);
-            std::fill(lowH.MutableRawMemory(), lowH.MutableRawMemory() + B * hidden_size, 0.0f);
-            std::fill(lowC.MutableRawMemory(), lowC.MutableRawMemory() + B * hidden_size, 0.0f);
+            std::fill(lowH.MutableRawMemory(), lowH.MutableRawMemory() + B * hiddenSize_, 0.0f);
+            std::fill(lowC.MutableRawMemory(), lowC.MutableRawMemory() + B * hiddenSize_, 0.0f);
         }
 
         auto ww = hoistWindowWeights();
@@ -3855,14 +3866,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 auto biasMem = lowBias.SharedMemory();
                 auto yMem = lowY.SharedMemory();
 
-                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
+                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hiddenSize_, direction_output_size);
 #if LSTM_SHAPE_DIAG
                 static bool s_printed_head_matmul_shapes = false;
                 if (!s_printed_head_matmul_shapes)
                 {
                     std::cout << "DIAG_HEAD_MATMUL_SHAPE"
                               << ",m=" << B
-                              << ",k=" << hidden_size
+                              << ",k=" << hiddenSize_
                               << ",n=" << direction_output_size
                               << std::endl;
                     s_printed_head_matmul_shapes = true;
@@ -3881,14 +3892,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 auto biasMem = lowBias.SharedMemory();
                 auto yMem = lowY.SharedMemory();
 
-                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
+                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hiddenSize_, direction_output_size);
 #if LSTM_SHAPE_DIAG
                 static bool s_printed_head_matmul_shapes = false;
                 if (!s_printed_head_matmul_shapes)
                 {
                     std::cout << "DIAG_HEAD_MATMUL_SHAPE"
                               << ",m=" << B
-                              << ",k=" << hidden_size
+                              << ",k=" << hiddenSize_
                               << ",n=" << direction_output_size
                               << std::endl;
                     s_printed_head_matmul_shapes = true;
@@ -4110,7 +4121,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             std::array<std::vector<double>, direction_output_size> hSumByActual;
             std::array<double, direction_output_size> hSumSqByActual {0.0, 0.0, 0.0};
             for (size_t cls = 0; cls < direction_output_size; ++cls)
-                hSumByActual[cls].assign(hidden_size, 0.0);
+                hSumByActual[cls].assign(hiddenSize_, 0.0);
 
             for (size_t b = 0; b < B; ++b)
             {
@@ -4150,10 +4161,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     logitSumByActual[static_cast<size_t>(cls)][pc] += static_cast<double>(z[pc]);
                     probSumByActual[static_cast<size_t>(cls)][pc] += static_cast<double>(p[pc]);
                 }
-                if (hHostForSeparation.cols == hidden_size && b < hHostForSeparation.rows)
+                if (hHostForSeparation.cols == hiddenSize_ && b < hHostForSeparation.rows)
                 {
                     const size_t clsIdx = static_cast<size_t>(cls);
-                    for (size_t h = 0; h < hidden_size; ++h)
+                    for (size_t h = 0; h < hiddenSize_; ++h)
                     {
                         const double hv = static_cast<double>(hHostForSeparation.data[b * hHostForSeparation.cols + h]);
                         hSumByActual[clsIdx][h] += hv;
@@ -4165,12 +4176,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     const size_t clsIdx = static_cast<size_t>(cls);
                     double projection = 0.0;
 
-                    if (hHostForSeparation.cols == hidden_size && b < hHostForSeparation.rows)
+                    if (hHostForSeparation.cols == hiddenSize_ && b < hHostForSeparation.rows)
                     {
                         auto lowHeadW = MetaNN::LowerAccess(returnHeadDirWeight);
                         const float* wptr = lowHeadW.RawMemory();
 
-                        for (size_t h = 0; h < hidden_size; ++h)
+                        for (size_t h = 0; h < hiddenSize_; ++h)
                         {
                             const double hv = static_cast<double>(
                                 hHostForSeparation.data[b * hHostForSeparation.cols + h]);
@@ -4442,14 +4453,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                         : 1.0;
                     double meanNormSq = 0.0;
                     double meanSq = 0.0;
-                    for (size_t h = 0; h < hidden_size; ++h)
+                    for (size_t h = 0; h < hiddenSize_; ++h)
                     {
                         const double mean = hSumByActual[actualCls][h] / count;
                         meanNormSq += mean * mean;
                         meanSq += mean * mean;
                     }
-                    const double elemMeanSq = meanSq / static_cast<double>(hidden_size);
-                    const double elemSecondMoment = hSumSqByActual[actualCls] / (count * static_cast<double>(hidden_size));
+                    const double elemMeanSq = meanSq / static_cast<double>(hiddenSize_);
+                    const double elemSecondMoment = hSumSqByActual[actualCls] / (count * static_cast<double>(hiddenSize_));
                     hMeanNormByActual[actualCls] = std::sqrt(meanNormSq);
                     hStdByActual[actualCls] = std::sqrt(std::max(0.0, elemSecondMoment - elemMeanSq));
                 }
@@ -4459,7 +4470,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     const double countA = actualHist[a] ? static_cast<double>(actualHist[a]) : 1.0;
                     const double countB = actualHist[b] ? static_cast<double>(actualHist[b]) : 1.0;
                     double distSq = 0.0;
-                    for (size_t h = 0; h < hidden_size; ++h)
+                    for (size_t h = 0; h < hiddenSize_; ++h)
                     {
                         const double ma = hSumByActual[a][h] / countA;
                         const double mb = hSumByActual[b][h] / countB;
@@ -4489,7 +4500,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 double centroidMarginMin = centroidLargeDistance;
                 double centroidMarginMax = -centroidLargeDistance;
 
-                if (hHostForSeparation.cols == hidden_size)
+                if (hHostForSeparation.cols == hiddenSize_)
                 {
                     for (size_t row = 0; row < B && row < hHostForSeparation.rows; ++row)
                     {
@@ -4508,7 +4519,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
                         bool rowFinite = true;
                         long double rowNormSq = 0.0L;
-                        for (size_t h = 0; h < hidden_size; ++h)
+                        for (size_t h = 0; h < hiddenSize_; ++h)
                         {
                             const double hv = static_cast<double>(
                                 hHostForSeparation.data[row * hHostForSeparation.cols + h]);
@@ -4538,7 +4549,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
                             const double count = static_cast<double>(candidateCount);
                             double distSq = 0.0;
-                            for (size_t h = 0; h < hidden_size; ++h)
+                            for (size_t h = 0; h < hiddenSize_; ++h)
                             {
                                 const double hv = static_cast<double>(
                                     hHostForSeparation.data[row * hHostForSeparation.cols + h]);
@@ -4596,7 +4607,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
                 std::cout << "DIAG_H_SEPARATION_"
                           << ",update=" << phase3HeadDiagIdx
-                          << ",hidden_size=" << hidden_size
+                          << ",hidden_size=" << hiddenSize_
                           << ",count_down=" << actualHist[0]
                           << ",count_neutral=" << actualHist[1]
                           << ",count_up=" << actualHist[2]
@@ -4614,7 +4625,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 std::cout << "DIAG_H_CENTROID_ACC_"
                           << ",update=" << phase3HeadDiagIdx
                           << ",mode=leave_one_out"
-                          << ",hidden_size=" << hidden_size
+                          << ",hidden_size=" << hiddenSize_
                           << ",total=" << centroidTotal
                           << ",correct=" << centroidCorrect
                           << ",accuracy=" << (centroidTotal ? static_cast<double>(centroidCorrect) / static_cast<double>(centroidTotal) : 0.0)
@@ -4647,7 +4658,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 s_phase3HiddenReplayCapture.valid = true;
                 s_phase3HiddenReplayCapture.batchBase = batchBase;
                 s_phase3HiddenReplayCapture.rows = B;
-                s_phase3HiddenReplayCapture.hiddenCols = hidden_size;
+                s_phase3HiddenReplayCapture.hiddenCols = hiddenSize_;
                 s_phase3HiddenReplayCapture.effectiveMiniBatchWindows = effectiveMiniBatchWindows;
                 s_phase3HiddenReplayCapture.windowCountAtCapture = windowCount;
                 s_phase3HiddenReplayCapture.startIndices.clear();
@@ -4731,8 +4742,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 for (size_t b = 0; b < B; ++b)
                 {
                     float prediction = auxiliaryBias;
-                    for (size_t h = 0; h < hidden_size; ++h)
-                        prediction += hptr[b * hidden_size + h] * wptr[h];
+                    for (size_t h = 0; h < hiddenSize_; ++h)
+                        prediction += hptr[b * hiddenSize_ + h] * wptr[h];
                     const double target = static_cast<double>(wb.targets[b]);
                     const double residual = static_cast<double>(prediction) - target;
                     errs[b] = static_cast<float>(
@@ -4770,14 +4781,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     bMem,
                     biasMem,
                     yMem,
-                    B, hidden_size, 1);
+                    B, hiddenSize_, 1);
 #if LSTM_SHAPE_DIAG
                 static bool s_printed_head_reg_matmul_shapes = false;
                 if (!s_printed_head_reg_matmul_shapes)
                 {
                     std::cout << "DIAG_HEAD_REG_MATMUL_SHAPE"
                               << ",m=" << B
-                              << ",k=" << hidden_size
+                              << ",k=" << hiddenSize_
                               << ",n=1"
                               << std::endl;
                     s_printed_head_reg_matmul_shapes = true;
@@ -4801,14 +4812,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     bMem,
                     biasMem,
                     yMem,
-                    B, hidden_size, 1);
+                    B, hiddenSize_, 1);
 #if LSTM_SHAPE_DIAG
                 static bool s_printed_head_reg_matmul_shapes = false;
                 if (!s_printed_head_reg_matmul_shapes)
                 {
                     std::cout << "DIAG_HEAD_REG_MATMUL_SHAPE"
                               << ",m=" << B
-                              << ",k=" << hidden_size
+                              << ",k=" << hiddenSize_
                               << ",n=1"
                               << std::endl;
                     s_printed_head_reg_matmul_shapes = true;
@@ -4854,7 +4865,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 auto lowAuxiliary = MetaNN::LowerAccess(auxiliaryDh);
                 float* combined = lowCombined.MutableRawMemory();
                 const float* auxiliary = lowAuxiliary.RawMemory();
-                for (size_t index = 0; index < B * hidden_size; ++index)
+                for (size_t index = 0; index < B * hiddenSize_; ++index)
                     combined[index] += auxiliary[index];
             }
             static size_t s_phase3DhFromHeadDiagCount = 0;
@@ -4975,13 +4986,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                           << ",cos_neutral_up=" << phase3Cosine(dhMeanByActual[1], dhMeanByActual[2])
                           << std::endl;
             }
-            if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hidden_size)
-                d_c_batch = EAMatrix(B, hidden_size);
+            if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hiddenSize_)
+                d_c_batch = EAMatrix(B, hiddenSize_);
             zeroFill(d_c_batch);
 
-            zeroGateAccumulators(G_bin, param.Shape()[0], hidden_size);
+            zeroGateAccumulators(G_bin, param.Shape()[0], hiddenSize_);
 
-            auto gb = hoistGateBlocks(ww.W_h, hidden_size);
+            auto gb = hoistGateBlocks(ww.W_h, hiddenSize_);
             if (phase3DhDiagEnabled)
             {
                 const double whINorm = FroNormEvalHost(gb.W_hi);
@@ -5009,14 +5020,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 const double whGMaxAbs = phase3MaxAbsHost(gb.W_hg);
                 const double whOMaxAbs = phase3MaxAbsHost(gb.W_ho);
 
-                const double whIAvgColNorm = hidden_size > 0 ? whINorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
-                const double whFAvgColNorm = hidden_size > 0 ? whFNorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
-                const double whGAvgColNorm = hidden_size > 0 ? whGNorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
-                const double whOAvgColNorm = hidden_size > 0 ? whONorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
+                const double whIAvgColNorm = hiddenSize_ > 0 ? whINorm / std::sqrt(static_cast<double>(hiddenSize_)) : 0.0;
+                const double whFAvgColNorm = hiddenSize_ > 0 ? whFNorm / std::sqrt(static_cast<double>(hiddenSize_)) : 0.0;
+                const double whGAvgColNorm = hiddenSize_ > 0 ? whGNorm / std::sqrt(static_cast<double>(hiddenSize_)) : 0.0;
+                const double whOAvgColNorm = hiddenSize_ > 0 ? whONorm / std::sqrt(static_cast<double>(hiddenSize_)) : 0.0;
 
                 std::cout << "DIAG_BPTT_RECURRENT_BLOCK_SCALE_"
                           << ",call=" << phase3DhFromHeadDiagIdx
-                          << ",hidden_size=" << hidden_size
+                          << ",hidden_size=" << hiddenSize_
                           << ",W_hi_fro_norm=" << whINorm
                           << ",W_hf_fro_norm=" << whFNorm
                           << ",W_hg_fro_norm=" << whGNorm
@@ -5266,7 +5277,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 PrintPhase3NormStats("DIAG_DH_AFTER_BPTT_", phase3DhFromHeadDiagIdx, "d_c_batch", d_c_batch);
             }
 
-            mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hidden_size);
+            mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hiddenSize_);
             {
                 static size_t s_phase3GradDiagCount = 0;
                 const size_t phase3GradDiagIdx = s_phase3GradDiagCount++;
@@ -5311,7 +5322,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     [&]() -> double
                     {
                         const size_t recurrentRowsBegin = static_cast<size_t>(n_in);
-                        const size_t recurrentRowsCount = hidden_size;
+                        const size_t recurrentRowsCount = hiddenSize_;
 
                         auto low = MetaNN::LowerAccess(d_param_accum);
                         const AccumScalar* ptr = low.RawMemory();
@@ -5409,7 +5420,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                                 std::pow(FroNormEvalHost(G_bin.db_g), 2.0) +
                                 std::pow(FroNormEvalHost(G_bin.db_o), 2.0));
 
-                            EAMatrix d_headDirW_mb(hidden_size, returnHeadDirWeight.Shape()[1]);
+                            EAMatrix d_headDirW_mb(hiddenSize_, returnHeadDirWeight.Shape()[1]);
                             EAMatrix d_headDirB_mb(1, returnHeadDirBias.Shape()[1]);
                             zeroFill(d_headDirW_mb);
                             zeroFill(d_headDirB_mb);
@@ -5441,17 +5452,17 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             AccumulateHeadGradsBatch(d_headW_accum_f, d_headB_accum_f, h_batch, errs);
 
             d_h_batch = BuildHeadDhBatch(errs, returnHeadWeight, LSTM_CORE_GRAD_SCALE);
-            if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hidden_size)
-                d_c_batch = EAMatrix(B, hidden_size);
+            if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hiddenSize_)
+                d_c_batch = EAMatrix(B, hiddenSize_);
             zeroFill(d_c_batch);
 
-            zeroGateAccumulators(G_reg, param.Shape()[0], hidden_size);
+            zeroGateAccumulators(G_reg, param.Shape()[0], hiddenSize_);
 
-            auto gb = hoistGateBlocks(ww.W_h, hidden_size);
+            auto gb = hoistGateBlocks(ww.W_h, hiddenSize_);
             for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_reg);
 
-            mergeGateAccumulators(G_reg, d_param_accum, d_bias_accum, hidden_size);
+            mergeGateAccumulators(G_reg, d_param_accum, d_bias_accum, hiddenSize_);
             #if LSTM_HEAVY_DIAG
                         if ((!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall) && isFirstMiniBatch)
                         {
@@ -5474,7 +5485,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                                 std::pow(FroNormEvalHost(G_reg.db_g), 2.0) +
                                 std::pow(FroNormEvalHost(G_reg.db_o), 2.0));
 
-                            EAMatrix d_headW_mb(hidden_size, 1);
+                            EAMatrix d_headW_mb(hiddenSize_, 1);
                             EAMatrix d_headB_mb(1, 1);
                             zeroFill(d_headW_mb);
                             zeroFill(d_headB_mb);
@@ -5638,7 +5649,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                   << std::endl;
     }
 
-    // Print the current returnHeadWeight vector (hidden_size x 1)
+    // Print the current returnHeadWeight vector (hiddenSize_ x 1)
     std::cout << "returnHeadBias: [" << returnHeadBias(0, 0) << "]" << std::endl;
     std::cout << "returnHeadWeight(0,0): " << returnHeadWeight(0,0)
               << " (1,0): " << returnHeadWeight(1,0)
@@ -6416,7 +6427,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                             s_phase3HiddenReplayCapture.actualClasses.size() == s_phase3HiddenReplayCapture.rows &&
                             s_phase3HiddenReplayCapture.hBefore.rows == s_phase3HiddenReplayCapture.rows &&
                             s_phase3HiddenReplayCapture.hBefore.cols > 0 &&
-                            s_phase3HiddenReplayCapture.hBefore.cols == hidden_size &&
+                            s_phase3HiddenReplayCapture.hBefore.cols == hiddenSize_ &&
                             s_phase3HiddenReplayCapture.startIndices.size() == s_phase3HiddenReplayCapture.rows &&
                             s_phase3HiddenReplayCapture.replayTimeSteps > 0 &&
                             s_phase3HiddenReplayCapture.replayInputCols == static_cast<size_t>(n_in) &&
@@ -6429,11 +6440,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                         {
                             if (phase3CanReplayHiddenBatch)
                             {
-                                EAMatrix replayH(s_phase3HiddenReplayCapture.rows, hidden_size);
-                                EAMatrix replayC(s_phase3HiddenReplayCapture.rows, hidden_size);
+                                EAMatrix replayH(s_phase3HiddenReplayCapture.rows, hiddenSize_);
+                                EAMatrix replayC(s_phase3HiddenReplayCapture.rows, hiddenSize_);
                                 EAMatrix replayConcat(
                                     s_phase3HiddenReplayCapture.rows,
-                                    static_cast<size_t>(n_in + hidden_size));
+                                    static_cast<size_t>(n_in + hiddenSize_));
 
                                 zeroFill(replayH);
                                 zeroFill(replayC);
@@ -6745,11 +6756,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                         }
                         else
                         {
-                            EAMatrix replayH(s_phase3HiddenReplayCapture.rows, hidden_size);
-                            EAMatrix replayC(s_phase3HiddenReplayCapture.rows, hidden_size);
+                            EAMatrix replayH(s_phase3HiddenReplayCapture.rows, hiddenSize_);
+                            EAMatrix replayC(s_phase3HiddenReplayCapture.rows, hiddenSize_);
                             EAMatrix replayConcat(
                                 s_phase3HiddenReplayCapture.rows,
-                                static_cast<size_t>(n_in + hidden_size));
+                                static_cast<size_t>(n_in + hiddenSize_));
 
                             zeroFill(replayH);
                             zeroFill(replayC);
@@ -6828,7 +6839,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                             auto phase3ReplayCentroidDistance =
                             [&](const Phase3HostMatrix& hmat, size_t classA, size_t classB) -> double
                             {
-                                if (hmat.rows == 0 || hmat.cols != hidden_size)
+                                if (hmat.rows == 0 || hmat.cols != hiddenSize_)
                                     return 0.0;
                                 if (s_phase3HiddenReplayCapture.actualClasses.size() != hmat.rows)
                                     return 0.0;
@@ -6836,8 +6847,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                                     s_phase3HiddenReplayCapture.actualHist[classB] == 0)
                                     return 0.0;
 
-                                std::vector<double> meanA(hidden_size, 0.0);
-                                std::vector<double> meanB(hidden_size, 0.0);
+                                std::vector<double> meanA(hiddenSize_, 0.0);
+                                std::vector<double> meanB(hiddenSize_, 0.0);
 
                                 for (size_t row = 0; row < hmat.rows; ++row)
                                 {
@@ -6847,7 +6858,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
                                     std::vector<double>& mean =
                                         (cls == static_cast<int>(classA)) ? meanA : meanB;
-                                    for (size_t h = 0; h < hidden_size; ++h)
+                                    for (size_t h = 0; h < hiddenSize_; ++h)
                                     {
                                         mean[h] += static_cast<double>(hmat.data[row * hmat.cols + h]);
                                     }
@@ -6857,7 +6868,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                                 const double denomB = static_cast<double>(s_phase3HiddenReplayCapture.actualHist[classB]);
 
                                 double distSq = 0.0;
-                                for (size_t h = 0; h < hidden_size; ++h)
+                                for (size_t h = 0; h < hiddenSize_; ++h)
                                 {
                                     const double a = meanA[h] / denomA;
                                     const double b = meanB[h] / denomB;
@@ -7374,7 +7385,7 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hiddenSize_));
     const size_t physicalTensorFeatureCount = (w.begin() != w.end())
         ? static_cast<size_t>((*w.begin()).Shape()[1])
         : 0;
@@ -7468,7 +7479,7 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hiddenSize_));
     const size_t physicalTensorFeatureCount = (w.begin() != w.end())
         ? static_cast<size_t>((*w.begin()).Shape()[1])
         : 0;
