@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <cmath>
+#include <functional>
 #include <optional>
 #include <utility>
 
@@ -16,6 +17,7 @@
 #include "Donchian20Mode.hpp"
 #include "DonchianLookback.hpp"
 #include "FeatureWarmupScope.hpp"
+#include "FeatureAblation.hpp"
 #include "ModelInputContract.hpp"
 #include "ModelInputExpansion.hpp"
 #include "TrainingObjective.hpp"
@@ -265,7 +267,7 @@ public:
         saveAsciiMeta(w, modelId, "donchian20_mode_meta", Donchian20ModeText(mode));
     }
 
-    static Donchian20Mode loadDonchian20ModeMeta(pqxx::work& w,
+    static Donchian20Mode loadDonchian20ModeMeta(pqxx::transaction_base& w,
                                                  long long modelId)
     {
         try
@@ -291,7 +293,7 @@ public:
     }
 
     // Missing metadata predates configurable lookback and means Donchian-20.
-    static std::size_t loadDonchianLookbackMeta(pqxx::work& w,
+    static std::size_t loadDonchianLookbackMeta(pqxx::transaction_base& w,
                                                 long long modelId)
     {
         try
@@ -319,7 +321,7 @@ public:
 
     // Missing metadata is durable evidence of the historic cold boundary.
     static EA::FeatureWarmupScope loadFeatureWarmupScopeMeta(
-        pqxx::work& w,
+        pqxx::transaction_base& w,
         long long modelId)
     {
         try
@@ -474,7 +476,7 @@ public:
     }
 
     static EA::TrainingObjective::Configuration loadTrainingObjectiveMeta(
-        pqxx::work& w,
+        pqxx::transaction_base& w,
         long long modelId)
     {
         const pqxx::result markers = w.exec(
@@ -616,7 +618,7 @@ public:
         saveParameter(w, modelId, "train_symbol_meta", meta);
     }
 
-    static std::string decodeTrainSymbolMeta(pqxx::work& w, long long modelId)
+    static std::string decodeTrainSymbolMeta(pqxx::transaction_base& w, long long modelId)
     {
         auto dims = loadParameterDims(w, modelId, "train_symbol_meta");
         auto vals = loadParameterValues(w, modelId, "train_symbol_meta");
@@ -644,7 +646,7 @@ public:
         saveAsciiMeta(w, modelId, "train_range_meta", fromDate + "|" + toDate);
     }
 
-    static std::pair<std::string, std::string> decodeTrainRangeMeta(pqxx::work& w, long long modelId)
+    static std::pair<std::string, std::string> decodeTrainRangeMeta(pqxx::transaction_base& w, long long modelId)
     {
         const std::string encoded = decodeAsciiMeta(w, modelId, "train_range_meta");
         const size_t sep = encoded.find('|');
@@ -653,7 +655,7 @@ public:
         return { encoded.substr(0, sep), encoded.substr(sep + 1) };
     }
 
-    static void loadOptimizerMeta(pqxx::work& w, long long modelId, EA::LSTM& lstm)
+    static void loadOptimizerMeta(pqxx::transaction_base& w, long long modelId, EA::LSTM& lstm)
     {
         auto dims = loadParameterDims(w, modelId, "optimizer_meta");
         auto vals = loadParameterValues(w, modelId, "optimizer_meta");
@@ -718,6 +720,80 @@ private:
 public:
 
     struct ParamDims { int n_rows; int n_cols; };
+
+    // Fully owned database representation of one selected checkpoint.  It is
+    // intentionally Tensor-free: a caller may commit its short read snapshot
+    // before constructing a Tensor-backed LSTM and applying these values.
+    struct PersistedMatrix
+    {
+        std::size_t rows = 0;
+        std::size_t cols = 0;
+        std::vector<double> values;
+    };
+
+    struct PersistedOptimizerMeta
+    {
+        int schemaVersion = 0;
+        int optimizerType = 0;
+        std::size_t updateCount = 0;
+        int firstMomentBufferCount = 0;
+        int secondMomentBufferCount = 0;
+    };
+
+    struct PersistedModelIdentity
+    {
+        long long modelId = -1;
+        std::optional<long long> experimentId;
+        std::optional<long long> parentModelId;
+        EA::FeatureAblationMask featureAblationMask;
+        std::string featureAblationCanonicalText;
+
+        // The model/experiment pair carries this immutable identity after
+        // migration 092.  Keep it owned here without coupling this narrow
+        // materialization boundary to an economic-event repository session.
+        std::optional<long long> economicCalendarSnapshotId;
+        std::optional<std::string> economicCalendarSnapshotHash;
+    };
+
+    struct PersistedModelMaterialization
+    {
+        PersistedModelIdentity identity;
+        PersistedModelMeta modelMeta;
+        std::optional<EA::ModelInputSemanticMetadata> semanticMetadata;
+        std::optional<EA::InputWidthExpansionProvenance>
+            inputWidthExpansionProvenance;
+
+        EA::TrainingObjective::Configuration trainingObjective =
+            EA::TrainingObjective::Legacy();
+        std::optional<std::string> trainingObjectiveCanonical;
+        std::optional<std::string> trainingObjectiveHash;
+        std::optional<PersistedTargetMeta> targetMeta;
+
+        PersistedMatrix param;
+        PersistedMatrix bias;
+        std::optional<PersistedMatrix> returnHeadWeight;
+        std::optional<PersistedMatrix> returnHeadBias;
+        std::optional<PersistedMatrix> returnHeadDirWeight;
+        std::optional<PersistedMatrix> returnHeadDirBias;
+
+        std::optional<PersistedMatrix> trainConfigMeta;
+        std::optional<PersistedOptimizerMeta> optimizerMeta;
+        std::optional<std::size_t> completedEpoch;
+        std::optional<std::string> trainSymbol;
+        std::optional<std::pair<std::string, std::string>> trainRange;
+        Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
+        EA::FeatureWarmupScope featureWarmupScope =
+            EA::FeatureWarmupScope::LegacyColdBoundary;
+        std::size_t donchianLookback = kDefaultDonchianLookback;
+    };
+
+    // This callback exists solely to make the reader's snapshot boundary
+    // observable in deterministic integration tests.  It runs immediately
+    // after the reader's first model-identity query; it is empty in production.
+    struct PersistedModelMaterializationReadOptions
+    {
+        std::function<void()> afterFirstRead;
+    };
 
     // Load model_meta and prove that its structural width agrees with the
     // persisted input parameter matrix.  model_meta is written from that
@@ -805,7 +881,7 @@ public:
     }
 
     template <typename T = float>
-    static MatGPU<T> loadParameterMatrix(pqxx::work& w,
+    static MatGPU<T> loadParameterMatrix(pqxx::transaction_base& w,
                                          long long modelId,
                                          const std::string& paramName)
     {
@@ -817,7 +893,7 @@ public:
     // Decode the persisted target contract used to choose the real training
     // path.  Type 3 remains accepted as the legacy spelling of the current
     // three-class direction target.
-    static PersistedTargetMeta loadRequiredTargetMeta(pqxx::work& w,
+    static PersistedTargetMeta loadRequiredTargetMeta(pqxx::transaction_base& w,
                                                       long long modelId)
     {
         const auto dims = loadParameterDims(w, modelId, "target_meta");
@@ -859,7 +935,7 @@ public:
     }
 
     static MatGPU<float> loadRequiredDirectionHeadMatrix(
-        pqxx::work& w,
+        pqxx::transaction_base& w,
         long long modelId,
         const std::string& paramName,
         std::size_t expectedRows,
@@ -872,6 +948,352 @@ public:
                 std::to_string(expectedRows) + "x" +
                 std::to_string(expectedCols));
         return matrix;
+    }
+
+    static bool persistedParameterExists(pqxx::transaction_base& transaction,
+                                         long long modelId,
+                                         const std::string& paramName)
+    {
+        const pqxx::result rows = transaction.exec_params(
+            "SELECT 1 FROM matrix WHERE model_id=$1 AND param_name=$2 LIMIT 1;",
+            modelId, paramName);
+        return !rows.empty();
+    }
+
+    static PersistedMatrix readPersistedMatrix(
+        pqxx::transaction_base& transaction,
+        long long modelId,
+        const std::string& paramName)
+    {
+        const ParamDims dims = loadParameterDims(transaction, modelId, paramName);
+        if (dims.n_rows <= 0 || dims.n_cols <= 0)
+            throw std::runtime_error(paramName + " has invalid shape");
+        PersistedMatrix result{
+            static_cast<std::size_t>(dims.n_rows),
+            static_cast<std::size_t>(dims.n_cols),
+            loadParameterValues(transaction, modelId, paramName)};
+        if (result.values.size() != result.rows * result.cols)
+            throw std::runtime_error(paramName + " has invalid value count");
+        return result;
+    }
+
+    // This reader owns no transaction lifecycle.  Every query below, including
+    // source-lineage validation, is issued through the supplied transaction.
+    // Its return value contains no pqxx result, row, field, or Tensor object.
+    static PersistedModelMaterialization ReadPersistedModelMaterialization(
+        pqxx::transaction_base& transaction,
+        long long modelId,
+        const PersistedModelMaterializationReadOptions& options = {})
+    {
+        PersistedModelMaterialization result;
+        const pqxx::result identityRows = transaction.exec_params(
+            "SELECT m.model_id,m.experiment_id,m.parent_model_id,"
+            "e.feature_ablation_mask,m.economic_calendar_snapshot_id,"
+            "m.economic_calendar_snapshot_hash,"
+            "e.economic_calendar_snapshot_id,e.economic_calendar_snapshot_hash "
+            "FROM model m LEFT JOIN experiment e ON e.experiment_id=m.experiment_id "
+            "WHERE m.model_id=$1;",
+            modelId);
+        if (identityRows.size() != 1)
+            throw std::runtime_error("model_not_found_for_materialization");
+        if (options.afterFirstRead) options.afterFirstRead();
+
+        const pqxx::row identityRow = identityRows.one_row();
+        result.identity.modelId = identityRow[0].as<long long>();
+        if (!identityRow[1].is_null())
+            result.identity.experimentId = identityRow[1].as<long long>();
+        if (!identityRow[2].is_null())
+            result.identity.parentModelId = identityRow[2].as<long long>();
+        if (result.identity.experimentId.has_value())
+        {
+            if (identityRow[3].is_null())
+                throw std::runtime_error(
+                    "model_experiment_lineage_missing_feature_ablation_mask");
+            result.identity.featureAblationMask = EA::FeatureAblationMask::Parse(
+                identityRow[3].as<std::string>());
+            result.identity.featureAblationCanonicalText =
+                result.identity.featureAblationMask.CanonicalText();
+        }
+
+        const bool modelCalendarNull = identityRow[4].is_null() &&
+            identityRow[5].is_null();
+        const bool experimentCalendarNull = identityRow[6].is_null() &&
+            identityRow[7].is_null();
+        if (identityRow[4].is_null() != identityRow[5].is_null() ||
+            identityRow[6].is_null() != identityRow[7].is_null())
+            throw std::runtime_error(
+                "economic_calendar_snapshot_identity_incomplete");
+        if (modelCalendarNull != experimentCalendarNull ||
+            (!modelCalendarNull &&
+             (identityRow[4].as<long long>() != identityRow[6].as<long long>() ||
+              identityRow[5].as<std::string>() != identityRow[7].as<std::string>())))
+            throw std::runtime_error(
+                "model_experiment_economic_calendar_snapshot_mismatch");
+        if (!modelCalendarNull)
+        {
+            result.identity.economicCalendarSnapshotId =
+                identityRow[4].as<long long>();
+            result.identity.economicCalendarSnapshotHash =
+                identityRow[5].as<std::string>();
+            const pqxx::result snapshot = transaction.exec_params(
+                "SELECT 1 FROM economic_calendar_snapshot WHERE "
+                "economic_calendar_snapshot_id=$1 AND content_hash=$2 "
+                "AND snapshot_state='finalized';",
+                *result.identity.economicCalendarSnapshotId,
+                *result.identity.economicCalendarSnapshotHash);
+            if (snapshot.empty())
+                throw std::runtime_error(
+                    "economic_calendar_snapshot_identity_invalid");
+        }
+
+        result.modelMeta = loadRequiredModelMeta(transaction, modelId);
+        result.semanticMetadata =
+            loadModelInputSemanticMetadata(transaction, modelId);
+        result.inputWidthExpansionProvenance =
+            validateModelInputSemanticsForLoad(transaction, modelId);
+
+        const bool hasObjectiveCanonical = persistedParameterExists(
+            transaction, modelId, "training_objective_canonical_meta");
+        const bool hasObjectiveHash = persistedParameterExists(
+            transaction, modelId, "training_objective_hash_meta");
+        if (hasObjectiveCanonical)
+            result.trainingObjectiveCanonical = decodeAsciiMeta(
+                transaction, modelId, "training_objective_canonical_meta");
+        if (hasObjectiveHash)
+            result.trainingObjectiveHash = decodeAsciiMeta(
+                transaction, modelId, "training_objective_hash_meta");
+        result.trainingObjective = EA::TrainingObjective::ResolvePersisted(
+            result.trainingObjectiveCanonical, result.trainingObjectiveHash);
+
+        result.param = readPersistedMatrix(transaction, modelId, "param");
+        result.bias = readPersistedMatrix(transaction, modelId, "bias");
+        const auto readOptionalMatrix = [&](const char* name)
+            -> std::optional<PersistedMatrix>
+        {
+            if (!persistedParameterExists(transaction, modelId, name))
+                return std::nullopt;
+            return readPersistedMatrix(transaction, modelId, name);
+        };
+        result.returnHeadWeight = readOptionalMatrix("returnHeadWeight");
+        result.returnHeadBias = readOptionalMatrix("returnHeadBias");
+        result.returnHeadDirWeight = readOptionalMatrix("returnHeadDirWeight");
+        result.returnHeadDirBias = readOptionalMatrix("returnHeadDirBias");
+
+        if (persistedParameterExists(transaction, modelId, "target_meta"))
+            result.targetMeta = loadRequiredTargetMeta(transaction, modelId);
+
+        const bool scalarHeadComplete = result.returnHeadWeight.has_value() &&
+            result.returnHeadBias.has_value();
+        const bool auxiliaryObjective =
+            EA::TrainingObjective::AuxiliaryEnabled(result.trainingObjective);
+        if (auxiliaryObjective && (!result.targetMeta.has_value() ||
+            result.targetMeta->targetType !=
+                EA::LSTM::TargetType::UpNeutralDownReturn))
+            throw std::runtime_error(
+                "auxiliary objective requires classification target metadata");
+        const bool scalarHeadRequired = auxiliaryObjective ||
+            (result.targetMeta.has_value() && result.targetMeta->targetType !=
+             EA::LSTM::TargetType::UpNeutralDownReturn);
+        if (scalarHeadRequired && !scalarHeadComplete)
+            throw std::runtime_error(auxiliaryObjective
+                ? "auxiliary objective requires complete scalar auxiliary head parameters"
+                : "regression model requires complete scalar head parameters");
+        if (result.targetMeta.has_value() &&
+            result.targetMeta->targetType ==
+                EA::LSTM::TargetType::UpNeutralDownReturn &&
+            (!result.returnHeadDirWeight.has_value() ||
+             !result.returnHeadDirBias.has_value()))
+            throw std::runtime_error(
+                "classification model requires complete directional head parameters");
+
+        if (persistedParameterExists(transaction, modelId, "train_config_meta"))
+        {
+            result.trainConfigMeta = readPersistedMatrix(
+                transaction, modelId, "train_config_meta");
+            if (result.trainConfigMeta->rows != 1 ||
+                result.trainConfigMeta->values.empty())
+                throw std::runtime_error("train_config_meta has invalid shape");
+            if (result.trainConfigMeta->values.size() >=
+                static_cast<std::size_t>(kTrainConfigMetaExtendedFieldCount))
+                result.completedEpoch = static_cast<std::size_t>(std::llround(
+                    result.trainConfigMeta->values[10]));
+        }
+        if (persistedParameterExists(transaction, modelId, "optimizer_meta"))
+        {
+            const PersistedMatrix optimizer = readPersistedMatrix(
+                transaction, modelId, "optimizer_meta");
+            if (optimizer.rows != 1 || optimizer.cols < kOptimizerMetaFieldCount ||
+                optimizer.values.size() <
+                    static_cast<std::size_t>(kOptimizerMetaFieldCount))
+                throw std::runtime_error("optimizer_meta has invalid shape");
+            PersistedOptimizerMeta parsed{
+                static_cast<int>(std::llround(optimizer.values[0])),
+                static_cast<int>(std::llround(optimizer.values[1])),
+                static_cast<std::size_t>(std::llround(optimizer.values[2])),
+                static_cast<int>(std::llround(optimizer.values[3])),
+                static_cast<int>(std::llround(optimizer.values[4]))};
+            if (parsed.schemaVersion != kOptimizerMetaSchemaVersion)
+                throw std::runtime_error("optimizer_meta unsupported schema_version");
+            if (parsed.optimizerType != kOptimizerTypeSgd)
+                throw std::runtime_error(
+                    "optimizer_meta optimizer_type is not supported by this binary");
+            if (parsed.firstMomentBufferCount != 0 ||
+                parsed.secondMomentBufferCount != 0)
+                throw std::runtime_error(
+                    "optimizer_meta declares moment buffers unsupported by current SGD optimizer");
+            result.optimizerMeta = parsed;
+        }
+        if (persistedParameterExists(transaction, modelId, "train_symbol_meta"))
+            result.trainSymbol = decodeTrainSymbolMeta(transaction, modelId);
+        if (persistedParameterExists(transaction, modelId, "train_range_meta"))
+            result.trainRange = decodeTrainRangeMeta(transaction, modelId);
+        result.donchian20Mode = loadDonchian20ModeMeta(transaction, modelId);
+        result.featureWarmupScope = loadFeatureWarmupScopeMeta(transaction, modelId);
+        result.donchianLookback = loadDonchianLookbackMeta(transaction, modelId);
+        return result;
+    }
+
+    // The applier deliberately accepts no transaction or connection.  It has
+    // no SQL path: all database work belongs to the detached reader above.
+    static void ApplyPersistedModelMaterialization(
+        const PersistedModelMaterialization& state,
+        EA::LSTM& lstm,
+        bool expandInputWidth = false)
+    {
+        const auto requireShape = [](const PersistedMatrix& matrix,
+                                     std::size_t rows,
+                                     std::size_t cols,
+                                     const char* name)
+        {
+            if (matrix.rows != rows || matrix.cols != cols)
+                throw std::runtime_error(
+                    std::string{"MODEL_INPUT_EXPANSION_TENSOR_SHAPE_MISMATCH,name="} +
+                    name + ",actual=" + std::to_string(matrix.rows) + "x" +
+                    std::to_string(matrix.cols) + ",expected=" +
+                    std::to_string(rows) + "x" + std::to_string(cols));
+        };
+        if (state.param.rows != state.modelMeta.inputWidth +
+                state.modelMeta.hiddenSize ||
+            state.param.cols != 4 * state.modelMeta.hiddenSize)
+            throw std::runtime_error("param has invalid LSTM gate-matrix shape");
+
+        if (expandInputWidth)
+        {
+            const EA::InputWidthExpansionPlan plan =
+                EA::BuildInputWidthExpansionPlan(
+                    state.modelMeta.inputWidth,
+                    static_cast<std::size_t>(lstm.InputFeatureCount()));
+            if (lstm.param.Shape()[1] != 4 * state.modelMeta.hiddenSize)
+                throw std::runtime_error(
+                    "MODEL_INPUT_EXPANSION_RUNTIME_HIDDEN_SIZE_MISMATCH");
+            const std::vector<double> expanded =
+                EA::ExpandFusedLstmParameterRowMajor(
+                    state.param.values, state.modelMeta.hiddenSize, plan);
+            lstm.param = fromFlatRowMajor<float>(expanded,
+                plan.expandedInputWidth + state.modelMeta.hiddenSize,
+                4 * state.modelMeta.hiddenSize);
+        }
+        else
+        {
+            lstm.param = fromFlatRowMajor<float>(state.param.values,
+                state.param.rows, state.param.cols);
+        }
+        lstm.bias = fromFlatRowMajor<float>(state.bias.values,
+            state.bias.rows, state.bias.cols);
+
+        const bool scalarHeadComplete = state.returnHeadWeight.has_value() &&
+            state.returnHeadBias.has_value();
+        if (scalarHeadComplete)
+        {
+            lstm.returnHeadWeight = fromFlatRowMajor<float>(
+                state.returnHeadWeight->values, state.returnHeadWeight->rows,
+                state.returnHeadWeight->cols);
+            lstm.returnHeadBias = fromFlatRowMajor<float>(
+                state.returnHeadBias->values, state.returnHeadBias->rows,
+                state.returnHeadBias->cols);
+        }
+        if (state.targetMeta.has_value()) applyTargetMeta(*state.targetMeta, lstm);
+
+        const bool auxiliaryObjective =
+            EA::TrainingObjective::AuxiliaryEnabled(state.trainingObjective);
+        if (auxiliaryObjective && (!state.targetMeta.has_value() ||
+            state.targetMeta->targetType !=
+                EA::LSTM::TargetType::UpNeutralDownReturn))
+            throw std::runtime_error(
+                "auxiliary objective requires classification target metadata");
+        const bool scalarHeadRequired = auxiliaryObjective ||
+            (state.targetMeta.has_value() && state.targetMeta->targetType !=
+             EA::LSTM::TargetType::UpNeutralDownReturn);
+        if (scalarHeadRequired && !scalarHeadComplete)
+            throw std::runtime_error(auxiliaryObjective
+                ? "auxiliary objective requires complete scalar auxiliary head parameters"
+                : "regression model requires complete scalar head parameters");
+        if (scalarHeadRequired)
+        {
+            requireShape(*state.returnHeadWeight, state.modelMeta.hiddenSize, 1,
+                         "returnHeadWeight");
+            requireShape(*state.returnHeadBias, 1, 1, "returnHeadBias");
+        }
+
+        const bool classification = state.targetMeta.has_value() &&
+            state.targetMeta->targetType ==
+                EA::LSTM::TargetType::UpNeutralDownReturn;
+        if (classification)
+        {
+            lstm.SetTrainingObjective(state.trainingObjective, false);
+            if (!state.returnHeadDirWeight.has_value() ||
+                !state.returnHeadDirBias.has_value())
+                throw std::runtime_error(
+                    "classification model requires complete directional head parameters");
+            requireShape(*state.returnHeadDirWeight, state.modelMeta.hiddenSize,
+                         static_cast<std::size_t>(direction_output_size),
+                         "returnHeadDirWeight");
+            requireShape(*state.returnHeadDirBias, 1,
+                         static_cast<std::size_t>(direction_output_size),
+                         "returnHeadDirBias");
+        }
+        if (state.returnHeadDirWeight.has_value())
+            lstm.returnHeadDirWeight = fromFlatRowMajor<float>(
+                state.returnHeadDirWeight->values,
+                state.returnHeadDirWeight->rows,
+                state.returnHeadDirWeight->cols);
+        if (state.returnHeadDirBias.has_value())
+            lstm.returnHeadDirBias = fromFlatRowMajor<float>(
+                state.returnHeadDirBias->values,
+                state.returnHeadDirBias->rows,
+                state.returnHeadDirBias->cols);
+
+        if (expandInputWidth)
+        {
+            requireShape(state.bias, 1, 4 * state.modelMeta.hiddenSize, "bias");
+            if (scalarHeadComplete)
+            {
+                requireShape(*state.returnHeadWeight, state.modelMeta.hiddenSize,
+                             1, "returnHeadWeight");
+                requireShape(*state.returnHeadBias, 1, 1, "returnHeadBias");
+            }
+            if (state.returnHeadDirWeight.has_value())
+                requireShape(*state.returnHeadDirWeight,
+                             state.modelMeta.hiddenSize,
+                             static_cast<std::size_t>(direction_output_size),
+                             "returnHeadDirWeight");
+            if (state.returnHeadDirBias.has_value())
+                requireShape(*state.returnHeadDirBias, 1,
+                             static_cast<std::size_t>(direction_output_size),
+                             "returnHeadDirBias");
+        }
+        const std::size_t rows = lstm.param.Shape()[0];
+        const std::size_t cols = lstm.param.Shape()[1];
+        if (cols == 0 || cols % 4 != 0 || rows <= cols / 4 ||
+            rows - cols / 4 != static_cast<std::size_t>(lstm.InputFeatureCount()))
+            throw std::runtime_error(
+                "MODEL_PARAMETER_SHAPE_MISMATCH,loaded_n_in=" +
+                std::to_string(rows > cols / 4 ? rows - cols / 4 : 0) +
+                ",runtime_n_in=" + std::to_string(lstm.InputFeatureCount()));
+        if (state.optimizerMeta.has_value())
+            lstm.optimizerUpdateCount = state.optimizerMeta->updateCount;
+        if (state.completedEpoch.has_value())
+            lstm.completedEpochs = *state.completedEpoch;
     }
 
     // Validate the persisted state that the training resume path loads after

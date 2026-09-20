@@ -31,7 +31,7 @@ xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=26.2 \
     "${repo_root}/Tests/LSTMInputWidthExpansionPersistenceTests.cpp" \
     "${repo_root}/LSTM/LSTM.cpp" "${repo_root}/LSTM/Tensor.cpp" "${repo_root}/Sources/EconomicEventFeatures.cpp" \
     "${repo_root}/Common/PricePoint.cpp" \
-    -L"${repo_root}/DerivedData/Development/Build/Products/Debug" \
+    -L"${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release" \
     -L/opt/homebrew/opt/libpqxx@7.10.1/lib \
     -L/opt/homebrew/opt/libpq/lib \
     -lMetaNN -lMetalBuffer -lpqxx -lpq \
@@ -39,10 +39,11 @@ xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=26.2 \
     -framework Foundation -o "${test_dir}/persistence_test"
 
 # Standalone Metal tests need the same compiled libraries that Xcode places
-# beside LSTM_Debug; the application target normally supplies this packaging.
-cp "${repo_root}/DerivedData/Development/Build/Products/Debug/default.metallib" \
+# beside the stable Release target; the application target normally supplies
+# this packaging.
+cp "${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release/default.metallib" \
    "${test_dir}/default.metallib"
-cp "${repo_root}/DerivedData/Development/Build/Products/Debug/MetaNN_metal.metallib" \
+cp "${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release/MetaNN_metal.metallib" \
    "${test_dir}/MetaNN.metallib"
 
 createdb "${test_db}"
