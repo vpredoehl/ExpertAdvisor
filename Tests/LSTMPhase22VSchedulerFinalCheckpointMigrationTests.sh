@@ -19,7 +19,7 @@ rg -q 'scheduler_inference_binding_stale' "${main_file}"
 rg -q 'ON CONFLICT \(checkpoint_eval_id\)' "${main_file}"
 rg -q "ON CONFLICT \(" "${main_file}"
 
-# Infer-all remains on its existing transaction-backed flow for Phase 22W.
-rg -q 'return RunInferAllForSymbol\(\*runtimeDatabaseWork' "${main_file}"
+# Phase 22W moves infer-all before the scheduler/non-scheduler runtime work.
+rg -q 'return RunInferAllForSymbol\(c_LSTM' "${main_file}"
 
 printf '%s\n' 'LSTMPhase22VSchedulerFinalCheckpointMigrationTests passed'

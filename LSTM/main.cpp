@@ -7881,15 +7881,23 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work* w,
             const auto marketPath = EA::StrategyEvaluationAdapters::
                 AdaptTensorMarketPath(tensor, context, strategyDecisions);
 
-            const pqxx::result modelRows = w->exec(
-                "SELECT experiment_id FROM model WHERE model_id=$1;",
-                pqxx::params{*loadedModelId});
-            if (modelRows.size() != 1)
-                throw std::runtime_error(
-                    "probability_stop_extension_path_mechanism_model_identity_mismatch");
             std::optional<long long> experimentId;
-            if (!modelRows[0][0].is_null())
-                experimentId = modelRows[0][0].as<long long>();
+            if (materialized)
+                experimentId = materialized->identity.experimentId;
+            else
+            {
+                if (!w)
+                    throw std::runtime_error(
+                        "database_model_validation_requires_transaction");
+                const pqxx::result modelRows = w->exec(
+                    "SELECT experiment_id FROM model WHERE model_id=$1;",
+                    pqxx::params{*loadedModelId});
+                if (modelRows.size() != 1)
+                    throw std::runtime_error(
+                        "probability_stop_extension_path_mechanism_model_identity_mismatch");
+                if (!modelRows[0][0].is_null())
+                    experimentId = modelRows[0][0].as<long long>();
+            }
 
             const auto extraction = EA::StrategyEvaluation::
                 ExtractPhase19BPostEntryPathMechanism(
@@ -7982,21 +7990,15 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work* w,
     return result;
 }
 
-bool MatrixParamExists(pqxx::work& w, long long modelId, const std::string& paramName)
-{
-    pqxx::result r = w.exec_params(
-        "SELECT 1 FROM matrix WHERE model_id = $1 AND param_name = $2 LIMIT 1;",
-        modelId, paramName);
-    return !r.empty();
-}
-
 bool NearlyEqualDouble(double lhs, double rhs, double tolerance = 1e-7)
 {
     return std::fabs(lhs - rhs) <= tolerance;
 }
 
-bool InferAllCandidateCompatible(pqxx::work& w,
-                                 long long modelId,
+// Infer-all compatibility is intentionally snapshot-only.  Discovery is
+// advisory (identity/order) and must never supply candidate correctness state.
+bool InferAllCandidateCompatible(
+                                 const DBIO::PgModelIO::PersistedModelMaterialization& persisted,
                                  const std::string& runtimeSymbol,
                                  EA::LSTM::TargetType requestedTargetType,
                                  const Tensor& tensor,
@@ -8007,8 +8009,10 @@ bool InferAllCandidateCompatible(pqxx::work& w,
                                  InferAllCandidate& candidate,
                                  InferAllSkipDetail& skipDetail)
 {
+    const long long modelId = persisted.identity.modelId;
     candidate.legacyMissingSymbol = false;
     candidate.metadataGap = false;
+    candidate.name = persisted.identity.modelName;
 
     auto configMismatch = [&](const char* field, const auto& anchorValue, const auto& candidateValue) -> bool
     {
@@ -8027,45 +8031,28 @@ bool InferAllCandidateCompatible(pqxx::work& w,
         return false;
     };
 
-    try
+    const auto candidateCalendarSnapshot =
+        EconomicCalendarSnapshotFromMaterialization(persisted);
+    if (!EA::EconomicCalendar::SameEconomicCalendarSnapshotIdentity(
+            tensorCalendarSnapshot, candidateCalendarSnapshot))
     {
-        const auto candidateCalendarSnapshot =
-            EA::EconomicCalendar::LoadModelEconomicCalendarSnapshot(
-                w, modelId);
-        if (!EA::EconomicCalendar::SameEconomicCalendarSnapshotIdentity(
-                tensorCalendarSnapshot, candidateCalendarSnapshot))
+        const auto identityText = [](const auto& identity)
         {
-            const auto identityText = [](const auto& identity)
-            {
-                return identity
-                    ? std::to_string(identity->snapshotId) + "/" +
-                          identity->contentHash
-                    : std::string{"legacy_live_corpus"};
-            };
-            return configMismatch(
-                "economic_calendar_snapshot_identity",
-                identityText(tensorCalendarSnapshot),
-                identityText(candidateCalendarSnapshot));
-        }
-    }
-    catch (const std::exception& e)
-    {
-        return invalidMetadata("economic_calendar_snapshot_identity", e.what());
+            return identity
+                ? std::to_string(identity->snapshotId) + "/" +
+                      identity->contentHash
+                : std::string{"legacy_live_corpus"};
+        };
+        return configMismatch("economic_calendar_snapshot_identity",
+                              identityText(tensorCalendarSnapshot),
+                              identityText(candidateCalendarSnapshot));
     }
 
-    if (MatrixParamExists(w, modelId, "train_symbol_meta"))
+    if (persisted.trainSymbol.has_value())
     {
-        try
-        {
-            const std::string modelSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
-            PrintDatabaseModelSymbol(modelId, modelSymbol);
-            if (modelSymbol != runtimeSymbol)
-                return configMismatch("symbol", runtimeSymbol, modelSymbol);
-        }
-        catch (const std::exception& e)
-        {
-            return invalidMetadata("train_symbol_meta", e.what());
-        }
+        PrintDatabaseModelSymbol(modelId, *persisted.trainSymbol);
+        if (*persisted.trainSymbol != runtimeSymbol)
+            return configMismatch("symbol", runtimeSymbol, *persisted.trainSymbol);
     }
     else
     {
@@ -8078,98 +8065,44 @@ bool InferAllCandidateCompatible(pqxx::work& w,
         PrintLegacyModelSymbol(modelId, *legacySymbol);
     }
 
-    if (MatrixParamExists(w, modelId, "target_meta"))
+    if (persisted.targetMeta.has_value())
     {
-        try
-        {
-            auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "target_meta");
-            auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "target_meta");
-            if (dims.n_rows != 1 || dims.n_cols != 6 || vals.size() != 6)
-            {
-                return invalidMetadata("target_meta", "invalid_shape");
-            }
-            const auto modelTargetType =
-                static_cast<EA::LSTM::TargetType>(static_cast<int>(std::llround(vals[0])));
-            if (static_cast<int>(modelTargetType) != static_cast<int>(requestedTargetType))
-                return configMismatch("target_type", TargetTypeName(requestedTargetType), TargetTypeName(modelTargetType));
-        }
-        catch (const std::exception& e)
-        {
-            return invalidMetadata("target_meta", e.what());
-        }
+        if (static_cast<int>(persisted.targetMeta->targetType) !=
+            static_cast<int>(requestedTargetType))
+            return configMismatch("target_type", TargetTypeName(requestedTargetType),
+                                  TargetTypeName(persisted.targetMeta->targetType));
     }
     else
         candidate.metadataGap = true;
-
-    if (MatrixParamExists(w, modelId, "model_meta"))
-    {
-        try
-        {
-            const auto modelMeta =
-                DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
-            const auto inputContract = EA::ResolveModelInputContract(
-                modelMeta.inputWidth,
-                RuntimeTensorFeatureWidth(tensor));
-            candidate.modelInputWidth = inputContract.modelInputWidth;
-            candidate.modelHiddenSize = modelMeta.hiddenSize;
-            if (modelMeta.hiddenSize != static_cast<std::size_t>(hidden_size))
-                return configMismatch("hidden_size", hidden_size, modelMeta.hiddenSize);
-        }
-        catch (const std::exception& e)
-        {
-            return invalidMetadata("model_meta", e.what());
-        }
-    }
-    else
-    {
-        // Legacy infer-all candidates may predate model_meta.  Preserve the
-        // existing metadata-gap inclusion only when the parameter matrix
-        // itself yields one of the supported structural widths.
-        try
-        {
-            const auto paramDims =
-                DBIO::PgModelIO::loadParameterDims(w, modelId, "param");
-            if (paramDims.n_rows <= 0 || paramDims.n_cols <= 0 ||
-                paramDims.n_cols % 4 != 0 ||
-                paramDims.n_rows <= paramDims.n_cols / 4)
-                return invalidMetadata("param", "invalid_lstm_gate_matrix_shape");
-            candidate.modelInputWidth = static_cast<std::size_t>(
-                paramDims.n_rows - paramDims.n_cols / 4);
-            candidate.modelHiddenSize = static_cast<std::size_t>(
-                paramDims.n_cols / 4);
-            (void)EA::ResolveModelInputContract(
-                candidate.modelInputWidth,
-                RuntimeTensorFeatureWidth(tensor));
-        }
-        catch (const std::exception& e)
-        {
-            return invalidMetadata("model_meta", e.what());
-        }
-        candidate.metadataGap = true;
-    }
 
     try
     {
-        const Donchian20Mode modelMode =
-            DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
-        if (modelMode != tensor.GetDonchian20Mode())
-            return configMismatch("donchian20_mode",
-                                  Donchian20ModeText(tensor.GetDonchian20Mode()),
-                                  Donchian20ModeText(modelMode));
+        const auto inputContract = EA::ResolveModelInputContract(
+            persisted.modelMeta.inputWidth, RuntimeTensorFeatureWidth(tensor));
+        candidate.modelInputWidth = inputContract.modelInputWidth;
+        candidate.modelHiddenSize = persisted.modelMeta.hiddenSize;
+        if (persisted.modelMeta.hiddenSize != static_cast<std::size_t>(hidden_size))
+            return configMismatch("hidden_size", hidden_size,
+                                  persisted.modelMeta.hiddenSize);
     }
     catch (const std::exception& e)
     {
-        return invalidMetadata("donchian20_mode_meta", e.what());
+        return invalidMetadata("model_meta", e.what());
     }
 
-    if (MatrixParamExists(w, modelId, "train_config_meta"))
+    if (persisted.donchian20Mode != tensor.GetDonchian20Mode())
+        return configMismatch("donchian20_mode",
+                              Donchian20ModeText(tensor.GetDonchian20Mode()),
+                              Donchian20ModeText(persisted.donchian20Mode));
+
+    if (persisted.trainConfigMeta.has_value())
     {
         try
         {
-            auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "train_config_meta");
-            auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "train_config_meta");
-            if (dims.n_rows != 1 ||
-                dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaFieldCount ||
+            const auto& meta = *persisted.trainConfigMeta;
+            const auto& vals = meta.values;
+            if (meta.rows != 1 ||
+                meta.cols < DBIO::PgModelIO::kTrainConfigMetaFieldCount ||
                 vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaFieldCount))
             {
                 return invalidMetadata("train_config_meta", "invalid_shape");
@@ -8270,19 +8203,9 @@ bool InferAllCandidateCompatible(pqxx::work& w,
 
 std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
                                                       const LaunchArgs& launchArgs,
-                                                      const std::string& runtimeSymbol,
-                                                      EA::LSTM::TargetType requestedTargetType,
-                                                      const Tensor& tensor,
-                                                      const TrainConfigMeta* anchorTrainConfig,
-                                                      const std::optional<EA::EconomicCalendar::
-                                                          EconomicCalendarSnapshotIdentity>&
-                                                          tensorCalendarSnapshot,
-                                                      size_t& skippedDueToResume,
-                                                      size_t& skippedIncompatible,
-                                                      std::vector<std::string>& skippedModelLogs)
+                                                      size_t& skippedDueToResume)
 {
     skippedDueToResume = 0;
-    skippedIncompatible = 0;
     const long long startAfter = launchArgs.modelId.value_or(launchArgs.inferStartAfterModelId.value_or(0));
     if (startAfter > 0)
     {
@@ -8304,43 +8227,17 @@ std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
         InferAllCandidate candidate;
         candidate.modelId = row[0].as<long long>();
         candidate.name = row[1].as<std::string>();
-        InferAllSkipDetail skipDetail;
-        if (InferAllCandidateCompatible(w,
-                                        candidate.modelId,
-                                        runtimeSymbol,
-                                        requestedTargetType,
-                                        tensor,
-                                        anchorTrainConfig,
-                                        tensorCalendarSnapshot,
-                                        candidate,
-                                        skipDetail))
-        {
-            candidates.push_back(candidate);
-        }
-        else
-        {
-            ++skippedIncompatible;
-            std::ostringstream oss;
-            oss << "INFER_ALL_SKIP_MODEL"
-                << ",model_id=" << candidate.modelId
-                << ",reason=" << skipDetail.reason;
-            if (!skipDetail.field.empty())
-                oss << ",field=" << skipDetail.field;
-            if (!skipDetail.anchor.empty())
-                oss << ",anchor=" << skipDetail.anchor;
-            if (!skipDetail.candidate.empty())
-                oss << ",candidate=" << skipDetail.candidate;
-            if (!skipDetail.detail.empty())
-                oss << ",detail=" << skipDetail.detail;
-            skippedModelLogs.push_back(oss.str());
-        }
+        // Name and ordering are advisory discovery data only.  The later
+        // per-candidate RR/RO snapshot owns every eligibility decision.
+        candidates.push_back(std::move(candidate));
     }
     return candidates;
 }
 
-InferAllSummaryRow RunInferAllModel(pqxx::work& w,
+InferAllSummaryRow RunInferAllModel(
                                     const LaunchArgs& launchArgs,
                                     const InferAllCandidate& candidate,
+                                    const DBIO::PgModelIO::PersistedModelMaterialization& materialized,
                                     const std::string& rawPriceTableName,
                                     const std::string& fromDate,
                                     const std::string& toDate,
@@ -8369,7 +8266,7 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
     EA::LSTM lstm = CreateLstmForRuntimeLogLevel(
         tensor, candidate.modelHiddenSize, 1, 0, requestedTargetType,
         candidate.modelInputWidth,
-        LoadModelFeatureAblationMask(w, candidate.modelId));
+        materialized.identity.featureAblationMask);
     PrintRuntimeLrConfig(lstm);
     DiagnosticOut() << "DIAG_LSTM_BINDING"
                     << ",table=" << rawPriceTableName
@@ -8382,14 +8279,14 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
 
     {
         ScopedDiagnosticCoutSilencer silence;
-        DBIO::PgModelIO::loadAll(w, candidate.modelId, lstm);
+        DBIO::PgModelIO::ApplyPersistedModelMaterialization(materialized, lstm);
     }
     DiagnosticOut() << "Loaded model_id=" << candidate.modelId
                     << " source=--infer-all"
                     << std::endl;
 
     const InferenceEvaluationResult evaluation =
-        RunInferenceEvaluation(&w,
+        RunInferenceEvaluation(nullptr,
                                launchArgs,
                                lstm,
                                tensor,
@@ -8400,7 +8297,8 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                                fromDate,
                                toDate,
                                logicalOutputStartIndex,
-                               true);
+                               true,
+                               &materialized);
 
     InferAllSummaryRow row;
     row.modelId = candidate.modelId;
@@ -8424,7 +8322,7 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
     return row;
 }
 
-int RunInferAllForSymbol(pqxx::work& w,
+int RunInferAllForSymbol(pqxx::connection& database,
                          const LaunchArgs& launchArgs,
                          const std::string& rawPriceTableName,
                          const std::string& fromDate,
@@ -8439,21 +8337,19 @@ int RunInferAllForSymbol(pqxx::work& w,
 {
     size_t skippedDueToResume = 0;
     size_t skippedIncompatible = 0;
-    std::vector<std::string> skippedModelLogs;
     const long long startAfter = launchArgs.modelId.value_or(launchArgs.inferStartAfterModelId.value_or(0));
-    if (!RequireInferenceEvalResultTable(w))
-        return 1;
-    std::vector<InferAllCandidate> candidates =
-        LoadInferAllCandidates(w,
-                               launchArgs,
-                               rawPriceTableName,
-                               requestedTargetType,
-                               tensor,
-                               inferenceConfig.has_value() ? &inferenceConfig->trainConfig : nullptr,
-                               tensorCalendarSnapshot,
-                               skippedDueToResume,
-                               skippedIncompatible,
-                               skippedModelLogs);
+    std::vector<InferAllCandidate> candidates;
+    {
+        // Discovery supplies only non-authoritative ordering and IDs.  It is
+        // deliberately committed before any per-model compatibility decision.
+        pqxx::work discoveryRead { database };
+        discoveryRead.exec("SET TRANSACTION READ ONLY;");
+        if (!RequireInferenceEvalResultTable(discoveryRead))
+            return 1;
+        candidates = LoadInferAllCandidates(
+            discoveryRead, launchArgs, skippedDueToResume);
+        discoveryRead.commit();
+    }
 
     if (startAfter > 0)
     {
@@ -8476,9 +8372,6 @@ int RunInferAllForSymbol(pqxx::work& w,
         std::cout << std::endl;
     }
 
-    for (const auto& skippedModelLog : skippedModelLogs)
-        DiagnosticOut() << skippedModelLog << std::endl;
-
     if (candidates.empty())
     {
         if (LogSummary())
@@ -8497,7 +8390,6 @@ int RunInferAllForSymbol(pqxx::work& w,
         std::cout << "INFER_ALL_SUMMARY" << std::endl;
         std::cout << "model_id,name,completed_epochs,accuracy,accept_model,reject_reason,pred_down,pred_neutral,pred_up" << std::endl;
         DiagnosticOut() << "runtime_infer=true; skipping model save" << std::endl;
-        w.commit();
         return 0;
     }
 
@@ -8506,8 +8398,9 @@ int RunInferAllForSymbol(pqxx::work& w,
     size_t skippedDuringEvaluation = 0;
     size_t skippedExisting = 0;
     size_t newlyEvaluated = 0;
-    for (const auto& candidate : candidates)
+    for (const auto& discoveredCandidate : candidates)
     {
+        InferAllCandidate candidate = discoveredCandidate;
         const InferenceIdentity identity =
             BuildInferenceIdentity(candidate.modelId,
                                    rawPriceTableName,
@@ -8516,7 +8409,16 @@ int RunInferAllForSymbol(pqxx::work& w,
                                    toDate);
         if (!launchArgs.forceInfer)
         {
-            const auto existing = LoadCompletedInferenceResult(w, identity, candidate);
+            std::optional<InferAllSummaryRow> existing;
+            {
+                // Existing-result detection is fresh result-time state, not
+                // a model correctness snapshot.
+                pqxx::work resultRead { database };
+                resultRead.exec("SET TRANSACTION READ ONLY;");
+                existing = LoadCompletedInferenceResult(
+                    resultRead, identity, candidate);
+                resultRead.commit();
+            }
             if (existing.has_value())
             {
                 ++skippedExisting;
@@ -8546,25 +8448,57 @@ int RunInferAllForSymbol(pqxx::work& w,
 
         try
         {
-            InferAllSummaryRow row = RunInferAllModel(w,
-                                                      launchArgs,
-                                                      candidate,
-                                                      rawPriceTableName,
-                                                      fromDate,
-                                                      toDate,
-                                                      tensor,
-                                                      logicalOutputStartIndex,
-                                                      requestedTargetType);
-            const long long inferenceEvalResultId =
-                PersistCompletedInferenceResult(w, identity, row);
-            PersistInferenceProfitabilityObservation(
-                w,
-                inferenceEvalResultId,
-                identity,
-                row,
-                EA::InferenceProfitability::Scope::finalInference,
-                std::nullopt,
-                std::nullopt);
+            DBIO::PgModelIO::PersistedModelMaterialization materialized;
+            InferAllSkipDetail skipDetail;
+            {
+                // One short, explicit RR/RO snapshot owns all candidate
+                // state used for compatibility and detached construction.
+                pqxx::work candidateRead { database };
+                candidateRead.exec(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+                materialized = DBIO::PgModelIO::ReadPersistedModelMaterialization(
+                    candidateRead, candidate.modelId);
+                if (!InferAllCandidateCompatible(
+                        materialized, rawPriceTableName, requestedTargetType,
+                        tensor,
+                        inferenceConfig.has_value()
+                            ? &inferenceConfig->trainConfig : nullptr,
+                        tensorCalendarSnapshot, candidate, skipDetail))
+                {
+                    candidateRead.commit();
+                    ++skippedIncompatible;
+                    std::ostringstream oss;
+                    oss << "INFER_ALL_SKIP_MODEL"
+                        << ",model_id=" << candidate.modelId
+                        << ",reason=" << skipDetail.reason;
+                    if (!skipDetail.field.empty()) oss << ",field=" << skipDetail.field;
+                    if (!skipDetail.anchor.empty()) oss << ",anchor=" << skipDetail.anchor;
+                    if (!skipDetail.candidate.empty()) oss << ",candidate=" << skipDetail.candidate;
+                    if (!skipDetail.detail.empty()) oss << ",detail=" << skipDetail.detail;
+                    DiagnosticOut() << oss.str() << std::endl;
+                    continue;
+                }
+                candidateRead.commit();
+            }
+
+            // No transaction survives into LSTM/Tensor construction or long
+            // inference.  The applier has no SQL path.
+            InferAllSummaryRow row = RunInferAllModel(
+                launchArgs, candidate, materialized, rawPriceTableName,
+                fromDate, toDate, tensor, logicalOutputStartIndex,
+                requestedTargetType);
+            {
+                // Preserve the completed-result/profitability atomicity, but
+                // use a new short write transaction after evaluation.
+                pqxx::work resultWrite { database };
+                const long long inferenceEvalResultId =
+                    PersistCompletedInferenceResult(resultWrite, identity, row);
+                PersistInferenceProfitabilityObservation(
+                    resultWrite, inferenceEvalResultId, identity, row,
+                    EA::InferenceProfitability::Scope::finalInference,
+                    std::nullopt, std::nullopt);
+                resultWrite.commit();
+            }
             summaries.push_back(row);
             ++newlyEvaluated;
         }
@@ -8573,7 +8507,12 @@ int RunInferAllForSymbol(pqxx::work& w,
             ++skippedDuringEvaluation;
             try
             {
-                PersistFailedInferenceResult(w, identity, candidate, e.what());
+                // Failed candidates remain independently durable and do not
+                // roll back a previous candidate's completed result.
+                pqxx::work failedResultWrite { database };
+                PersistFailedInferenceResult(
+                    failedResultWrite, identity, candidate, e.what());
+                failedResultWrite.commit();
             }
             catch (const std::exception& persistError)
             {
@@ -8635,7 +8574,6 @@ int RunInferAllForSymbol(pqxx::work& w,
     }
 
     DiagnosticOut() << "runtime_infer=true; skipping model save" << std::endl;
-    w.commit();
     return 0;
 }
 }
@@ -9389,6 +9327,28 @@ int main(int argc, const char * argv[])
                 }
             }
 
+            const auto requestedTargetType = resumeConfig.has_value()
+                ? resumeConfig->targetType
+                : (inferenceConfig.has_value()
+                   ? inferenceConfig->targetType
+                   : EA::LSTM::TargetType::UpNeutralDownReturn);
+            const std::size_t runtimeLstmHiddenSize = resumeConfig.has_value()
+                ? resumeConfig->modelHiddenSize
+                : (inferenceConfig.has_value()
+                    ? inferenceConfig->modelHiddenSize
+                    : hidden_size);
+            if (launchArgs.inferAll)
+                return RunInferAllForSymbol(c_LSTM,
+                                            launchArgs,
+                                            rawPriceTableName,
+                                            fromDate,
+                                            toDate,
+                                            t,
+                                            logicalOutputStartIndex,
+                                            requestedTargetType,
+                                            inferenceConfig,
+                                            economicCalendarSnapshot);
+
             // Scheduler final/checkpoint inference must not retain a database
             // transaction while Tensor/LSTM inference runs.  Its fresh RW
             // transaction is opened only below, immediately before locked
@@ -9402,28 +9362,7 @@ int main(int argc, const char * argv[])
                         ? "SET TRANSACTION READ ONLY;"
                         : "SET TRANSACTION READ WRITE;");
             }
-  
-            const auto requestedTargetType = resumeConfig.has_value()
-                ? resumeConfig->targetType
-                : (inferenceConfig.has_value()
-                   ? inferenceConfig->targetType
-                   : EA::LSTM::TargetType::UpNeutralDownReturn);
-            const std::size_t runtimeLstmHiddenSize = resumeConfig.has_value()
-                ? resumeConfig->modelHiddenSize
-                : (inferenceConfig.has_value()
-                    ? inferenceConfig->modelHiddenSize
-                    : hidden_size);
-            if (launchArgs.inferAll)
-                return RunInferAllForSymbol(*runtimeDatabaseWork,
-                                            launchArgs,
-                                            rawPriceTableName,
-                                            fromDate,
-                                            toDate,
-                                            t,
-                                            logicalOutputStartIndex,
-                                            requestedTargetType,
-                                            inferenceConfig,
-                                            economicCalendarSnapshot);
+
             const EA::FeatureAblationMask runtimeFeatureAblationMask =
                 schedulerFeatureAblationMask.has_value()
                     ? *schedulerFeatureAblationMask
