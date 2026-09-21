@@ -16,13 +16,15 @@ source_commit="$(git -C "${repo_root}" rev-parse HEAD)"
 for binary in "${scheduler}" "${compatibility}" "${standalone}"; do
     test -x "${binary}"
 done
+live_scheduler_pid=""
 
 cleanup() {
     local status=$?
+    if [[ -n "${live_scheduler_pid}" ]] && kill -0 "${live_scheduler_pid}" >/dev/null 2>&1; then kill -TERM "${live_scheduler_pid}" >/dev/null 2>&1 || true; wait "${live_scheduler_pid}" >/dev/null 2>&1 || true; fi
     while IFS= read -r database; do
         [[ -n "${database}" ]] || continue
         case "${database}" in
-            ${base_tag}_a[0-9]_*|${base_tag}_b[0-9]_*)
+            ${base_tag}_a[0-9]_*|${base_tag}_b[0-9]_*|${base_tag}_live[0-9]_*)
                 dropdb --if-exists "${database}" >/dev/null 2>&1 || true
                 ;;
             *) printf 'refusing unexpected Phase23A2 cleanup target: %s\n' "${database}" >&2 ;;
@@ -248,6 +250,129 @@ SQL
         "${label}" "${iteration}" "${model_id}" "${attempt}" \
         "$(printf '%s' "${path_result}" | shasum -a 256 | awk '{print $1}')"
 }
+
+run_live_reaper_regression() {
+    local lstm_db="${base_tag}_live1_lstm"
+    local forex_db="${base_tag}_live1_forex"
+    local root="${test_dir}/live1-registry"
+    local log_dir="${test_dir}/live1-logs"
+    local output="${test_dir}/live1.out"
+    printf '%s\n%s\n' "${lstm_db}" "${forex_db}" >>"${database_list}"
+
+    createdb "${lstm_db}"
+    createdb "${forex_db}"
+    PGOPTIONS='-c default_transaction_read_only=on' \
+        pg_dump -s -h 127.0.0.1 -U vjp -d LSTM |
+        psql -X -v ON_ERROR_STOP=1 -q -d "${lstm_db}"
+    PGOPTIONS='-c default_transaction_read_only=on' \
+        pg_dump -s -h 127.0.0.1 -U vjp -d forex |
+        psql -X -v ON_ERROR_STOP=1 -q -d "${forex_db}"
+
+    psql -X -v ON_ERROR_STOP=1 -q -d "${lstm_db}" <<'SQL'
+INSERT INTO experiment_global_control(singleton,desired_state)
+VALUES(true,'running') ON CONFLICT(singleton) DO UPDATE SET desired_state='running';
+INSERT INTO experiment_scheduler_lease(singleton)
+VALUES(true) ON CONFLICT(singleton) DO NOTHING;
+INSERT INTO experiment_scheduler_protocol(
+    singleton,required_generation,cutover_state,cutover_completed_at,
+    cutover_completed_by,cutover_executable_path,cutover_process_evidence,
+    failure_diagnostic,updated_at)
+VALUES(true,52,'complete',clock_timestamp(),'phase23a2-live-reaper-fixture',
+       '/phase23a2/disposable/lstm-scheduler','disposable fixture',NULL,
+       clock_timestamp())
+ON CONFLICT(singleton) DO UPDATE SET required_generation=52,
+    cutover_state='complete',cutover_completed_at=clock_timestamp(),
+    cutover_completed_by='phase23a2-live-reaper-fixture',
+    cutover_executable_path='/phase23a2/disposable/lstm-scheduler',
+    cutover_process_evidence='disposable fixture',failure_diagnostic=NULL,
+    updated_at=clock_timestamp();
+SQL
+
+    psql -X -v ON_ERROR_STOP=1 -q -d "${forex_db}" <<'SQL'
+CREATE TABLE phase23a2audrmp(
+    time timestamp without time zone NOT NULL,
+    bid numeric(10,6) NOT NULL, ask numeric(10,6) NOT NULL,
+    vol smallint NOT NULL
+);
+INSERT INTO phase23a2audrmp(time,bid,ask,vol)
+SELECT timestamp '2024-01-01 00:00:00' + i * interval '5 minutes',
+       (1.000000 + i * 0.000001)::numeric(10,6),
+       (1.000200 + i * 0.000001)::numeric(10,6),1
+FROM generate_series(0,2303) AS g(i);
+SQL
+
+    local fixture experiment_id model_id
+    fixture="$(LSTM_DB_NAME="${lstm_db}" "${seeder}")"
+    grep -Eq '^PHASE23A2_FIXTURE,experiment_id=[0-9]+,model_id=[0-9]+,snapshot_id=[0-9]+,snapshot_hash=fnv1a64:[0-9a-f]{16}$' <<<"${fixture}"
+    experiment_id="$(sed -n 's/.*experiment_id=\([0-9]*\).*/\1/p' <<<"${fixture}")"
+    model_id="$(sed -n 's/.*model_id=\([0-9]*\).*/\1/p' <<<"${fixture}")"
+    make_registry "${root}" "${standalone}"
+
+    LSTM_DB_NAME="${lstm_db}" FOREX_DB_NAME="${forex_db}" "${scheduler}" \
+        --schedule-experiments \
+        --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
+        --scheduler-poll-seconds=1 \
+        --semantic-worker-registry="${root}/registry.json" \
+        --scheduler-log-dir="${log_dir}" >"${output}" 2>&1 &
+    live_scheduler_pid=$!
+
+    local state=""
+    for _ in {1..6000}; do
+        state="$(scalar "${lstm_db}" \
+            "SELECT status||':'||phase FROM experiment WHERE experiment_id=${experiment_id}" 2>/dev/null || true)"
+        [[ "${state}" = "pending:analyze" ]] && break
+        if ! kill -0 "${live_scheduler_pid}" >/dev/null 2>&1; then
+            wait "${live_scheduler_pid}" || true
+            printf 'live-reaper scheduler exited before durable completion; state=%s\n' "${state}" >&2
+            return 1
+        fi
+        sleep 0.02
+    done
+    test "${state}" = "pending:analyze"
+
+    kill -TERM "${live_scheduler_pid}"
+    wait "${live_scheduler_pid}"
+    live_scheduler_pid=""
+
+    grep -q "SCHEDULER_CHILD_EXITED,experiment_id=${experiment_id},.*phase=infer,.*exit_code=0" \
+        "${output}"
+    grep -q "SCHEDULER_CHILD_RESULT_PERSISTED,experiment_id=${experiment_id},model_id=${model_id},phase=infer,reason=completed_inference_eval_result" \
+        "${output}"
+
+    local completed_attempt
+    completed_attempt="$(scalar "${lstm_db}" \
+        "SELECT worker_attempt_id FROM experiment_scheduler_worker_attempt
+         WHERE experiment_id=${experiment_id}
+         ORDER BY worker_attempt_id DESC LIMIT 1")"
+
+    test "$(scalar "${lstm_db}" \
+        "SELECT lifecycle_state||':'||COALESCE(exit_code::text,'NULL')||':'||
+                reconciliation_result
+         FROM experiment_scheduler_worker_attempt
+         WHERE worker_attempt_id=${completed_attempt}")" = \
+        "completed:0:child_exited"
+
+    test "$(scalar "${lstm_db}" \
+        "SELECT count(*)
+         FROM experiment e
+         JOIN inference_eval_result r ON r.model_id=e.last_model_id
+         WHERE e.experiment_id=${experiment_id}
+           AND r.inference_scope='final'
+           AND r.status='completed'
+           AND r.threshold_logret <> e.c_next_threshold
+           AND abs(r.threshold_logret-e.c_next_threshold) <= 1e-7")" = 1
+
+    test "$(scalar "${lstm_db}" \
+        "SELECT count(*) FROM inference_profitability_observation
+         WHERE experiment_id=${experiment_id}
+           AND model_id=${model_id}
+           AND inference_scope='final'")" = 1
+
+    printf 'PHASE23A2_LIVE_REAPER,experiment_id=%s,model_id=%s,worker_attempt_id=%s,state=%s\n' \
+        "${experiment_id}" "${model_id}" "${completed_attempt}" "${state}"
+}
+
+run_live_reaper_regression
 
 for iteration in 1 2; do
     run_path a "${compatibility}" "${iteration}"
