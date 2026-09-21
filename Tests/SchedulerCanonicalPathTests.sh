@@ -10,6 +10,8 @@ trap cleanup EXIT
 
 binary="${test_dir}/SchedulerOwnershipPolicyTests"
 clang++ -std=c++20 -Wall -Wextra -Wpedantic -Werror \
+    -I"${repo_root}/Sources" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerAuthorityService.cpp" \
     "${repo_root}/Tests/SchedulerOwnershipPolicyTests.cpp" \
     -o "${binary}"
 canonical_binary="$(realpath "${binary}")"

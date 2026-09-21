@@ -1897,12 +1897,12 @@
 			);
 			inputPaths = (
 			);
-			name = "Publish Canonical LSTM Binary";
+			name = "Publish Ordinary Canonical LSTM_Release";
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n    exit 0\nfi\n\nif [ \"$PUBLISH_CANONICAL_BINARY\" != \"YES\" ]; then\n    echo \"Skipping semantic worker publish\"\n    exit 0\nfi\n\nBUILT_BIN=\"$CONFIGURATION_BUILD_DIR/LSTM_Release\"\nif [ ! -x \"$BUILT_BIN\" ]; then\n    echo \"error: built LSTM executable not found or not executable: $BUILT_BIN\"\n    exit 1\nfi\n\n/usr/bin/python3 \"$PROJECT_DIR/Scripts/PublishSemanticWorker.py\" \\\n    --repository-root \"$PROJECT_DIR\" \\\n    --built-executable \"$BUILT_BIN\" \\\n    --worker-rule current\n";
+			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n    exit 0\nfi\n\nif [ \"$PUBLISH_CANONICAL_LSTM_RELEASE\" != \"YES\" ]; then\n    echo \"Skipping ordinary canonical LSTM_Release publication\"\n    exit 0\nfi\n\nBUILT_BIN=\"$CONFIGURATION_BUILD_DIR/LSTM_Release\"\nif [ ! -x \"$BUILT_BIN\" ]; then\n    echo \"error: built LSTM executable not found or not executable: $BUILT_BIN\"\n    exit 1\nfi\n\n/usr/bin/python3 \"$PROJECT_DIR/Scripts/PublishCanonicalLSTMRelease.py\" \\\n    --repository-root \"$PROJECT_DIR\" \\\n    --built-executable \"$BUILT_BIN\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

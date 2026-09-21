@@ -86,11 +86,16 @@ operationally validated.
 
 ## Publishing and rollover
 
-`Publish LSTM Canonical` runs only after its normal Release dependency succeeds
-and calls `Scripts/PublishSemanticWorker.py`. Release provenance still requires
-a clean checkout. The publisher determines the current semantic contract from
-the source headers, obtains clean `HEAD`, verifies the commit is embedded in the
-built executable, and computes SHA-256. It then:
+`Publish LSTM Canonical` is now reserved for ordinary `LSTM_Release`
+publication.  With `PUBLISH_CANONICAL_LSTM_RELEASE=YES`, it runs only after its
+normal Release dependency succeeds and calls
+`Scripts/PublishCanonicalLSTMRelease.py`; it never calls the semantic-worker
+publisher or changes the semantic-worker registry. Semantic workers remain
+published explicitly with `Scripts/PublishSemanticWorker.py`. Release
+provenance still requires a clean checkout. The semantic publisher determines
+the current semantic contract from the source headers, obtains clean `HEAD`,
+verifies the commit is embedded in the built executable, and computes SHA-256.
+It then:
 
 1. publishes and verifies the content-addressed shared runtime package;
 2. copies the executable into a same-filesystem staging directory;
