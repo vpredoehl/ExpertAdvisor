@@ -92,8 +92,8 @@ activation rows and authorized experiment lifecycle transitions.
 References
 ----------
 
-* ``docs/Phase4CExperimentRecommendationConversionActivation.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignHandoff.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignExecution.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionActivation.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignHandoff.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignExecution.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
-* ``docs/Phase5ExperimentRecommendationCampaignLaunch.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignLaunch.rst``

@@ -125,8 +125,8 @@ execution require distinct later authority and operational designs.
 ## 8. References
 
 - [Volume VIII](../Volume_VIII_Recommendation_Engine.md)
-- [Phase 5 outcome assessment and policy](../../Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst)
-- [Phase 6A follow-up proposal](../../Phase6ARecommendationCampaignFollowUpProposal.rst)
+- [Phase 5 outcome assessment and policy](../../campaign/recommendations/Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst)
+- [Phase 6A follow-up proposal](../../campaign/recommendations/Phase6ARecommendationCampaignFollowUpProposal.rst)
 - [ADR-0003](ADR-0003-advisory-recommendation-evaluation.md)
 - [ADR-0004](ADR-0004-scheduler-ownership-boundaries.md)
 - [ADR-0005](ADR-0005-manual-recommendation-conversion.md)

@@ -127,6 +127,6 @@ activation, experiment creation, and scheduling remain separate boundaries.
 References
 ----------
 
-* ``docs/Phase4DExperimentRecommendationCampaignPlanning.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignReview.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignPlanning.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignReview.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``

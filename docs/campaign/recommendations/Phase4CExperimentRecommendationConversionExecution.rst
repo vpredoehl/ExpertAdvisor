@@ -70,5 +70,5 @@ References
 
 * ``docs/architecture/adr/ADR-0005-manual-recommendation-conversion.md``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
-* ``docs/Phase4CExperimentRecommendationConversionPersistence.rst``
-* ``docs/Phase4CExperimentRecommendationConversionProposalReview.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionPersistence.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionProposalReview.rst``

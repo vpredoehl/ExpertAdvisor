@@ -102,4 +102,4 @@ References
 * ``docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md``
 * ``docs/architecture/adr/ADR-0005-manual-recommendation-conversion.md``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
-* ``docs/Phase4CExperimentRecommendationConversionExecution.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionExecution.rst``

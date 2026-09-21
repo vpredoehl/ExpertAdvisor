@@ -43,7 +43,7 @@ shared while different executable generations can retain different runtime
 identities if the Metal libraries change.
 
 The operational registry and binaries are ignored by Git. The checked-in v4
-schema is `docs/semantic-worker-registry.schema.json`. Registry paths are
+schema is `docs/semantic-workers/semantic-worker-registry.schema.json`. Registry paths are
 artifact-root-relative and must exactly match the content-addressed structure.
 Startup canonicalizes them, rejects escapes and missing/non-executable files,
 compares each manifest, and hashes each executable and runtime resource.

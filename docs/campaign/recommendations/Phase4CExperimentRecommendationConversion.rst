@@ -109,7 +109,7 @@ References
 * ``docs/architecture/adr/ADR-0003-advisory-recommendation-evaluation.md``
 * ``docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md``
 * ``docs/architecture/adr/ADR-0005-manual-recommendation-conversion.md``
-* ``docs/Phase4AExperimentRecommendationFoundation.rst``
-* ``docs/Phase4AExperimentRecommendationReview.rst``
-* ``docs/Phase4BExperimentRecommendationEvaluation.rst``
-* ``docs/Phase4BExperimentRecommendationRanking.rst``
+* ``docs/campaign/recommendations/Phase4AExperimentRecommendationFoundation.rst``
+* ``docs/campaign/recommendations/Phase4AExperimentRecommendationReview.rst``
+* ``docs/campaign/recommendations/Phase4BExperimentRecommendationEvaluation.rst``
+* ``docs/campaign/recommendations/Phase4BExperimentRecommendationRanking.rst``

@@ -110,8 +110,8 @@ mutation, and scheduler integration remain outside Step 6.
 References
 ----------
 
-* ``docs/Phase4CExperimentRecommendationConversionPersistence.rst``
-* ``docs/Phase4CExperimentRecommendationConversionProposalReview.rst``
-* ``docs/Phase4CExperimentRecommendationConversionExecution.rst``
-* ``docs/Phase4CExperimentRecommendationConversionActivation.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionPersistence.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionProposalReview.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionExecution.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionActivation.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``

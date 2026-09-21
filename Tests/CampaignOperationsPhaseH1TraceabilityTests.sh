@@ -154,7 +154,7 @@ if [[ "$mode" == "--report" ]]; then
     exit 0
 fi
 if [[ "$mode" == "--check-report" ]]; then
-    checked_report="${4:-$repo_root/docs/CampaignOperationsH1Traceability.md}"
+    checked_report="${4:-$repo_root/docs/campaign/operations/CampaignOperationsH1Traceability.md}"
     [[ -s "$checked_report" ]] || fail_trace 010 "$checked_report" missing-generated-report
     python3 "$repo_root/Scripts/CampaignOperationsH1EvidenceGraph.py" validate \
       "$artifact_root" "$requested_run_id" "$checked_report" >/dev/null || \

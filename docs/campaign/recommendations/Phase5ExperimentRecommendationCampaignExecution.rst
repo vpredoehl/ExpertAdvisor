@@ -112,8 +112,8 @@ References
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md``
 * ``docs/architecture/adr/ADR-0005-manual-recommendation-conversion.md``
-* ``docs/Phase4CExperimentRecommendationConversionExecution.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignHandoff.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignProposalReview.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignActivation.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignLaunch.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionExecution.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignHandoff.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignProposalReview.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignActivation.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignLaunch.rst``

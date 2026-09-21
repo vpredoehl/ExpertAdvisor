@@ -100,7 +100,7 @@ meaning from the underlying research configuration.
 - [Volume I §5](../Volume_I_Foundation.md)
 - [Volume VII](../Volume_VII_Experiment_Lifecycle.md)
 - [Volume VIII](../Volume_VIII_Recommendation_Engine.md)
-- [Phase 4 recommendation foundation](../../Phase4AExperimentRecommendationFoundation.rst)
+- [Phase 4 recommendation foundation](../../campaign/recommendations/Phase4AExperimentRecommendationFoundation.rst)
 
 ## 9. Revision history
 

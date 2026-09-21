@@ -124,8 +124,8 @@ Rejected as a distinct later authority explicitly outside Phase 6B.
 ## 8. References
 
 - [Volume VIII](../Volume_VIII_Recommendation_Engine.md)
-- [Phase 6A proposal](../../Phase6ARecommendationCampaignFollowUpProposal.rst)
-- [Phase 6B persistence and preview](../../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
+- [Phase 6A proposal](../../campaign/recommendations/Phase6ARecommendationCampaignFollowUpProposal.rst)
+- [Phase 6B persistence and preview](../../campaign/recommendations/Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
 - [ADR-0001](ADR-0001-postgresql-source-of-truth.md)
 - [ADR-0004](ADR-0004-scheduler-ownership-boundaries.md)
 - [ADR-0006](ADR-0006-phase-6a-follow-up-proposal.md)

@@ -158,10 +158,10 @@ plan and materializes only its selected members as Phase 4C proposals.
 References
 ----------
 
-* ``docs/Phase4BExperimentRecommendationRanking.rst``
-* ``docs/Phase4CExperimentRecommendationConversionWorkflow.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignReview.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignApproval.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignMaterialization.rst``
+* ``docs/campaign/recommendations/Phase4BExperimentRecommendationRanking.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionWorkflow.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignReview.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignApproval.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignMaterialization.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/Volume_IX_Trading_Profitability.md``

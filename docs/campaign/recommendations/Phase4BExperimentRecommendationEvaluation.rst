@@ -209,4 +209,4 @@ References
 * ``docs/architecture/adr/ADR-0002-deterministic-experiment-identity.md``
 * ``docs/architecture/adr/ADR-0003-advisory-recommendation-evaluation.md``
 * ``docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md``
-* ``docs/Phase4AExperimentRecommendationScoring.rst``
+* ``docs/campaign/recommendations/Phase4AExperimentRecommendationScoring.rst``

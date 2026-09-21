@@ -457,9 +457,9 @@ permissions, backup, concurrency, and observability decisions.
 - [ADR-0020](adr/ADR-0020-campaign-manager-continuous-operation.md)
 - [Normative Phase H architecture](CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md)
 - [Accepted Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
-- [Phase 6B persistence and preview](../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
-- [Phase 6C administrative review](../Phase6CRecommendationCampaignFollowUpProposalReview.rst)
-- [Phase 6D governance ratification](../Phase6DRecommendationCampaignFollowUpProposalRatification.rst)
+- [Phase 6B persistence and preview](../campaign/recommendations/Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
+- [Phase 6C administrative review](../campaign/recommendations/Phase6CRecommendationCampaignFollowUpProposalReview.rst)
+- [Phase 6D governance ratification](../campaign/recommendations/Phase6DRecommendationCampaignFollowUpProposalRatification.rst)
 - [`migrate_lstm_db.sh`](../../migrate_lstm_db.sh)
 - [`Database/migrations`](../../Database/migrations)
 

@@ -134,9 +134,9 @@ policy.
 
 - [Volume VIII](../Volume_VIII_Recommendation_Engine.md)
 - [Volume XII](../Volume_XII_Database.md)
-- [Phase 6A proposal](../../Phase6ARecommendationCampaignFollowUpProposal.rst)
-- [Phase 6B persistence and preview](../../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
-- [Phase 6C administrative review](../../Phase6CRecommendationCampaignFollowUpProposalReview.rst)
+- [Phase 6A proposal](../../campaign/recommendations/Phase6ARecommendationCampaignFollowUpProposal.rst)
+- [Phase 6B persistence and preview](../../campaign/recommendations/Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
+- [Phase 6C administrative review](../../campaign/recommendations/Phase6CRecommendationCampaignFollowUpProposalReview.rst)
 - [ADR-0001](ADR-0001-postgresql-source-of-truth.md)
 - [ADR-0004](ADR-0004-scheduler-ownership-boundaries.md)
 - [ADR-0006](ADR-0006-phase-6a-follow-up-proposal.md)

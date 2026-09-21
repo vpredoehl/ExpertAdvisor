@@ -669,10 +669,10 @@ scheduler-owned operation.
 - [ADR-0002: Deterministic experiment identity](adr/ADR-0002-deterministic-experiment-identity.md)
 - [ADR-0003: Advisory recommendation evaluation](adr/ADR-0003-advisory-recommendation-evaluation.md)
 - [ADR-0004: Scheduler ownership boundaries](adr/ADR-0004-scheduler-ownership-boundaries.md)
-- [Phase 4 recommendation foundation](../Phase4AExperimentRecommendationFoundation.rst)
-- [Phase 4 recommendation persistence](../Phase4AExperimentRecommendationPersistence.rst)
-- [Phase 4 recommendation scoring](../Phase4AExperimentRecommendationScoring.rst)
-- [Phase 4 recommendation review](../Phase4AExperimentRecommendationReview.rst)
+- [Phase 4 recommendation foundation](../campaign/recommendations/Phase4AExperimentRecommendationFoundation.rst)
+- [Phase 4 recommendation persistence](../campaign/recommendations/Phase4AExperimentRecommendationPersistence.rst)
+- [Phase 4 recommendation scoring](../campaign/recommendations/Phase4AExperimentRecommendationScoring.rst)
+- [Phase 4 recommendation review](../campaign/recommendations/Phase4AExperimentRecommendationReview.rst)
 
 ## 20. Revision history
 

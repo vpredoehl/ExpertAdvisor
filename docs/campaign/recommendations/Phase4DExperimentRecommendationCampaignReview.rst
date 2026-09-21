@@ -80,8 +80,8 @@ exact canonical evidence and stops at Phase 4C proposal materialization.
 References
 ----------
 
-* ``docs/Phase4DExperimentRecommendationCampaignPlanning.rst``
-* ``docs/Phase4CExperimentRecommendationConversionWorkflow.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignApproval.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignMaterialization.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignPlanning.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionWorkflow.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignApproval.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignMaterialization.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``

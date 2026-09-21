@@ -128,8 +128,8 @@ authorize review, conversion, or execution. Profitability is not inferred.
 References
 ----------
 
-* ``docs/Phase4CExperimentRecommendationConversion.rst``
-* ``docs/Phase4CExperimentRecommendationConversionProposalReview.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversion.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionProposalReview.rst``
 * ``docs/architecture/Volume_I_Foundation.md``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/adr/ADR-0001-postgresql-source-of-truth.md``

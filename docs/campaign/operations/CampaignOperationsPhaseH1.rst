@@ -215,7 +215,7 @@ Runtime assurance records
 The migration harness emits ``h1-runtime-result-v2`` records with 24 fields and reconciles
 every fixture against ``Tests/fixtures/CampaignOperationsH1Traceability.tsv``.
 It rejects missing, duplicate, stale, malformed, unexpected, or artifact-digest
-mismatched records and generates ``docs/CampaignOperationsH1Traceability.md``
+mismatched records and generates ``docs/campaign/operations/CampaignOperationsH1Traceability.md``
 from the reconciled data. Restore A--J use ``h1-restore-runtime-v2``. Lock rows
 use ``h1-lock-runtime-v3`` records with 43 fields; the strict validator
 deliberately rejects any row classified as a non-final seam.

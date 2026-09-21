@@ -99,7 +99,7 @@ automation without explicit ownership and safety decisions.
 
 - [Volume I §10.3](../Volume_I_Foundation.md)
 - [Volume VIII](../Volume_VIII_Recommendation_Engine.md)
-- [Phase 4 recommendation review](../../Phase4AExperimentRecommendationReview.rst)
+- [Phase 4 recommendation review](../../campaign/recommendations/Phase4AExperimentRecommendationReview.rst)
 
 ## 9. Revision history
 

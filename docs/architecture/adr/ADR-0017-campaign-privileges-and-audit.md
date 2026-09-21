@@ -179,7 +179,7 @@ reconciliation, and completion require distinct powers.
 - [Accepted Campaign Operations specification §§24–25, 27–29](../../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
 - [Volume XII](../Volume_XII_Database.md)
 - [Migration 045](../../../Database/migrations/045_campaign_operations_foundation.sql)
-- [Phase 5 launch](../../Phase5ExperimentRecommendationCampaignLaunch.rst)
+- [Phase 5 launch](../../campaign/recommendations/Phase5ExperimentRecommendationCampaignLaunch.rst)
 
 ## 11. Revision history
 

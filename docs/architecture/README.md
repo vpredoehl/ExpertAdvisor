@@ -142,10 +142,10 @@ or perform external actions unless the prompt separately authorizes them.
 
 The Phase 4 recommendation documents remain detailed implementation references:
 
-- [Recommendation identity and candidate generation](../Phase4AExperimentRecommendationFoundation.rst)
-- [Recommendation persistence](../Phase4AExperimentRecommendationPersistence.rst)
-- [Recommendation scoring](../Phase4AExperimentRecommendationScoring.rst)
-- [Recommendation review](../Phase4AExperimentRecommendationReview.rst)
+- [Recommendation identity and candidate generation](../campaign/recommendations/Phase4AExperimentRecommendationFoundation.rst)
+- [Recommendation persistence](../campaign/recommendations/Phase4AExperimentRecommendationPersistence.rst)
+- [Recommendation scoring](../campaign/recommendations/Phase4AExperimentRecommendationScoring.rst)
+- [Recommendation review](../campaign/recommendations/Phase4AExperimentRecommendationReview.rst)
 
 The accepted
 [Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)

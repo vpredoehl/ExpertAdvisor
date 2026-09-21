@@ -104,8 +104,8 @@ review, conversion, or execution.
 References
 ----------
 
-* ``docs/Phase4CExperimentRecommendationConversion.rst``
-* ``docs/Phase4CExperimentRecommendationConversionPersistence.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversion.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionPersistence.rst``
 * ``docs/architecture/Volume_I_Foundation.md``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/adr/ADR-0003-advisory-recommendation-evaluation.md``

@@ -100,8 +100,8 @@ of the preceding mutation commands and performs no automatic follow-up.
 References
 ----------
 
-* ``docs/Phase4DExperimentRecommendationCampaignHandoff.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignExecution.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignActivation.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignLaunch.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignHandoff.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignExecution.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignActivation.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignLaunch.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``

@@ -164,8 +164,8 @@ Campaign Operations orchestration.
 ## 10. References
 
 - [Accepted Campaign Operations specification §§12, 16–20](../../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
-- [Phase 5 launch](../../Phase5ExperimentRecommendationCampaignLaunch.rst)
-- [Phase 4C execution](../../Phase4CExperimentRecommendationConversionExecution.rst)
+- [Phase 5 launch](../../campaign/recommendations/Phase5ExperimentRecommendationCampaignLaunch.rst)
+- [Phase 4C execution](../../campaign/recommendations/Phase4CExperimentRecommendationConversionExecution.rst)
 
 ## 11. Revision history
 

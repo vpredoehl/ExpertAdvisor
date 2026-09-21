@@ -155,8 +155,8 @@ authority and break existing Phase 4/5 provenance.
 - [Accepted Campaign Operations specification](../../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
 - [Volume X](../Volume_X_Research_Automation.md)
 - [Volume XI](../Volume_XI_Scheduler.md)
-- [Phase 4D materialization](../../Phase4DExperimentRecommendationCampaignMaterialization.rst)
-- [Phase 5 launch](../../Phase5ExperimentRecommendationCampaignLaunch.rst)
+- [Phase 4D materialization](../../campaign/recommendations/Phase4DExperimentRecommendationCampaignMaterialization.rst)
+- [Phase 5 launch](../../campaign/recommendations/Phase5ExperimentRecommendationCampaignLaunch.rst)
 - [Migration 045](../../../Database/migrations/045_campaign_operations_foundation.sql)
 
 ## 11. Revision history

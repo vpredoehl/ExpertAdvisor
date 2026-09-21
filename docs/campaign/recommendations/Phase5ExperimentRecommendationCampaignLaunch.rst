@@ -131,10 +131,10 @@ or controls it.
 References
 ----------
 
-* ``docs/Phase4CExperimentRecommendationConversionExecution.rst``
-* ``docs/Phase4CExperimentRecommendationConversionActivation.rst``
-* ``docs/Phase4DExperimentRecommendationCampaignHandoff.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignExecution.rst``
-* ``docs/Phase5ExperimentRecommendationCampaignActivation.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionExecution.rst``
+* ``docs/campaign/recommendations/Phase4CExperimentRecommendationConversionActivation.rst``
+* ``docs/campaign/recommendations/Phase4DExperimentRecommendationCampaignHandoff.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignExecution.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignActivation.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
-* ``docs/Phase5ExperimentRecommendationCampaignStatus.rst``
+* ``docs/campaign/recommendations/Phase5ExperimentRecommendationCampaignStatus.rst``

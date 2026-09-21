@@ -214,7 +214,7 @@ contract exists.
 
 - [Accepted Campaign Operations specification §§13, 21–23](../../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
 - [Global experiment controls](../../GlobalExperimentControls.rst)
-- [Phase 5 outcome assessment](../../Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst)
+- [Phase 5 outcome assessment](../../campaign/recommendations/Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst)
 
 ## 11. Revision history
 
