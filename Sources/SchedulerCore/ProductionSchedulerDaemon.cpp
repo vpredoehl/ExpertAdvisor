@@ -8766,10 +8766,10 @@ void PersistObservedExperimentChild(pqxx::work& w,
         const bool forcedFinalInferenceRerun =
             OperatorForcedFinalInferenceRerunRequested(
                 w, experiment.experimentId);
-        if (HasCompletedInferenceResultForAttempt(
+        if (HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
                 w,
                 experiment,
-                child.launchedEpoch,
+                *child.workerAttemptId,
                 forcedFinalInferenceRerun))
         {
             TransitionRecoveredInferenceToAnalyze(

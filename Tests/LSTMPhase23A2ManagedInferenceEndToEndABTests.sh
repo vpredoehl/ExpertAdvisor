@@ -350,7 +350,7 @@ SQL
                 reconciliation_result
          FROM experiment_scheduler_worker_attempt
          WHERE worker_attempt_id=${completed_attempt}")" = \
-        "completed:0:child_exited"
+        "completed:0:parent_observed_exit"
 
     test "$(scalar "${lstm_db}" \
         "SELECT count(*)
