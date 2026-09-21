@@ -1,91 +1,89 @@
 do $code$
 declare
-	f text;
-	qs text;
-	ind1 text;
-	ind2 text;
-	oid int;
-	tbl text;
-	key text;
-	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
+    f record;
+    tbl text;
+    mv text;
+    tf text;
+    periods int;
+    unit text;
+    qs text;
+    ind_low text;
+    ind_high text;
+    current_year int := extract(year from current_date)::int;
+
+    pair cursor(yr int) for
+        select tablename
+        from pg_tables
+        where schemaname = 'public'
+          and tablename ~ '^[a-z]{6}_[0-9]{4}$'
+          and right(tablename, 4) = yr::text
+        order by tablename;
 begin
-	FOR y in 2000..2030 LOOP
-	select substring('''%' || y,2,5) into key;
-	FOR f in pair(key)
-	LOOP
-		select substring(f::text, 2, 11) into tbl;
-		raise info 'f: %, tbl: %', f, tbl;
- 		--qs = format('create materialized view %I_candlestick1m  tablespace view as select * from candlestick(''public.%I'', 1, ''minute'',  %L, %L) with data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
- 		qs = format('create materialized view %I_candlestick1m  tablespace view as select * from candlestick(''public.%I'', 1, ''minute'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_candlestick1m_dt_low_idx on %I_candlestick1m( dt, low )  tablespace candlestick_index',tbl,tbl);
-		ind2 = format('create index %I_candlestick1m_dt_high_idx on %I_candlestick1m( dt, high )  tablespace candlestick_index',tbl,tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-			execute ind2;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
- 		qs = format('create materialized view %I_candlestick5m  tablespace view as select * from candlestick(''public.%I'', 5, ''minute'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_candlestick5m_dt_low_idx on %I_candlestick5m( dt, low )  tablespace candlestick_index',tbl,tbl);
-		ind2 = format('create index %I_candlestick5m_dt_high_idx on %I_candlestick5m( dt, high )  tablespace candlestick_index',tbl,tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-			execute ind2;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
- 		qs = format('create materialized view %I_candlestick15m  tablespace view as select * from candlestick(''public.%I'', 15, ''minute'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_candlestick15m_dt_low_idx on %I_candlestick15m( dt, low )  tablespace candlestick_index',tbl,tbl);
-		ind2 = format('create index %I_candlestick15m_dt_high_idx on %I_candlestick15m( dt, high )  tablespace candlestick_index',tbl,tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-			execute ind2;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
- 		qs = format('create materialized view %I_candlestick1hr  tablespace view as select * from candlestick(''public.%I'', 1, ''hour'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_candlestick1hr_dt_low_idx on %I_candlestick1hr( dt, low )  tablespace candlestick_index',tbl,tbl);
-		ind2 = format('create index %I_candlestick1hr_dt_high_idx on %I_candlestick1hr( dt, high )  tablespace candlestick_index',tbl,tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-			execute ind2;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
- 		qs = format('create materialized view %I_candlestick4hr  tablespace view as select * from candlestick(''public.%I'', 4, ''hour'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_candlestick4hr_dt_low_idx on %I_candlestick4hr( dt, low )  tablespace candlestick_index',tbl,tbl);
-		ind2 = format('create index %I_candlestick4hr_dt_high_idx on %I_candlestick4hr( dt, high )  tablespace candlestick_index',tbl,tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-			execute ind2;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
- 		qs = format('create materialized view %I_candlestick1day  tablespace view as select * from candlestick(''public.%I'', 1, ''day'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_candlestick1day_dt_low_idx on %I_candlestick1day( dt, low )  tablespace candlestick_index',tbl,tbl);
-		ind2 = format('create index %I_candlestick1day_dt_high_idx on %I_candlestick1day( dt, high )  tablespace candlestick_index',tbl,tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-			execute ind2;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		COMMIT;
-	END LOOP;
-	END LOOP;
+    for f in pair(current_year)
+    loop
+        tbl := f.tablename;
+        raise info 'Creating candlestick MVs for %', tbl;
+
+        foreach tf in array array['15m', '1hr', '4hr', '1day']
+        loop
+            case tf
+                when '15m' then
+                    periods := 15;
+                    unit := 'minute';
+                when '1hr' then
+                    periods := 1;
+                    unit := 'hour';
+                when '4hr' then
+                    periods := 4;
+                    unit := 'hour';
+                when '1day' then
+                    periods := 1;
+                    unit := 'day';
+            end case;
+
+            mv := tbl || '_candlestick' || tf;
+
+            if not exists (
+                select 1
+                from pg_matviews
+                where schemaname = 'public'
+                  and matviewname = mv
+            ) then
+                qs := format(
+                    'create materialized view public.%I tablespace view as select * from candlestick(%L, %s, %L) with no data',
+                    mv,
+                    'public.' || tbl,
+                    periods,
+                    unit
+                );
+
+                ind_low := format(
+                    'create index %I on public.%I (dt, low) tablespace candlestick_index',
+                    mv || '_dt_low_idx',
+                    mv
+                );
+
+                ind_high := format(
+                    'create index %I on public.%I (dt, high) tablespace candlestick_index',
+                    mv || '_dt_high_idx',
+                    mv
+                );
+
+                begin
+                    raise info 'Creating %', mv;
+                    execute qs;
+                    execute ind_low;
+                    execute ind_high;
+                exception when others then
+                    raise notice '%: % %', mv, SQLERRM, SQLSTATE;
+                end;
+            else
+                raise info 'Already exists: %', mv;
+            end if;
+        end loop;
+
+        commit;
+    end loop;
 end $code$
 language 'plpgsql';
-
 

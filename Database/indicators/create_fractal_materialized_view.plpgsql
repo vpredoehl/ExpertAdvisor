@@ -1,78 +1,81 @@
 do $code$
 declare
-	f text;
-	qs text;
-	ind1 text;
-	ind2 text;
-	oid int;
-	tbl text;
-	key text;
-	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
+    f record;
+    tbl text;
+    mv text;
+    tf text;
+    periods int;
+    unit text;
+    qs text;
+    ind text;
+    current_year int := extract(year from current_date)::int;
+
+    pair cursor(yr int) for
+        select tablename
+        from pg_tables
+        where schemaname = 'public'
+          and tablename ~ '^[a-z]{6}_[0-9]{4}$'
+          and right(tablename, 4) = yr::text
+        order by tablename;
 begin
-	FOR y in 2010..2030 LOOP
-	select substring('''%' || y,2,5) into key;
-	FOR f in pair(key)
-	LOOP
-		select substring(f::text, 2, 11) into tbl;
-		raise info 'f: %, tbl: %', f, tbl;
-		qs = format('create materialized view %I_fractal1m  tablespace view as select * from fractal(''public.%I'', 1, ''minute'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_fractal1m_tfs_idx on %I_fractal1m( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('create materialized view %I_fractal5m  tablespace view as select * from fractal(''public.%I'', 5, ''minute'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_fractal5m_ts_idx on %I_fractal5m( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('create materialized view %I_fractal15m  tablespace view as select * from fractal(''public.%I'', 15, ''minute'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_fractal115m_ts_idx on %I_fractal15m( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('create materialized view %I_fractal1hr  tablespace view as select * from fractal(''public.%I'', 1, ''hour'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_fractal11hr_ts_idx on %I_fractal1hr( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('create materialized view %I_fractal4hr  tablespace view as select * from fractal(''public.%I'', 4, ''hour'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_fractal14hr_ts_idx on %I_fractal4hr( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('create materialized view %I_fractal1day  tablespace view as select * from fractal(''public.%I'', 1, ''day'') with no data;', tbl, tbl );
-		ind1 = format('create index %I_fractal11day_ts_idx on %I_fractal1day( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
-		begin
-			raise info 'executing: %', qs;
-			execute  qs;
-			execute ind1;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		COMMIT;
-	END LOOP;
-	END LOOP;
+    for f in pair(current_year)
+    loop
+        tbl := f.tablename;
+        raise info 'Creating fractal MVs for %', tbl;
+
+        foreach tf in array array['15m', '1hr', '4hr', '1day']
+        loop
+            case tf
+                when '15m' then
+                    periods := 15;
+                    unit := 'minute';
+                when '1hr' then
+                    periods := 1;
+                    unit := 'hour';
+                when '4hr' then
+                    periods := 4;
+                    unit := 'hour';
+                when '1day' then
+                    periods := 1;
+                    unit := 'day';
+            end case;
+
+            mv := tbl || '_fractal' || tf;
+
+            if not exists (
+                select 1
+                from pg_matviews
+                where schemaname = 'public'
+                  and matviewname = mv
+            ) then
+                qs := format(
+                    'create materialized view public.%I tablespace view as select * from fractal(%L, %s, %L) with no data',
+                    mv,
+                    'public.' || tbl,
+                    periods,
+                    unit
+                );
+
+                ind := format(
+                    'create index %I on public.%I (ts, fractal_high, fractal_low) tablespace candlestick_index',
+                    mv || '_ts_idx',
+                    mv
+                );
+
+                begin
+                    raise info 'Creating %', mv;
+                    execute qs;
+                    execute ind;
+                exception when others then
+                    raise notice '%: % %', mv, SQLERRM, SQLSTATE;
+                end;
+            else
+                raise info 'Already exists: %', mv;
+            end if;
+        end loop;
+
+        commit;
+    end loop;
 end $code$
 language 'plpgsql';
-
 

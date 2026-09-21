@@ -1,95 +1,51 @@
 do $code$
 declare
-	f text;
-	qs text;
-	qs2 text;
-	tbl text;
-	key text;
-	ispopulated boolean;
-	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
+    f record;
+    tbl text;
+    mv text;
+    tf text;
+    current_year int := extract(year from current_date)::int;
+
+    pair cursor(yr int) for
+        select tablename
+        from pg_tables
+        where schemaname = 'public'
+          and tablename ~ '^[a-z]{6}_[0-9]{4}$'
+          and right(tablename, 4) = yr::text
+        order by tablename;
 begin
-	FOR y in 2000..2030 LOOP
-	select substring('''%' || y || '%''',2,6) into key;
-	FOR f in pair(key)
-	LOOP
-		select substring(f::text, 2, 11) into tbl;
-		raise info 'f: %, tbl: %', f, tbl;
-		qs = format('refresh materialized view %I_fractal1m', tbl);
-		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1m''', tbl);
-			execute qs2 into ispopulated;
-			raise info '% fractal1m ispopulated: %', tbl, ispopulated;	
-			if ispopulated is not true then
-				raise info 'executing: %', qs;
-				execute  qs;
-			end if;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('refresh materialized view %I_fractal5m', tbl);
-		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal5m''', tbl);
-			execute qs2 into ispopulated;
-			raise info '% fracta5m ispopulated: %', tbl, ispopulated;	
-			if ispopulated is not true then
-				raise info 'executing: %', qs;
-				execute  qs;
-			end if;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('refresh materialized view %I_fractal15m', tbl);
-		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal15m''', tbl);
-			execute qs2 into ispopulated;
-			raise info '% fractal15m ispopulated: %', tbl, ispopulated;	
-			if ispopulated is not true then
-				raise info 'executing: %', qs;
-				execute  qs;
-			end if;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('refresh materialized view %I_fractal1hr', tbl);
-		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1hr''', tbl);
-			execute qs2 into ispopulated;
-			raise info '% fractal1hr ispopulated: %', tbl, ispopulated;	
-			if ispopulated is not true then
-				raise info 'executing: %', qs;
-				execute  qs;
-			end if;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('refresh materialized view %I_fractal4hr', tbl);
-		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal4hr''', tbl);
-			execute qs2 into ispopulated;
-			raise info '% fractal4hr ispopulated: %', tbl, ispopulated;	
-			if ispopulated is not true then
-				raise info 'executing: %', qs;
-				execute  qs;
-			end if;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		qs = format('refresh materialized view %I_fractal1day', tbl);
-		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1day''', tbl);
-			execute qs2 into ispopulated;
-			raise info '% fractal1day ispopulated: %', tbl, ispopulated;	
-			if ispopulated is not true then
-				raise info 'executing: %', qs;
-				execute  qs;
-			end if;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
-		COMMIT;
-	END LOOP;
-	END LOOP;
+    for f in pair(current_year)
+    loop
+        tbl := f.tablename;
+        raise info 'Refreshing fractal MVs for %', tbl;
+
+        foreach tf in array array['15m', '1hr', '4hr', '1day']
+        loop
+            mv := tbl || '_fractal' || tf;
+
+            if exists (
+                select 1
+                from pg_matviews
+                where schemaname = 'public'
+                  and matviewname = mv
+            ) then
+                begin
+                    raise info 'Refreshing %', mv;
+
+                    execute format(
+                        'refresh materialized view public.%I',
+                        mv
+                    );
+                exception when others then
+                    raise notice '%: % %', mv, SQLERRM, SQLSTATE;
+                end;
+            else
+                raise notice 'Missing materialized view: %', mv;
+            end if;
+        end loop;
+
+        commit;
+    end loop;
 end $code$
 language 'plpgsql';
-
 

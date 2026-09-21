@@ -52,11 +52,19 @@ declare
     qs text;
     p text;
     rc integer;
+    raw_refresh boolean;
 begin
+    raw_refresh := COALESCE(current_setting('lstm.candlestick_raw_refresh', true), 'off') = 'on';
+
+    if tbl ~ '_[0-9]{4}$' and fromdt = '-INFINITY' and todt = 'INFINITY' then
+        fromdt := make_date(substring(tbl from '([0-9]{4})$')::int, 1, 1);
+        todt := make_date(substring(tbl from '([0-9]{4})$')::int + 1, 1, 1) - interval '1 microsecond';
+    end if;
+
     -- look for a materialized view
     select substring(tbl,position('.' in tbl) + 1,6) into p;
     --raise info 'p: %', p;
-    if position( 'rmp' in tbl ) != 0 then
+    if not raw_refresh and position( 'rmp' in tbl ) != 0 then
         begin    
             select case
                      when unit = 'minute' then n::text || 'm'    
@@ -71,7 +79,7 @@ begin
         exception when others then
             raise notice 'rmp: % %', SQLERRM, SQLSTATE;
         end; 
-    elsif fromdt != '-INFINITY' and todt != 'INFINITY' then
+    elsif not raw_refresh and ((fromdt != '-INFINITY' and todt != 'INFINITY') or tbl ~ '_[0-9]{4}$') then
         begin
             select case
                      when unit = 'minute' then n::text || 'm'    
