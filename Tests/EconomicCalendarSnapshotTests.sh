@@ -74,16 +74,25 @@ done
 createdb --host="$DB_HOST" --username="$DB_ADMIN_USER" --owner="$DB_USER" \
     --template=template0 "$BASE_DB"
 
-# Production is inspected only through a read-only schema dump. The clone is
-# advanced from the deployed schema-090 shape through 091 and then 092.
+# Production is inspected only through a read-only schema dump.  Older source
+# schemas need the historical-consensus migration before snapshot validation;
+# a current source clone already includes that migration and must not replay
+# its non-idempotent ALTER TABLE statements.
 PGOPTIONS='-c default_transaction_read_only=on' \
     pg_dump -s --host="$DB_HOST" --username="$DB_ADMIN_USER" \
         --dbname="$SOURCE_DB" |
     admin_psql "$BASE_DB" >"$TEMP_DIR/schema-restore.log"
 
-admin_psql "$BASE_DB" \
-    -f "$ROOT/Database/migrations/091_weekly_claims_historical_consensus.sql" \
-    >"$TEMP_DIR/migration-091.log"
+if [[ "$(runtime_psql "$BASE_DB" -tAc "SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='economic_event_consensus'
+      AND column_name='provider_observed_at')")" != "t" ]]; then
+    admin_psql "$BASE_DB" \
+        -f "$ROOT/Database/migrations/091_weekly_claims_historical_consensus.sql" \
+        >"$TEMP_DIR/migration-091.log"
+else
+    printf 'MIGRATION_091_ALREADY_PRESENT=PASS\n' >"$TEMP_DIR/migration-091.log"
+fi
 
 # Historical rows are deliberately created before 092. They must survive and
 # remain NULL-bound after the migration.
