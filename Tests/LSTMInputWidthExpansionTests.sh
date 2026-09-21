@@ -17,6 +17,6 @@ trap 'rm -rf -- "${test_dir}"' EXIT
 grep -q 'arg == "--resume-expand-input-width"' "${repo_root}/LSTM/main.cpp"
 grep -q 'resumeConfig->parameterExpansionRequired' "${repo_root}/LSTM/main.cpp"
 grep -q 'AddCliFlag(argv, "--resume-expand-input-width")' \
-    "${repo_root}/Sources/ExperimentScheduler.cpp"
+    "${repo_root}/Sources/SchedulerCore/ProductionSchedulerDaemon.cpp"
 grep -q 'resume_expand_input_width boolean NOT NULL' \
     "${repo_root}/Database/migrations/071_resume_input_width_expansion.sql"

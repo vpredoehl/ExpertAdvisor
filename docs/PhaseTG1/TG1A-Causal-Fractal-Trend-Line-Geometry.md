@@ -120,4 +120,6 @@ history.
 
 TG1A contains no Long-Term/Outer/Inner classification, chart angles,
 Fibonacci logic, probabilities, break/retest strategy, labels, entries, exits,
-stops, targets, or sizing. Those remain later-phase concerns.
+stops, targets, or sizing. TG1B provides a separate diagnostic calibration and
+classification layer without changing this TG1A contract; the remaining
+strategy semantics remain later-phase concerns.
