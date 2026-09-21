@@ -68,6 +68,7 @@
 #include "RunMetadata.hpp"
 #include "SchedulerChildStatus.hpp"
 #include "SchedulerExecutablePath.hpp"
+#include "SchedulerStatusProcessRecognition.hpp"
 #include "SchedulerOwnershipPolicy.hpp"
 #include "SchedulerOwnershipRepository.hpp"
 #include "SchedulerCore/CheckpointAnalysisOrchestrationService.hpp"
@@ -9377,19 +9378,17 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         snapshot.resourcesByPid[pid] = resource;
         snapshot.processes.push_back(SchedulerProcessInfo{pid, command, resource});
 
-        const bool isLstm = command.find("LSTM_Release") != std::string::npos ||
-                            command.find("/LSTM ") != std::string::npos ||
-                            command.find(" LSTM ") != std::string::npos;
-        if (!isLstm)
+        const bool isScheduler =
+            IsSchedulerStatusSchedulerProcessCommand(command);
+        const bool isLegacyLstm =
+            SchedulerStatusCommandHasExecutableBasename(
+                command, "LSTM_Release") ||
+            SchedulerStatusCommandHasExecutableBasename(command, "LSTM");
+        if (!isScheduler && !isLegacyLstm)
             continue;
 
-        if (command.find("--schedule-experiments") != std::string::npos)
+        if (isScheduler)
         {
-            const bool isSchedulerWrapper =
-                command.find("SCREEN -dmS") != std::string::npos ||
-                command.find("login -pflq") != std::string::npos;
-            if (isSchedulerWrapper)
-                continue;
             snapshot.schedulerPids.push_back(pid);
             AddResourceToAggregate(snapshot.schedulerResources, resource);
             if (!snapshot.maxTrainProcs.has_value())
