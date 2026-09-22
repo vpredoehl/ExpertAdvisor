@@ -162,6 +162,237 @@ PostgresSchedulerRepository::findAuthoritativeFinalInferenceResultForWorkerAttem
         rows[0][2].as<bool>()};
 }
 
+HistoricalFailedInferenceRecoveryDiscovery
+PostgresSchedulerRepository::findHistoricalFailedInferenceRecoveryEvidence(
+    long long experimentId)
+{
+    const pqxx::result experiment = transaction_.exec(
+        "SELECT 1 FROM experiment e "
+        "WHERE e.experiment_id=$1 AND e.status='failed' "
+        "AND e.phase='infer' AND e.exit_code=0 "
+        "AND e.error_message='child_exit_code_0;phase=infer;exit_code=0' "
+        "AND e.active_scheduler_worker_attempt_id IS NULL "
+        "AND e.last_model_id IS NOT NULL;",
+        pqxx::params{experimentId});
+    if (experiment.empty())
+    {
+        return {
+            HistoricalFailedInferenceRecoveryEvidenceStatus::
+                ExperimentNotEligible,
+            std::nullopt};
+    }
+
+    // Do not add LIMIT here. More than one attempt/result pair is ambiguous
+    // evidence and must be rejected rather than resolved by ordering.
+    const pqxx::result rows = transaction_.exec(
+        "SELECT e.experiment_id,a.worker_attempt_id,m.model_id,r.id "
+        "FROM experiment e "
+        "JOIN model m ON m.model_id=e.last_model_id "
+        " AND m.experiment_id=e.experiment_id "
+        "JOIN experiment_scheduler_worker_attempt a "
+        " ON a.experiment_id=e.experiment_id "
+        " AND a.checkpoint_eval_id IS NULL "
+        " AND a.worker_kind='experiment' "
+        " AND a.lifecycle_phase='infer' "
+        " AND a.capacity_class='infer' "
+        " AND a.lifecycle_state='failed' "
+        " AND a.exit_code=0 "
+        " AND a.completed_at IS NOT NULL "
+        " AND a.reconciliation_result='parent_observed_exit' "
+        "JOIN inference_eval_result r ON r.model_id=m.model_id "
+        " AND r.symbol=e.symbol "
+        " AND r.prediction_horizon=e.prediction_horizon "
+        " AND abs(r.threshold_logret-e.c_next_threshold)<=1e-7 "
+        " AND r.from_date=e.infer_start::date::text "
+        " AND r.to_date=e.infer_end::date::text "
+        " AND r.status='completed' "
+        " AND r.inference_scope='final' "
+        " AND r.checkpoint_eval_id IS NULL "
+        " AND r.completed_at>=a.reserved_at "
+        "WHERE e.experiment_id=$1 AND e.status='failed' "
+        "AND e.phase='infer' AND e.exit_code=0 "
+        "AND e.error_message='child_exit_code_0;phase=infer;exit_code=0' "
+        "AND e.active_scheduler_worker_attempt_id IS NULL "
+        "AND e.last_model_id IS NOT NULL "
+        "ORDER BY a.worker_attempt_id,r.id "
+        "FOR UPDATE OF e,a,m,r;",
+        pqxx::params{experimentId});
+    if (rows.empty())
+    {
+        return {
+            HistoricalFailedInferenceRecoveryEvidenceStatus::
+                NoQualifyingEvidence,
+            std::nullopt};
+    }
+    if (rows.size() != 1)
+    {
+        return {
+            HistoricalFailedInferenceRecoveryEvidenceStatus::
+                AmbiguousEvidence,
+            std::nullopt};
+    }
+
+    return {
+        HistoricalFailedInferenceRecoveryEvidenceStatus::Eligible,
+        HistoricalFailedInferenceRecoveryEvidence{
+            rows[0][0].as<long long>(),
+            rows[0][1].as<long long>(),
+            rows[0][2].as<long long>(),
+            rows[0][3].as<long long>()}};
+}
+
+HistoricalFailedInferenceRecoveryPersistenceResult
+PostgresSchedulerRepository::applyHistoricalFailedInferenceRecovery(
+    const HistoricalFailedInferenceRecoveryEvidence& evidence)
+{
+    // Re-prove the unique relationship in the UPDATE snapshot. This rejects
+    // state changes after discovery, including a newly ambiguous attempt or
+    // result, before either durable row can be committed.
+    const pqxx::result attempt = transaction_.exec(
+        "WITH candidates AS ("
+        " SELECT e.experiment_id,a.worker_attempt_id,m.model_id,r.id "
+        " FROM experiment e "
+        " JOIN model m ON m.model_id=e.last_model_id "
+        "  AND m.experiment_id=e.experiment_id "
+        " JOIN experiment_scheduler_worker_attempt a "
+        "  ON a.experiment_id=e.experiment_id "
+        "  AND a.checkpoint_eval_id IS NULL "
+        "  AND a.worker_kind='experiment' "
+        "  AND a.lifecycle_phase='infer' "
+        "  AND a.capacity_class='infer' "
+        "  AND a.lifecycle_state='failed' AND a.exit_code=0 "
+        "  AND a.completed_at IS NOT NULL "
+        "  AND a.reconciliation_result='parent_observed_exit' "
+        " JOIN inference_eval_result r ON r.model_id=m.model_id "
+        "  AND r.symbol=e.symbol "
+        "  AND r.prediction_horizon=e.prediction_horizon "
+        "  AND abs(r.threshold_logret-e.c_next_threshold)<=1e-7 "
+        "  AND r.from_date=e.infer_start::date::text "
+        "  AND r.to_date=e.infer_end::date::text "
+        "  AND r.status='completed' AND r.inference_scope='final' "
+        "  AND r.checkpoint_eval_id IS NULL "
+        "  AND r.completed_at>=a.reserved_at "
+        " WHERE e.experiment_id=$1 AND e.status='failed' "
+        " AND e.phase='infer' AND e.exit_code=0 "
+        " AND e.error_message='child_exit_code_0;phase=infer;exit_code=0' "
+        " AND e.active_scheduler_worker_attempt_id IS NULL "
+        " AND e.last_model_id IS NOT NULL"
+        "), unique_candidate AS ("
+        " SELECT min(experiment_id) AS experiment_id,"
+        " min(worker_attempt_id) AS worker_attempt_id,"
+        " min(model_id) AS model_id,min(id) AS inference_result_id "
+        " FROM candidates HAVING count(*)=1"
+        ") UPDATE experiment_scheduler_worker_attempt a SET "
+        "lifecycle_state='completed',"
+        "reconciliation_result="
+        "'historical_completed_inference_result_recovered',"
+        "diagnostic="
+        "'historical_failed_final_inference_recovered_from_durable_result',"
+        "reconciled_at=clock_timestamp() "
+        "FROM unique_candidate c "
+        "WHERE a.worker_attempt_id=$2 "
+        "AND c.experiment_id=$1 AND c.worker_attempt_id=$2 "
+        "AND c.model_id=$3 AND c.inference_result_id=$4 "
+        "AND a.lifecycle_state='failed' AND a.exit_code=0 "
+        "AND a.completed_at IS NOT NULL "
+        "AND a.reconciliation_result='parent_observed_exit' "
+        "RETURNING a.worker_attempt_id;",
+        pqxx::params{
+            evidence.experimentId,
+            evidence.workerAttemptId,
+            evidence.modelId,
+            evidence.inferenceResultId});
+    if (attempt.size() != 1)
+    {
+        return HistoricalFailedInferenceRecoveryPersistenceResult::
+            AtomicPreconditionRejected;
+    }
+
+    const pqxx::result lifecycle = transaction_.exec(
+        "UPDATE experiment e SET "
+        "status='pending',phase='analyze',"
+        "worker_pid=NULL,worker_process_group_id=NULL,"
+        "worker_process_start_identity=NULL,worker_executable=NULL,"
+        "worker_command_line=NULL,worker_started_at=NULL,"
+        "worker_control_state='paused',worker_global_pause_request_id=NULL,"
+        "active_scheduler_worker_attempt_id=NULL,current_operation=NULL,"
+        "completed_at=NULL,exit_code=0,error_message=NULL,"
+        "operator_forced_final_inference_rerun_requested=false,"
+        "resume_requested=false,scheduler_resume_origin='none',"
+        "updated_at=clock_timestamp() "
+        "WHERE e.experiment_id=$1 AND e.status='failed' "
+        "AND e.phase='infer' AND e.exit_code=0 "
+        "AND e.error_message='child_exit_code_0;phase=infer;exit_code=0' "
+        "AND e.active_scheduler_worker_attempt_id IS NULL "
+        "AND e.last_model_id=$3 "
+        "AND EXISTS ("
+        " SELECT 1 FROM model m "
+        " JOIN experiment_scheduler_worker_attempt a "
+        "  ON a.worker_attempt_id=$2 "
+        "  AND a.experiment_id=e.experiment_id "
+        "  AND a.checkpoint_eval_id IS NULL "
+        "  AND a.worker_kind='experiment' "
+        "  AND a.lifecycle_phase='infer' "
+        "  AND a.capacity_class='infer' "
+        "  AND a.lifecycle_state='completed' AND a.exit_code=0 "
+        "  AND a.completed_at IS NOT NULL "
+        "  AND a.reconciliation_result="
+        "'historical_completed_inference_result_recovered' "
+        " JOIN inference_eval_result r ON r.id=$4 "
+        "  AND r.model_id=m.model_id AND r.symbol=e.symbol "
+        "  AND r.prediction_horizon=e.prediction_horizon "
+        "  AND abs(r.threshold_logret-e.c_next_threshold)<=1e-7 "
+        "  AND r.from_date=e.infer_start::date::text "
+        "  AND r.to_date=e.infer_end::date::text "
+        "  AND r.status='completed' AND r.inference_scope='final' "
+        "  AND r.checkpoint_eval_id IS NULL "
+        "  AND r.completed_at>=a.reserved_at "
+        " WHERE m.model_id=$3 AND m.experiment_id=e.experiment_id"
+        ") AND NOT EXISTS ("
+        " SELECT 1 FROM experiment_scheduler_worker_attempt a2 "
+        " JOIN inference_eval_result r2 ON r2.model_id=e.last_model_id "
+        "  AND r2.symbol=e.symbol "
+        "  AND r2.prediction_horizon=e.prediction_horizon "
+        "  AND abs(r2.threshold_logret-e.c_next_threshold)<=1e-7 "
+        "  AND r2.from_date=e.infer_start::date::text "
+        "  AND r2.to_date=e.infer_end::date::text "
+        "  AND r2.status='completed' AND r2.inference_scope='final' "
+        "  AND r2.checkpoint_eval_id IS NULL "
+        "  AND r2.completed_at>=a2.reserved_at "
+        " WHERE a2.experiment_id=e.experiment_id "
+        " AND a2.checkpoint_eval_id IS NULL "
+        " AND a2.worker_kind='experiment' "
+        " AND a2.lifecycle_phase='infer' AND a2.capacity_class='infer' "
+        " AND a2.lifecycle_state='failed' AND a2.exit_code=0 "
+        " AND a2.completed_at IS NOT NULL "
+        " AND a2.reconciliation_result='parent_observed_exit'"
+        ") AND NOT EXISTS ("
+        " SELECT 1 FROM inference_eval_result r3 "
+        " JOIN experiment_scheduler_worker_attempt a3 "
+        "  ON a3.worker_attempt_id=$2 "
+        " WHERE r3.id<>$4 AND r3.model_id=e.last_model_id "
+        " AND r3.symbol=e.symbol "
+        " AND r3.prediction_horizon=e.prediction_horizon "
+        " AND abs(r3.threshold_logret-e.c_next_threshold)<=1e-7 "
+        " AND r3.from_date=e.infer_start::date::text "
+        " AND r3.to_date=e.infer_end::date::text "
+        " AND r3.status='completed' AND r3.inference_scope='final' "
+        " AND r3.checkpoint_eval_id IS NULL "
+        " AND r3.completed_at>=a3.reserved_at"
+        ") RETURNING e.experiment_id;",
+        pqxx::params{
+            evidence.experimentId,
+            evidence.workerAttemptId,
+            evidence.modelId,
+            evidence.inferenceResultId});
+    if (lifecycle.size() != 1)
+    {
+        return HistoricalFailedInferenceRecoveryPersistenceResult::
+            AtomicPreconditionRejected;
+    }
+    return HistoricalFailedInferenceRecoveryPersistenceResult::Updated;
+}
+
 std::vector<PendingSchedulerExperimentRecord>
 PostgresSchedulerRepository::loadPendingExperiments(
     std::string_view phase,

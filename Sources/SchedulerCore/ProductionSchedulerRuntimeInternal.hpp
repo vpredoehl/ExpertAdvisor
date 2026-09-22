@@ -35,6 +35,7 @@ struct SchedulerOptions
     std::optional<long long> statusExperimentId;
     std::optional<long long> stopExperimentId;
     std::optional<long long> reconcileWorkerAttemptId;
+    std::optional<long long> recoverFailedInferenceExperimentId;
     bool stopAllExperiments = false;
     bool pauseAllExperiments = false;
     bool resumeAllExperiments = false;

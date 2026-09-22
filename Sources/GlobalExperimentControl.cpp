@@ -3745,6 +3745,133 @@ int RunWorkerAttemptReconciliationCommandImpl(
 
 } // namespace
 
+int RunHistoricalFailedInferenceRecoveryCommand(
+    const std::string& connectionString,
+    const HistoricalFailedInferenceRecoveryCommand& command,
+    std::ostream& output,
+    std::ostream& error)
+{
+    const auto printResult = [&](
+        const char* outcome,
+        const EA::SchedulerCore::HistoricalFailedInferenceRecoveryEvidence*
+            evidence,
+        const char* reason) {
+        output << "HISTORICAL_FAILED_INFERENCE_RECOVERY"
+               << ",outcome=" << outcome
+               << ",eligible="
+               << (std::string{outcome} == "eligible" ||
+                           std::string{outcome} == "applied"
+                       ? "true"
+                       : "false")
+               << ",experiment_id=" << command.experimentId
+               << ",worker_attempt_id="
+               << (evidence
+                       ? std::to_string(evidence->workerAttemptId)
+                       : "unknown")
+               << ",model_id="
+               << (evidence ? std::to_string(evidence->modelId) : "unknown")
+               << ",inference_result_id="
+               << (evidence
+                       ? std::to_string(evidence->inferenceResultId)
+                       : "unknown")
+               << ",reason=" << reason << std::endl;
+    };
+
+    if (command.experimentId <= 0)
+    {
+        error << "HISTORICAL_FAILED_INFERENCE_RECOVERY_REJECTED"
+              << ",reason=experiment_id_required" << std::endl;
+        return 2;
+    }
+    if (command.dryRun == command.confirmed)
+    {
+        error << "HISTORICAL_FAILED_INFERENCE_RECOVERY_REJECTED"
+              << ",experiment_id=" << command.experimentId
+              << ",reason=exactly_one_of_dry_run_or_yes_required"
+              << std::endl;
+        return 2;
+    }
+
+    try
+    {
+        pqxx::connection connection{connectionString};
+        pqxx::work transaction{connection};
+        transaction.exec("SET TRANSACTION READ WRITE;");
+        EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(
+            transaction);
+
+        // Serialize with scheduler lifecycle transactions without claiming
+        // authority or dispatching work.
+        AcquireCoordinationLock(transaction);
+        EA::SchedulerCore::PostgresSchedulerRepository repository{
+            transaction};
+        const auto discovery =
+            repository.findHistoricalFailedInferenceRecoveryEvidence(
+                command.experimentId);
+        if (discovery.status !=
+            EA::SchedulerCore::
+                HistoricalFailedInferenceRecoveryEvidenceStatus::Eligible ||
+            !discovery.evidence)
+        {
+            const char* reason = "historical_recovery_not_eligible";
+            if (discovery.status ==
+                EA::SchedulerCore::
+                    HistoricalFailedInferenceRecoveryEvidenceStatus::
+                        NoQualifyingEvidence)
+            {
+                reason = "no_qualifying_historical_result_relationship";
+            }
+            else if (discovery.status ==
+                     EA::SchedulerCore::
+                         HistoricalFailedInferenceRecoveryEvidenceStatus::
+                             AmbiguousEvidence)
+            {
+                reason = "ambiguous_historical_recovery_evidence";
+            }
+            printResult("rejected", nullptr, reason);
+            transaction.commit();
+            return 1;
+        }
+
+        const auto& evidence = *discovery.evidence;
+        printResult(
+            command.dryRun ? "eligible" : "applying",
+            &evidence,
+            "unique_historical_durable_result_relationship");
+        if (command.dryRun)
+        {
+            transaction.commit();
+            return 0;
+        }
+
+        const auto result =
+            repository.applyHistoricalFailedInferenceRecovery(evidence);
+        if (result !=
+            EA::SchedulerCore::
+                HistoricalFailedInferenceRecoveryPersistenceResult::Updated)
+        {
+            throw std::runtime_error(
+                "historical_recovery_atomic_precondition_rejected");
+        }
+
+        // Emit applied only after commit. A deferred constraint failure rolls
+        // back both guarded updates and reaches the error path instead.
+        transaction.commit();
+        printResult(
+            "applied",
+            &evidence,
+            "historical_durable_result_recovered");
+        return 0;
+    }
+    catch (const std::exception& exception)
+    {
+        error << "HISTORICAL_FAILED_INFERENCE_RECOVERY_ERROR"
+              << ",experiment_id=" << command.experimentId
+              << ",error=" << exception.what() << std::endl;
+        return 2;
+    }
+}
+
 int RunWorkerAttemptReconciliationCommand(
     const std::string& connectionString,
     const WorkerAttemptReconciliationCommand& command,

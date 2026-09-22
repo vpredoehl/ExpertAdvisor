@@ -384,6 +384,22 @@ struct WorkerAttemptReconciliationCommand
     bool confirmed = false;
 };
 
+// Repairs only the historical failed-final-inference corruption proven by a
+// unique durable attempt/result relationship. It never launches work or
+// creates replacement persistence rows.
+struct HistoricalFailedInferenceRecoveryCommand
+{
+    long long experimentId = -1;
+    bool dryRun = false;
+    bool confirmed = false;
+};
+
+int RunHistoricalFailedInferenceRecoveryCommand(
+    const std::string& connectionString,
+    const HistoricalFailedInferenceRecoveryCommand& command,
+    std::ostream& output,
+    std::ostream& error);
+
 int RunWorkerAttemptReconciliationCommand(
     const std::string& connectionString,
     const WorkerAttemptReconciliationCommand& command,

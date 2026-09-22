@@ -61,6 +61,13 @@ public:
         long long experimentId,
         long long workerAttemptId);
 
+    HistoricalFailedInferenceRecoveryDiscovery
+    findHistoricalFailedInferenceRecoveryEvidence(
+        long long experimentId);
+    HistoricalFailedInferenceRecoveryPersistenceResult
+    applyHistoricalFailedInferenceRecovery(
+        const HistoricalFailedInferenceRecoveryEvidence& evidence);
+
     bool checkpointPolicySchemaAvailable();
     std::optional<EA::ExperimentScheduler::CheckpointPolicyConfig>
     loadCheckpointPolicyForEvaluation(long long parentExperimentId);

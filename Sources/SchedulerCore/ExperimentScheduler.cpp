@@ -546,6 +546,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--include-parent-models" ||
             arg == "--stop-experiment" ||
             arg == "--reconcile-worker-attempt" ||
+            arg == "--recover-failed-inference" ||
             arg == "--stop-all-experiments" ||
             arg == "--pause-all-experiments" ||
             arg == "--resume-all-experiments" ||
@@ -758,6 +759,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--experiment-id=", 0) == 0 ||
             arg.rfind("--stop-experiment=", 0) == 0 ||
             arg.rfind("--reconcile-worker-attempt=", 0) == 0 ||
+            arg.rfind("--recover-failed-inference=", 0) == 0 ||
             arg.rfind("--pause-experiment=", 0) == 0 ||
             arg.rfind("--resume-experiment=", 0) == 0 ||
             arg.rfind("--pause-campaign-materialization=", 0) == 0 ||
@@ -1608,6 +1610,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--reconcile-worker-attempt")
             options.reconcileWorkerAttemptId = ParsePositiveLongLong(
                 arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recover-failed-inference")
+            options.recoverFailedInferenceExperimentId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--stop-all-experiments")
             options.stopAllExperiments = true;
         else if (arg == "--pause-all-experiments" || arg == "--pause-all")
@@ -2766,6 +2772,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (SplitOptionWithValue(arg, "--reconcile-worker-attempt", value))
             options.reconcileWorkerAttemptId = ParsePositiveLongLong(
                 "--reconcile-worker-attempt", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recover-failed-inference", value))
+            options.recoverFailedInferenceExperimentId =
+                ParsePositiveLongLong("--recover-failed-inference", value);
         else if (SplitOptionWithValue(arg, "--pause-experiment", value))
             options.pauseExperimentId = ParsePositiveLongLong("--pause-experiment", value);
         else if (SplitOptionWithValue(arg, "--resume-experiment", value))
@@ -3620,6 +3630,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.listExperimentLineageId.has_value() ? 1 : 0) +
         (options.stopExperimentId.has_value() ? 1 : 0) +
         (options.reconcileWorkerAttemptId.has_value() ? 1 : 0) +
+        (options.recoverFailedInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAllExperiments ? 1 : 0) +
         (options.pauseAllExperiments ? 1 : 0) +
         (options.resumeAllExperiments ? 1 : 0) +
@@ -4713,6 +4724,13 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     {
         throw std::invalid_argument(
             "--reconcile-worker-attempt requires --dry-run or --yes");
+    }
+    if (options.recoverFailedInferenceExperimentId.has_value() &&
+        (options.dryRun == options.yes))
+    {
+        throw std::invalid_argument(
+            "--recover-failed-inference requires exactly one of "
+            "--dry-run or --yes");
     }
     if (options.completeSchedulerProtocolCutover &&
         (!options.yes || options.dryRun))
@@ -13305,6 +13323,10 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Reconciles only an exact identity_ambiguous experiment-worker attempt after "
         << "locked lifecycle and live process identity verification; it never signals or dispatches work.\n"
         << "Usage: " << exe
+        << " --recover-failed-inference=EXPERIMENT_ID [--dry-run | --yes]\n"
+        << "Repairs only uniquely proven historical failed final-inference completion; "
+        << "it never reruns inference or creates an attempt or result.\n"
+        << "Usage: " << exe
         << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
         << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
         << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n"
@@ -14371,6 +14393,19 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             command.confirmed = options.yes;
             return EA::GlobalExperimentControl::RunWorkerAttemptReconciliationCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.recoverFailedInferenceExperimentId.has_value())
+        {
+            EA::GlobalExperimentControl::
+                HistoricalFailedInferenceRecoveryCommand command;
+            command.experimentId =
+                *options.recoverFailedInferenceExperimentId;
+            command.dryRun = options.dryRun;
+            command.confirmed = options.yes;
+            return EA::GlobalExperimentControl::
+                RunHistoricalFailedInferenceRecoveryCommand(
+                    LstmDbConnectionString(), command,
+                    std::cout, std::cerr);
         }
         if (options.retryCheckpointEvalId.has_value())
             return RunRetryCheckpointEvalCommand(options);
