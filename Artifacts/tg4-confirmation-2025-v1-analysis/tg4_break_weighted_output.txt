@@ -1,0 +1,103 @@
+TG4A BREAK-WEIGHTED ANALYSIS
+============================
+unique break clusters: 20175
+
+confluent
+  breaks     : 1456
+  successes : 1263
+  failures  : 193
+  rate       : 0.867445
+  Wilson 95% : [0.849057, 0.883900]
+
+non_confluent
+  breaks     : 18719
+  successes : 13491
+  failures  : 5228
+  rate       : 0.720712
+  Wilson 95% : [0.714240, 0.727093]
+
+absolute rate difference: +0.146733 (+14.67 percentage points)
+
+PER-SYMBOL BREAK-WEIGHTED RESULTS
+=================================
+
+audcadrmp
+  confluent      n=  266 success=  232 rate=0.872180 95%=[0.826693,0.907071]
+  non_confluent  n= 2621 success= 1964 rate=0.749332 95%=[0.732383,0.765551]
+  difference      +0.122848 (+12.28 pp)
+
+audusdrmp
+  confluent      n=  316 success=  282 rate=0.892405 95%=[0.853407,0.921977]
+  non_confluent  n= 3081 success= 2266 rate=0.735475 95%=[0.719615,0.750750]
+  difference      +0.156930 (+15.69 pp)
+
+eurusdrmp
+  confluent      n=  249 success=  218 rate=0.875502 95%=[0.828705,0.910889]
+  non_confluent  n= 3512 success= 2455 rate=0.699032 95%=[0.683651,0.713977]
+  difference      +0.176470 (+17.65 pp)
+
+gbpusdrmp
+  confluent      n=  223 success=  191 rate=0.856502 95%=[0.804445,0.896485]
+  non_confluent  n= 3353 success= 2456 rate=0.732478 95%=[0.717235,0.747189]
+  difference      +0.124024 (+12.40 pp)
+
+usdcadrmp
+  confluent      n=  247 success=  209 rate=0.846154 95%=[0.795890,0.885816]
+  non_confluent  n= 2938 success= 2033 rate=0.691967 95%=[0.675032,0.708402]
+  difference      +0.154187 (+15.42 pp)
+
+usdjpyrmp
+  confluent      n=  155 success=  131 rate=0.845161 95%=[0.779941,0.893687]
+  non_confluent  n= 3214 success= 2317 rate=0.720909 95%=[0.705144,0.736145]
+  difference      +0.124253 (+12.43 pp)
+
+OUTER-CANDIDATE STRUCTURE
+=========================
+outer candidates             : 4124
+confluent only               : 107
+non-confluent only           : 3174
+mixed confluence             : 843
+mixed outcome                : 1069
+
+WITHIN-OUTER MATCHED BREAK ANALYSIS
+===================================
+mixed-confluence outer candidates : 843
+positive within-outer differences : 244
+negative within-outer differences : 112
+ties                              : 487
+equal-outer mean difference       : +0.030607 (+3.06 pp)
+
+pooled breaks within matched outers
+ confluent     : 1328 rate=0.860693
+ non-confluent : 6411 rate=0.708314
+ difference    : +0.152379 (+15.24 pp)
+
+WITHIN-OUTER DIRECTIONAL ROBUSTNESS
+===================================
+informative outer candidates : 356
+positive                     : 244
+negative                     : 112
+positive fraction            : 0.685393
+exact sign-test p (2-sided)  : 2.16017241085e-12
+difference Q25               : +0.000000
+difference median            : +0.000000
+difference Q75               : +0.111111
+
+SYMBOL-WEEK TEMPORAL ROBUSTNESS
+===============================
+matched symbol-weeks           : 286
+informative symbol-weeks       : 275
+positive                       : 213
+negative                       : 62
+ties                           : 11
+positive fraction             : 0.774545
+exact sign-test p (2-sided)    : 1.47168923742e-20
+equal-symbol-week mean diff    : +0.119846 (+11.98 pp)
+difference Q25                 : +0.000000
+difference median              : +0.152924
+difference Q75                 : +0.272059
+
+pooled breaks in matched weeks
+ confluent                     : 1456 rate=0.867445
+ non-confluent                 : 17753 rate=0.721399
+ difference                    : +0.146046 (+14.60 pp)
