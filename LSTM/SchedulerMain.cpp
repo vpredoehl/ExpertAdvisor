@@ -129,5 +129,17 @@ int main(int argc, const char* argv[])
             std::cerr);
     }
 
+    if (EA::GlobalExperimentControl::IsHistoricalFailedInferenceRecoveryCli(
+            argc, argv))
+    {
+        return EA::GlobalExperimentControl::
+            RunHistoricalFailedInferenceRecoveryCli(
+                argc,
+                argv,
+                LstmDbConnectionString(),
+                std::cout,
+                std::cerr);
+    }
+
     return EA::SchedulerCore::RunStandaloneSchedulerDaemonCli(argc, argv);
 }

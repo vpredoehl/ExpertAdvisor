@@ -400,6 +400,15 @@ int RunHistoricalFailedInferenceRecoveryCommand(
     std::ostream& output,
     std::ostream& error);
 
+bool IsHistoricalFailedInferenceRecoveryCli(int argc, const char* argv[]);
+
+int RunHistoricalFailedInferenceRecoveryCli(
+    int argc,
+    const char* argv[],
+    const std::string& connectionString,
+    std::ostream& output,
+    std::ostream& error);
+
 int RunWorkerAttemptReconciliationCommand(
     const std::string& connectionString,
     const WorkerAttemptReconciliationCommand& command,

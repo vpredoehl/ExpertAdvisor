@@ -7611,6 +7611,121 @@ bool IsWorkerAttemptReconciliationCli(int argc, const char* argv[])
     return false;
 }
 
+bool IsHistoricalFailedInferenceRecoveryCli(int argc, const char* argv[])
+{
+    const std::string option = "--recover-failed-inference";
+
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+        if (arg == option || arg.rfind(option + "=", 0) == 0)
+            return true;
+    }
+
+    return false;
+}
+
+int RunHistoricalFailedInferenceRecoveryCli(
+    int argc,
+    const char* argv[],
+    const std::string& connectionString,
+    std::ostream& output,
+    std::ostream& error)
+{
+    try
+    {
+        const std::string option = "--recover-failed-inference";
+        std::optional<long long> experimentId;
+        bool dryRun = false;
+        bool confirmed = false;
+
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string arg = argv[i];
+            std::string value;
+
+            if (arg == option)
+            {
+                if (experimentId)
+                    throw std::invalid_argument(
+                        option + " specified more than once");
+
+                if (++i >= argc)
+                    throw std::invalid_argument(
+                        option + " requires a value");
+
+                value = argv[i];
+            }
+            else if (arg.rfind(option + "=", 0) == 0)
+            {
+                if (experimentId)
+                    throw std::invalid_argument(
+                        option + " specified more than once");
+
+                value = arg.substr(option.size() + 1);
+            }
+            else if (arg == "--dry-run")
+            {
+                dryRun = true;
+                continue;
+            }
+            else if (arg == "--yes")
+            {
+                confirmed = true;
+                continue;
+            }
+            else
+            {
+                throw std::invalid_argument(
+                    "unknown historical failed-inference recovery option '" +
+                    arg + "'");
+            }
+
+            if (value.empty())
+                throw std::invalid_argument(option + " requires a value");
+
+            std::size_t consumed = 0;
+            long long parsed = 0;
+
+            try
+            {
+                parsed = std::stoll(value, &consumed);
+            }
+            catch (const std::exception&)
+            {
+                throw std::invalid_argument(
+                    option + " requires a positive integer");
+            }
+
+            if (consumed != value.size() || parsed <= 0)
+                throw std::invalid_argument(
+                    option + " requires a positive integer");
+
+            experimentId = parsed;
+        }
+
+        if (!experimentId)
+            throw std::invalid_argument(option + " requires a value");
+
+        if (dryRun == confirmed)
+            throw std::invalid_argument(
+                option + " requires exactly one of --dry-run or --yes");
+
+        HistoricalFailedInferenceRecoveryCommand command;
+        command.experimentId = *experimentId;
+        command.dryRun = dryRun;
+        command.confirmed = confirmed;
+
+        return RunHistoricalFailedInferenceRecoveryCommand(
+            connectionString, command, output, error);
+    }
+    catch (const std::exception& exception)
+    {
+        error << "Argument error: " << exception.what() << '\n';
+        return 1;
+    }
+}
+
 int RunWorkerAttemptReconciliationCli(
     int argc,
     const char* argv[],

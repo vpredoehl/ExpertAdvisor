@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-scheduler_binary="${1:-${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release}"
+scheduler_binary="${1:-${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release/lstm-scheduler}"
 scheduler_binary="$(cd "$(dirname "${scheduler_binary}")" && pwd)/$(basename "${scheduler_binary}")"
 
 test_db="ea_historical_inference_recovery_test_${$}"
@@ -215,7 +215,9 @@ LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     >"${test_dir}/xor.out" 2>&1
 rc=$?
 set -e
-test "${rc}" = "2"
+test "${rc}" = "1"
+grep -q 'Argument error: --recover-failed-inference requires exactly one of --dry-run or --yes' \
+    "${test_dir}/xor.out"
 test "$(snapshot 940102)" = "${xor_before}"
 
 # Missing durable result.
