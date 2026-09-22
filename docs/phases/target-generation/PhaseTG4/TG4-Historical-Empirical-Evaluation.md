@@ -111,7 +111,7 @@ checked-in example deliberately contains `REQUIRED_EXPERIMENTAL_VALUE` for
 those fields and is not runnable. TG4A prospectively freezes the first-study
 values in `Scripts/tg4_analysis_config.frozen_v1.conf`; their evidence and
 experimental provenance are recorded in
-`docs/PhaseTG/TG4A-Pre-Study-Methodology-Freeze.md`.
+`docs/phases/target-generation/PhaseTG4/TG4A-Pre-Study-Methodology-Freeze.md`.
 
 TG4 expresses Fibonacci proximity in canonical FX pips and deterministically
 materializes the effective absolute tolerance per symbol (0.0001 per pip for

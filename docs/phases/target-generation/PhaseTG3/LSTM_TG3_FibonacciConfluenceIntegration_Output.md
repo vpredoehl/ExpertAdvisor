@@ -18,8 +18,8 @@ and TG1A `7058413`.
 - `Headers/CausalFibonacciConfluenceIntegration.hpp`
 - `Tests/TG3FibonacciConfluenceIntegrationTests.cpp`
 - `Tests/TG3FibonacciConfluenceIntegrationTests.sh`
-- `docs/PhaseTG/TG3-Causal-Fibonacci-Confluence-Integration.md`
-- `docs/PhaseTG/LSTM_TG3_FibonacciConfluenceIntegration_Output.md`
+- `docs/phases/target-generation/PhaseTG3/TG3-Causal-Fibonacci-Confluence-Integration.md`
+- `docs/phases/target-generation/PhaseTG3/LSTM_TG3_FibonacciConfluenceIntegration_Output.md`
 
 TG1A, TG1B, and TG2 headers were not modified.
 

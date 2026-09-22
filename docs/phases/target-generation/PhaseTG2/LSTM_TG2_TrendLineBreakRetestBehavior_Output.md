@@ -18,8 +18,8 @@ bypassed.
 - `Headers/CausalTrendLineBreakRetestBehavior.hpp`
 - `Tests/TG2TrendLineBreakRetestBehaviorTests.cpp`
 - `Tests/TG2TrendLineBreakRetestBehaviorTests.sh`
-- `docs/PhaseTG/TG2-Causal-Trend-Line-Break-Retest-Behavior.md`
-- `docs/PhaseTG/LSTM_TG2_TrendLineBreakRetestBehavior_Output.md`
+- `docs/phases/target-generation/PhaseTG2/TG2-Causal-Trend-Line-Break-Retest-Behavior.md`
+- `docs/phases/target-generation/PhaseTG2/LSTM_TG2_TrendLineBreakRetestBehavior_Output.md`
 
 TG1A and TG1B production headers were not modified.
 
