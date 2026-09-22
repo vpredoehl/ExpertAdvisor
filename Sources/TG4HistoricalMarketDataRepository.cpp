@@ -25,6 +25,32 @@ std::string CanonicalBarsCte()
         "(dt AT TIME ZONE 'America/New_York') < $5::timestamptz) ";
 }
 
+std::string CanonicalBarsStreamingCte(
+    const pqxx::read_transaction& transaction,
+    const std::string& symbol,
+    const EvaluationConfiguration& configuration,
+    const TemporalRange& range)
+{
+    const std::string warmupStart =
+        transaction.quote(FormatUtcTimestamp(range.warmupStart));
+    const std::string outcomeEnd =
+        transaction.quote(FormatUtcTimestamp(range.outcomeEnd));
+
+    return
+        "WITH canonical_bars AS ("
+        "SELECT dt,open,close,high,low,vol FROM candlestick(" +
+        transaction.quote(symbol) + "::text," +
+        transaction.quote(configuration.candlePeriod) + "::integer," +
+        transaction.quote(configuration.candleUnit) + "::text,(" +
+        warmupStart + "::timestamptz AT TIME ZONE 'America/New_York'),(" +
+        outcomeEnd + "::timestamptz AT TIME ZONE 'America/New_York'))),"
+        "bounded AS (SELECT * FROM canonical_bars WHERE "
+        "(dt AT TIME ZONE 'America/New_York') >= " +
+        warmupStart + "::timestamptz AND "
+        "(dt AT TIME ZONE 'America/New_York') < " +
+        outcomeEnd + "::timestamptz) ";
+}
+
 pqxx::params Parameters(const std::string& symbol,
                         const EvaluationConfiguration& configuration,
                         const TemporalRange& range)
@@ -80,14 +106,14 @@ void HistoricalMarketDataRepository::StreamCanonicalCandles(
     const CandleConsumer& consumer)
 {
     if (!consumer) throw std::invalid_argument("TG4 candle consumer is empty");
-    const std::string query = CanonicalBarsCte() +
+    const std::string query = CanonicalBarsStreamingCte(
+        transaction, symbol, configuration, range) +
         "SELECT to_char(dt,'YYYY-MM-DD HH24:MI:SS'),"
         "open::double precision,high::double precision,"
         "low::double precision,close::double precision,vol::bigint "
         "FROM bounded ORDER BY dt";
     auto stream = transaction.stream<std::string, double, double, double,
-                                     double, long long>(
-        query, Parameters(symbol, configuration, range));
+                                     double, long long>(query);
     for (const auto& [timestamp, open, high, low, close, volume] : stream)
     {
         if (volume < 0)
