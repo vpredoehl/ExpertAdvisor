@@ -454,16 +454,18 @@ without scheduler-safety checks and explicit authorization.
    appended for `T`, not its successor or a fractal anchor. Evidence and test:
    `docs/phases/target-generation/PhaseTG4/TG4_CAUSAL_BOUNDARY_CLOSURE.md` sections 3--4;
    `Common/db_cursor.cpp:76-105`; `LSTM/Tensor.cpp:102-180,443-449`.
-2. **Resolved as a blocking mismatch—market-data parity:** common rows are the
-   same canonical OHLC/order, but normal loading includes the `candlestick`
-   right endpoint while TG4's bounded query is half-open. The read-only DST
-   probe reports the difference; do not silently convert either side. See
-   `docs/phases/target-generation/PhaseTG4/TG4_CAUSAL_BOUNDARY_CLOSURE.md` sections 5--6 and
-   `Tests/TG4MarketDataParityProbe.sh`.
-3. **Resolved design—configuration ownership:** production needs its own
-   immutable, source-owned canonical TG1--TG3 payload/hash; it must not load
-   frozen research artifacts. Required persistence is specified in boundary
-   closure section 8, with no schema/layout change made here.
+2. **Resolved pre-integration—market-data parity:**
+   `Headers/CanonicalMarketDataRange.hpp` now specifies absolute UTC
+   `[start,end)` canonical bars and provides the shared SQL CTE used by TG4 and
+   exposed through `MarketData::LoadCanonicalHalfOpenCandlesticks`
+   (`Sources/MarketDataCore/MarketDataCore.cpp:49-64`). Legacy model loading
+   remains inclusive-right until an explicit future migration. See
+   `TG4_PREINTEGRATION_CAUSAL_BOUNDARY_CLOSURE.md`.
+3. **Resolved pre-integration—configuration ownership:**
+   `Headers/ProductionTG1TG3PulseConfiguration.hpp` supplies the immutable,
+   source-owned `tg4a-derived-source-utl-up-ab-only-v1` payload/hash without a
+   runtime research-artifact dependency. Persistence remains explicitly
+   deferred until an approved layout/model migration.
 4. **Resolved—capacity effects:** TG1 retained fractals/candidates and TG3
    retained A/B state can alter later pulse bits and are semantic identity.
    Outcome-observation retention can censor outcomes but cannot rewrite a

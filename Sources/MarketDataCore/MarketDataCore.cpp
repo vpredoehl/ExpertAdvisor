@@ -46,6 +46,23 @@ CandlestickSlice LoadCandlesticks(pqxx::work& transaction,
     return slice;
 }
 
+CandlestickSlice LoadCanonicalHalfOpenCandlesticks(
+    pqxx::work& transaction,
+    const std::string& symbol,
+    const CanonicalMarketData::AbsoluteHalfOpenRange& range,
+    const std::string& cursorName)
+{
+    if (cursorName.empty())
+        throw std::invalid_argument("canonical candlestick range requires cursor name");
+    CandlestickSlice slice;
+    slice.query = CanonicalMarketData::CanonicalHalfOpenCandlestickQuery(
+        transaction, symbol, range);
+    db_cursor_stream<Feature> cursor{transaction, slice.query, cursorName};
+    for (auto it = cursor.begin(), end = cursor.end(); it != end; ++it)
+        slice.rows.push_back(*it);
+    return slice;
+}
+
 OutcomeCoverage CheckProspectiveOutcomeCoverage(pqxx::work& transaction,
                                                 const std::string& symbol,
                                                 const std::string& fromDate,

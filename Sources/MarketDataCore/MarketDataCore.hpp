@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PricePoint.hpp"
+#include "CanonicalMarketDataRange.hpp"
 
 #include <pqxx/pqxx>
 
@@ -26,6 +27,15 @@ struct CandlestickSlice
     std::size_t logicalOutputStartIndex = 0;
     std::string query;
 };
+
+// New callers that require a cross-consumer identity must use this absolute
+// [start,end) API.  LoadCandlesticks remains the legacy civil/inclusive path
+// for existing model preparation and persisted experiment reproducibility.
+CandlestickSlice LoadCanonicalHalfOpenCandlesticks(
+    pqxx::work& transaction,
+    const std::string& symbol,
+    const CanonicalMarketData::AbsoluteHalfOpenRange& range,
+    const std::string& cursorName);
 
 struct OutcomeCoverage
 {

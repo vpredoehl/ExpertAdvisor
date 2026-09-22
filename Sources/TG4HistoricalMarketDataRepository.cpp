@@ -1,5 +1,6 @@
 #include "TG4HistoricalMarketDataRepository.hpp"
 
+#include "CanonicalMarketDataRange.hpp"
 #include "HistoricalFxTimestamp.hpp"
 
 #include <chrono>
@@ -12,55 +13,17 @@ namespace EA::TG4
 namespace
 {
 
-std::string CanonicalBarsCte()
-{
-    return
-        "WITH canonical_bars AS ("
-        "SELECT dt,open,close,high,low,vol FROM candlestick("
-        "$1::text,$2::integer,$3::text,"
-        "($4::timestamptz AT TIME ZONE 'America/New_York'),"
-        "($5::timestamptz AT TIME ZONE 'America/New_York'))),"
-        "bounded AS (SELECT * FROM canonical_bars WHERE "
-        "(dt AT TIME ZONE 'America/New_York') >= $4::timestamptz AND "
-        "(dt AT TIME ZONE 'America/New_York') < $5::timestamptz) ";
-}
-
 std::string CanonicalBarsStreamingCte(
     const pqxx::read_transaction& transaction,
     const std::string& symbol,
     const EvaluationConfiguration& configuration,
     const TemporalRange& range)
 {
-    const std::string warmupStart =
-        transaction.quote(FormatUtcTimestamp(range.warmupStart));
-    const std::string outcomeEnd =
-        transaction.quote(FormatUtcTimestamp(range.outcomeEnd));
-
-    return
-        "WITH canonical_bars AS ("
-        "SELECT dt,open,close,high,low,vol FROM candlestick(" +
-        transaction.quote(symbol) + "::text," +
-        transaction.quote(configuration.candlePeriod) + "::integer," +
-        transaction.quote(configuration.candleUnit) + "::text,(" +
-        warmupStart + "::timestamptz AT TIME ZONE 'America/New_York'),(" +
-        outcomeEnd + "::timestamptz AT TIME ZONE 'America/New_York'))),"
-        "bounded AS (SELECT * FROM canonical_bars WHERE "
-        "(dt AT TIME ZONE 'America/New_York') >= " +
-        warmupStart + "::timestamptz AND "
-        "(dt AT TIME ZONE 'America/New_York') < " +
-        outcomeEnd + "::timestamptz) ";
-}
-
-pqxx::params Parameters(const std::string& symbol,
-                        const EvaluationConfiguration& configuration,
-                        const TemporalRange& range)
-{
-    return pqxx::params{
-        symbol,
-        configuration.candlePeriod,
-        configuration.candleUnit,
-        FormatUtcTimestamp(range.warmupStart),
-        FormatUtcTimestamp(range.outcomeEnd)};
+    return CanonicalMarketData::CanonicalHalfOpenCandlestickCte(
+        transaction, symbol,
+        {PriceTP{std::chrono::seconds{range.warmupStart}},
+         PriceTP{std::chrono::seconds{range.outcomeEnd}}},
+        configuration.candlePeriod, configuration.candleUnit);
 }
 
 std::int64_t ParseCanonicalTimestamp(const std::string& sourceTimestamp)
@@ -82,14 +45,14 @@ MarketDataPreflight HistoricalMarketDataRepository::Preflight(
     const EvaluationConfiguration& configuration,
     const TemporalRange& range)
 {
-    const std::string query = CanonicalBarsCte() +
+    const std::string query = CanonicalBarsStreamingCte(
+        transaction, symbol, configuration, range) +
         "SELECT count(*)::bigint,"
         "(count(*)-count(DISTINCT dt))::bigint,"
         "min(extract(epoch from (dt AT TIME ZONE 'America/New_York')))::bigint,"
         "max(extract(epoch from (dt AT TIME ZONE 'America/New_York')))::bigint "
         "FROM bounded;";
-    const pqxx::row row = transaction.exec(query, Parameters(
-        symbol, configuration, range)).one_row();
+    const pqxx::row row = transaction.exec(query).one_row();
     MarketDataPreflight result;
     result.rowCount = row[0].as<std::size_t>();
     result.duplicateTimestampCount = row[1].as<std::size_t>();

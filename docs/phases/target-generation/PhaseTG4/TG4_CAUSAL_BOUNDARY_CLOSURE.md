@@ -1,8 +1,11 @@
 # TG4 causal boundary closure
 
-Status: closed as an audit and test increment; **not ready to connect a TG
-adapter to production Tensor rows**. This document makes no Tensor, model,
-schema, scheduler, worker, experiment, database, or frozen-artifact change.
+Status: the audit/test increment is closed. Its two pre-integration blockers
+were implemented by `TG4_PREINTEGRATION_CAUSAL_BOUNDARY_CLOSURE.md`; the
+repository is ready only for a **separately approved isolated TG1->TG3
+streaming-adapter phase**, not Tensor/model integration. This document makes
+no Tensor, model, schema, scheduler, worker, experiment, database, or
+frozen-artifact change.
 
 ## 1. Executive summary
 
@@ -248,17 +251,25 @@ No LSTM executable, worker, scheduler command, experiment, or historical
 evaluation was started. A scheduler was observed active before tests; the
 tests compile/run isolated C++ fixtures and read-only SQL only.
 
-## 12. Remaining blockers
+## 12. Pre-integration closure
 
-1. **Market range parity:** choose and implement one canonical absolute,
-   half-open bar-range contract shared by normal model preparation and the
-   future adapter. Until then normal/TG rows are not demonstrably identical.
-2. **Production configuration ownership:** create the source-owned immutable
-   configuration factory/identity above before any adapter can run. The
-   research parser/fingerprint is not production ownership.
+The former blockers are closed without changing legacy model behavior:
 
-These are design/implementation blockers, not reasons to modify frozen TG4
-artifacts or reinterpret 2025 results.
+1. `Headers/CanonicalMarketDataRange.hpp` defines the absolute UTC
+   `[start,end)` contract and its shared canonical SQL CTE. The new normal
+   `MarketData::LoadCanonicalHalfOpenCandlesticks` API
+   (`Sources/MarketDataCore/MarketDataCore.cpp`) and the TG4 read-only
+   repository use it. Legacy `LoadCandlesticks` remains inclusive-right for
+   compatibility.
+2. `Headers/ProductionTG1TG3PulseConfiguration.hpp` provides the source-owned
+   `tg4a-derived-source-utl-up-ab-only-v1` immutable factory, deterministic
+   semantic payload, and `fnv1a64:` identity. It has no runtime artifact
+   dependency.
+
+The detailed contract, field inventory, tests, persistence requirement and
+readiness decision are recorded in
+`TG4_PREINTEGRATION_CAUSAL_BOUNDARY_CLOSURE.md`. These closures are not a
+reason to modify frozen TG4 artifacts or reinterpret 2025 results.
 
 ## 13. Explicitly deferred non-blocking questions
 
@@ -268,12 +279,10 @@ has an implementation, default, or performance-derived convention here.
 
 ## 14. Readiness decision for an isolated TG1→TG3 adapter
 
-**Not ready for a production-connected adapter or Tensor integration.** The
-exact reason is the unresolved canonical market range reader/boundary and the
-absence of a production-owned immutable configuration factory. The pure
-completed-bar TG1→TG3 engine itself has sufficient causal evidence for a
-future isolated adapter once those two prerequisites are implemented; that
-adapter must remain disconnected from Tensor while width is 77/layout is 7.
+**Ready for a separately approved isolated TG1→TG3 streaming adapter, and not
+ready for Tensor/model integration.** The canonical range and production
+configuration prerequisites are now implemented and tested. Any future adapter
+must remain disconnected from Tensor while width is 77/layout is 7.
 
 ## 15. Recommended next sequence
 
