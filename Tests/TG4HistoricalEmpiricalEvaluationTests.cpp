@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -139,6 +140,79 @@ void TestPartitionAssignment()
     assert(EA::TG4::TemporalPartitionName(EA::TG4::PartitionForTimestamp(
         EA::TG4::ParseUtcDateOrTimestamp("2026-01-01"))) ==
         "outside_named_study");
+}
+
+void TestPreconfirmationNamedRangeCannotLoad2025()
+{
+    const TemporalRange range = EA::TG4::PreconfirmationStudyRange();
+    const std::int64_t confirmationStart =
+        EA::TG4::ParseUtcDateOrTimestamp("2025-01-01");
+    assert(range.warmupStart ==
+           EA::TG4::ParseUtcDateOrTimestamp("2010-01-01"));
+    assert(range.scoreStart == range.warmupStart);
+    assert(range.scoreEnd == confirmationStart);
+    assert(range.outcomeEnd == confirmationStart);
+    EA::TG4::ValidateTemporalRange(range);
+}
+
+void TestSymbolAwarePipToleranceAndConfigurationFingerprint()
+{
+    EvaluationConfiguration configuration = Config();
+    configuration.fibonacciPriceTolerancePips = 1.0;
+    assert(std::fabs(EA::TG4::CanonicalFxPipSize("eurusdrmp") - 0.0001) <
+           1e-15);
+    assert(std::fabs(EA::TG4::CanonicalFxPipSize("usdjpyrmp") - 0.01) <
+           1e-15);
+    assert(std::fabs(EA::TG4::EffectiveFibonacciAbsolutePriceTolerance(
+                         configuration, "audcadrmp") - 0.0001) < 1e-15);
+    assert(std::fabs(EA::TG4::EffectiveFibonacciAbsolutePriceTolerance(
+                         configuration, "usdjpyrmp") - 0.01) < 1e-15);
+
+    bool unknownRejected = false;
+    try { (void)EA::TG4::CanonicalFxPipSize("unknown"); }
+    catch (const std::invalid_argument&) { unknownRejected = true; }
+    assert(unknownRejected);
+
+    const std::string frozen = EA::TG4::ConfigurationFingerprint(configuration);
+    EvaluationConfiguration changed = configuration;
+    changed.referenceBarScale = 14.0;
+    assert(EA::TG4::ConfigurationFingerprint(changed) != frozen);
+    changed = configuration;
+    changed.fibonacci.retracementRatios = {0.6180339887498949};
+    assert(EA::TG4::ConfigurationFingerprint(changed) != frozen);
+    changed = configuration;
+    changed.fibonacciPriceTolerancePips = 0.5;
+    assert(EA::TG4::ConfigurationFingerprint(changed) != frozen);
+
+    const std::string metadata = EA::TG4::EffectiveConfigurationJson(
+        configuration, Range(), "baseline");
+    assert(metadata.find("\"configuration_fingerprint\": \"") !=
+           std::string::npos);
+    assert(metadata.find("\"price_tolerance_convention\":"
+                         "\"canonical_fx_pips\"") != std::string::npos);
+    assert(metadata.find("\"usdjpyrmp\":0.01") != std::string::npos);
+    assert(metadata.find("\"eurusdrmp\":0.0001") != std::string::npos);
+}
+
+void TestFrozenConfigurationLoads(const std::filesystem::path& path)
+{
+    const EvaluationConfiguration frozen = EA::TG4::LoadConfigurationFile(path);
+    assert(frozen.name == "tg4a-first-study-preconfirmation-frozen-v1");
+    assert(frozen.referenceBarScale == 14.0);
+    assert(frozen.geometry.atrPeriod == 14);
+    assert(frozen.fibonacci.retracementRatios.size() == 1);
+    assert(frozen.fibonacci.retracementRatios.front() ==
+           0.6180339887498949);
+    assert(frozen.fibonacciPriceTolerancePips == 1.0);
+    assert(EA::TG4::EffectiveFibonacciAbsolutePriceTolerance(
+               frozen, "eurusdrmp") == 0.0001);
+    assert(EA::TG4::EffectiveFibonacciAbsolutePriceTolerance(
+               frozen, "usdjpyrmp") == 0.01);
+    const std::string fingerprint =
+        EA::TG4::ConfigurationFingerprint(frozen);
+    assert(fingerprint == "fnv1a64:bf809ce38a4a444a");
+    std::cout << "TG4_FROZEN_CONFIGURATION name=" << frozen.name
+              << ",fingerprint=" << fingerprint << '\n';
 }
 
 void TestHistoricalStreamingTG4PrefixParityAndFrozenCohort()
@@ -434,10 +508,14 @@ void TestBoundedRepresentativeLargeStream()
 
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
+    assert(argc == 2);
     TestWilsonKnownCasesAndZeroDenominator();
     TestPartitionAssignment();
+    TestPreconfirmationNamedRangeCannotLoad2025();
+    TestSymbolAwarePipToleranceAndConfigurationFingerprint();
+    TestFrozenConfigurationLoads(argv[1]);
     TestHistoricalStreamingTG4PrefixParityAndFrozenCohort();
     TestWarmupWithoutPrePartitionScoring();
     TestAccountingAndCohortSeparations();

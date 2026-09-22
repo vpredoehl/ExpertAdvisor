@@ -11,4 +11,5 @@ trap 'rm -rf -- "${test_dir}"' EXIT
     "${repo_root}/Tests/TG4HistoricalEmpiricalEvaluationTests.cpp" \
     -o "${test_dir}/TG4HistoricalEmpiricalEvaluationTests"
 
-"${test_dir}/TG4HistoricalEmpiricalEvaluationTests"
+"${test_dir}/TG4HistoricalEmpiricalEvaluationTests" \
+    "${repo_root}/Scripts/tg4_analysis_config.frozen_v1.conf"

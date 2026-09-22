@@ -14,7 +14,7 @@ unused output directory:
 | `equal_symbol_rates.csv` | `tg4-aggregate-v1` | Equal-symbol summaries, distinct from event-weighted pooling. |
 | `data_quality.csv` | `tg4-data-quality-v1` | Coverage, duplicate/order, gap, partition, and exclusion audit. |
 | `data_gaps.csv` | `tg4-data-gap-v1` | One row per material timestamp gap; no filled bars. |
-| `metadata.json` | `tg4-study-metadata-v1` | Baseline, range, warmup policy, and all effective configuration. |
+| `metadata.json` | `tg4-study-metadata-v1` | Baseline, study identity, range, warmup policy, effective configuration, and configuration fingerprint. |
 | `report.md` | human-readable | Descriptive report with tiny-cell suppression. |
 
 Temporary `.tmp` files are renamed only after successful close. Existing
@@ -67,6 +67,13 @@ TG3 columns record:
 Empty CSV fields mean not applicable or unavailable. They never mean zero.
 `final_record_state` distinguishes resolved, censored, and resolved records
 with structural ineligibility.
+
+`metadata.json` serializes the configured TG3 pip count and convention plus
+the effective absolute tolerance for every canonical symbol. Observation rows
+retain the effective absolute tolerance actually applied. The deterministic
+`configuration_fingerprint` covers the reference-bar scale, ratio set,
+tolerance convention/count/effective symbol values, and the other effective
+configuration fields.
 
 ## Aggregate outcome columns
 

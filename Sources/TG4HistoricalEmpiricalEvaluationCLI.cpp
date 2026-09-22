@@ -20,7 +20,7 @@ namespace
 {
 
 constexpr std::string_view kTG4BaselineCommit =
-    "02e414a1b9274318d95b73aa85597d6cde1a8b6d";
+    "8cc823239ed34b068009c92c50a185216db01158";
 
 struct Options
 {
@@ -50,7 +50,7 @@ void PrintUsage(std::ostream& output)
     output <<
         "Usage: tg4-historical-evaluation --config FILE --output-dir DIR "
         "(--symbol SYMBOL ... | --all-canonical-symbols) "
-        "[--study tg4-2010-2025-v1 | --partition NAME | "
+        "[--study tg4-preconfirmation-2010-2025-v1 | --partition NAME | "
         "--warmup-start UTC --start UTC --end UTC --outcome-end UTC] "
         "[--connection CONNECTION_STRING]\n"
         "Partitions: exploratory, calibration, validation, confirmation\n"
@@ -122,10 +122,12 @@ EA::TG4::TemporalRange NamedRange(const Options& options)
     };
     if (options.study.has_value())
     {
-        if (*options.study != "tg4-2010-2025-v1")
-            throw std::invalid_argument("unknown TG4 named study");
-        return range("2010-01-01", "2010-01-01", "2026-01-01",
-                     "2026-02-15");
+        if (*options.study == "tg4-preconfirmation-2010-2025-v1")
+            return EA::TG4::PreconfirmationStudyRange();
+        if (*options.study == "tg4-2010-2025-v1")
+            return range("2010-01-01", "2010-01-01", "2026-01-01",
+                         "2026-02-15");
+        throw std::invalid_argument("unknown TG4 named study");
     }
     if (options.partition.has_value())
     {

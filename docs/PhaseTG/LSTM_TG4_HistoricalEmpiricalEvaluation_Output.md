@@ -2,8 +2,10 @@
 
 ## Decision
 
-Implementation validation is in progress. No historical TG4 empirical funnel
-has been run, and no market result or trading conclusion is claimed.
+TG4 implementation is closed at commit `8cc823239ed34b068009c92c50a185216db01158`.
+TG4A prospectively freezes the first-study methodology in
+`LSTM_TG4A_PreStudyConfigurationFreeze_Output.md`. No historical TG4 empirical
+funnel has been run, and no market result or trading conclusion is claimed.
 
 The clean audited baseline before any TG4 change was:
 
@@ -40,10 +42,12 @@ to choose the three unsupported methodology inputs:
 - TG3 Fibonacci ratio set;
 - TG3 absolute price tolerance.
 
-Those fields remain `REQUIRED_EXPERIMENTAL_VALUE`. A real study requires an
-explicit named configuration whose provenance contains `experimental`. The
-loader rejects missing/unknown fields and ratio provenance without that label.
-No value is selected from 2025 data.
+Those fields remain `REQUIRED_EXPERIMENTAL_VALUE` in the example. The separate
+tracked `Scripts/tg4_analysis_config.frozen_v1.conf` now freezes the first
+study at scale 14, one ratio `0.6180339887498949`, and one canonical FX pip.
+All three are explicitly experimental and were selected without TG4 outcome
+inspection. The loader rejects missing/unknown fields and ratio provenance
+without the experimental label.
 
 ## Read-only data and coverage audit
 
@@ -105,23 +109,15 @@ build unsafe.
 
 ## First real study command
 
-First create a separate configuration and replace every
-`REQUIRED_EXPERIMENTAL_VALUE` from a decision made without viewing 2025
-results:
-
-```bash
-cp Scripts/tg4_analysis_config.example.conf /absolute/path/tg4-frozen.conf
-${EDITOR:?set EDITOR} /absolute/path/tg4-frozen.conf
-```
-
-Then run the six-symbol named study into a new directory:
+After TG4A review, run the six-symbol preconfirmation study into a new
+directory. This command was not executed during TG4A:
 
 ```bash
 Scripts/run_tg4_historical_empirical_evaluation.sh \
-  --config /absolute/path/tg4-frozen.conf \
-  --output-dir /absolute/path/tg4-study-2010-2025-v1 \
+  --config Scripts/tg4_analysis_config.frozen_v1.conf \
+  --output-dir /absolute/new/path/tg4-preconfirmation-2010-2025-v1 \
   --all-canonical-symbols \
-  --study tg4-2010-2025-v1
+  --study tg4-preconfirmation-2010-2025-v1
 ```
 
 `FOREX_DB_HOST` and `FOREX_DB_NAME` follow the existing application defaults;
@@ -130,9 +126,9 @@ directory must not already contain TG4 artifacts.
 
 ## Limitations and remaining risks
 
-- No canonical ratio set, Fibonacci tolerance, or reference-bar scale exists;
-  the empirical study is intentionally blocked until those are explicitly
-  frozen and labeled experimental.
+- No source-authored ratio set, Fibonacci tolerance, or reference-bar scale
+  exists. TG4A's frozen values remain explicitly experimental measurement
+  conventions and are not claims of optimality.
 - No full market TG4 run has occurred, so there is no evidence yet about
   cross-symbol stability, censoring rates, or incremental Fibonacci
   information beyond TG2.

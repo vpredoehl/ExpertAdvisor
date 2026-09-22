@@ -12,6 +12,11 @@ rg -q 'HistoricalFxTimestamp::ParseNewYorkCivilTimestamp' "${repository}"
 rg -q 'transaction\.stream' "${repository}"
 rg -q 'SupportedSymbols::TrainingSymbols' "${cli}"
 rg -q 'confirmation_period_used_for_selection.*false' "${core}"
+rg -q 'scoreEnd <= range.outcomeEnd' "${core}"
+rg -q 'EffectiveFibonacciAbsolutePriceTolerance' "${core}"
+rg -q 'configuration_fingerprint' "${core}"
+rg -q 'tg4-preconfirmation-2010-2025-v1' "${core}" "${cli}"
+rg -q 'PreconfirmationStudyRange' "${core}" "${cli}"
 ! rg -q 'Tensor|FeatureLayout|kCurrentModelInputWidth' \
     "${core}" "${repository}" "${cli}"
 ! rg -q 'INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE' \

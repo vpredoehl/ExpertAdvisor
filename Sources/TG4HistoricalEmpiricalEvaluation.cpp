@@ -94,6 +94,15 @@ std::vector<double> ParseRatios(const std::string& text)
     return ratios;
 }
 
+TG3::Configuration EffectiveFibonacciConfiguration(
+    const EvaluationConfiguration& configuration, std::string_view symbol)
+{
+    TG3::Configuration result = configuration.fibonacci;
+    result.absolutePriceTolerance =
+        EffectiveFibonacciAbsolutePriceTolerance(configuration, symbol);
+    return result;
+}
+
 void RequireValue(const std::map<std::string, std::string>& values,
                   const std::string& key,
                   const std::string& expected)
@@ -678,7 +687,7 @@ HistoricalEvaluator::HistoricalEvaluator(
       sink_(std::move(sink)),
       integration_(
           TG1B::CalibrationConfiguration(configuration_.referenceBarScale),
-          configuration_.fibonacci,
+          EffectiveFibonacciConfiguration(configuration_, symbol_),
           configuration_.geometry,
           configuration_.behavior,
           {symbol_, configuration_.timeframe})
@@ -944,7 +953,8 @@ EvaluationConfiguration LoadConfigurationFile(const std::filesystem::path& path)
         "tg2_max_active_break_observations",
         "tg2_max_retained_break_observations", "tg3_ab_policy",
         "tg3_retracement_ratios", "tg3_ratio_provenance",
-        "tg3_absolute_price_tolerance", "tg3_confluence_policy",
+        "tg3_price_tolerance_convention", "tg3_price_tolerance_pips",
+        "tg3_confluence_policy",
         "tg3_directional_study_policy", "tg3_max_confirmed_fractals_per_kind",
         "tg3_max_ab_age_bars", "tg3_max_active_ab_structures",
         "tg3_max_active_confluence_observations",
@@ -1028,8 +1038,12 @@ EvaluationConfiguration LoadConfigurationFile(const std::filesystem::path& path)
         throw std::invalid_argument(
             "TG4 ratio provenance must explicitly contain 'experimental'");
     result.provenance += "; fibonacci_ratios=" + ratioProvenance;
-    result.fibonacci.absolutePriceTolerance = ParseDouble(
-        values, "tg3_absolute_price_tolerance");
+    RequireValue(values, "tg3_price_tolerance_convention",
+                 "canonical_fx_pips");
+    result.fibonacciPriceToleranceConvention =
+        FibonacciPriceToleranceConvention::CanonicalFxPips;
+    result.fibonacciPriceTolerancePips = ParseDouble(
+        values, "tg3_price_tolerance_pips");
     RequireValue(values, "tg3_confluence_policy",
                  "absolute_price_tolerance_around_exact_retracement_level");
     const std::string directional = Require(
@@ -1073,7 +1087,9 @@ void ValidateConfiguration(const EvaluationConfiguration& value)
         value.minimumHumanReportResolvedN == 0 ||
         value.maxPendingTG4Records == 0 ||
         !std::isfinite(value.referenceBarScale) ||
-        value.referenceBarScale <= 0.0)
+        value.referenceBarScale <= 0.0 ||
+        !std::isfinite(value.fibonacciPriceTolerancePips) ||
+        value.fibonacciPriceTolerancePips < 0.0)
         throw std::invalid_argument("TG4 configuration bounds are invalid");
     if (value.maxPendingTG4Records <
         value.behavior.maxActiveBreakObservations)
@@ -1083,6 +1099,76 @@ void ValidateConfiguration(const EvaluationConfiguration& value)
     (void)TG1A::CausalFractalTrendLineGeometry(value.geometry);
     (void)TG2::TrendLineBehaviorTracker(value.behavior);
     (void)TG3::FibonacciConfluenceTracker(value.fibonacci);
+}
+
+double CanonicalFxPipSize(std::string_view symbol)
+{
+    if (symbol == "usdjpyrmp") return 0.01;
+    if (symbol == "audcadrmp" || symbol == "audusdrmp" ||
+        symbol == "eurusdrmp" || symbol == "gbpusdrmp" ||
+        symbol == "usdcadrmp")
+        return 0.0001;
+    throw std::invalid_argument(
+        "TG4 has no canonical FX pip convention for symbol '" +
+        std::string(symbol) + "'");
+}
+
+double EffectiveFibonacciAbsolutePriceTolerance(
+    const EvaluationConfiguration& configuration, std::string_view symbol)
+{
+    switch (configuration.fibonacciPriceToleranceConvention)
+    {
+        case FibonacciPriceToleranceConvention::CanonicalFxPips:
+            return configuration.fibonacciPriceTolerancePips *
+                CanonicalFxPipSize(symbol);
+    }
+    throw std::invalid_argument("TG4 Fibonacci tolerance convention is invalid");
+}
+
+std::string ConfigurationFingerprint(
+    const EvaluationConfiguration& configuration)
+{
+    std::ostringstream canonical;
+    canonical << std::setprecision(std::numeric_limits<double>::max_digits10)
+              << configuration.configurationSchema << '|'
+              << configuration.name << '|' << configuration.provenance << '|'
+              << configuration.timeframe << '|' << configuration.candlePeriod
+              << '|' << configuration.candleUnit << '|'
+              << configuration.expectedIntervalSeconds << '|'
+              << configuration.materialGapMultiple << '|'
+              << configuration.minimumHumanReportResolvedN << '|'
+              << configuration.maxPendingTG4Records << '|'
+              << configuration.geometry.interveningPriceTolerance << '|'
+              << configuration.geometry.touchPriceTolerance << '|'
+              << configuration.geometry.maxFractalAnchorLookbackBars << '|'
+              << configuration.geometry.maxConfirmedFractalsPerKind << '|'
+              << configuration.geometry.maxCandidateAgeBars << '|'
+              << configuration.geometry.maxCandidates << '|'
+              << configuration.geometry.atrPeriod << '|'
+              << configuration.referenceBarScale << '|'
+              << static_cast<int>(configuration.behavior.breakPolicy) << '|'
+              << configuration.behavior.breakPriceTolerance << '|'
+              << configuration.behavior.retestPriceTolerance << '|'
+              << configuration.behavior.outerTargetPriceTolerance << '|'
+              << configuration.behavior.retestHorizonBars << '|'
+              << configuration.behavior.outerTargetHorizonBars << '|'
+              << configuration.behavior.maxActiveBreakObservations << '|'
+              << configuration.behavior.maxRetainedBreakObservations << '|'
+              << RatiosText(configuration.fibonacci.retracementRatios) << '|'
+              << static_cast<int>(configuration.fibonacci.directionalStudyPolicy)
+              << '|' << configuration.fibonacci.maxConfirmedFractalsPerKind
+              << '|' << configuration.fibonacci.maxABAgeBars << '|'
+              << configuration.fibonacci.maxActiveABStructures << '|'
+              << configuration.fibonacci.maxActiveConfluenceObservations << '|'
+              << configuration.fibonacci.maxRetainedConfluenceObservations
+              << "|canonical_fx_pips|"
+              << configuration.fibonacciPriceTolerancePips;
+    for (std::string_view symbol : {"audcadrmp", "audusdrmp", "eurusdrmp",
+             "gbpusdrmp", "usdcadrmp", "usdjpyrmp"})
+        canonical << '|' << symbol << '='
+                  << EffectiveFibonacciAbsolutePriceTolerance(
+                         configuration, symbol);
+    return HashIdentity(canonical.str());
 }
 
 void ValidateTemporalRange(const TemporalRange& range)
@@ -1095,6 +1181,12 @@ void ValidateTemporalRange(const TemporalRange& range)
     if (range.scoreEnd > kNamedStudyEnd)
         throw std::invalid_argument(
             "TG4 v1 refuses scored observations after 2025-12-31");
+}
+
+TemporalRange PreconfirmationStudyRange()
+{
+    return {kExploratoryStart, kExploratoryStart, kConfirmationStart,
+            kConfirmationStart};
 }
 
 TemporalPartition PartitionForTimestamp(std::int64_t timestamp)
@@ -1375,7 +1467,17 @@ std::string EffectiveConfigurationJson(
            << "  \"schema_version\": \"tg4-study-metadata-v1\",\n"
            << "  \"study_contract_version\": \"" << kStudyContractVersion << "\",\n"
            << "  \"baseline_commit\": \"" << JsonEscape(baselineCommit) << "\",\n"
+           << "  \"study_identity\": \""
+           << (range.warmupStart == kExploratoryStart &&
+                       range.scoreStart == kExploratoryStart &&
+                       range.scoreEnd == kConfirmationStart &&
+                       range.outcomeEnd == kConfirmationStart
+                   ? "tg4-preconfirmation-2010-2025-v1"
+                   : "explicit-temporal-range")
+           << "\",\n"
            << "  \"configuration_name\": \"" << JsonEscape(configuration.name) << "\",\n"
+           << "  \"configuration_fingerprint\": \""
+           << ConfigurationFingerprint(configuration) << "\",\n"
            << "  \"configuration_provenance\": \"" << JsonEscape(configuration.provenance) << "\",\n"
            << "  \"database_access\": \"read_only_repeatable_read\",\n"
            << "  \"warmup_policy\": \"feed all canonical bars from warmup_start; score only break timestamps in [score_start,score_end)\",\n"
@@ -1414,7 +1516,23 @@ std::string EffectiveConfigurationJson(
            << "  \"tg3\": {\"ab_policy\":\"most_recent_prior_opposite_confirmed_fractal\""
            << ",\"ratio_set\":\"" << RatiosText(configuration.fibonacci.retracementRatios) << "\""
            << ",\"ratio_provenance\":\"explicit experimental caller configuration\""
-           << ",\"absolute_price_tolerance\":" << configuration.fibonacci.absolutePriceTolerance
+           << ",\"price_tolerance_convention\":\"canonical_fx_pips\""
+           << ",\"price_tolerance_pips\":"
+           << configuration.fibonacciPriceTolerancePips
+           << ",\"effective_absolute_price_tolerance_by_symbol\":{"
+           << "\"audcadrmp\":"
+           << EffectiveFibonacciAbsolutePriceTolerance(configuration, "audcadrmp")
+           << ",\"audusdrmp\":"
+           << EffectiveFibonacciAbsolutePriceTolerance(configuration, "audusdrmp")
+           << ",\"eurusdrmp\":"
+           << EffectiveFibonacciAbsolutePriceTolerance(configuration, "eurusdrmp")
+           << ",\"gbpusdrmp\":"
+           << EffectiveFibonacciAbsolutePriceTolerance(configuration, "gbpusdrmp")
+           << ",\"usdcadrmp\":"
+           << EffectiveFibonacciAbsolutePriceTolerance(configuration, "usdcadrmp")
+           << ",\"usdjpyrmp\":"
+           << EffectiveFibonacciAbsolutePriceTolerance(configuration, "usdjpyrmp")
+           << "}"
            << ",\"confluence_policy\":\"absolute_price_tolerance_around_exact_retracement_level\""
            << ",\"directional_policy\":\"" << DirectionalPolicyName(configuration.fibonacci.directionalStudyPolicy) << "\""
            << ",\"max_confirmed_fractals_per_kind\":" << configuration.fibonacci.maxConfirmedFractalsPerKind

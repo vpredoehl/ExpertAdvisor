@@ -52,6 +52,12 @@ intervals:
 - locked-rule validation: `[2023-01-01, 2025-01-01)`;
 - untouched confirmation: `[2025-01-01, 2026-01-01)`.
 
+TG4A adds the first-study identity
+`tg4-preconfirmation-2010-2025-v1`. It uses the same 2010 warmup and partition
+definitions but makes both `score_end` and `outcome_end` exactly
+`2025-01-01T00:00:00Z`. It cannot load a confirmation-period bar; unresolved
+finite windows at the boundary are censored rather than resolved from 2025.
+
 The named study loads canonical bars from 2010-01-01. A partition-only run
 still uses 2010-01-01 as its warmup start so the ATR recursion and every
 bounded TG causal state see the same prefix as the full named study. No
@@ -102,9 +108,17 @@ TG1A and TG2 values in the example file mirror the audited implementation
 defaults. The repository does not define a canonical TG1B
 `referenceBarScale`, Fibonacci ratio set, or Fibonacci price tolerance. The
 checked-in example deliberately contains `REQUIRED_EXPERIMENTAL_VALUE` for
-those fields and is not runnable. The configuration name and both general and
-ratio provenance must explicitly say `experimental`; this prevents a generic
-trading convention from being mislabeled as repository methodology.
+those fields and is not runnable. TG4A prospectively freezes the first-study
+values in `Scripts/tg4_analysis_config.frozen_v1.conf`; their evidence and
+experimental provenance are recorded in
+`docs/PhaseTG/TG4A-Pre-Study-Methodology-Freeze.md`.
+
+TG4 expresses Fibonacci proximity in canonical FX pips and deterministically
+materializes the effective absolute tolerance per symbol (0.0001 per pip for
+the five non-JPY canonical pairs and 0.01 per pip for USDJPY). Metadata records
+the convention, pip count, all six effective values, and an effective
+configuration fingerprint. TG3 itself retains its inclusive absolute-price
+comparison.
 
 TG3's source-direction default remains `source_utl_up_ab_only`. Symmetric
 DTL/down-AB measurement is accepted only when explicitly named as the existing

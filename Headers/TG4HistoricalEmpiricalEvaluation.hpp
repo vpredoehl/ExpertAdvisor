@@ -41,6 +41,11 @@ struct TemporalRange
     std::int64_t outcomeEnd = 0;
 };
 
+enum class FibonacciPriceToleranceConvention
+{
+    CanonicalFxPips
+};
+
 struct EvaluationConfiguration
 {
     std::string configurationSchema;
@@ -58,6 +63,9 @@ struct EvaluationConfiguration
     double referenceBarScale = 0.0;
     TG2::Configuration behavior;
     TG3::Configuration fibonacci;
+    FibonacciPriceToleranceConvention fibonacciPriceToleranceConvention =
+        FibonacciPriceToleranceConvention::CanonicalFxPips;
+    double fibonacciPriceTolerancePips = 0.0;
 };
 
 struct WilsonInterval
@@ -250,6 +258,12 @@ EvaluationConfiguration LoadConfigurationFile(
     const std::filesystem::path& path);
 void ValidateConfiguration(const EvaluationConfiguration& configuration);
 void ValidateTemporalRange(const TemporalRange& range);
+TemporalRange PreconfirmationStudyRange();
+double CanonicalFxPipSize(std::string_view symbol);
+double EffectiveFibonacciAbsolutePriceTolerance(
+    const EvaluationConfiguration& configuration, std::string_view symbol);
+std::string ConfigurationFingerprint(
+    const EvaluationConfiguration& configuration);
 
 TemporalPartition PartitionForTimestamp(std::int64_t timestamp);
 std::string TemporalPartitionName(TemporalPartition partition);
