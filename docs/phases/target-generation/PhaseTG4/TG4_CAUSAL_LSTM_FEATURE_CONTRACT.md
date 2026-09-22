@@ -448,19 +448,27 @@ without scheduler-safety checks and explicit authorization.
 
 ## 11. Open questions / ambiguities
 
-1. **Row timestamp contract:** document whether `Feature::time` means bar open
-   or close and align it exactly with TG4 `Candle.timestamp`. TG4 parses a
-   canonical timestamp separately (`TG4HistoricalMarketDataRepository.cpp:66-75`).
-2. **Market-data parity:** TG4 uses `candlestick(...)` with New-York civil-time
-   conversion; model preparation uses `MarketData::LoadCandlesticks`. Prove
-   same canonical 15-minute OHLC/order/timestamp/boundaries before integration.
-3. **Configuration ownership:** frozen study config is research evidence.
-   Establish production immutable configuration identity/persistence for all
-   policies, bounds, reference scale and pip conversion; never silently read or
-   modify frozen artifact at runtime.
-4. **Capacity effects:** the pulse should not need retained old observations,
-   but prove deterministic streaming generation under production bounds and
-   never expose eviction/censoring as a feature.
+1. **Resolved—row timestamp contract:** `Feature::time` and TG
+   `Candle.timestamp` are New-York-civil **bar starts** converted to UTC
+   `PriceTP` instants. An event for completed bar `T` maps to the Tensor row
+   appended for `T`, not its successor or a fractal anchor. Evidence and test:
+   `docs/phases/target-generation/PhaseTG4/TG4_CAUSAL_BOUNDARY_CLOSURE.md` sections 3--4;
+   `Common/db_cursor.cpp:76-105`; `LSTM/Tensor.cpp:102-180,443-449`.
+2. **Resolved as a blocking mismatch—market-data parity:** common rows are the
+   same canonical OHLC/order, but normal loading includes the `candlestick`
+   right endpoint while TG4's bounded query is half-open. The read-only DST
+   probe reports the difference; do not silently convert either side. See
+   `docs/phases/target-generation/PhaseTG4/TG4_CAUSAL_BOUNDARY_CLOSURE.md` sections 5--6 and
+   `Tests/TG4MarketDataParityProbe.sh`.
+3. **Resolved design—configuration ownership:** production needs its own
+   immutable, source-owned canonical TG1--TG3 payload/hash; it must not load
+   frozen research artifacts. Required persistence is specified in boundary
+   closure section 8, with no schema/layout change made here.
+4. **Resolved—capacity effects:** TG1 retained fractals/candidates and TG3
+   retained A/B state can alter later pulse bits and are semantic identity.
+   Outcome-observation retention can censor outcomes but cannot rewrite a
+   pulse already emitted. See boundary closure sections 9--10 and its focused
+   replay/eviction test.
 5. **Continuous aggregation:** only binary OR is specified. Min/mean/nearest
    choices for future continuous fields are absent from repository semantics.
 6. **Persistence:** TG defines immutable break labels, not feature duration.
