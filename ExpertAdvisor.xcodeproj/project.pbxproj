@@ -37,6 +37,7 @@
 		08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
+		0F6100023610000100AAA001 /* LegacyDiagnosticCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6100013610000100AAA001 /* LegacyDiagnosticCli.cpp */; };
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
 		08A334DC2F5FCBBC00BE2DCE /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
@@ -46,6 +47,7 @@
 		08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
 		0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0A1000022F70000100AAA001 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
+		0F6100033610000100AAA001 /* LegacyDiagnosticCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6100013610000100AAA001 /* LegacyDiagnosticCli.cpp */; };
 		0A1000032F70000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		0A1000052F70000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
@@ -573,6 +575,7 @@
 		08403E9A2F1DDA2F004742A5 /* LSTM.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = LSTM.hpp; sourceTree = "<group>"; };
 		084426802ED8DD46002DEB21 /* LSTM_Debug */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM_Debug; sourceTree = BUILT_PRODUCTS_DIR; };
 		084426892ED8E755002DEB21 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
+		0F6100013610000100AAA001 /* LegacyDiagnosticCli.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LegacyDiagnosticCli.cpp; path = Sources/LegacyDiagnosticCli.cpp; sourceTree = SOURCE_ROOT; };
 		0844268B2ED94F86002DEB21 /* candlestick.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = candlestick.plpgsql; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
@@ -1115,6 +1118,7 @@
 			children = (
 				08B33BEA2F4213DB0015F9CF /* Answers.txt */,
 				084426892ED8E755002DEB21 /* main.cpp */,
+				0F6100013610000100AAA001 /* LegacyDiagnosticCli.cpp */,
 				0F40000234D0000100AAA001 /* SchedulerMain.cpp */,
 				0F6000023600000100AAA001 /* AnalyzeWorkerMain.cpp */,
 				0F8000023800000100AAA001 /* InferWorkerMain.cpp */,
@@ -1926,6 +1930,7 @@
 				0EC2003A3311000100AAA001 /* EconomicEventRepository.cpp in Sources */,
 				084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */,
 				0844268A2ED8E755002DEB21 /* main.cpp in Sources */,
+				0F6100023610000100AAA001 /* LegacyDiagnosticCli.cpp in Sources */,
 				0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0F2200013800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200053800000100AAA001 /* InferenceRuntime.cpp in Sources */,
@@ -2073,6 +2078,7 @@
 				0EC2003B3311000100AAA001 /* EconomicEventRepository.cpp in Sources */,
 				0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */,
 				0A1000022F70000100AAA001 /* main.cpp in Sources */,
+				0F6100033610000100AAA001 /* LegacyDiagnosticCli.cpp in Sources */,
 				0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0F2200023800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200063800000100AAA001 /* InferenceRuntime.cpp in Sources */,
