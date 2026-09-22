@@ -126,7 +126,7 @@ ArmEvidence LoadAuthoritativeArmEvidence(
         "checkpoint_policy_hash,model_input_width,"
         "model_input_semantic_layout_version,economic_calendar_snapshot_id,"
         "economic_calendar_snapshot_hash,scheduler_priority,worker_pid,"
-        "continuation_policy_enabled,"
+        "continuation_policy_enabled,fresh_initialization_seed,"
         "CASE WHEN continuation_policy_enabled THEN ROW("
         "continuation_policy_target_epochs,continuation_policy_min_evals,"
         "continuation_policy_patience,continuation_policy_min_leader_score,"
@@ -166,10 +166,13 @@ ArmEvidence LoadAuthoritativeArmEvidence(
         row, "economic_calendar_snapshot_id");
     extended.economicCalendarSnapshotHash = OptionalValue<std::string>(
         row, "economic_calendar_snapshot_hash");
-    // Fresh initialization is deterministic in the current executable. A
-    // resumed arm is governed by its validated model ancestry instead.
+    // Fresh lineage is authoritative experiment provenance. A resumed arm is
+    // governed by validated model ancestry rather than a new seed.
     if (arm.authoritative.configuration.resumeModelId)
         extended.freshInitializationSeed.reset();
+    else
+        extended.freshInitializationSeed = OptionalValue<unsigned int>(
+            row, "fresh_initialization_seed");
     extended.trainingObjectiveVersion =
         row["training_objective_version"].as<int>();
     extended.lossDefinitionVersion = row["loss_definition_version"].as<int>();

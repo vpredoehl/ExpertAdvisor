@@ -1400,6 +1400,8 @@ long long InsertExperimentRecord(pqxx::work& w,
         throw std::runtime_error("donchian lookback migration required; run ./migrate_lstm_db.sh");
     if (!ColumnExists(w, "experiment", "feature_ablation_mask"))
         throw std::runtime_error("feature ablation migration required; run ./migrate_lstm_db.sh");
+    if (!ColumnExists(w, "experiment", "fresh_initialization_seed"))
+        throw std::runtime_error("fresh initialization seed migration required; run ./migrate_lstm_db.sh");
     if (!ColumnExists(w, "experiment", "resume_expand_input_width"))
         throw std::runtime_error(
             "input width expansion migration required; run ./migrate_lstm_db.sh");
@@ -1444,7 +1446,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
-    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash, training_objective_id, training_objective_version, loss_definition_version, auxiliary_loss_mode, auxiliary_loss_coefficient, regression_target_definition, regression_normalization_identity, robust_loss_definition, robust_loss_delta, target_clipping_definition, objective_normalization_identity, model_input_width, model_input_semantic_layout_version, economic_calendar_snapshot_id, economic_calendar_snapshot_hash";
+    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, fresh_initialization_seed, resume_expand_input_width, training_objective_canonical, training_objective_hash, training_objective_id, training_objective_version, loss_definition_version, auxiliary_loss_mode, auxiliary_loss_coefficient, regression_target_definition, regression_normalization_identity, robust_loss_definition, robust_loss_delta, target_clipping_definition, objective_normalization_identity, model_input_width, model_input_semantic_layout_version, economic_calendar_snapshot_id, economic_calendar_snapshot_hash";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -1490,6 +1492,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "," << w.quote(EA::FeatureWarmupScopeText(options.featureWarmupScope))
         << "," << DonchianLookbackDatabaseValue(options.donchianLookback)
         << "," << w.quote(options.featureAblationMask)
+        << "," << options.freshInitializationSeed
         << "," << (options.resumeExpandInputWidth ? "true" : "false")
         << "," << w.quote(EA::TrainingObjective::CanonicalText(
             options.trainingObjective))
@@ -1644,9 +1647,10 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     experiment.donchianLookback = ParseDonchianLookback(row[19].as<std::string>());
     experiment.featureAblationMask = EA::FeatureAblationMask::Parse(
         row[20].as<std::string>()).CanonicalText();
-    experiment.resumeExpandInputWidth = row[21].as<bool>();
+    experiment.freshInitializationSeed = row[21].as<unsigned int>();
+    experiment.resumeExpandInputWidth = row[22].as<bool>();
     experiment.trainingObjective = EA::TrainingObjective::ResolvePersisted(
-        row[22].as<std::string>(), row[23].as<std::string>());
+        row[23].as<std::string>(), row[24].as<std::string>());
     return experiment;
 }
 
@@ -1660,7 +1664,7 @@ std::optional<ExperimentRow> LoadExperimentCheckpointIdentity(
         "train_start::text,train_end::text,infer_start::text,infer_end::text,"
         "last_model_id,resume_model_id,train_log_path,infer_log_path,"
         "analysis_log_path,donchian20_mode,feature_warmup_scope,"
-        "donchian_lookback,feature_ablation_mask,resume_expand_input_width,"
+        "donchian_lookback,feature_ablation_mask,fresh_initialization_seed,resume_expand_input_width,"
         "training_objective_canonical,training_objective_hash "
         "FROM experiment WHERE experiment_id=" +
         std::to_string(experimentId) + ";");
@@ -3398,6 +3402,9 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
                  EA::FeatureWarmupScopeText(experiment.featureWarmupScope));
     AddCliOption(argv, "--donchian-lookback",
                  std::to_string(experiment.donchianLookback));
+    if (!experiment.resumeModelId && !experiment.lastModelId)
+        AddCliOption(argv, "--fresh-initialization-seed",
+                     std::to_string(experiment.freshInitializationSeed));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
     AddCliOption(
         argv,
@@ -8413,7 +8420,7 @@ int RecoverOrphanedRunningExperiments(
                 "train_start::text,train_end::text,"
                 "infer_start::text,infer_end::text,last_model_id,"
                 "resume_model_id,train_log_path,infer_log_path,"
-                "analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash "
+                "analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,fresh_initialization_seed,resume_expand_input_width,training_objective_canonical,training_objective_hash "
                 "FROM experiment WHERE experiment_id=$1;",
                 experimentId);
             if (experimentRows.size() == 1)
@@ -8642,7 +8649,7 @@ void PersistObservedExperimentChild(pqxx::work& w,
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "e.donchian20_mode,e.feature_warmup_scope,e.donchian_lookback,e.feature_ablation_mask,e.resume_expand_input_width,e.training_objective_canonical,e.training_objective_hash,e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
+        "e.donchian20_mode,e.feature_warmup_scope,e.donchian_lookback,e.feature_ablation_mask,e.fresh_initialization_seed,e.resume_expand_input_width,e.training_objective_canonical,e.training_objective_hash,e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
         "r.cancellation_mode,e.cancel_after_checkpoint_epoch "
         "FROM experiment e LEFT JOIN experiment_admin_request r "
         "ON r.request_id=e.cancellation_request_id "
@@ -8654,23 +8661,23 @@ void PersistObservedExperimentChild(pqxx::work& w,
         return;
 
     ExperimentRow experiment = RowToExperiment(rows[0]);
-    const std::string status = rows[0][24].as<std::string>();
-    const std::string phase = rows[0][25].as<std::string>();
-    const std::optional<int> workerPid = rows[0][26].is_null()
+    const std::string status = rows[0][25].as<std::string>();
+    const std::string phase = rows[0][26].as<std::string>();
+    const std::optional<int> workerPid = rows[0][27].is_null()
         ? std::nullopt
-        : std::optional<int>{rows[0][26].as<int>()};
+        : std::optional<int>{rows[0][27].as<int>()};
     const std::optional<long long> cancellationRequestId =
-        rows[0][27].is_null()
-            ? std::nullopt
-            : std::optional<long long>{rows[0][27].as<long long>()};
-    const std::optional<std::string> cancellationMode =
         rows[0][28].is_null()
             ? std::nullopt
-            : std::optional<std::string>{rows[0][28].as<std::string>()};
-    const std::optional<int> cancellationCheckpoint =
+        : std::optional<long long>{rows[0][28].as<long long>()};
+    const std::optional<std::string> cancellationMode =
         rows[0][29].is_null()
             ? std::nullopt
-            : std::optional<int>{rows[0][29].as<int>()};
+        : std::optional<std::string>{rows[0][29].as<std::string>()};
+    const std::optional<int> cancellationCheckpoint =
+        rows[0][30].is_null()
+            ? std::nullopt
+        : std::optional<int>{rows[0][30].as<int>()};
     const std::string& error = completion.error;
 
     if (status != "running" || phase != child.phase ||

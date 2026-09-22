@@ -754,10 +754,12 @@ bool EA::LSTM::WriteHotspotProfileReport(const std::string& outputPath)
 
 
 // Random helpers: uniform real in [low, high] and symmetric [-limit, limit]
+static thread_local std::mt19937* freshInitializationRng = nullptr;
 static inline float uniform_between(float low, float high) {
-    thread_local std::mt19937 rng{ 42 };// std::random_device{}() };
+    if (!freshInitializationRng)
+        throw std::logic_error("fresh initialization RNG boundary is not active");
     std::uniform_real_distribution<float> dist(low, high);
-    return dist(rng);
+    return dist(*freshInitializationRng);
 }
 
 static inline float uniform_symmetric(float limit) {
@@ -3062,7 +3064,8 @@ EA::LSTM::LSTM(const Tensor& tt,
                float st,
                TargetType explicitTargetType,
                std::optional<std::size_t> modelInputWidth,
-               EA::FeatureAblationMask ablationMask)
+               EA::FeatureAblationMask ablationMask,
+               unsigned int freshInitializationSeed)
   : t{ tt },
     hiddenSize_{ hiddenSize },
     n_in { static_cast<int>(EA::ResolveModelInputContract(
@@ -3079,6 +3082,11 @@ EA::LSTM::LSTM(const Tensor& tt,
     returnHeadDirWeight { hiddenSize_, direction_output_size },
     returnHeadDirBias { 1, direction_output_size }
 {
+    // Each fresh constructor owns its deterministic stream: prior models on
+    // this thread cannot advance the initialization sequence.
+    std::mt19937 initializationRng{freshInitializationSeed};
+    freshInitializationRng = &initializationRng;
+    struct ResetRng { ~ResetRng() { freshInitializationRng = nullptr; } } resetRng;
     if (hiddenSize_ == 0)
         throw std::runtime_error("LSTM ctor: hidden size must be positive");
     const size_t baseFeatureCount = TensorFeatureCount(tt);

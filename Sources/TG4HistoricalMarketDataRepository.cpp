@@ -84,7 +84,7 @@ void HistoricalMarketDataRepository::StreamCanonicalCandles(
         "SELECT to_char(dt,'YYYY-MM-DD HH24:MI:SS'),"
         "open::double precision,high::double precision,"
         "low::double precision,close::double precision,vol::bigint "
-        "FROM bounded ORDER BY dt;";
+        "FROM bounded ORDER BY dt";
     auto stream = transaction.stream<std::string, double, double, double,
                                      double, long long>(
         query, Parameters(symbol, configuration, range));

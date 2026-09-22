@@ -3795,6 +3795,7 @@ struct LaunchArgs
     std::optional<long long> schedulerCheckpointEvalId;
     std::optional<long long> schedulerWorkerAttemptId;
     std::optional<EA::TrainingObjective::Configuration> trainingObjective;
+    std::optional<unsigned int> freshInitializationSeed;
     std::optional<long long> inferStartAfterModelId;
     std::optional<EA::FeatureWarmupScope> featureWarmupScope;
     std::optional<Donchian20Mode> donchian20Mode;
@@ -4003,6 +4004,14 @@ int ParsePositiveIntArg(const std::string& optionName, const std::string& value)
     return static_cast<int>(parsed);
 }
 
+unsigned int ParseFreshInitializationSeedArg(const std::string& value)
+{
+    const size_t parsed = ParsePositiveSizeArg("--fresh-initialization-seed", value);
+    if (parsed > std::numeric_limits<unsigned int>::max())
+        throw std::invalid_argument("--fresh-initialization-seed exceeds uint32 range");
+    return static_cast<unsigned int>(parsed);
+}
+
 int ParseNonNegativeIntArg(const std::string& optionName, const std::string& value)
 {
     if (value.empty())
@@ -4108,6 +4117,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument(
                     "--resume-expand-input-width specified more than once");
             parsed.resumeExpandInputWidth = true;
+        }
+        else if (arg == "--fresh-initialization-seed")
+        {
+            if (parsed.freshInitializationSeed)
+                throw std::invalid_argument("--fresh-initialization-seed specified more than once");
+            if (++i >= argc)
+                throw std::invalid_argument("--fresh-initialization-seed requires a value");
+            parsed.freshInitializationSeed = ParseFreshInitializationSeedArg(argv[i]);
         }
         else if (arg == "--target-epochs")
         {
@@ -4580,6 +4597,8 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
 
     if (parsed.resumeModelId.has_value())
     {
+        if (parsed.freshInitializationSeed)
+            throw std::invalid_argument("--fresh-initialization-seed cannot be combined with --resume-model-id");
         if (parsed.schedulerCheckpointEvalId.has_value())
             throw std::invalid_argument("--scheduler-checkpoint-eval-id cannot be combined with --resume-model-id");
         if (parsed.inferAll)
@@ -6987,11 +7006,12 @@ EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
                                       float initialShortTerm,
                                       EA::LSTM::TargetType targetType,
                                       std::optional<std::size_t> modelInputWidth = std::nullopt,
-                                      EA::FeatureAblationMask ablationMask = {})
+                                      EA::FeatureAblationMask ablationMask = {},
+                                      unsigned int freshInitializationSeed = 42U)
 {
     ScopedDiagnosticCoutSilencer silence;
     return EA::LSTM { tensor, hiddenSize, initialLongTerm, initialShortTerm, targetType,
-                      modelInputWidth, std::move(ablationMask) };
+                      modelInputWidth, std::move(ablationMask), freshInitializationSeed };
 }
 
 InferenceIdentity BuildInferenceIdentity(long long modelId,
@@ -9426,7 +9446,8 @@ int main(int argc, const char * argv[])
                 runtimeModel = std::make_unique<EA::LSTM>(
                     CreateLstmForRuntimeLogLevel(
                         t, runtimeLstmHiddenSize, 1, 0, requestedTargetType,
-                        persistedModelInputWidth, runtimeFeatureAblationMask));
+                        persistedModelInputWidth, runtimeFeatureAblationMask,
+                        launchArgs.freshInitializationSeed.value_or(42U)));
                 if (!gRuntimeInferenceMode)
                     runtimeModel->SetTrainingObjective(runtimeTrainingObjective);
             }

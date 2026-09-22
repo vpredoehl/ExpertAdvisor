@@ -151,7 +151,8 @@ public:
          float initial_long_term = 1, float initial_short_term = 0,
          TargetType explicitTargetType = TargetType::UpNeutralDownReturn,
          std::optional<std::size_t> modelInputWidth = std::nullopt,
-         EA::FeatureAblationMask ablationMask = {});
+         EA::FeatureAblationMask ablationMask = {},
+         unsigned int freshInitializationSeed = 42U);
 
     inline void InitializeBiasWithForgetGateOffset(float forgetBiasOffset)
     {

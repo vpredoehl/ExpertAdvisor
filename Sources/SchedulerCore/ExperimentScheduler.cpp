@@ -2620,6 +2620,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 RequireNextArg(argc, argv, i, arg)).CanonicalText();
             options.featureAblationMaskSpecified = true;
         }
+        else if (arg == "--fresh-initialization-seed")
+        {
+            const long long seed = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+            if (seed > std::numeric_limits<unsigned int>::max())
+                throw std::invalid_argument("--fresh-initialization-seed exceeds uint32 range");
+            options.freshInitializationSeed = static_cast<unsigned int>(seed);
+        }
         else if (arg == "--train-start")
             options.trainStart = RequireNextArg(argc, argv, i, arg);
         else if (arg == "--train-end")
@@ -2705,6 +2713,13 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         {
             options.featureAblationMask = EA::FeatureAblationMask::Parse(value).CanonicalText();
             options.featureAblationMaskSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--fresh-initialization-seed", value))
+        {
+            const long long seed = ParsePositiveLongLong("--fresh-initialization-seed", value);
+            if (seed > std::numeric_limits<unsigned int>::max())
+                throw std::invalid_argument("--fresh-initialization-seed exceeds uint32 range");
+            options.freshInitializationSeed = static_cast<unsigned int>(seed);
         }
         else if (SplitOptionWithValue(arg, "--train-start", value))
             options.trainStart = value;
@@ -5247,6 +5262,7 @@ std::string DuplicateWhereClause(pqxx::work& w,
         << " AND donchian_lookback = " << DonchianLookbackDatabaseValue(
             options.donchianLookback)
         << " AND feature_ablation_mask = " << w.quote(options.featureAblationMask)
+        << " AND fresh_initialization_seed = " << options.freshInitializationSeed
         << " AND resume_model_id IS NOT DISTINCT FROM " << SqlNullable(w, options.resumeModelId)
         << " AND resume_expand_input_width = "
         << (options.resumeExpandInputWidth ? "true" : "false")
@@ -5285,6 +5301,7 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
         << " AND feature_warmup_scope = " << w.quote(
             EA::FeatureWarmupScopeText(options.featureWarmupScope))
         << " AND feature_ablation_mask = " << w.quote(options.featureAblationMask)
+        << " AND fresh_initialization_seed = " << options.freshInitializationSeed
         << " AND donchian_lookback = " << DonchianLookbackDatabaseValue(
             options.donchianLookback)
         << " AND resume_expand_input_width = "
@@ -5447,6 +5464,7 @@ void PrintQueueConfig(const char* marker,
               << ",feature_warmup_scope=" << EA::FeatureWarmupScopeText(options.featureWarmupScope)
               << ",donchian_lookback=" << options.donchianLookback
               << ",feature_ablation_mask=" << options.featureAblationMask
+              << ",fresh_initialization_seed=" << options.freshInitializationSeed
               << ",training_objective_id="
               << options.trainingObjective.objectiveIdentifier
               << ",training_objective_hash="
@@ -8716,7 +8734,7 @@ int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& option
             "target_epochs,checkpoint_interval,train_start::text,"
             "train_end::text,infer_start::text,infer_end::text,"
             "last_model_id,resume_model_id,train_log_path,"
-            "infer_log_path,analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash "
+            "infer_log_path,analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,fresh_initialization_seed,resume_expand_input_width,training_objective_canonical,training_objective_hash "
             "FROM experiment WHERE experiment_id=$1 "
             "AND status='running' AND phase='analyze' "
             "AND active_scheduler_worker_attempt_id=$2;",
@@ -9498,7 +9516,7 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
         << "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         << "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         << "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        << "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash,status, phase,worker_pid,worker_process_group_id,"
+        << "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,fresh_initialization_seed,resume_expand_input_width,training_objective_canonical,training_objective_hash,status, phase,worker_pid,worker_process_group_id,"
         << "worker_executable,worker_command_line,"
         << "worker_process_start_identity,"
         << "active_scheduler_worker_attempt_id "
@@ -9513,21 +9531,19 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
 
     SchedulerStopExperiment result;
     result.experiment = RowToExperiment(rows[0]);
-    result.status = rows[0][24].as<std::string>();
-    result.phase = rows[0][25].as<std::string>();
+    result.status = rows[0][25].as<std::string>();
+    result.phase = rows[0][26].as<std::string>();
     result.worker.experimentId = result.experiment.experimentId;
     result.worker.phase = result.phase;
     result.worker.lifecycleStatus = result.status;
-    if (!rows[0][26].is_null())
-        result.worker.pid = rows[0][26].as<int>();
-    if (!rows[0][27].is_null())
-        result.worker.processGroupId = rows[0][27].as<int>();
-    result.worker.executable = OptionalStringCell(rows[0], 28);
-    result.worker.commandLine = OptionalStringCell(rows[0], 29);
+    if (!rows[0][27].is_null()) result.worker.pid = rows[0][27].as<int>();
+    if (!rows[0][28].is_null()) result.worker.processGroupId = rows[0][28].as<int>();
+    result.worker.executable = OptionalStringCell(rows[0], 29);
+    result.worker.commandLine = OptionalStringCell(rows[0], 30);
     result.worker.processStartIdentity =
-        OptionalStringCell(rows[0], 30);
+        OptionalStringCell(rows[0], 31);
     result.activeWorkerAttemptId =
-        OptionalLongLongCell(rows[0], 31);
+        OptionalLongLongCell(rows[0], 32);
     result.worker.workerAttemptId =
         result.activeWorkerAttemptId;
     result.worker.workerKind = "experiment";
@@ -9542,7 +9558,7 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash,status, phase,worker_pid,worker_process_group_id,"
+        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,fresh_initialization_seed,resume_expand_input_width,training_objective_canonical,training_objective_hash,status, phase,worker_pid,worker_process_group_id,"
         "worker_executable,worker_command_line,"
         "worker_process_start_identity,"
         "active_scheduler_worker_attempt_id "
@@ -9556,22 +9572,20 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
     {
         SchedulerStopExperiment item;
         item.experiment = RowToExperiment(row);
-        item.status = row[24].as<std::string>();
-        item.phase = row[25].as<std::string>();
+        item.status = row[25].as<std::string>();
+        item.phase = row[26].as<std::string>();
         item.worker.experimentId =
             item.experiment.experimentId;
         item.worker.phase = item.phase;
         item.worker.lifecycleStatus = item.status;
-        if (!row[26].is_null())
-            item.worker.pid = row[26].as<int>();
-        if (!row[27].is_null())
-            item.worker.processGroupId = row[27].as<int>();
-        item.worker.executable = OptionalStringCell(row, 28);
-        item.worker.commandLine = OptionalStringCell(row, 29);
+        if (!row[27].is_null()) item.worker.pid = row[27].as<int>();
+        if (!row[28].is_null()) item.worker.processGroupId = row[28].as<int>();
+        item.worker.executable = OptionalStringCell(row, 29);
+        item.worker.commandLine = OptionalStringCell(row, 30);
         item.worker.processStartIdentity =
-            OptionalStringCell(row, 30);
+            OptionalStringCell(row, 31);
         item.activeWorkerAttemptId =
-            OptionalLongLongCell(row, 31);
+            OptionalLongLongCell(row, 32);
         item.worker.workerAttemptId =
             item.activeWorkerAttemptId;
         item.worker.workerKind = "experiment";

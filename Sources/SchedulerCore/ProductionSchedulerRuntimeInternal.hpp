@@ -350,6 +350,7 @@ struct SchedulerOptions
     bool donchianLookbackSpecified = false;
     std::string featureAblationMask;
     bool featureAblationMaskSpecified = false;
+    unsigned int freshInitializationSeed = 42U;
     std::optional<int> targetEpochs;
     std::optional<int> epochs;
     int checkpointInterval = 20;
@@ -387,6 +388,7 @@ struct QueueResumeMeta
         EA::FeatureWarmupScope::LegacyColdBoundary;
     std::size_t donchianLookback = kDefaultDonchianLookback;
     std::string featureAblationMask;
+    unsigned int freshInitializationSeed = 42U;
     std::size_t modelInputWidth = 0;
     EA::TrainingObjective::Configuration trainingObjective =
         EA::TrainingObjective::Legacy();
@@ -416,6 +418,7 @@ struct ExperimentRow
         EA::FeatureWarmupScope::LegacyColdBoundary;
     std::size_t donchianLookback = kDefaultDonchianLookback;
     std::string featureAblationMask;
+    unsigned int freshInitializationSeed = 42U;
     bool resumeExpandInputWidth = false;
     EA::TrainingObjective::Configuration trainingObjective =
         EA::TrainingObjective::Legacy();

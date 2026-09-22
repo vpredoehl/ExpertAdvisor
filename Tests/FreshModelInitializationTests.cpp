@@ -99,17 +99,19 @@ void WriteAuxiliaryInitialization(const EA::LSTM& model,
 
 int main(int argc, char** argv)
 {
-    if (argc != 3)
+    if (argc != 4)
     {
         std::cerr << "usage: FreshModelInitializationTests "
-                     "legacy|auxiliary output-prefix\n";
+                     "legacy|auxiliary seed output-prefix\n";
         return 2;
     }
 
     try
     {
         const std::string selection = argv[1];
-        const std::string outputPrefix = argv[2];
+        const unsigned int seed = static_cast<unsigned int>(std::stoul(argv[2]));
+        if (seed == 0U) throw std::invalid_argument("seed_must_be_positive");
+        const std::string outputPrefix = argv[3];
         const EA::TrainingObjective::Configuration objective =
             selection == "legacy"
                 ? EA::TrainingObjective::Legacy()
@@ -131,8 +133,9 @@ int main(int argc, char** argv)
 
         // This is the production fresh-training order in main.cpp:
         // construct EA::LSTM, then apply the resolved objective.
-        EA::LSTM model{tensor, 1.0f, 0.0f,
-                       EA::LSTM::TargetType::UpNeutralDownReturn};
+EA::LSTM model{tensor, hidden_size, 1.0f, 0.0f,
+               EA::LSTM::TargetType::UpNeutralDownReturn,
+               std::nullopt, {}, seed};
         model.SetTrainingObjective(objective);
 
         WriteSharedInitialization(model, outputPrefix + ".shared.bin");
