@@ -1,11 +1,11 @@
 # TG4 causal boundary closure
 
 Status: the audit/test increment is closed. Its two pre-integration blockers
-were implemented by `TG4_PREINTEGRATION_CAUSAL_BOUNDARY_CLOSURE.md`; the
-repository is ready only for a **separately approved isolated TG1->TG3
-streaming-adapter phase**, not Tensor/model integration. This document makes
-no Tensor, model, schema, scheduler, worker, experiment, database, or
-frozen-artifact change.
+were implemented by `TG4_PREINTEGRATION_CAUSAL_BOUNDARY_CLOSURE.md`, and the
+isolated prerequisite adapter is recorded in
+`TG4_ISOLATED_PRODUCTION_STREAMING_ADAPTER.md`. Tensor/model integration is
+still separate. This document makes no Tensor, model, schema, scheduler,
+worker, experiment, database, or frozen-artifact change.
 
 ## 1. Executive summary
 

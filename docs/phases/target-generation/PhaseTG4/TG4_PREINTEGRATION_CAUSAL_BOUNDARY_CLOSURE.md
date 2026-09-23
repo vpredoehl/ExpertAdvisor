@@ -2,9 +2,10 @@
 
 Status: complete prerequisite increment. This closes the range and
 configuration blockers identified in
-`TG4_CAUSAL_BOUNDARY_CLOSURE.md`; it does not implement a streaming adapter or
-connect any TG state to Tensor, training, inference, checkpoints, workers or
-the scheduler.
+`TG4_CAUSAL_BOUNDARY_CLOSURE.md`; its separately approved isolated adapter
+successor is recorded in `TG4_ISOLATED_PRODUCTION_STREAMING_ADAPTER.md`. This
+document itself does not connect TG state to Tensor, training, inference,
+checkpoints, workers or the scheduler.
 
 ## Scope and non-goals
 

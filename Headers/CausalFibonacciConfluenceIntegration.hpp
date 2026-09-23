@@ -196,6 +196,10 @@ struct Update
     TG2::Update behaviorUpdate;
     std::vector<ABIdentity> newlyAvailableABStructures;
     std::vector<std::uint64_t> newConfluenceObservations;
+    // Captured at creation time so a streaming consumer can classify every
+    // same-bar event before later outcome synchronization or retention limits
+    // can affect the tracker-visible observation set.
+    std::vector<ConfluenceObservation> newlyCreatedConfluenceObservations;
 };
 
 class FibonacciConfluenceTracker
@@ -1256,7 +1260,16 @@ public:
                 tracker_.ObserveInnerBreak(
                     *observation, ObservationAtr(*observation));
             if (created.has_value())
+            {
                 result.newConfluenceObservations.push_back(*created);
+                const ConfluenceObservation* createdObservation =
+                    FindConfluenceObservation(*created);
+                if (createdObservation == nullptr)
+                    throw std::logic_error(
+                        "TG3 could not find newly created confluence observation");
+                result.newlyCreatedConfluenceObservations.push_back(
+                    *createdObservation);
+            }
         }
         return result;
     }
@@ -1314,6 +1327,19 @@ private:
             [eventSequence](const TG2::BreakObservation& observation)
             {
                 return observation.breakEvent.eventSequence == eventSequence;
+            });
+        return found == observations.end() ? nullptr : &*found;
+    }
+
+    const ConfluenceObservation* FindConfluenceObservation(
+        std::uint64_t eventSequence) const
+    {
+        const auto& observations = tracker_.Observations();
+        const auto found = std::find_if(
+            observations.begin(), observations.end(),
+            [eventSequence](const ConfluenceObservation& observation)
+            {
+                return observation.breakEventSequence == eventSequence;
             });
         return found == observations.end() ? nullptr : &*found;
     }
