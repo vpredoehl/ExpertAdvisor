@@ -173,6 +173,11 @@ void TestSymbolAwarePipToleranceAndConfigurationFingerprint()
     catch (const std::invalid_argument&) { unknownRejected = true; }
     assert(unknownRejected);
 
+    bool productionOnlySymbolRejected = false;
+    try { (void)EA::TG4::CanonicalFxPipSize("cadchfrmp"); }
+    catch (const std::invalid_argument&) { productionOnlySymbolRejected = true; }
+    assert(productionOnlySymbolRejected);
+
     const std::string frozen = EA::TG4::ConfigurationFingerprint(configuration);
     EvaluationConfiguration changed = configuration;
     changed.referenceBarScale = 14.0;

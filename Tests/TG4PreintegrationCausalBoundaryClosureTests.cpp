@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -175,6 +176,7 @@ void AssertSemanticFieldChangesIdentity()
     });
     changed([](Input& v) { v.fibonacciTolerancePips = 2.0; });
     changed([](Input& v) { v.canonicalFxPipSizes["eurusdrmp"] = 0.001; });
+    changed([](Input& v) { v.canonicalFxPipSizes.erase("cadchfrmp"); });
     changed([](Input& v) { ++v.fibonacci.maxConfirmedFractalsPerKind; });
     changed([](Input& v) { ++v.fibonacci.maxABAgeBars; });
     changed([](Input& v) { ++v.fibonacci.maxActiveABStructures; });
@@ -237,10 +239,50 @@ void TestProductionConfiguration()
     assert(first.values().fibonacci.maxActiveConfluenceObservations == 4096);
     assert(first.values().fibonacci.maxRetainedConfluenceObservations == 4096);
     assert(first.values().fibonacciTolerancePips == 1.0);
+    const std::map<std::string, double> expectedPipSizes{
+        {"audcadrmp", 0.0001}, {"audchfrmp", 0.0001},
+        {"audjpyrmp", 0.01},   {"audnzdrmp", 0.0001},
+        {"audusdrmp", 0.0001}, {"cadchfrmp", 0.0001},
+        {"cadjpyrmp", 0.01},   {"chfjpyrmp", 0.01},
+        {"euraudrmp", 0.0001}, {"eurcadrmp", 0.0001},
+        {"eurchfrmp", 0.0001}, {"eurgbprmp", 0.0001},
+        {"eurjpyrmp", 0.01},   {"eurnzdrmp", 0.0001},
+        {"eurusdrmp", 0.0001}, {"gbpaudrmp", 0.0001},
+        {"gbpcadrmp", 0.0001}, {"gbpnzdrmp", 0.0001},
+        {"gbpusdrmp", 0.0001}, {"nzdchfrmp", 0.0001},
+        {"nzdcadrmp", 0.0001}, {"nzdjpyrmp", 0.01},
+        {"usdcadrmp", 0.0001}, {"usdjpyrmp", 0.01}};
+    assert(first.values().canonicalFxPipSizes == expectedPipSizes);
+    for (const auto& [symbol, pipSize] : first.values().canonicalFxPipSizes)
+    {
+        assert(!symbol.empty());
+        assert(pipSize > 0.0);
+    }
+    for (const auto& [symbol, pipSize] : std::map<std::string, double>{
+             {"audcadrmp", 0.0001}, {"audusdrmp", 0.0001},
+             {"eurusdrmp", 0.0001}, {"gbpusdrmp", 0.0001},
+             {"usdcadrmp", 0.0001}, {"usdjpyrmp", 0.01}})
+        assert(first.values().canonicalFxPipSizes.at(symbol) == pipSize);
     assert(first.FibonacciConfigurationForSymbol("eurusdrmp").absolutePriceTolerance ==
            0.0001);
     assert(first.FibonacciConfigurationForSymbol("usdjpyrmp").absolutePriceTolerance ==
            0.01);
+    assert(first.FibonacciConfigurationForSymbol("cadchfrmp").absolutePriceTolerance ==
+           0.0001);
+    assert(first.FibonacciConfigurationForSymbol("audchfrmp").absolutePriceTolerance ==
+           0.0001);
+    assert(first.FibonacciConfigurationForSymbol("cadjpyrmp").absolutePriceTolerance ==
+           0.01);
+    bool unknownRejected = false;
+    try
+    {
+        (void)first.FibonacciConfigurationForSymbol("unknownrmp");
+    }
+    catch (const std::invalid_argument&)
+    {
+        unknownRejected = true;
+    }
+    assert(unknownRejected);
     AssertSemanticFieldChangesIdentity();
 }
 } // namespace

@@ -301,6 +301,26 @@ inline void Validate(const Input& value)
     }
 }
 
+// This is the production LSTM FX universe, deliberately separate from the
+// frozen six-symbol TG4A historical-confirmation study universe.
+inline const std::map<std::string, double>& ProductionCanonicalFxPipSizes()
+{
+    static const std::map<std::string, double> pipSizes{
+        {"audcadrmp", 0.0001}, {"audchfrmp", 0.0001},
+        {"audjpyrmp", 0.01},   {"audnzdrmp", 0.0001},
+        {"audusdrmp", 0.0001}, {"cadchfrmp", 0.0001},
+        {"cadjpyrmp", 0.01},   {"chfjpyrmp", 0.01},
+        {"euraudrmp", 0.0001}, {"eurcadrmp", 0.0001},
+        {"eurchfrmp", 0.0001}, {"eurgbprmp", 0.0001},
+        {"eurjpyrmp", 0.01},   {"eurnzdrmp", 0.0001},
+        {"eurusdrmp", 0.0001}, {"gbpaudrmp", 0.0001},
+        {"gbpcadrmp", 0.0001}, {"gbpnzdrmp", 0.0001},
+        {"gbpusdrmp", 0.0001}, {"nzdchfrmp", 0.0001},
+        {"nzdcadrmp", 0.0001}, {"nzdjpyrmp", 0.01},
+        {"usdcadrmp", 0.0001}, {"usdjpyrmp", 0.01}};
+    return pipSizes;
+}
+
 inline Input TG4ADerivedSourceUTLUpABOnlyV1Input()
 {
     Input value;
@@ -338,9 +358,7 @@ inline Input TG4ADerivedSourceUTLUpABOnlyV1Input()
     value.fibonacci.maxRetainedConfluenceObservations = 4096;
     value.fibonacciToleranceConvention = "canonical_fx_pips";
     value.fibonacciTolerancePips = 1.0;
-    value.canonicalFxPipSizes = {{"audcadrmp", 0.0001}, {"audusdrmp", 0.0001},
-                                 {"eurusdrmp", 0.0001}, {"gbpusdrmp", 0.0001},
-                                 {"usdcadrmp", 0.0001}, {"usdjpyrmp", 0.01}};
+    value.canonicalFxPipSizes = ProductionCanonicalFxPipSizes();
     Validate(value);
     return value;
 }
