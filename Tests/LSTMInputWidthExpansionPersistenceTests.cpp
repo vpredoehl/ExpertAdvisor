@@ -125,12 +125,12 @@ int main()
     assert(postRelease[authoritativeInitialHasSurpriseCol] == 1.0F);
     assert(postRelease[authoritativeInitialSurpriseCol] != 0.0F);
 
-    // A newly initialized width-77 model consumes the same nonzero event row
+    // A newly initialized width-80 model consumes the same nonzero event row
     // through both production inference and training tensor-copy paths.
     EA::LSTM freshWidth77{
         tensor, hidden_size, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
         EA::kCurrentModelInputWidth};
-    assert(freshWidth77.InputFeatureCount() == 77);
+    assert(freshWidth77.InputFeatureCount() == 80);
     assert(freshWidth77.param.Shape()[0] ==
            EA::kCurrentModelInputWidth + hidden_size);
     const auto freshProbabilities = freshWidth77.PredictNextDirectionProbs(
@@ -234,7 +234,7 @@ int main()
             "model_input_semantic_layout_version,"
             "economic_calendar_snapshot_id,economic_calendar_snapshot_hash) VALUES "
             "('eurusdrmp',1,0.0,1,0,'2020-01-01','2021-01-01',"
-            "'pending','train',2090001,77,7,$1,$2) RETURNING experiment_id;",
+            "'pending','train',2090001,80,8,$1,$2) RETURNING experiment_id;",
             pqxx::params{calendarSnapshotId, kCalendarSnapshotHash})
             .one_row()[0].as<long long>();
         freshWidth77ModelId = DBIO::PgModelIO::createModel(

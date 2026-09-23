@@ -133,6 +133,12 @@ void Tensor::Add(Feature f)
         causalReturnAutocorrelation.AddCompletedClose(f.close);
     const auto economicEventValues =
         economicEventFeatures.AdvanceCompletedBar(f.time).Ordered();
+    const auto tg4Pulse = tg4ProductionPulses.AddCompletedCanonicalBar(f);
+    if (tg4Pulse.barStart != f.time)
+        throw std::logic_error("tg4_tensor_pulse_timestamp_alignment_mismatch");
+    if (tg4Pulse.bits[2] > tg4Pulse.bits[1] ||
+        tg4Pulse.bits[1] > tg4Pulse.bits[0])
+        throw std::logic_error("tg4_tensor_pulse_hierarchy_invariant_failed");
     causalDirectionalRange.RetainCompletedBar(f.open, f.high, f.low, f.close);
     causalCloseLocation.RetainCompletedBar(f.high, f.low, f.close);
     causalDirectionalPersistence.RetainCompletedClose(f.close);
@@ -162,6 +168,12 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[returnAutocorrelationCol] = returnAutocorrelation;
         std::copy(economicEventValues.begin(), economicEventValues.end(),
                   low.MutableRawMemory() + economicEventFeatureStartCol);
+        low.MutableRawMemory()[tg4InnerBreakAnyCol] =
+            static_cast<float>(tg4Pulse.bits[0]);
+        low.MutableRawMemory()[tg4SourceTg3StructurallyEligibleCol] =
+            static_cast<float>(tg4Pulse.bits[1]);
+        low.MutableRawMemory()[tg4SourceTg3ConfluentCol] =
+            static_cast<float>(tg4Pulse.bits[2]);
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -426,6 +438,10 @@ void Tensor::Add(Feature f)
     p[returnAutocorrelationCol] = returnAutocorrelation;
     std::copy(economicEventValues.begin(), economicEventValues.end(),
               p + economicEventFeatureStartCol);
+    p[tg4InnerBreakAnyCol] = static_cast<float>(tg4Pulse.bits[0]);
+    p[tg4SourceTg3StructurallyEligibleCol] =
+        static_cast<float>(tg4Pulse.bits[1]);
+    p[tg4SourceTg3ConfluentCol] = static_cast<float>(tg4Pulse.bits[2]);
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

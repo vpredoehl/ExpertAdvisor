@@ -158,12 +158,12 @@ int main()
     static_assert(pre_consensus_economic_event_feature_size == 59);
     static_assert(consensus_economic_event_feature_size == 67);
     static_assert(economic_event_feature_size == 71);
-    static_assert(feature_size == 73);
+    static_assert(feature_size == 76);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
     static_assert(EA::kEconomicEventConsensusModelInputWidth == 71);
     static_assert(EA::kEconomicEventReleaseActualModelInputWidth == 75);
-    static_assert(EA::kCurrentModelInputWidth == 77);
+    static_assert(EA::kCurrentModelInputWidth == 80);
     static_assert(kEconomicEventFeatureNames.size() ==
                   kEconomicEventFeatureWidth);
     assert(kEconomicEventFeatureNames.front() == "inflation_event");

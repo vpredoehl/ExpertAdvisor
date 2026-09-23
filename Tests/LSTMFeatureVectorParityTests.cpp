@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../Headers/ModelInputContract.hpp"
+#include "../Headers/ModelInputExpansion.hpp"
 #include "../Headers/ReturnFeatureHistory.hpp"
 
 namespace
@@ -92,7 +93,12 @@ int main()
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
-    static_assert(EA::kCurrentModelInputWidth == 77);
+    static_assert(EA::kCurrentModelInputWidth == 80);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 8);
+    static_assert(feature_size == 76);
+    static_assert(tg4InnerBreakAnyCol == 73);
+    static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
+    static_assert(tg4SourceTg3ConfluentCol == 75);
 
     constexpr std::size_t sourceRowCount = 96;
     std::vector<std::vector<float>> sourceRows(sourceRowCount,
@@ -103,6 +109,13 @@ int main()
         rawCloses[row] = std::pow(1.001f, static_cast<float>(row));
         for (std::size_t col = 0; col < feature_size; ++col)
             sourceRows[row][col] = static_cast<float>(row * 100 + col);
+        const std::array<std::array<float, 3>, 4> legalTG4States{{
+            {{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}},
+            {{1.0f, 1.0f, 0.0f}}, {{1.0f, 1.0f, 1.0f}}}};
+        const auto& tg4 = legalTG4States[row % legalTG4States.size()];
+        sourceRows[row][tg4InnerBreakAnyCol] = tg4[0];
+        sourceRows[row][tg4SourceTg3StructurallyEligibleCol] = tg4[1];
+        sourceRows[row][tg4SourceTg3ConfluentCol] = tg4[2];
     }
 
     // Training prebuilds against a batch-local row; inference begins a local
@@ -118,6 +131,27 @@ int main()
     AssertByteIdentical(trainingAtOffset16, inferenceAtOffset16);
     for (std::size_t col = feature_size; col < EA::kCurrentModelInputWidth; ++col)
         assert(!IsZero(trainingAtOffset16[col]));
+
+    // Layout 7 is retained as a historical semantic identity. Its 73-column
+    // Tensor prefix is byte-identical to layout 8's prefix; only layout 8
+    // includes the three TG4 columns before its relocated return suffix.
+    const auto layout7AtOffset16 = BuildModelInputRow(
+        sourceRows, rawCloses, kPreviouslyFailingGlobalStart,
+        EA::kCausalEconomicEventSurpriseModelInputWidth);
+    assert(layout7AtOffset16.size() == 77);
+    for (std::size_t col = 0;
+         col < causal_economic_event_surprise_feature_size; ++col)
+        assert(layout7AtOffset16[col] == trainingAtOffset16[col]);
+    assert(trainingAtOffset16[tg4InnerBreakAnyCol] == 0.0f);
+    assert(trainingAtOffset16[tg4SourceTg3StructurallyEligibleCol] == 0.0f);
+    assert(trainingAtOffset16[tg4SourceTg3ConfluentCol] == 0.0f);
+    for (std::size_t returnIndex = 0;
+         returnIndex < EA::kModelReturnFeatureCount; ++returnIndex)
+    {
+        assert(layout7AtOffset16[
+                   causal_economic_event_surprise_feature_size + returnIndex] ==
+               trainingAtOffset16[feature_size + returnIndex]);
+    }
 
     const auto consensusAblation = EA::FeatureAblationMask::Parse(
         std::string{EA::kEconomicEventConsensusAblationMaskText});

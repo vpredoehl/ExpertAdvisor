@@ -76,7 +76,8 @@ inline constexpr std::array<std::string_view, kModelReturnFeatureCount>
 
 inline bool IsCategoricalModelInputFeature(std::string_view name)
 {
-    return name.ends_with("_event") ||
+    return name.starts_with("tg4_") ||
+        name.ends_with("_event") ||
         name.ends_with("_has_consensus") ||
         name.ends_with("_consensus_is_range") ||
         name.ends_with("_has_surprise") ||

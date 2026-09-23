@@ -142,15 +142,15 @@ test "$(psql -X -At -q -d "${test_db}" -c \
 test "$(psql -X -At -q -d "${test_db}" -c \
     "SELECT string_agg(resume_expand_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = 'false,true'
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT string_agg(model_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '51,77'
+    "SELECT string_agg(model_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '51,80'
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT string_agg(model_input_semantic_layout_version::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '7,7'
+    "SELECT string_agg(model_input_semantic_layout_version::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '8,8'
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --symbol=eurusdrmp --prediction-horizon=4 \
     --target-epochs=1 >"${test_dir}/fresh.out" 2>&1
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT model_input_width::text || ':' || model_input_semantic_layout_version::text FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1 ORDER BY experiment_id DESC LIMIT 1")" = '77:7'
+    "SELECT model_input_width::text || ':' || model_input_semantic_layout_version::text FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1 ORDER BY experiment_id DESC LIMIT 1")" = '80:8'
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --resume-model-id="${source_model_id}" \

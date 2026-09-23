@@ -147,12 +147,24 @@ inline constexpr std::size_t economic_event_feature_size =
 inline constexpr std::size_t causal_economic_event_surprise_feature_size =
     economic_event_feature_size +
     EA::EconomicCalendar::kCausalEconomicEventSurpriseFeatureWidth;
-inline constexpr std::size_t feature_size =
+// TG4 production pulses are one-bar categorical observations of the same
+// completed canonical bar that produces the Tensor row. They intentionally
+// precede the model-only multi-horizon return suffix.
+inline constexpr std::size_t tg4InnerBreakAnyCol =
     causal_economic_event_surprise_feature_size;
+inline constexpr std::size_t tg4SourceTg3StructurallyEligibleCol =
+    tg4InnerBreakAnyCol + 1;
+inline constexpr std::size_t tg4SourceTg3ConfluentCol =
+    tg4SourceTg3StructurallyEligibleCol + 1;
+inline constexpr std::size_t tg4_production_pulse_feature_size =
+    tg4SourceTg3ConfluentCol + 1;
+inline constexpr std::size_t feature_size =
+    tg4_production_pulse_feature_size;
 
 static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
-static_assert(feature_size == return_autocorrelation_feature_size +
+static_assert(causal_economic_event_surprise_feature_size ==
+              return_autocorrelation_feature_size +
               EA::EconomicCalendar::kEconomicEventFeatureWidth);
 static_assert(relevantEventHasConsensusCol ==
               pre_consensus_economic_event_feature_size);
@@ -160,5 +172,10 @@ static_assert(authoritativeInitialHasSurpriseCol ==
               consensus_economic_event_feature_size);
 static_assert(causalFirstReleaseSurpriseAvailableCol ==
               economic_event_feature_size);
+static_assert(tg4InnerBreakAnyCol ==
+              causal_economic_event_surprise_feature_size);
+static_assert(tg4SourceTg3StructurallyEligibleCol ==
+              tg4InnerBreakAnyCol + 1);
+static_assert(tg4SourceTg3ConfluentCol == tg4InnerBreakAnyCol + 2);
 
 #endif /* FeatureLayout_hpp */

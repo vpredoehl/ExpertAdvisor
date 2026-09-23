@@ -14,6 +14,10 @@ int main()
     assert(Scheduler::EvaluateSemanticWorkerAdmission(
                "infer", {{77}, {7}}, current).admissible);
     assert(Scheduler::EvaluateSemanticWorkerAdmission(
+               "infer", {{80}, {8}}, current).admissible);
+    assert(!Scheduler::EvaluateSemanticWorkerAdmission(
+                "infer", {{80}, {7}}, current).admissible);
+    assert(Scheduler::EvaluateSemanticWorkerAdmission(
                "train", {{75}, {5}}, current).admissible);
     assert(Scheduler::EvaluateSemanticWorkerAdmission(
                "analyze", {{77}, {6}}, current).admissible);

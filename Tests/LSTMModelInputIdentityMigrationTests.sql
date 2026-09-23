@@ -111,7 +111,16 @@ BEGIN
         ('phase20identity',4,0.0008,1,0,'2020-01-01','2020-01-02',
          'pending','train',2089004,'enabled','legacy_cold_boundary',20,'',75,5),
         ('phase20identity',4,0.0008,1,0,'2020-01-01','2020-01-02',
-         'pending','train',2089004,'enabled','legacy_cold_boundary',20,'',75,4);
+         'pending','train',2089004,'enabled','legacy_cold_boundary',20,'',75,4),
+        ('phase20identity',4,0.0008,1,0,'2020-01-01','2020-01-02',
+         'pending','train',2089004,'enabled','legacy_cold_boundary',20,'',80,8);
+
+    IF NOT EXISTS (
+        SELECT 1 FROM experiment WHERE symbol='phase20identity'
+          AND model_input_width=80 AND model_input_semantic_layout_version=8
+    ) THEN
+        RAISE EXCEPTION 'layout-8 width-80 identity was not persisted';
+    END IF;
 
     BEGIN
         INSERT INTO experiment(

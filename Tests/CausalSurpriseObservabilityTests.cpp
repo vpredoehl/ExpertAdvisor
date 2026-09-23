@@ -93,8 +93,7 @@ Observability::ExperimentContext Context(long long experimentId)
     context.trainEnd = "2025-01-01 00:00:00+00";
     context.inferStart = "2025-01-01 00:00:00+00";
     context.inferEnd = "2026-01-01 00:00:00+00";
-    context.modelInputWidth = static_cast<int>(
-        EA::kCausalEconomicEventSurpriseModelInputWidth);
+    context.modelInputWidth = static_cast<int>(EA::kCurrentModelInputWidth);
     context.modelInputSemanticLayoutVersion =
         EA::kModelInputSemanticLayoutVersion;
     context.featureWarmupScope = EA::FeatureWarmupScope::FullHistoryWarmup;
@@ -281,8 +280,8 @@ void TestWarmupDenominatorAndIdentity()
     assert(result.warmupRowCount == 1);
     assert(result.coverage.totalFeatureRows == 2);
     assert(result.coverage.surpriseAvailableCount == 1);
-    assert(result.experiment.modelInputWidth == 77);
-    assert(result.experiment.modelInputSemanticLayoutVersion == 7);
+    assert(result.experiment.modelInputWidth == 80);
+    assert(result.experiment.modelInputSemanticLayoutVersion == 8);
     assert(!result.upstreamFeatureIdentity.empty());
     assert(!result.coverageIdentity.empty());
     assert(!result.diagnosticIdentity.empty());

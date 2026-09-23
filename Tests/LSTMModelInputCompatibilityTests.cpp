@@ -34,7 +34,7 @@ int main()
     static_assert(return_autocorrelation_feature_size == 49);
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
-    static_assert(feature_size == 73);
+    static_assert(feature_size == 76);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -55,7 +55,9 @@ int main()
     static_assert(EA::kEconomicEventModelInputWidth == 63);
     static_assert(EA::kEconomicEventConsensusModelInputWidth == 71);
     static_assert(EA::kEconomicEventReleaseActualModelInputWidth == 75);
-    static_assert(EA::kCurrentModelInputWidth == 77);
+    static_assert(EA::kCausalEconomicEventSurpriseModelInputWidth == 77);
+    static_assert(EA::kTG4ProductionPulseModelInputWidth == 80);
+    static_assert(EA::kCurrentModelInputWidth == 80);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -277,8 +279,8 @@ int main()
     assert(returnAutocorrelationInput[returnAutocorrelationCol] ==
            physicalTensor[returnAutocorrelationCol]);
 
-    // The current contract appends economic-event, consensus, and certified
-    // release-actual features. Every predecessor remains a registered prefix.
+    // The current contract appends economic-event, certified release-actual,
+    // and same-bar TG4 pulse features. Every predecessor remains registered.
     const auto economicEvents = EA::ResolveModelInputContract(
         EA::kCurrentModelInputWidth, physicalTensor.size());
     assert(economicEvents.tensorFeatureCount == feature_size);
@@ -292,6 +294,25 @@ int main()
            physicalTensor[inflationEventCol]);
     assert(economicEventInput[consumerDemandRecencyDecayCol] ==
            physicalTensor[consumerDemandRecencyDecayCol]);
+    assert(economicEventInput[tg4InnerBreakAnyCol] ==
+           physicalTensor[tg4InnerBreakAnyCol]);
+    assert(economicEventInput[tg4SourceTg3StructurallyEligibleCol] ==
+           physicalTensor[tg4SourceTg3StructurallyEligibleCol]);
+    assert(economicEventInput[tg4SourceTg3ConfluentCol] ==
+           physicalTensor[tg4SourceTg3ConfluentCol]);
+
+    const auto layout7 = EA::ResolveModelInputContract(
+        EA::kCausalEconomicEventSurpriseModelInputWidth,
+        physicalTensor.size());
+    assert(layout7.tensorFeatureCount ==
+           causal_economic_event_surprise_feature_size);
+    std::vector<float> layout7Input(
+        EA::kCausalEconomicEventSurpriseModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(layout7Input.data(),
+                                        physicalTensor.data(), layout7);
+    for (std::size_t i = 0;
+         i < causal_economic_event_surprise_feature_size; ++i)
+        assert(layout7Input[i] == physicalTensor[i]);
 
     const auto consensusEvents = EA::ResolveModelInputContract(
         EA::kEconomicEventConsensusModelInputWidth, physicalTensor.size());
@@ -528,7 +549,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80";
     }
     assert(unsupportedRejected);
 

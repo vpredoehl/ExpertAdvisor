@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 7;
+inline constexpr int kModelInputSemanticLayoutVersion = 8;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -37,7 +37,7 @@ struct ModelInputSemanticLayoutRegistryEntry
 // version as predecessor. A corrected interpretation at an existing width
 // instead branches from the newest genuinely compatible predecessor; old
 // entries and their fixed maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 7>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 8>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
@@ -51,6 +51,9 @@ inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 7>
         // contract. It therefore branches from layout 5 instead of naming
         // layout 6 as a compatible predecessor.
         {7, kCausalEconomicEventSurpriseModelInputWidth, 5},
+        // Layout 8 adds three TG4 same-bar pulse bits before the stable
+        // return suffix. It remains append-only at semantic-feature level.
+        {8, kTG4ProductionPulseModelInputWidth, 7},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -193,7 +196,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 41>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 44>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -245,6 +248,10 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 41>
          EA::EconomicCalendar::kEconomicEventFeatureNames[22]},
         {causalFirstReleaseSurpriseCol,
          EA::EconomicCalendar::kEconomicEventFeatureNames[23]},
+        {tg4InnerBreakAnyCol, "tg4_inner_break_any"},
+        {tg4SourceTg3StructurallyEligibleCol,
+         "tg4_source_tg3_structurally_eligible"},
+        {tg4SourceTg3ConfluentCol, "tg4_source_tg3_confluent"},
     }};
 
 constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()

@@ -1,15 +1,17 @@
 # TG4 causal point-in-time LSTM feature contract
 
-Status: design/audit only. This document specifies the causal contract for a
-future TG-derived feature implementation. It does not authorize a feature,
-schema, model-width, semantic-layout, worker, scheduler, or experiment change.
+Status: superseded as a current-layout description by
+`TG4_TENSOR_LSTM_LAYOUT8_INTEGRATION.md`. This document records the
+pre-integration design/audit baseline that preceded the approved layout-8
+implementation; it does not describe the current model identity.
 
 ## 1. Executive summary
 
-Repository truth is that the active model-input contract is **77 columns** and
-semantic-layout **7**, not a TG-dependent layout. Its physical `Tensor` prefix
-is 73 columns and its last four columns are model-materialization-time return
-features. The current path is:
+At the time of this design audit, the active model-input contract was **77
+columns** and semantic-layout **7**, with a 73-column physical `Tensor` prefix
+and four model-materialization-time return features. The later layout-8
+integration preserves that layout as historical compatibility and is the
+current authority. The then-current path was:
 
 ```text
 canonical market/economic reads -> ModelInputPreparation::Prepare -> Tensor::Add
@@ -57,11 +59,10 @@ tolerance, or any other representation here.
 
 ### Identity and construction
 
-`EA::kCurrentModelInputWidth` is 77 (`Headers/ModelInputContract.hpp:55-60`),
-`feature_size` is 73 (`Headers/FeatureLayout.hpp:137-151`), and
-`EA::kModelInputSemanticLayoutVersion` is 7
-(`Headers/ModelInputExpansion.hpp:22-24`). `Tests/LSTMFeatureVectorParityTests.cpp:86-95`
-asserts the same baseline.
+The historical baseline recorded here was `EA::kCurrentModelInputWidth == 77`,
+`feature_size == 73`, and `EA::kModelInputSemanticLayoutVersion == 7`.
+Those values are no longer current; see the layout-8 integration record for
+the authoritative 80/76/8 contract and its layout-7 projection rules.
 
 `ModelInputPreparation::Prepare` opens read-only market/economic transactions,
 loads an owned range, and invokes `Tensor::Add` for every row
