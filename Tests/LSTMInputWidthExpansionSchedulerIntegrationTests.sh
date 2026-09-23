@@ -5,6 +5,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:?usage: $0 /path/to/isolated/LSTM_Release}"
 test_db="ea_input_width_expansion_test_${$}"
 test_dir="$(mktemp -d /tmp/ea_input_width_expansion_scheduler.XXXXXX)"
+expected_source_commit="$(git -C "${repo_root}" rev-parse --verify HEAD)"
+
+test -x "${scheduler_binary}"
+if ! strings "${scheduler_binary}" | grep -Fx -- "${expected_source_commit}" \
+    >/dev/null; then
+    printf '%s\n' \
+        "scheduler binary does not embed current source commit: ${expected_source_commit}" \
+        >&2
+    exit 2
+fi
 
 case "${test_db}" in
     ea_input_width_expansion_test_[0-9]*) ;;
@@ -18,23 +28,27 @@ cleanup() {
 trap cleanup EXIT
 
 createdb "${test_db}"
-pg_dump -s -h 127.0.0.1 -U vjp -d LSTM |
+# The production database is a read-only schema source.  This test exercises
+# the current scheduler fixture, not historical migration replay: applying
+# migrations to this already-current clone can replay incompatible DDL.
+PGOPTIONS='-c default_transaction_read_only=on' \
+    pg_dump -s -h 127.0.0.1 -U vjp -d LSTM |
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}"
+# The production schema source predates the current queue binary's additive
+# fresh-initialization-seed column.  Apply only its idempotent owner migration
+# to the disposable clone; do not replay already-present historical DDL.
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/071_resume_input_width_expansion.sql"
-psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
-psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/089_lstm_model_input_identity.sql"
+    -f "${repo_root}/Database/migrations/094_fresh_initialization_seed.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/InputWidthExpansionMigrationTests.sql"
-psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Tests/LSTMModelInputIdentityMigrationTests.sql"
-psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/091_weekly_claims_historical_consensus.sql"
-psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/092_economic_calendar_snapshot.sql"
+# LSTMModelInputIdentityMigrationTests.sql asserts migration 089's exact
+# pre-092 index shape.  Its dedicated harness reconstructs that predecessor
+# schema before applying 089; it is intentionally not a current-schema
+# scheduler-fixture assertion.
 
+# This intentionally historical, marker-less width-51 fixture exercises the
+# expansion path.  Its width/layout are not assertions about the fresh-model
+# baseline; queued children must receive the current canonical layout instead.
 source_experiment_id="$(psql -X -At -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment(
     symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,
@@ -130,13 +144,13 @@ test "$(psql -X -At -q -d "${test_db}" -c \
 test "$(psql -X -At -q -d "${test_db}" -c \
     "SELECT string_agg(model_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '51,77'
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT string_agg(model_input_semantic_layout_version::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '6,6'
+    "SELECT string_agg(model_input_semantic_layout_version::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '7,7'
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --symbol=eurusdrmp --prediction-horizon=4 \
     --target-epochs=1 >"${test_dir}/fresh.out" 2>&1
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT model_input_width::text || ':' || model_input_semantic_layout_version::text FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1 ORDER BY experiment_id DESC LIMIT 1")" = '77:6'
+    "SELECT model_input_width::text || ':' || model_input_semantic_layout_version::text FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1 ORDER BY experiment_id DESC LIMIT 1")" = '77:7'
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --resume-model-id="${source_model_id}" \
