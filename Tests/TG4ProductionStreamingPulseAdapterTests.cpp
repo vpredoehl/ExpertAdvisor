@@ -94,6 +94,32 @@ void TestProductionReplayAndCausalInvariants()
         "eurusdrmp", prefix);
     assert(std::equal(prefixPulses.begin(), prefixPulses.end(), pulses.begin()));
 
+    EA::TG4Pulse::ProductionStreamingAdapter instrumented{"EURUSDRMP"};
+    std::vector<EA::TG4Pulse::Pulse> instrumentedPulses;
+    instrumentedPulses.reserve(bars.size());
+    for (const Feature& bar : bars)
+        instrumentedPulses.push_back(instrumented.AddCompletedCanonicalBar(bar));
+    assert(instrumentedPulses == pulses);
+    const auto& synchronization =
+        instrumented.OutcomeSynchronizationWorkForTesting();
+    assert(synchronization.calls == bars.size());
+    assert(synchronization.pendingObservationsVisited <=
+           synchronization.retainedObservationsExamined);
+    std::cout << "TG3_PRODUCTION_REPLAY_SYNC calls=" << synchronization.calls
+              << ",retained_examined="
+              << synchronization.retainedObservationsExamined
+              << ",pending_visited="
+              << synchronization.pendingObservationsVisited
+              << ",tg2_comparisons="
+              << synchronization.behaviorObservationsCompared
+              << ",behavior_available="
+              << synchronization.behaviorObservationsAvailable
+              << ",max_retained="
+              << synchronization.maxRetainedObservations
+              << ",max_pending=" << synchronization.maxPendingObservations
+              << ",max_behavior="
+              << synchronization.maxBehaviorObservations << '\n';
+
     EA::TG4Pulse::ProductionStreamingAdapter adapter{"EURUSDRMP"};
     const auto expectedConfiguration =
         EA::ProductionTG1TG3Pulse::Configuration::TG4ADerivedSourceUTLUpABOnlyV1();

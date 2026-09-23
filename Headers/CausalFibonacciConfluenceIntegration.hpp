@@ -190,6 +190,23 @@ struct Summary
     ConfluenceGroupCounts ineligible;
 };
 
+// Test-only deterministic work accounting for outcome synchronization. It is
+// deliberately excluded from all semantic identities and compiled only by the
+// focused complexity-regression harness.
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+struct SynchronizationWork
+{
+    std::size_t calls = 0;
+    std::size_t retainedObservationsExamined = 0;
+    std::size_t pendingObservationsVisited = 0;
+    std::size_t behaviorObservationsCompared = 0;
+    std::size_t behaviorObservationsAvailable = 0;
+    std::size_t maxRetainedObservations = 0;
+    std::size_t maxPendingObservations = 0;
+    std::size_t maxBehaviorObservations = 0;
+};
+#endif
+
 struct Update
 {
     std::size_t bar = 0;
@@ -353,16 +370,65 @@ public:
         std::size_t currentBar,
         std::int64_t currentTimestamp)
     {
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+        ++synchronizationWork_.calls;
+        synchronizationWork_.behaviorObservationsAvailable +=
+            behaviorObservations.size();
+        synchronizationWork_.maxRetainedObservations = std::max(
+            synchronizationWork_.maxRetainedObservations, observations_.size());
+        synchronizationWork_.maxBehaviorObservations = std::max(
+            synchronizationWork_.maxBehaviorObservations,
+            behaviorObservations.size());
+        std::size_t pendingThisCall = 0;
+#endif
         for (ConfluenceObservation& observation : observations_)
         {
-            const auto found = std::find_if(
-                behaviorObservations.begin(), behaviorObservations.end(),
-                [&observation](const TG2::BreakObservation& candidate)
-                {
-                    return candidate.breakEvent.eventSequence ==
-                        observation.breakEventSequence;
-                });
-            if (found != behaviorObservations.end())
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+            ++synchronizationWork_.retainedObservationsExamined;
+#endif
+            // TG2 mutates only pending outcomes. Once all three snapshots are
+            // terminal, later bars and TG2 record eviction cannot alter this
+            // observation, so a historical lookup is redundant.
+            if (!IsPending(observation.retest) &&
+                !IsPending(observation.outerTarget) &&
+                !IsPending(observation.outerTargetAfterRetest))
+                continue;
+
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+            ++synchronizationWork_.pendingObservationsVisited;
+            ++pendingThisCall;
+#endif
+
+            // TG2 assigns strictly increasing event sequences and retains the
+            // vector in that order; capacity eviction only removes entries.
+            // Binary search therefore avoids a P*B rescan without retaining
+            // any pointer/reference across a possible TG2 vector mutation.
+            auto first = behaviorObservations.begin();
+            const auto end = behaviorObservations.end();
+            auto last = end;
+            while (first != last)
+            {
+                const auto middle = first + (last - first) / 2;
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+                ++synchronizationWork_.behaviorObservationsCompared;
+#endif
+                if (middle->breakEvent.eventSequence <
+                    observation.breakEventSequence)
+                    first = middle + 1;
+                else
+                    last = middle;
+            }
+            const TG2::BreakObservation* found = nullptr;
+            if (first != end)
+            {
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+                ++synchronizationWork_.behaviorObservationsCompared;
+#endif
+                if (first->breakEvent.eventSequence ==
+                    observation.breakEventSequence)
+                    found = &*first;
+            }
+            if (found != nullptr)
             {
                 observation.retest = found->retest;
                 observation.outerTarget = found->outerTarget;
@@ -381,6 +447,10 @@ public:
                               currentTimestamp, observation.innerBreakBar);
             }
         }
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+        synchronizationWork_.maxPendingObservations = std::max(
+            synchronizationWork_.maxPendingObservations, pendingThisCall);
+#endif
     }
 
     const std::vector<ABStructure>& ABStructures() const
@@ -401,6 +471,12 @@ public:
     }
     std::size_t ABCapacityEvictions() const { return abCapacityEvictions_; }
     std::size_t ABAgeExpirations() const { return abAgeExpirations_; }
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+    const SynchronizationWork& OutcomeSynchronizationWork() const
+    {
+        return synchronizationWork_;
+    }
+#endif
 
     std::size_t ActiveObservationCount() const
     {
@@ -621,6 +697,9 @@ private:
     std::size_t totalABStructuresCreated_ = 0;
     std::size_t abCapacityEvictions_ = 0;
     std::size_t abAgeExpirations_ = 0;
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+    SynchronizationWork synchronizationWork_;
+#endif
 
     using ABKey = std::tuple<std::size_t, std::size_t, int,
                              std::int64_t, std::int64_t>;

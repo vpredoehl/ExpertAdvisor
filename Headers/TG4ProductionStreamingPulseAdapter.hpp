@@ -101,6 +101,14 @@ public:
         return configuration_;
     }
 
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+    const TG3::SynchronizationWork& OutcomeSynchronizationWorkForTesting()
+        const noexcept
+    {
+        return integration_.Tracker().OutcomeSynchronizationWork();
+    }
+#endif
+
 private:
     std::string symbol_;
     ProductionTG1TG3Pulse::Configuration configuration_;
