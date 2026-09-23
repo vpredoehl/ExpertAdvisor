@@ -528,6 +528,13 @@ void TestDeterministicBoundsAndLongStreamPerformance()
            configuration.maxActiveBreakObservations);
     const auto firstSummary = first.AggregateSummary();
     const auto secondSummary = second.AggregateSummary();
+    assert(first.Observations().size() ==
+           configuration.maxRetainedBreakObservations);
+    assert(first.Observations().back().breakEvent.eventSequence ==
+           firstSummary.breakEvents);
+    for (std::size_t index = 1; index < first.Observations().size(); ++index)
+        assert(first.Observations()[index - 1].breakEvent.eventSequence <
+               first.Observations()[index].breakEvent.eventSequence);
     assert(firstSummary.breakEvents == (barCount - 1) / 2 + 1);
     assert(firstSummary.breakEvents == secondSummary.breakEvents);
     assert(firstSummary.innerBreaks == secondSummary.innerBreaks);

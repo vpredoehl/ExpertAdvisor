@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <deque>
 #include <iomanip>
 #include <limits>
 #include <optional>
@@ -356,17 +357,11 @@ public:
         ClassifyConfluence(observation);
         observations_.push_back(std::move(observation));
         lastBreakEventSequence_ = event.eventSequence;
-        std::sort(observations_.begin(), observations_.end(),
-            [](const ConfluenceObservation& left,
-               const ConfluenceObservation& right)
-            {
-                return left.breakEventSequence < right.breakEventSequence;
-            });
         return event.eventSequence;
     }
 
     void SynchronizeOutcomes(
-        const std::vector<TG2::BreakObservation>& behaviorObservations,
+        const std::deque<TG2::BreakObservation>& behaviorObservations,
         std::size_t currentBar,
         std::int64_t currentTimestamp)
     {
@@ -399,10 +394,10 @@ public:
             ++pendingThisCall;
 #endif
 
-            // TG2 assigns strictly increasing event sequences and retains the
-            // vector in that order; capacity eviction only removes entries.
+            // TG2 assigns strictly increasing event sequences and retains
+            // observations in that order; capacity eviction only removes entries.
             // Binary search therefore avoids a P*B rescan without retaining
-            // any pointer/reference across a possible TG2 vector mutation.
+            // any pointer/reference across a possible TG2 container mutation.
             auto first = behaviorObservations.begin();
             const auto end = behaviorObservations.end();
             auto last = end;
@@ -458,7 +453,7 @@ public:
         return abStructures_;
     }
 
-    const std::vector<ConfluenceObservation>& Observations() const
+    const std::deque<ConfluenceObservation>& Observations() const
     {
         return observations_;
     }
@@ -689,7 +684,7 @@ private:
     std::vector<TG1A::ConfirmedFractal> highFractals_;
     std::vector<TG1A::ConfirmedFractal> lowFractals_;
     std::vector<ABStructure> abStructures_;
-    std::vector<ConfluenceObservation> observations_;
+    std::deque<ConfluenceObservation> observations_;
     Summary archivedSummary_;
     std::optional<std::size_t> lastBar_;
     std::optional<std::int64_t> lastTimestamp_;
@@ -994,7 +989,19 @@ private:
         }
         while (observations_.size() >=
                configuration_.maxRetainedConfluenceObservations)
-            ArchiveAndErase(0, bar, timestamp);
+        {
+            ConfluenceObservation& observation = observations_.front();
+            CensorPending(observation.retest, bar, timestamp,
+                          observation.innerBreakBar);
+            CensorPending(observation.outerTarget, bar, timestamp,
+                          observation.innerBreakBar);
+            CensorPending(observation.outerTargetAfterRetest,
+                          bar, timestamp,
+                          observation.innerBreakBar);
+            Accumulate(archivedSummary_, observation);
+            ++archivedSummary_.capacityEvictedObservations;
+            observations_.pop_front();
+        }
     }
 
     static void AddOutcome(TG2::OutcomeCounts& counts,
@@ -1366,7 +1373,7 @@ public:
         return tracker_.ABStructures();
     }
 
-    const std::vector<ConfluenceObservation>& Observations() const
+    const std::deque<ConfluenceObservation>& Observations() const
     {
         return tracker_.Observations();
     }

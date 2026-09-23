@@ -544,7 +544,8 @@ void TestFutureOutcomeCannotRewriteConfluence()
     Resolve(event.retest, ResolutionState::Succeeded, 9);
     Resolve(event.outerTarget, ResolutionState::Failed, 9);
     Resolve(event.outerTargetAfterRetest, ResolutionState::Failed, 9);
-    tracker.SynchronizeOutcomes({event}, 9, Timestamp(9));
+    tracker.SynchronizeOutcomes(
+        std::deque<BreakObservation>{event}, 9, Timestamp(9));
     assert(ImmutableSnapshot(tracker.Observations()[0]) == fixed);
     assert(tracker.Observations()[0].outerTarget.state ==
            ResolutionState::Failed);
@@ -581,8 +582,9 @@ auto ABSnapshot(const std::vector<ABStructure>& structures)
     return result;
 }
 
+template <typename ObservationContainer>
 auto ConfluenceSnapshot(
-    const std::vector<ConfluenceObservation>& observations)
+    const ObservationContainer& observations)
 {
     std::vector<decltype(ImmutableSnapshot(observations.front()))> result;
     for (const ConfluenceObservation& observation : observations)
@@ -682,6 +684,11 @@ void TestDeterministicBoundsAndLongStreamPerformance()
            ABSnapshot(second.ABStructures()));
     const auto firstSummary = first.AggregateSummary();
     const auto secondSummary = second.AggregateSummary();
+    assert(first.Observations().back().breakEventSequence ==
+           firstSummary.innerBreakObservations);
+    for (std::size_t index = 1; index < first.Observations().size(); ++index)
+        assert(first.Observations()[index - 1].breakEventSequence <
+               first.Observations()[index].breakEventSequence);
     assert(firstSummary.innerBreakObservations == barCount - 7);
     assert(firstSummary.innerBreakObservations ==
            secondSummary.innerBreakObservations);

@@ -179,8 +179,9 @@ void AssertOutcomeEqual(const EA::TG2::OutcomeResolution& actual,
     assert(actual.censorReason == expected.censorReason);
 }
 
+template <typename ActualContainer>
 void AssertOutcomeSnapshotsEqual(
-    const std::vector<ConfluenceObservation>& actual,
+    const ActualContainer& actual,
     const std::vector<ConfluenceObservation>& expected)
 {
     assert(actual.size() == expected.size());
@@ -214,9 +215,10 @@ void ReferenceCensor(EA::TG2::OutcomeResolution& outcome,
 
 // Reference the pre-optimization full rescan exactly. It is test-local so
 // production keeps only the incremental implementation.
+template <typename BehaviorObservationContainer>
 std::size_t ReferenceSynchronizeFullRescan(
     std::vector<ConfluenceObservation>& observations,
-    const std::vector<BreakObservation>& behaviorObservations,
+    const BehaviorObservationContainer& behaviorObservations,
     std::size_t currentBar, std::int64_t currentTimestamp)
 {
     std::size_t comparisons = 0;
@@ -254,7 +256,7 @@ std::size_t ReferenceSynchronizeFullRescan(
 void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
 {
     EA::TG3::FibonacciConfluenceTracker tracker(FibonacciConfiguration());
-    std::vector<BreakObservation> behavior;
+    std::deque<BreakObservation> behavior;
 
     tracker.Advance(1, Timestamp(1));
     BreakObservation first = InnerBreak(1, 1);
@@ -266,7 +268,8 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
     behavior.front().retest.resolutionBar = 2;
     behavior.front().retest.resolutionTimestamp = Timestamp(2);
     behavior.front().retest.latencyBars = 1;
-    std::vector<ConfluenceObservation> expected = tracker.Observations();
+    std::vector<ConfluenceObservation> expected(
+        tracker.Observations().begin(), tracker.Observations().end());
     assert(ReferenceSynchronizeFullRescan(expected, behavior, 2, Timestamp(2)) == 1);
     tracker.SynchronizeOutcomes(behavior, 2, Timestamp(2));
     AssertOutcomeSnapshotsEqual(tracker.Observations(), expected);
@@ -274,7 +277,8 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
     // Once terminal, a removed TG2 record cannot alter the immutable snapshot.
     tracker.Advance(3, Timestamp(3));
     behavior.clear();
-    expected = tracker.Observations();
+    expected.assign(tracker.Observations().begin(),
+                    tracker.Observations().end());
     assert(ReferenceSynchronizeFullRescan(expected, behavior, 3, Timestamp(3)) == 0);
     tracker.SynchronizeOutcomes(behavior, 3, Timestamp(3));
     AssertOutcomeSnapshotsEqual(tracker.Observations(), expected);
@@ -283,7 +287,8 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
     tracker.Advance(4, Timestamp(4));
     const BreakObservation pending = InnerBreak(2, 4);
     assert(tracker.ObserveInnerBreak(pending).has_value());
-    expected = tracker.Observations();
+    expected.assign(tracker.Observations().begin(),
+                    tracker.Observations().end());
     assert(ReferenceSynchronizeFullRescan(expected, behavior, 4, Timestamp(4)) == 0);
     tracker.SynchronizeOutcomes(behavior, 4, Timestamp(4));
     AssertOutcomeSnapshotsEqual(tracker.Observations(), expected);
@@ -307,8 +312,7 @@ void TestOutcomeSynchronizationDoesNotRescanTerminalHistory()
     configuration.maxActiveConfluenceObservations = observationCount;
     configuration.maxRetainedConfluenceObservations = observationCount;
     EA::TG3::FibonacciConfluenceTracker tracker(configuration);
-    std::vector<BreakObservation> behavior;
-    behavior.reserve(observationCount);
+    std::deque<BreakObservation> behavior;
 
     for (std::size_t index = 0; index < observationCount; ++index)
     {
@@ -349,8 +353,7 @@ void TestOutcomeSynchronizationUsesLogarithmicPendingLookup()
     configuration.maxActiveConfluenceObservations = observationCount;
     configuration.maxRetainedConfluenceObservations = observationCount;
     EA::TG3::FibonacciConfluenceTracker tracker(configuration);
-    std::vector<BreakObservation> behavior;
-    behavior.reserve(observationCount);
+    std::deque<BreakObservation> behavior;
 
     for (std::size_t index = 0; index < observationCount; ++index)
     {

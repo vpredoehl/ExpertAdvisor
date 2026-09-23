@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <deque>
 #include <iomanip>
 #include <limits>
 #include <optional>
@@ -240,7 +241,7 @@ public:
                           bar, timestamp);
     }
 
-    const std::vector<BreakObservation>& Observations() const
+    const std::deque<BreakObservation>& Observations() const
     {
         return observations_;
     }
@@ -383,7 +384,7 @@ private:
     Configuration configuration_;
     TG1A::SeriesIdentity identity_;
     std::vector<CandidateState> candidateStates_;
-    std::vector<BreakObservation> observations_;
+    std::deque<BreakObservation> observations_;
     Summary archivedSummary_;
     std::uint64_t nextEventSequence_ = 1;
     std::optional<std::size_t> lastBar_;
@@ -856,8 +857,13 @@ private:
         }
         while (observations_.size() >=
                configuration_.maxRetainedBreakObservations)
-            ArchiveAndErase(0, CensorReason::CapacityEviction,
-                            bar, timestamp);
+        {
+            CensorPending(observations_.front(),
+                          CensorReason::CapacityEviction,
+                          bar, timestamp);
+            Accumulate(archivedSummary_, observations_.front());
+            observations_.pop_front();
+        }
     }
 
     static void AddOutcome(OutcomeCounts& counts,
@@ -1069,7 +1075,7 @@ public:
 
     void Finalize() { tracker_.Finalize(); }
 
-    const std::vector<BreakObservation>& Observations() const
+    const std::deque<BreakObservation>& Observations() const
     {
         return tracker_.Observations();
     }
