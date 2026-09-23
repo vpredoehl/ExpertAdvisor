@@ -14,7 +14,7 @@ trap 'rm -rf -- "${test_dir}"' EXIT
 # CLI/workflow wiring checks protect the opt-in boundary: ordinary resume uses
 # the unchanged three-argument loadAll call behavior, while only the explicit
 # mode selects parameter expansion and the scheduler persists/forwards it.
-grep -q 'arg == "--resume-expand-input-width"' "${repo_root}/LSTM/main.cpp"
+grep -q 'arg == "--resume-expand-input-width"' "${repo_root}/Sources/LaunchArguments.cpp"
 grep -q 'resumeConfig->parameterExpansionRequired' "${repo_root}/LSTM/main.cpp"
 grep -q 'AddCliFlag(argv, "--resume-expand-input-width")' \
     "${repo_root}/Sources/SchedulerCore/ProductionSchedulerDaemon.cpp"
