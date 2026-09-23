@@ -105,8 +105,10 @@ for migration in "${MIGRATION_DIR}"/*.sql; do
 
     # Any transaction-control statement left after outer-wrapper
     # normalization could escape the runner-owned transaction.  Track
-    # dollar-quoted function/procedure bodies and fail closed on remaining
-    # top-level transaction control rather than risking a partial commit.
+    # top-level lexical state and fail closed on remaining transaction control
+    # rather than risking a partial commit.  A bare END; is ambiguous: it is
+    # transaction control at statement level, but closes a SQL CASE expression
+    # while a CASE is open.
     if ! awk '
         function transaction_control(line, value) {
             value = line
@@ -116,26 +118,116 @@ for migration in "${MIGRATION_DIR}"/*.sql; do
             value = toupper(value)
             return value ~ /^BEGIN([[:space:]].*)?;$/ ||
                    value ~ /^START[[:space:]]+TRANSACTION([[:space:]].*)?;$/ ||
-                   value ~ /^(COMMIT|END)([[:space:]]+(WORK|TRANSACTION))?([[:space:]]+AND[[:space:]]+(NO[[:space:]]+)?CHAIN)?[[:space:]]*;$/ ||
+                   value ~ /^COMMIT([[:space:]]+(WORK|TRANSACTION))?([[:space:]]+AND[[:space:]]+(NO[[:space:]]+)?CHAIN)?[[:space:]]*;$/ ||
+                   value ~ /^END[[:space:]]+(WORK|TRANSACTION)([[:space:]]+AND[[:space:]]+(NO[[:space:]]+)?CHAIN)?[[:space:]]*;$/ ||
+                   value ~ /^END[[:space:]]+AND[[:space:]]+(NO[[:space:]]+)?CHAIN[[:space:]]*;$/ ||
+                   (case_depth == 0 && value ~ /^END[[:space:]]*;$/) ||
                    value ~ /^(COMMIT|ROLLBACK)[[:space:]]+PREPARED([[:space:]].*)?;$/ ||
                    value ~ /^(ROLLBACK|ABORT)([[:space:]].*)?;$/ ||
                    value ~ /^PREPARE[[:space:]]+TRANSACTION([[:space:]].*)?;$/
         }
+
+        # Count CASE/END tokens outside literals and comments.  This is not a
+        # SQL parser; it only resolves the one otherwise ambiguous whole-line
+        # statement, END;.  Other transaction-control spellings are never
+        # accepted merely because a CASE is open.
+        function update_case_depth(line, i, line_length, word, remainder) {
+            line_length = length(line)
+            for (i = 1; i <= line_length;) {
+                if (dollar_quote != "") {
+                    if (substr(line, i, length(dollar_quote)) == dollar_quote) {
+                        i += length(dollar_quote)
+                        dollar_quote = ""
+                    } else {
+                        ++i
+                    }
+                    continue
+                }
+                if (block_comment_depth > 0) {
+                    if (substr(line, i, 2) == "/*") {
+                        ++block_comment_depth
+                        i += 2
+                    } else if (substr(line, i, 2) == "*/") {
+                        --block_comment_depth
+                        i += 2
+                    } else {
+                        ++i
+                    }
+                    continue
+                }
+                if (single_quote) {
+                    if (substr(line, i, 1) == "\\") {
+                        i += 2
+                    } else if (substr(line, i, 1) == "\047") {
+                        if (substr(line, i + 1, 1) == "\047") {
+                            i += 2
+                        } else {
+                            single_quote = 0
+                            ++i
+                        }
+                    } else {
+                        ++i
+                    }
+                    continue
+                }
+                if (double_quote) {
+                    if (substr(line, i, 1) == "\042") {
+                        if (substr(line, i + 1, 1) == "\042") {
+                            i += 2
+                        } else {
+                            double_quote = 0
+                            ++i
+                        }
+                    } else {
+                        ++i
+                    }
+                    continue
+                }
+
+                if (substr(line, i, 2) == "--") {
+                    return
+                }
+                if (substr(line, i, 2) == "/*") {
+                    ++block_comment_depth
+                    i += 2
+                    continue
+                }
+                if (substr(line, i, 1) == "\047") {
+                    single_quote = 1
+                    ++i
+                    continue
+                }
+                if (substr(line, i, 1) == "\042") {
+                    double_quote = 1
+                    ++i
+                    continue
+                }
+
+                remainder = substr(line, i)
+                if (match(remainder, /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)) {
+                    dollar_quote = substr(remainder, 1, RLENGTH)
+                    i += RLENGTH
+                    continue
+                }
+                if (match(remainder, /^[A-Za-z_][A-Za-z0-9_$]*/)) {
+                    word = toupper(substr(remainder, 1, RLENGTH))
+                    if (word == "CASE") {
+                        ++case_depth
+                    } else if (word == "END" && case_depth > 0) {
+                        --case_depth
+                    }
+                    i += RLENGTH
+                    continue
+                }
+                ++i
+            }
+        }
         {
-            if (dollar_quote == "" && transaction_control($0)) {
+            if (dollar_quote == "" && !single_quote &&
+                block_comment_depth == 0 && transaction_control($0)) {
                 exit 1
             }
-
-            remainder = $0
-            while (match(remainder, /\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$/)) {
-                delimiter = substr(remainder, RSTART, RLENGTH)
-                if (dollar_quote == "") {
-                    dollar_quote = delimiter
-                } else if (delimiter == dollar_quote) {
-                    dollar_quote = ""
-                }
-                remainder = substr(remainder, RSTART + RLENGTH)
-            }
+            update_case_depth($0)
         }
     ' "${tmp_body}"; then
         echo "MIGRATION_ERROR,version=${version},filename=${filename},reason=unsupported_transaction_control" >&2

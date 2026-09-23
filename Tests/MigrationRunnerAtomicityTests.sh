@@ -151,6 +151,43 @@ grep -Fq 'reason=unsupported_transaction_control' \
 [[ "$(table_exists "${transaction_control_db}" migration_runner_unsupported_transaction_effect)" == f ]]
 [[ "$(ledger_count "${transaction_control_db}" 050)" == 0 ]]
 
+# A bare END; remains transaction control at statement level and therefore
+# must be rejected rather than escaping the runner-owned transaction.
+new_database transaction_end_control
+transaction_end_control_db="${database_created}"
+transaction_end_control_runner="$(make_runner transaction_end_control \
+    "${fixture_root}/transaction_control/051_unmatched_end.sql")"
+if run_runner "${transaction_end_control_db}" "${transaction_end_control_runner}" \
+    > "${tmp_root}/transaction-end-control.log" 2>&1; then
+    echo "unsupported END transaction control unexpectedly succeeded" >&2
+    exit 1
+fi
+grep -Fq 'reason=unsupported_transaction_control' \
+    "${tmp_root}/transaction-end-control.log"
+[[ "$(table_exists "${transaction_end_control_db}" migration_runner_unsupported_end_effect)" == f ]]
+[[ "$(ledger_count "${transaction_end_control_db}" 051)" == 0 ]]
+
+# A CASE-closing END; is ordinary SQL, not transaction control.  The exact
+# migration 093 path below exercises the same multiline form with real schema.
+new_database case_expression
+case_expression_db="${database_created}"
+case_expression_runner="$(make_runner case_expression \
+    "${fixture_root}/case_expression/060_multiline_case.sql")"
+run_runner "${case_expression_db}" "${case_expression_runner}" \
+    > "${tmp_root}/case-expression.log"
+[[ "$(psql_database "${case_expression_db}" -Atc \
+    "SELECT result FROM migration_runner_case_expression WHERE value = true;")" == operator ]]
+[[ "$(ledger_count "${case_expression_db}" 060)" == 1 ]]
+
+# Historical BEGIN/END whole-file wrappers remain normalized before execution.
+new_database internal_end
+internal_end_db="${database_created}"
+internal_end_runner="$(make_runner internal_end \
+    "${fixture_root}/internal/031_internal_end_transaction.sql")"
+run_runner "${internal_end_db}" "${internal_end_runner}" > "${tmp_root}/internal-end.log"
+[[ "$(table_exists "${internal_end_db}" migration_runner_internal_end_effect)" == t ]]
+[[ "$(ledger_count "${internal_end_db}" 031)" == 1 ]]
+
 # G: filename ordering remains deterministic.
 new_database order
 order_db="${database_created}"
@@ -183,6 +220,35 @@ checksum_087="$(shasum -a 256 \
 [[ "$(psql_database "${real_db}" -Atc \
     "SELECT attnotnull AND pg_get_expr(adbin, adrelid) = '''normal''::text' FROM pg_attribute JOIN pg_attrdef ON adrelid=attrelid AND adnum=attnum WHERE attrelid='experiment'::regclass AND attname='scheduler_priority';")" == t ]]
 [[ "$(table_exists "${real_db}" experiment_campaign_materialization_control_operation)" == t ]]
+
+# The checked-in 093 bytes apply after its deterministic 086 predecessor.
+# Its multiline CASE expression must not be mistaken for transaction END, and
+# the original bytes must still determine the migration ledger checksum.
+new_database real093
+real_093_db="${database_created}"
+psql_database "${real_093_db}" -f "${fixture_root}/086_087_predecessor.sql"
+real_093_086_runner="$(make_runner real093base \
+    "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql")"
+run_runner "${real_093_db}" "${real_093_086_runner}" > "${tmp_root}/real-093-086.log"
+psql_database "${real_093_db}" <<'SQL'
+INSERT INTO experiment (
+    experiment_id,
+    status,
+    phase,
+    resume_requested
+) VALUES (93001, 'pending', 'train', true);
+SQL
+real_093_runner="$(make_runner real093 \
+    "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql")"
+run_runner "${real_093_db}" "${real_093_runner}" > "${tmp_root}/real-093.log"
+checksum_093="$(shasum -a 256 \
+    "${repo_root}/Database/migrations/093_scheduler_priority_preemption.sql" | awk '{print $1}')"
+[[ "$(psql_database "${real_093_db}" -Atc \
+    "SELECT checksum FROM schema_migrations WHERE version='093';")" == "${checksum_093}" ]]
+[[ "$(psql_database "${real_093_db}" -Atc \
+    "SELECT scheduler_resume_origin FROM experiment WHERE experiment_id=93001;")" == operator ]]
+[[ "$(psql_database "${real_093_db}" -Atc \
+    "SELECT attnotnull FROM pg_attribute WHERE attrelid='experiment'::regclass AND attname='scheduler_resume_origin';")" == t ]]
 
 # Force the exact 086 ledger insert to fail and prove its schema changes do
 # not escape. Then force the exact 087 ledger insert to fail after a separately
@@ -232,4 +298,4 @@ fi
 [[ "$(ledger_count "${real_087_failure_db}" 086)" == 1 ]]
 [[ "$(ledger_count "${real_087_failure_db}" 087)" == 0 ]]
 
-echo "MIGRATION_RUNNER_ATOMICITY_TESTS_PASS success=PASS rollback=PASS internal_wrapper=PASS ledger_failure=PASS transaction_control=FAIL_CLOSED replay=PASS checksum_mismatch=FAIL_CLOSED order=003,010,020 migration086=PASS migration087=PASS"
+echo "MIGRATION_RUNNER_ATOMICITY_TESTS_PASS success=PASS rollback=PASS internal_wrapper=PASS internal_end_wrapper=PASS ledger_failure=PASS transaction_control=FAIL_CLOSED transaction_end=FAIL_CLOSED case_expression=PASS replay=PASS checksum_mismatch=FAIL_CLOSED order=003,010,020 migration086=PASS migration087=PASS migration093=PASS"
