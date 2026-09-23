@@ -141,6 +141,11 @@ CREATE TABLE experiment (
     binary_name text
 );
 
+-- Keep this hand-built disposable fixture aligned with the current
+-- experiment provenance contract. Migration 094 owns the additive column and
+-- is idempotent, so apply it only to this isolated test database.
+\i '${repo_root}/Database/migrations/094_fresh_initialization_seed.sql'
+
 CREATE TABLE model (
     model_id bigint PRIMARY KEY,
     experiment_id bigint REFERENCES experiment(experiment_id),

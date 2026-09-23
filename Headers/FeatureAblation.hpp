@@ -23,7 +23,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 21> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 24> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -49,6 +49,10 @@ inline constexpr std::array<AblatableFeature, 21> kAblatableFeatures{{
     {"causal_first_release_surprise_available",
      causalFirstReleaseSurpriseAvailableCol},
     {"causal_first_release_surprise", causalFirstReleaseSurpriseCol},
+    {"tg4_inner_break_any", tg4InnerBreakAnyCol},
+    {"tg4_source_tg3_structurally_eligible",
+     tg4SourceTg3StructurallyEligibleCol},
+    {"tg4_source_tg3_confluent", tg4SourceTg3ConfluentCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -71,6 +75,13 @@ inline constexpr std::string_view
     kCausalEconomicEventSurpriseAblationMaskText =
         "causal_first_release_surprise_available,"
         "causal_first_release_surprise";
+
+// The TG4 control arm uses the three individually persisted feature names.
+// This is intentionally not a parser alias: canonical experiment provenance
+// always records the concrete channels that were ablated.
+inline constexpr std::string_view kTG4AblationMaskText =
+    "tg4_inner_break_any,tg4_source_tg3_structurally_eligible,"
+    "tg4_source_tg3_confluent";
 
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.

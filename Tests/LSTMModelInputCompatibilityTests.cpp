@@ -314,6 +314,79 @@ int main()
          i < causal_economic_event_surprise_feature_size; ++i)
         assert(layout7Input[i] == physicalTensor[i]);
 
+    // TG4 masks use the same persisted parse/canonical/reconstruction path as
+    // experiment feature_ablation_mask values. Their concrete names are
+    // canonicalized in physical tensor-column order, not input text order.
+    const auto tg4PersistedMask = EA::FeatureAblationMask::Parse(
+        "tg4_source_tg3_confluent,tg4_inner_break_any,"
+        "tg4_source_tg3_structurally_eligible");
+    assert(tg4PersistedMask.CanonicalText() == EA::kTG4AblationMaskText);
+    const auto tg4ReconstructedMask = EA::FeatureAblationMask::Parse(
+        tg4PersistedMask.CanonicalText());
+    assert(tg4ReconstructedMask.CanonicalText() == EA::kTG4AblationMaskText);
+    assert((tg4ReconstructedMask.tensorColumns() ==
+            std::vector<std::size_t>{tg4InnerBreakAnyCol,
+                                     tg4SourceTg3StructurallyEligibleCol,
+                                     tg4SourceTg3ConfluentCol}));
+
+    // An empty TG4 mask is the treatment arm: all three physical values pass
+    // through unchanged at Layout 8, including the return suffix.
+    for (std::size_t col = 0; col < EA::kCurrentModelInputWidth; ++col)
+        assert(economicEventInput[col] ==
+               (col < feature_size ? physicalTensor[col] : -1.0f));
+
+    // Each named TG4 mask clears exactly one channel. In particular, masking
+    // the middle hierarchy bit deliberately leaves the confluent bit intact;
+    // experimental masking must not rewrite the causal hierarchy.
+    for (const std::string& featureName : {
+             std::string{"tg4_inner_break_any"},
+             std::string{"tg4_source_tg3_structurally_eligible"},
+             std::string{"tg4_source_tg3_confluent"}})
+    {
+        const auto tg4Mask = EA::FeatureAblationMask::Parse(featureName);
+        assert(tg4Mask.CanonicalText() == featureName);
+        assert(tg4Mask.tensorColumns().size() == 1);
+        const std::size_t maskedColumn = tg4Mask.tensorColumns().front();
+        std::vector<float> tg4Control(EA::kCurrentModelInputWidth, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(
+            tg4Control.data(), physicalTensor.data(), economicEvents, tg4Mask);
+        for (std::size_t col = 0; col < EA::kCurrentModelInputWidth; ++col)
+            assert(tg4Control[col] ==
+                   (col == maskedColumn ? 0.0f : economicEventInput[col]));
+    }
+
+    // The all-three control arm preserves the Layout-8 width, prefix, and
+    // return suffix while zeroing exactly the TG4 channels.
+    std::vector<float> tg4Control(EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        tg4Control.data(), physicalTensor.data(), economicEvents,
+        tg4ReconstructedMask);
+    for (std::size_t col = 0; col < tg4InnerBreakAnyCol; ++col)
+        assert(tg4Control[col] == economicEventInput[col]);
+    for (std::size_t col = tg4InnerBreakAnyCol;
+         col <= tg4SourceTg3ConfluentCol; ++col)
+        assert(tg4Control[col] == 0.0f);
+    for (std::size_t col = feature_size;
+         col < EA::kCurrentModelInputWidth; ++col)
+        assert(tg4Control[col] == economicEventInput[col]);
+
+    // Layout 7's columns 73..76 are its historical return suffix. A TG4
+    // mask therefore rejects before it can alias a historical return feature.
+    bool tg4MaskRejectedByLayout7 = false;
+    const auto layout7BeforeRejectedMask = layout7Input;
+    try
+    {
+        EA::CopyTensorFeaturesForModelInput(
+            layout7Input.data(), physicalTensor.data(), layout7,
+            tg4ReconstructedMask);
+    }
+    catch (const std::runtime_error&)
+    {
+        tg4MaskRejectedByLayout7 = true;
+    }
+    assert(tg4MaskRejectedByLayout7);
+    assert(layout7Input == layout7BeforeRejectedMask);
+
     const auto consensusEvents = EA::ResolveModelInputContract(
         EA::kEconomicEventConsensusModelInputWidth, physicalTensor.size());
     assert(consensusEvents.tensorFeatureCount ==
