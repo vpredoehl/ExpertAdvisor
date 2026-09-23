@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -239,6 +240,7 @@ public:
         for (BreakObservation& observation : observations_)
             CensorPending(observation, CensorReason::EndOfInput,
                           bar, timestamp);
+        activeObservationCount_ = 0;
     }
 
     const std::deque<BreakObservation>& Observations() const
@@ -252,8 +254,7 @@ public:
 
     std::size_t ActiveObservationCount() const
     {
-        return static_cast<std::size_t>(std::count_if(
-            observations_.begin(), observations_.end(), IsActive));
+        return activeObservationCount_;
     }
 
     Summary AggregateSummary() const
@@ -385,6 +386,7 @@ private:
     TG1A::SeriesIdentity identity_;
     std::vector<CandidateState> candidateStates_;
     std::deque<BreakObservation> observations_;
+    std::size_t activeObservationCount_ = 0;
     Summary archivedSummary_;
     std::uint64_t nextEventSequence_ = 1;
     std::optional<std::size_t> lastBar_;
@@ -616,6 +618,8 @@ private:
                 ResolutionState::StructurallyIneligible;
         }
         observations_.push_back(observation);
+        if (IsActive(observations_.back()))
+            ++activeObservationCount_;
         update.newBreakEvents.push_back(std::move(event));
     }
 
@@ -717,6 +721,7 @@ private:
     {
         for (BreakObservation& observation : observations_)
         {
+            const bool wasActive = IsActive(observation);
             const std::size_t breakBar = observation.breakEvent.bar;
             if (bar <= breakBar) continue;
             const std::size_t retestDeadline =
@@ -798,6 +803,11 @@ private:
                                    candle.timestamp, breakBar);
                 }
             }
+            if (wasActive && !IsActive(observation))
+            {
+                assert(activeObservationCount_ != 0);
+                --activeObservationCount_;
+            }
         }
     }
 
@@ -837,8 +847,17 @@ private:
                          std::size_t bar,
                          std::int64_t timestamp)
     {
+        const bool wasActive = IsActive(observations_[index]);
+
         CensorPending(observations_[index], reason, bar, timestamp);
         Accumulate(archivedSummary_, observations_[index]);
+
+        if (wasActive)
+        {
+            assert(activeObservationCount_ != 0);
+            --activeObservationCount_;
+        }
+
         observations_.erase(observations_.begin() +
                             static_cast<std::ptrdiff_t>(index));
     }
@@ -858,10 +877,19 @@ private:
         while (observations_.size() >=
                configuration_.maxRetainedBreakObservations)
         {
+            const bool wasActive = IsActive(observations_.front());
+
             CensorPending(observations_.front(),
                           CensorReason::CapacityEviction,
                           bar, timestamp);
             Accumulate(archivedSummary_, observations_.front());
+
+            if (wasActive)
+            {
+                assert(activeObservationCount_ != 0);
+                --activeObservationCount_;
+            }
+
             observations_.pop_front();
         }
     }

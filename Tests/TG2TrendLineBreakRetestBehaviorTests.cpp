@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -24,6 +25,20 @@ using EA::TG2::CensorReason;
 using EA::TG2::Configuration;
 using EA::TG2::ResolutionState;
 using EA::TG2::TrendLineBehaviorTracker;
+
+std::size_t IndependentlyCountActive(
+    const std::deque<BreakObservation>& observations)
+{
+    return static_cast<std::size_t>(std::count_if(
+        observations.begin(), observations.end(),
+        [](const BreakObservation& observation)
+        {
+            return observation.retest.state == ResolutionState::Pending ||
+                observation.outerTarget.state == ResolutionState::Pending ||
+                observation.outerTargetAfterRetest.state ==
+                    ResolutionState::Pending;
+        }));
+}
 
 constexpr std::int64_t kStart = 1'700'000'000;
 constexpr std::int64_t kHour = 3'600;
@@ -519,7 +534,18 @@ void TestDeterministicBoundsAndLongStreamPerformance()
             : Bar(index, 10.2, 10.5, 9.8, 10.2);
         first.ObserveCompletedBar(index, candle, candidate);
         second.ObserveCompletedBar(index, candle, candidate);
+        if (index % 257 == 0)
+        {
+            assert(first.ActiveObservationCount() ==
+                   IndependentlyCountActive(first.Observations()));
+            assert(second.ActiveObservationCount() ==
+                   IndependentlyCountActive(second.Observations()));
+        }
     }
+    assert(first.ActiveObservationCount() ==
+           IndependentlyCountActive(first.Observations()));
+    assert(second.ActiveObservationCount() ==
+           IndependentlyCountActive(second.Observations()));
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
     assert(first.Observations().size() <=
@@ -541,6 +567,10 @@ void TestDeterministicBoundsAndLongStreamPerformance()
     assert(firstSummary.allEligibleInnerToOuter.structurallyIneligible ==
            firstSummary.innerBreaks);
     assert(elapsed.count() < 10'000);
+    TrendLineBehaviorTracker finalized = first;
+    finalized.Finalize();
+    assert(finalized.ActiveObservationCount() == 0);
+    assert(IndependentlyCountActive(finalized.Observations()) == 0);
     std::cout << "TG2_BOUNDED_STREAM bars=" << barCount
               << ",milliseconds=" << elapsed.count()
               << ",retained=" << first.Observations().size()
