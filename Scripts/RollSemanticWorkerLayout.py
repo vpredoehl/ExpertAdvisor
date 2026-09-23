@@ -235,18 +235,11 @@ def rollover(
         publisher.validate_existing_registry(artifact_root, registry)
         publisher.atomic_write_json(registry_path, registry)
 
-        # Registry authority precedes this convenience link.  It intentionally
-        # continues to name the current infer-worker directory, as the old
-        # inference-only publisher does.
-        current_link = artifact_root / "current"
-        temporary_link = artifact_root / f".current.{os.getpid()}.tmp"
-        temporary_link.unlink(missing_ok=True)
-        try:
-            os.symlink(inference_relative, temporary_link)
-            os.replace(temporary_link, current_link)
-            publisher.fsync_directory(artifact_root)
-        finally:
-            temporary_link.unlink(missing_ok=True)
+        # Registry authority precedes this convenience link. It intentionally
+        # continues to name the current infer-worker directory. A failure is
+        # explicitly committed-but-link-update-failed, never a rollback.
+        publisher.update_current_link_after_registry_commit(
+            artifact_root, inference_relative)
     return staged_training, staged_inference
 
 

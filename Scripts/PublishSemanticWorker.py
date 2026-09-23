@@ -34,6 +34,10 @@ class PublishError(RuntimeError):
     pass
 
 
+class RegistryCommittedLinkUpdateError(PublishError):
+    """The registry is authoritative, but its convenience link was not updated."""
+
+
 def git_output(repository_root: Path, *arguments: str) -> str:
     result = subprocess.run(
         ["/usr/bin/git", "-C", str(repository_root), *arguments],
@@ -125,6 +129,32 @@ def atomic_write_json(path: Path, value: object) -> None:
         fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def update_current_link_after_registry_commit(
+    artifact_root: Path, relative_directory: Path
+) -> None:
+    """Update a non-authoritative link after the registry has committed.
+
+    This must be called only after ``atomic_write_json``. A failure cannot
+    roll back the registry, so callers receive a distinct diagnostic instead
+    of an ambiguous publication failure.
+    """
+    current_link = artifact_root / "current"
+    temporary_link = artifact_root / f".current.{os.getpid()}.tmp"
+    try:
+        temporary_link.unlink(missing_ok=True)
+        os.symlink(relative_directory, temporary_link)
+        os.replace(temporary_link, current_link)
+        fsync_directory(artifact_root)
+    except OSError as error:
+        try:
+            temporary_link.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RegistryCommittedLinkUpdateError(
+            "semantic worker registry committed but current convenience link update failed"
+        ) from error
 
 
 def json_text(value: object) -> str:
@@ -712,12 +742,7 @@ def publish(
         atomic_write_json(registry_path, registry)
 
         if worker_rule == "current":
-            current_link = artifact_root / "current"
-            temporary_link = artifact_root / f".current.{os.getpid()}.tmp"
-            temporary_link.unlink(missing_ok=True)
-            os.symlink(relative_directory, temporary_link)
-            os.replace(temporary_link, current_link)
-            fsync_directory(artifact_root)
+            update_current_link_after_registry_commit(artifact_root, relative_directory)
     return final_directory / "lstm-infer-worker"
 
 

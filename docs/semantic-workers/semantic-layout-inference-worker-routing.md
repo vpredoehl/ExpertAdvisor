@@ -174,3 +174,33 @@ The scheduler must still be restarted or explicitly reloaded through a separate
 approved operational procedure to observe a newly published registry. Existing
 schedulers retain their startup snapshot; publication neither starts nor
 restarts them.
+
+### Same-layout generation refresh
+
+For a code-only replacement that retains the current semantic layout and model
+input width, use the separate paired operation below. It is not a rollover and
+cannot advance the layout:
+
+```bash
+/usr/bin/python3 Scripts/RefreshSemanticWorkerGeneration.py \
+  --repository-root /absolute/path/to/ExpertAdvisor \
+  --training-executable /absolute/path/to/LSTM_Release \
+  --inference-executable /absolute/path/to/lstm-infer-worker \
+  --source-commit <approved-40-hex-commit>
+```
+
+It derives the layout and width from the clean checked-out source, requires
+them to equal the registry's current layout, and requires exactly the current
+`train` and `infer` bindings for that layout. Both candidates must prove the
+same clean commit, including the training executable provenance and infer
+worker build identity/SHA; their runtime resources must match. It stages both
+immutable artifacts, validates the complete prospective registry, then makes
+one registry replacement that replaces only those two current bindings. All
+historical bindings and prior immutable artifacts remain untouched. As with a
+rollover, the `current` infer-worker convenience symlink changes only after the
+registry publication succeeds.
+
+If that non-authoritative symlink update or its directory fsync fails after
+the registry replacement, the command reports `semantic worker registry
+committed but current convenience link update failed`; the committed registry
+remains authoritative and must not be treated as rolled back.
