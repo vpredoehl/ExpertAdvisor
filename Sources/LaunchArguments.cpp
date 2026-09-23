@@ -231,6 +231,13 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     "--resume-expand-input-width specified more than once");
             parsed.resumeExpandInputWidth = true;
         }
+        else if (std::string seedValue;
+                 SplitOptionWithValue(arg, "--fresh-initialization-seed", seedValue))
+        {
+            if (parsed.freshInitializationSeed)
+                throw std::invalid_argument("--fresh-initialization-seed specified more than once");
+            parsed.freshInitializationSeed = ParseFreshInitializationSeedArg(seedValue);
+        }
         else if (arg == "--fresh-initialization-seed")
         {
             if (parsed.freshInitializationSeed)
@@ -839,7 +846,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             "--phase19b-path-artifact-dir requires --phase19c-causal-path-predictability");
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 19C extraction: --infer --model=<model_id> --phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--fresh-initialization-seed=<positive_uint32>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred Phase 19C extraction: --infer --model=<model_id> --phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
