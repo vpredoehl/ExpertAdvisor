@@ -320,6 +320,36 @@ int main()
                publishedTraining.canonicalExecutablePath);
     }
 
+    if (const char* rolloverRegistry =
+            std::getenv("EA_SEMANTIC_REGISTRY_ROLLOVER_UNDER_TEST"))
+    {
+        const auto published = EA::Scheduler::SemanticWorkerRegistry::Load({
+            rolloverRegistry, std::nullopt, 8, 80});
+        const auto infer6 = published.selectInferenceWorker({{77}, {6}, true});
+        const auto train7 =
+            published.selectTrainingReferenceWorker({{77}, {7}, true});
+        const auto infer7 = published.selectInferenceWorker({{77}, {7}, true});
+        const auto train8 =
+            published.selectTrainingReferenceWorker({{80}, {8}, true});
+        const auto infer8 = published.selectInferenceWorker({{80}, {8}, true});
+        assert(infer6.selected && infer6.reason ==
+               "immutable_historical_semantic_worker");
+        assert(train7.selected && train7.reason ==
+               "immutable_historical_semantic_worker");
+        assert(infer7.selected && infer7.reason ==
+               "immutable_historical_semantic_worker");
+        assert(train8.selected && train8.reason ==
+               "current_published_semantic_worker");
+        assert(infer8.selected && infer8.reason ==
+               "current_published_semantic_worker");
+        assert(train7.canonicalExecutablePath != train8.canonicalExecutablePath);
+        assert(infer7.canonicalExecutablePath != infer8.canonicalExecutablePath);
+        assert(!published.selectInferenceWorker({{80}, {7}, true}).selected);
+        assert(!published.selectInferenceWorker({{77}, {8}, true}).selected);
+        assert(!published.selectTrainingReferenceWorker({{80}, {7}, true}).selected);
+        assert(!published.selectTrainingReferenceWorker({{77}, {8}, true}).selected);
+    }
+
     assert(valid.load(valid.executable6.string()).find(6) != nullptr);
     assert(Contains(Failure([&] {
         (void)valid.load(valid.executable7.string());

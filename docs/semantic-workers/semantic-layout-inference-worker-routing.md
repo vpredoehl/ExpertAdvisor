@@ -19,12 +19,24 @@ The three executable identities are deliberately separate:
   inference both resolve the model's exact semantic layout through the same
   registry and persist that canonical immutable path before launch.
 
-Every registered executable is stored at:
+Role-aware inference executables are stored at:
 
 ```text
 Builds/SemanticWorkers/layout<N>/<role>/<git-commit>/<sha256>/<executable>
 Builds/SemanticWorkers/layout<N>/<role>/<git-commit>/<sha256>/manifest.json
 ```
+
+The established training/reference `LSTM_Release` identity uses its preserved
+legacy manifest-v1 path, without a role path component:
+
+```text
+Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/LSTM_Release
+Builds/SemanticWorkers/layout<N>/<git-commit>/<sha256>/manifest.json
+```
+
+The registry's explicit `worker_role: train` binding—not directory discovery
+or the executable filename—makes that immutable artifact the training/reference
+identity. This retains compatibility with the layout-6/layout-7 archives.
 
 The executable directory also contains deterministic `default.metallib` and
 `MetaNN.metallib` symbolic links. They resolve to a shared, content-addressed
@@ -59,10 +71,11 @@ artifact/manifest or republishing from a successful clean Release build, never
 editing a registered artifact in place. The `current` symlink is only an
 operator convenience; `registry.json` remains authoritative.
 
-Current layout 7 has two explicit bindings: `train` points at the preserved
-immutable `LSTM_Release` training/reference artifact and `infer` points at the
-immutable `lstm-infer-worker`. Historical v2/v3 layout-only entries remain
-readable: their established capability binding is interpreted as the legacy
+Before a supported current-layout rollover, current layout 7 has two explicit
+bindings: `train` points at the preserved immutable `LSTM_Release`
+training/reference artifact and `infer` points at the immutable
+`lstm-infer-worker`. Historical v2/v3 layout-only entries remain readable:
+their established capability binding is interpreted as the legacy
 `LSTM_Release` artifact and is never inferred from its filename. Layout 6 is the
 accepted inference-only artifact from commit
 `7645265bca0c2529523e1d2cdb37e7d023dfd559`, SHA-256
@@ -86,7 +99,7 @@ operationally validated.
 
 ## Publishing and rollover
 
-`Publish LSTM Canonical` is now reserved for ordinary `LSTM_Release`
+`Publish LSTM Canonical` is reserved for ordinary `LSTM_Release`
 publication.  With `PUBLISH_CANONICAL_LSTM_RELEASE=YES`, it runs only after its
 normal Release dependency succeeds and calls
 `Scripts/PublishCanonicalLSTMRelease.py`; it never calls the semantic-worker
@@ -117,3 +130,47 @@ registry failure is merely unreachable and safe. Already-running attempts keep
 their persisted immutable executable path across current-worker publication.
 Retention is indefinite/manual and reachability-based; the publisher performs
 no deletion.
+
+### Current semantic layout rollover
+
+`PublishSemanticWorker.py` remains intentionally infer-only. It can replace an
+inference artifact for the already-current layout, but it rejects an attempt to
+advance `current_layout`. In particular, its existing error
+`inference publication cannot change current layout without a
+training/reference binding` remains a hard boundary.
+
+The only supported operation for advancing the current semantic layout is the
+separate coordinated command:
+
+```bash
+/usr/bin/python3 Scripts/RollSemanticWorkerLayout.py \
+  --repository-root /absolute/path/to/ExpertAdvisor \
+  --training-executable /absolute/path/to/LSTM_Release \
+  --inference-executable /absolute/path/to/lstm-infer-worker
+```
+
+It accepts neither a caller-defined layout/width nor caller-defined
+capabilities. It derives layout and width from the checked-out source contract,
+requires a clean exact `HEAD`, verifies that exact commit is embedded in both
+binaries, verifies the standalone infer-worker build-identity contract, and
+requires identical Metal runtime resources from the two Release products. The
+training/reference candidate must be named `LSTM_Release` and is bound with
+`[train,infer,analyze]`; the infer candidate must be named
+`lstm-infer-worker` and is bound with `[infer]` only.
+
+Under the shared publisher lock the command validates the entire prior v4
+registry; verifies that it has exactly the old current `train` and `infer`
+bindings; rejects any already-registered target layout; stages both immutable
+artifacts and their verified runtime links; changes both prior-current bindings
+to `historical`; adds both new-current bindings; validates that complete
+prospective registry; and atomically replaces `registry.json` once. Thus no
+successful registry state can have a new current layout with only one role.
+Failures before that replacement retain the old registry byte-for-byte; safely
+staged new artifacts may remain unreachable. The `current` convenience symlink
+is updated only after the registry replacement and is never scheduler
+authority.
+
+The scheduler must still be restarted or explicitly reloaded through a separate
+approved operational procedure to observe a newly published registry. Existing
+schedulers retain their startup snapshot; publication neither starts nor
+restarts them.
