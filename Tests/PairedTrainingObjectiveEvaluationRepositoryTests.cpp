@@ -332,7 +332,7 @@ int main()
         databaseName,
         std::regex{"^ea_phase4d_loader_[A-Za-z0-9_]+$"}));
     const std::string connectionString =
-        "host=" + RequiredEnvironment("EA_PHASE4D_VERIFY_DB_HOST") +
+        "host='" + RequiredEnvironment("EA_PHASE4D_VERIFY_DB_HOST") + "'" +
         " port=" + RequiredEnvironment("EA_PHASE4D_VERIFY_DB_PORT") +
         " user=" + RequiredEnvironment("EA_PHASE4D_VERIFY_DB_USER") +
         " dbname=" + databaseName;
@@ -371,6 +371,30 @@ int main()
     assert(control.inferenceExecution &&
            control.inferenceExecution->workerAttemptId == controlIds.experiment * 10 + 2);
     assert(treatment.finalModelId == treatmentIds.model);
+
+    // A historical artifact with a NULL persisted producer link is a precise
+    // missing-linkage failure.  It is never inferred from the otherwise
+    // plausible worker-attempt history.
+    transaction.exec(
+        "UPDATE model SET producer_worker_attempt_id=NULL WHERE model_id=$1;",
+        pqxx::params{treatmentIds.model});
+    assert(LoadFailsWith(transaction, treatmentIds.experiment,
+                         "train_producer_worker_attempt_id_missing"));
+    transaction.exec(
+        "UPDATE model SET producer_worker_attempt_id=$1 WHERE model_id=$2;",
+        pqxx::params{treatmentIds.experiment * 10 + 1,
+                     treatmentIds.model});
+    transaction.exec(
+        "UPDATE inference_eval_result SET producer_worker_attempt_id=NULL "
+        "WHERE id=$1;",
+        pqxx::params{treatmentIds.inference});
+    assert(LoadFailsWith(transaction, treatmentIds.experiment,
+                         "infer_producer_worker_attempt_id_missing"));
+    transaction.exec(
+        "UPDATE inference_eval_result SET producer_worker_attempt_id=$1 "
+        "WHERE id=$2;",
+        pqxx::params{treatmentIds.experiment * 10 + 2,
+                     treatmentIds.inference});
     assert(control.materializedModelObjectives.size() == 1);
     assert(treatment.materializedModelObjectives.size() == 1);
     assert(control.materializedModelObjectives[0].isFinalModel);

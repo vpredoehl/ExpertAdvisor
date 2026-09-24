@@ -131,6 +131,13 @@ struct SchedulerOptions
     std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
     std::optional<std::pair<long long, long long>> compareTrainingObjectivePair;
     std::optional<std::pair<long long, long long>> compareFeatureAblationPair;
+    std::optional<std::pair<long long, long long>> compareExperimentPair;
+    bool compareExperimentPairSummary = false;
+    std::optional<std::vector<std::pair<long long, long long>>>
+        compareExperimentReplications;
+    std::optional<std::pair<long long, long long>>
+        planExperimentReplications;
+    std::optional<std::vector<unsigned int>> replicationSeeds;
     std::optional<std::string> expectedFeatureAblationMask;
     std::optional<std::vector<std::pair<long long, long long>>>
         compareFeatureAblationReplications;

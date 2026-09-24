@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/ea_phase4d_verify.XXXXXX")"
 cluster_dir="${work_dir}/pgdata"
-socket_dir="${work_dir}/socket"
+socket_dir="${EA_PHASE4D_VERIFY_SOCKET_DIR:-${work_dir}/socket}"
 binary="${work_dir}/PairedTrainingObjectiveEvaluationRepositoryTests"
 database_name="ea_phase4d_loader_${$}_${RANDOM}"
 database_created=false
@@ -40,6 +40,9 @@ cleanup() {
         server_started=false
     fi
     printf 'DISPOSABLE_DATABASE_DROPPED=%s\n' "${database_dropped}"
+    if [[ "${socket_dir}" != "${work_dir}/socket" ]]; then
+        rmdir "${socket_dir}" 2>/dev/null || true
+    fi
     rm -rf "${work_dir}"
     exit "${status}"
 }
@@ -53,6 +56,11 @@ for command_name in initdb pg_ctl createdb dropdb psql; do
     fi
 done
 
+if [[ -e "${socket_dir}" ]]; then
+    printf 'Rejected pre-existing disposable socket directory: %s\n' \
+        "${socket_dir}" >&2
+    exit 1
+fi
 mkdir -p "${socket_dir}"
 verify_database_name
 "${postgres_bin}/initdb" -D "${cluster_dir}" --username=pqxx \
@@ -60,7 +68,7 @@ verify_database_name
 
 verify_database_name
 "${postgres_bin}/pg_ctl" -D "${cluster_dir}" \
-    -o "-F -k ${socket_dir} -p ${port} -h ''" -w start >/dev/null
+    -o "-F -k '${socket_dir}' -p ${port} -h ''" -w start >/dev/null
 server_started=true
 
 verify_database_name

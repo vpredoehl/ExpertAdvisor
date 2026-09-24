@@ -102,6 +102,9 @@
 #include "PairedTrainingObjectiveEvaluationService.hpp"
 #include "FeatureAblationPairEvaluationService.hpp"
 #include "FeatureAblationPairEvaluationRepository.hpp"
+#include "ExperimentPairComparisonService.hpp"
+#include "ExperimentReplicationComparisonService.hpp"
+#include "ExperimentReplicationPlanningService.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
 #include "CorrectedCausalSurpriseReplicationContinuationService.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
@@ -482,6 +485,15 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--expected-ablation-mask=", 0) == 0 ||
             arg == "--compare-feature-ablation-replications" ||
             arg.rfind("--compare-feature-ablation-replications=", 0) == 0)
+            return true;
+        if (arg == "--compare-experiment-pair" ||
+            arg.rfind("--compare-experiment-pair=", 0) == 0 ||
+            arg == "--compare-experiment-replications" ||
+            arg.rfind("--compare-experiment-replications=", 0) == 0 ||
+            arg == "--plan-experiment-replications" ||
+            arg.rfind("--plan-experiment-replications=", 0) == 0 ||
+            arg == "--replication-seeds" ||
+            arg.rfind("--replication-seeds=", 0) == 0)
             return true;
         if (arg == "--corrected-causal-surprise-replication-status" ||
             arg.rfind(
@@ -1528,6 +1540,34 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareFeatureAblationPair =
                 EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(
                     RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-experiment-pair")
+            options.compareExperimentPair =
+                EA::ExperimentPairComparison::ParseExperimentIdPair(
+                    RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-experiment-replications")
+            options.compareExperimentReplications =
+                EA::ExperimentReplicationComparison::ParseExperimentIdPairs(
+                    RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--plan-experiment-replications")
+        {
+            if (options.planExperimentReplications)
+                throw std::invalid_argument(
+                    "--plan-experiment-replications specified more than once");
+            options.planExperimentReplications =
+                EA::ExperimentPairComparison::ParseExperimentIdPair(
+                    RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--replication-seeds")
+        {
+            if (options.replicationSeeds)
+                throw std::invalid_argument(
+                    "--replication-seeds specified more than once");
+            options.replicationSeeds =
+                EA::ExperimentReplicationPlanning::ParseReplicationSeeds(
+                    RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--summary")
+            options.compareExperimentPairSummary = true;
         else if (arg == "--expected-ablation-mask")
             options.expectedFeatureAblationMask =
                 EA::FeatureAblationMask::Parse(
@@ -3347,6 +3387,32 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareFeatureAblationPair =
                 EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(value);
         else if (SplitOptionWithValue(
+                     arg, "--compare-experiment-pair", value))
+            options.compareExperimentPair =
+                EA::ExperimentPairComparison::ParseExperimentIdPair(value);
+        else if (SplitOptionWithValue(
+                     arg, "--compare-experiment-replications", value))
+            options.compareExperimentReplications =
+                EA::ExperimentReplicationComparison::ParseExperimentIdPairs(
+                    value);
+        else if (SplitOptionWithValue(
+                     arg, "--plan-experiment-replications", value))
+        {
+            if (options.planExperimentReplications)
+                throw std::invalid_argument(
+                    "--plan-experiment-replications specified more than once");
+            options.planExperimentReplications =
+                EA::ExperimentPairComparison::ParseExperimentIdPair(value);
+        }
+        else if (SplitOptionWithValue(arg, "--replication-seeds", value))
+        {
+            if (options.replicationSeeds)
+                throw std::invalid_argument(
+                    "--replication-seeds specified more than once");
+            options.replicationSeeds =
+                EA::ExperimentReplicationPlanning::ParseReplicationSeeds(value);
+        }
+        else if (SplitOptionWithValue(
                      arg, "--expected-ablation-mask", value))
             options.expectedFeatureAblationMask =
                 EA::FeatureAblationMask::Parse(value).CanonicalText();
@@ -3700,6 +3766,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareRecommendationRankingMembers.has_value() ? 1 : 0) +
         (options.compareTrainingObjectivePair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationPair.has_value() ? 1 : 0) +
+        (options.compareExperimentPair.has_value() ? 1 : 0) +
+        (options.compareExperimentReplications.has_value() ? 1 : 0) +
+        (options.planExperimentReplications.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
         (options.correctedCausalSurpriseReplicationStatus.has_value()
              ? 1 : 0) +
@@ -3822,6 +3891,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "pair materiality options require "
             "--compare-training-objective-pair");
+    if (options.compareExperimentPairSummary &&
+        !options.compareExperimentPair)
+        throw std::invalid_argument(
+            "--summary requires --compare-experiment-pair");
+    if (options.planExperimentReplications.has_value() !=
+        options.replicationSeeds.has_value())
+        throw std::invalid_argument(
+            "--plan-experiment-replications and --replication-seeds "
+            "must be specified together");
     if (options.expectedFeatureAblationMask &&
         !options.compareFeatureAblationPair &&
         !options.compareFeatureAblationReplications)
@@ -12849,6 +12927,37 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "coverage gaps and remains pending until the window is complete. "
         << "The command is repeatable-read and read-only.\n"
         << "Usage: " << exe
+        << " --compare-experiment-pair=EXPERIMENT_A_ID:EXPERIMENT_B_ID "
+           "[--summary]\n"
+        << "Generic experiment-pair comparison preserves argument order as "
+        << "arm A and arm B, loads exact persisted FINAL evidence in one "
+        << "repeatable-read transaction, and renders B-minus-A deltas without "
+        << "a winner or database writes. A control-versus-feature-ablation "
+        << "mask difference is recognized only when exactly one mask is empty. "
+        << "Exit 0 includes complete, incomplete, and scientifically "
+        << "incompatible reports; exit 3 is missing or invalid evidence; exit "
+        << "2 is a database/tool error.\n"
+        << "Usage: " << exe
+        << " --compare-experiment-replications=A_ID:B_ID,C_ID:D_ID\n"
+        << "Generic multi-pair replication comparison preserves pair and arm "
+        << "argument order, requires globally unique experiment IDs, and "
+        << "loads every pair in one repeatable-read transaction. It reports "
+        << "exact B-minus-A pair deltas and unweighted descriptive aggregates "
+        << "only after replication compatibility is established. Seed may "
+        << "differ across pairs but must match within each pair. Missing "
+        << "evidence remains NULL; no winner, ranking, recommendation, or "
+        << "database write is produced.\n"
+        << "Usage: " << exe
+        << " --plan-experiment-replications=SOURCE_A_ID:SOURCE_B_ID "
+           "--replication-seeds=SEED[,SEED...]\n"
+        << "Plans an ordered, read-only replication wave by copying the exact "
+        << "authoritative source-arm scientific identities and changing only "
+        << "fresh_initialization_seed. Seeds are strict positive uint32 values, "
+        << "must be unique, and retain argument order. Reusing the source seed "
+        << "is allowed and explicitly classified as same_seed_repeated_pairs. "
+        << "Equivalent experiments are reported without selecting or mutating "
+        << "them. Statistical independence is never inferred.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:ABLATION_ID "
         << "--expected-ablation-mask=FEATURE[,FEATURE...]\n"
         << "Feature-ablation pair comparison canonicalizes the requested mask, "
@@ -14272,6 +14381,31 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
                     << ",error=" << error.what() << std::endl;
                 return 2;
             }
+        }
+        if (options.compareExperimentPair)
+        {
+            EA::ExperimentPairComparison::ComparisonCommand command;
+            command.experimentIds = *options.compareExperimentPair;
+            command.summary = options.compareExperimentPairSummary;
+            return EA::ExperimentPairComparison::RunComparisonCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.compareExperimentReplications)
+        {
+            EA::ExperimentReplicationComparison::ComparisonCommand command;
+            command.experimentPairs =
+                *options.compareExperimentReplications;
+            return EA::ExperimentReplicationComparison::RunComparisonCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.planExperimentReplications)
+        {
+            EA::ExperimentReplicationPlanning::PlanningCommand command;
+            command.sourceExperimentIds =
+                *options.planExperimentReplications;
+            command.requestedSeeds = *options.replicationSeeds;
+            return EA::ExperimentReplicationPlanning::RunPlanningCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.compareFeatureAblationPair)
         {

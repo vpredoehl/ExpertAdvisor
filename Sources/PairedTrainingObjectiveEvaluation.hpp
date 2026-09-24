@@ -185,6 +185,10 @@ struct ProfitabilityEvidence
     std::string inferenceEnd;
     std::uint64_t predictionCount = 0;
     std::uint64_t actionableCount = 0;
+    std::optional<std::uint64_t> winningActionableCount;
+    std::optional<std::uint64_t> losingActionableCount;
+    std::optional<double> grossPositiveTerminalHorizonLogReturnSum;
+    std::optional<double> grossNegativeTerminalHorizonLogReturnSum;
     double aggregateTerminalHorizonLogReturnSum = 0.0;
     std::optional<double>
         averageTerminalHorizonLogReturnPerActionablePrediction;

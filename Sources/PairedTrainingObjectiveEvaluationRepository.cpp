@@ -92,9 +92,12 @@ void RequireSuccessfulTerminalExecution(const pqxx::result& rows,
                                         long long experimentId,
                                         std::string_view phase)
 {
-    if (rows.size() != 1)
+    if (rows.empty())
         ContractFailure(experimentId, std::string(phase) +
-                        "_producer_worker_attempt_missing_or_ambiguous");
+                        "_producer_worker_attempt_invalid");
+    if (rows.size() > 1)
+        ContractFailure(experimentId, std::string(phase) +
+                        "_producer_worker_attempt_ambiguous");
     if (!SuccessfulTerminalAttempt(rows.one_row(), phase))
         ContractFailure(experimentId, std::string(phase) +
                         "_producer_worker_attempt_not_successfully_terminal");
@@ -105,6 +108,15 @@ void LoadAuthoritativeExecutionProvenance(pqxx::transaction_base& transaction,
 {
     const long long experimentId = arm.configuration.experimentId;
     const long long modelId = *arm.finalModelId;
+    const pqxx::result modelProducer = transaction.exec(
+        "SELECT producer_worker_attempt_id FROM model "
+        "WHERE model_id=$2 AND experiment_id=$1;",
+        pqxx::params{experimentId, modelId});
+    if (modelProducer.size() != 1)
+        ContractFailure(experimentId, "final_model_identity_invalid");
+    if (modelProducer.one_row()["producer_worker_attempt_id"].is_null())
+        ContractFailure(experimentId,
+                        "train_producer_worker_attempt_id_missing");
     const pqxx::result training = transaction.exec(
         "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
         "FROM model m JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=m.producer_worker_attempt_id "
@@ -123,6 +135,16 @@ void LoadAuthoritativeExecutionProvenance(pqxx::transaction_base& transaction,
         transaction, experimentId, modelId);
     if (exact.inferenceEvalResultId)
     {
+        const pqxx::result inferenceProducer = transaction.exec(
+            "SELECT producer_worker_attempt_id FROM inference_eval_result "
+            "WHERE id=$2 AND model_id=$1;",
+            pqxx::params{modelId, *exact.inferenceEvalResultId});
+        if (inferenceProducer.size() != 1)
+            ContractFailure(experimentId,
+                            "final_inference_identity_invalid");
+        if (inferenceProducer.one_row()["producer_worker_attempt_id"].is_null())
+            ContractFailure(experimentId,
+                            "infer_producer_worker_attempt_id_missing");
         const pqxx::result inference = transaction.exec(
             "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
             "FROM inference_eval_result r JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=r.producer_worker_attempt_id "
@@ -617,6 +639,14 @@ void LoadFinalClassificationAndProfitability(
     evidence.inferenceEnd = observation.provenance.inferenceEnd;
     evidence.predictionCount = observation.statistics.predictionCount;
     evidence.actionableCount = observation.statistics.actionableCount;
+    evidence.winningActionableCount =
+        observation.statistics.winningActionableCount;
+    evidence.losingActionableCount =
+        observation.statistics.losingActionableCount;
+    evidence.grossPositiveTerminalHorizonLogReturnSum =
+        observation.statistics.grossPositiveTerminalHorizonLogReturnSum;
+    evidence.grossNegativeTerminalHorizonLogReturnSum =
+        observation.statistics.grossNegativeTerminalHorizonLogReturnSum;
     evidence.aggregateTerminalHorizonLogReturnSum =
         observation.statistics.aggregateTerminalHorizonLogReturnSum;
     evidence.averageTerminalHorizonLogReturnPerActionablePrediction =
