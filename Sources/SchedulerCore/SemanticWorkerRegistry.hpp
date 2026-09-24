@@ -97,6 +97,11 @@ public:
     const SemanticWorkerArtifact* find(int semanticLayoutVersion) const noexcept;
     const SemanticWorkerArtifact* find(
         int semanticLayoutVersion, SemanticWorkerRole role) const noexcept;
+    // Exact lookup of an already validated registry artifact.  Callers that
+    // persist launch evidence must use this, rather than reverse engineering
+    // identity from a deployment path.
+    const SemanticWorkerArtifact* findByCanonicalExecutable(
+        const std::string& canonicalExecutablePath) const noexcept;
     SemanticWorkerRuntimeValidation validateRuntimeForExecutable(
         const std::string& canonicalExecutablePath) const;
     SemanticWorkerSelection selectInferenceWorker(

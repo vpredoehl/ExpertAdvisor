@@ -124,6 +124,44 @@ int main()
     assert(ExactFinalInferenceResultStatusText(
                exactFinalInference.status) == "available");
 
+    // Threshold identity uses the established 1e-7 tolerance rather than
+    // exact float8 equality. This reproduces the representation difference
+    // observed in production final-inference artifacts.
+    transaction.exec(
+        "UPDATE matrix SET value=0.0007999999797903001 "
+        "WHERE model_id=10 AND param_name='train_config_meta' "
+        "AND row_idx=0 AND col_idx=2;"
+        "UPDATE experiment SET c_next_threshold=0.0008 "
+        "WHERE experiment_id=1;"
+        "UPDATE inference_eval_result SET threshold_logret=0.00079999998 "
+        "WHERE id=100;");
+    const auto tolerantThresholdFinalInference =
+        ResolveExactFinalInferenceResult(transaction, 1, 10);
+    assert(tolerantThresholdFinalInference.status ==
+           ExactFinalInferenceResultStatus::available);
+    assert(tolerantThresholdFinalInference.inferenceEvalResultId == 100);
+
+    // A threshold difference strictly greater than 1e-7 remains a distinct
+    // inference identity and must not resolve.
+    transaction.exec(
+        "UPDATE inference_eval_result SET threshold_logret=0.0009000001 "
+        "WHERE id=100;");
+    const auto outsideThresholdTolerance =
+        ResolveExactFinalInferenceResult(transaction, 1, 10);
+    assert(outsideThresholdTolerance.status ==
+           ExactFinalInferenceResultStatus::noExactFinalInferenceResult);
+    assert(!outsideThresholdTolerance.inferenceEvalResultId.has_value());
+
+    // Restore the fixture for the remaining repository tests.
+    transaction.exec(
+        "UPDATE matrix SET value=0.001 "
+        "WHERE model_id=10 AND param_name='train_config_meta' "
+        "AND row_idx=0 AND col_idx=2;"
+        "UPDATE experiment SET c_next_threshold=0.001 "
+        "WHERE experiment_id=1;"
+        "UPDATE inference_eval_result SET threshold_logret=0.001 "
+        "WHERE id=100;");
+
     ObservationRequest legacyFinalRequest = finalRequest;
     legacyFinalRequest.provenance.experimentId.reset();
     legacyFinalRequest.provenance.modelId = 11;

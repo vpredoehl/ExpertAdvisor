@@ -150,6 +150,22 @@ public:
         return r[0][0].as<long long>();
     }
 
+    static void bindProducerWorkerAttempt(
+        pqxx::work& w, long long modelId,
+        const std::optional<long long>& workerAttemptId)
+    {
+        if (!workerAttemptId) return;
+        const pqxx::result updated = w.exec_params(
+            "UPDATE model m SET producer_worker_attempt_id=$1 WHERE m.model_id=$2 "
+            "AND EXISTS (SELECT 1 FROM experiment_scheduler_worker_attempt a "
+            "WHERE a.worker_attempt_id=$1 AND a.experiment_id=m.experiment_id "
+            "AND a.worker_kind='experiment' AND a.lifecycle_phase='train' "
+            "AND a.capacity_class='train') RETURNING m.model_id;",
+            *workerAttemptId, modelId);
+        if (updated.size() != 1)
+            throw std::runtime_error("model_producer_worker_attempt_binding_rejected");
+    }
+
     template <typename T>
     static void saveParameter(pqxx::work& w,
                               long long modelId,

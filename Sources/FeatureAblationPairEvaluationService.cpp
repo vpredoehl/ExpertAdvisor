@@ -31,6 +31,12 @@ std::string MachineText(std::string value)
     return value.empty() ? "EMPTY" : value;
 }
 
+std::string OptionalBoolean(const std::optional<bool>& value)
+{
+    if (!value) return "NULL";
+    return *value ? "true" : "false";
+}
+
 template <typename Value>
 std::string OptionalNumber(const std::optional<Value>& value)
 {
@@ -114,6 +120,29 @@ void PrintArm(std::ostringstream& output,
             : (shared.finalModelId
                    ? std::optional<int>{configuration.modelInputLayoutVersion}
                    : std::nullopt);
+    const auto printExecution = [&](std::string_view phase,
+                                    const std::optional<SharedEvidence::ScientificExecutionProvenance>& value) {
+        output << "FEATURE_ABLATION_PAIR_EXECUTION_PROVENANCE"
+               << ",role=" << role << ",phase=" << phase
+               << ",worker_attempt_id=" << (value ? std::to_string(value->workerAttemptId) : "NULL")
+               << ",semantic_layout_version=" << (value ? std::to_string(value->semanticLayoutVersion) : "NULL")
+               << ",source_commit=" << (value ? value->sourceCommit : "NULL")
+               << ",executable_sha256=" << (value ? value->executableSha256 : "NULL")
+               << ",executable_name=" << (value ? value->executableName : "NULL")
+               << ",runtime_identity=" << (value ? value->runtimeIdentity : "NULL")
+               << ",model_input_width=" << (value ? std::to_string(value->modelInputWidth) : "NULL") << '\n';
+    };
+    output << "FEATURE_ABLATION_PAIR_CREATION_PROVENANCE"
+           << ",role=" << role << ",git_commit=" << MachineText(configuration.runProvenance.gitCommit)
+           << ",git_branch=" << MachineText(configuration.runProvenance.gitBranch)
+           << ",git_dirty=" << OptionalBoolean(configuration.runProvenance.gitDirty)
+           << ",build_config=" << MachineText(configuration.runProvenance.buildConfiguration)
+           << ",compiler_version=" << MachineText(configuration.runProvenance.compilerVersion)
+           << ",schema_version=" << MachineText(configuration.runProvenance.schemaVersion)
+           << ",scheduler_version=" << MachineText(configuration.runProvenance.schedulerVersion)
+           << ",binary_name=" << MachineText(configuration.runProvenance.binaryName) << '\n';
+    printExecution("train", shared.trainingExecution);
+    printExecution("infer", shared.inferenceExecution);
     output << "FEATURE_ABLATION_PAIR_ARM"
            << ",role=" << role
            << ",experiment_id=" << configuration.experimentId
@@ -305,6 +334,9 @@ std::string RenderComparisonOutput(const ArmEvidence& control,
            << ",ablation_identity_hash="
            << (result.ablationIdentityHash.empty()
                    ? "NULL" : result.ablationIdentityHash) << '\n';
+    output << "FEATURE_ABLATION_PAIR_SCIENTIFIC_COMPATIBILITY"
+           << ",controlling_identity=train_execution_and_final_inference_execution"
+           << ",creation_provenance_audit_only=true\n";
     PrintArm(output, "control", control);
     PrintArm(output, "ablation", ablation);
     PrintMetric(output, "prediction_count", result.predictionCount);

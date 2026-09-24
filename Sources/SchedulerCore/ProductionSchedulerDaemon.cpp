@@ -2912,11 +2912,26 @@ ReserveExperimentWorkerAttempt(
         return std::nullopt;
     }
 
+    const auto& registry = SemanticWorkerRegistryFor(options);
+    const auto* artifact = phase == "analyze" ? nullptr :
+        registry.findByCanonicalExecutable(selectedWorkerExecutable);
+    if (phase != "analyze" && artifact == nullptr)
+        throw std::runtime_error("selected_semantic_worker_not_in_registry");
+    if ((phase == "train" && artifact->role != EA::Scheduler::SemanticWorkerRole::Train) ||
+        (phase == "infer" && artifact->role != EA::Scheduler::SemanticWorkerRole::Infer))
+        throw std::runtime_error("selected_semantic_worker_role_phase_mismatch");
     EA::SchedulerCore::WorkerAttemptLifecycleService lifecycle{
         services.repository,
         {options.schedulerAuthority.schedulerInvocationId,
          options.schedulerAuthority.fencingToken,
-         selectedWorkerExecutable}};
+         selectedWorkerExecutable,
+         artifact ? artifact->semanticLayoutVersion : 0,
+         artifact ? artifact->modelInputWidth : 0,
+         artifact ? (artifact->role == EA::Scheduler::SemanticWorkerRole::Train ? "train" : "infer") : "",
+         artifact ? artifact->sourceCommit : "",
+         artifact ? artifact->sha256 : "",
+         artifact ? artifact->runtimeIdentity : "",
+         artifact ? artifact->canonicalManifestPath : ""}};
     auto attempt = lifecycle.reserveExperiment({
         experiment.experimentId,
         phase,
@@ -2982,11 +2997,22 @@ ReserveCheckpointWorkerAttempt(
         return std::nullopt;
     }
 
+    const auto& registry = SemanticWorkerRegistryFor(options);
+    const auto* artifact = registry.findByCanonicalExecutable(
+        selection.canonicalExecutablePath);
+    if (artifact == nullptr)
+        throw std::runtime_error("selected_semantic_worker_not_in_registry");
+    if (artifact->role != EA::Scheduler::SemanticWorkerRole::Infer)
+        throw std::runtime_error("selected_semantic_worker_role_phase_mismatch");
     EA::SchedulerCore::WorkerAttemptLifecycleService lifecycle{
         services.repository,
         {options.schedulerAuthority.schedulerInvocationId,
          options.schedulerAuthority.fencingToken,
-         selection.canonicalExecutablePath}};
+         selection.canonicalExecutablePath,
+         artifact->semanticLayoutVersion, artifact->modelInputWidth,
+         artifact->role == EA::Scheduler::SemanticWorkerRole::Train ? "train" : "infer",
+         artifact->sourceCommit, artifact->sha256, artifact->runtimeIdentity,
+         artifact->canonicalManifestPath}};
     auto attempt = lifecycle.reserveCheckpoint({
         eval.experiment.experimentId,
         eval.checkpointEvalId,

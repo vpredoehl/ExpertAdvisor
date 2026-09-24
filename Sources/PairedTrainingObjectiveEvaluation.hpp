@@ -43,6 +43,25 @@ struct RunProvenance
     bool operator==(const RunProvenance&) const = default;
 };
 
+// Normal durable evidence names its immutable producing worker through
+// producer_worker_attempt_id. Timestamp containment is limited to historical
+// backfill. This is distinct from RunProvenance: the latter records experiment
+// creation and orchestration context, not the producing executable.
+struct ScientificExecutionProvenance
+{
+    long long workerAttemptId = 0;
+    std::string phase;
+    int semanticLayoutVersion = 0;
+    int modelInputWidth = 0;
+    std::string workerRole;
+    std::string sourceCommit;
+    std::string executableSha256;
+    std::string executableName;
+    std::string runtimeIdentity;
+    std::string canonicalManifestPath;
+    bool operator==(const ScientificExecutionProvenance&) const = default;
+};
+
 // Exact persisted scientific identity. Canonical strings are used for
 // contracts that already have a versioned representation in model metadata.
 // No floating-point tolerance is applied between paired arms.
@@ -186,6 +205,8 @@ struct ArmEvidence
     std::optional<RuntimeObjectiveEvidence> runtimeObjective;
     std::optional<ClassificationEvidence> classification;
     std::optional<ProfitabilityEvidence> profitability;
+    std::optional<ScientificExecutionProvenance> trainingExecution;
+    std::optional<ScientificExecutionProvenance> inferenceExecution;
 };
 
 struct ClassificationDegradationPolicy

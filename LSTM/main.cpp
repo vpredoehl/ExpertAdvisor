@@ -77,6 +77,7 @@
 #include "EconomicEventImportService.hpp"
 #include "EconomicEventConsensusImport.hpp"
 #include "EconomicEventRepository.hpp"
+#include "../Sources/ScientificExecutionProvenanceBackfillService.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -5590,6 +5591,8 @@ int main(int argc, const char * argv[])
     if (EA::EconomicCalendar::IsEconomicEventConsensusImportCommand(argc, argv))
         return EA::EconomicCalendar::RunEconomicEventConsensusImportCli(
             argc, argv);
+    if (EA::ScientificExecutionProvenanceBackfill::IsCommand(argc, argv))
+        return EA::ScientificExecutionProvenanceBackfill::RunCli(argc, argv);
     if (EA::SchedulerCore::IsSchedulerDaemonCommand(argc, argv))
         return EA::SchedulerCore::RunSchedulerDaemonCli(argc, argv);
     if (EA::ExperimentScheduler::IsExperimentSchedulerCommand(argc, argv))
@@ -5685,7 +5688,8 @@ int main(int argc, const char * argv[])
                   << "Preferred Phase 19 state analysis: " << argv[0] << " --infer --model=<model_id> --probability-stop-extension-state-analysis=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred Phase 19B path extraction: " << argv[0] << " --infer --model=<model_id> --probability-stop-extension-path-mechanism=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred Phase 19C causal extraction: " << argv[0] << " --infer --model=<model_id> --phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir> <fromDate> <toDate>\n"
-                  << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
+                  << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n"
+                  << "Historical provenance repair: " << argv[0] << " --backfill-scientific-execution-provenance (--dry-run|--apply --yes) [--experiment-id=<id>] [--semantic-worker-registry=<path>]\n";
         return 1;
     }
 
@@ -6977,6 +6981,8 @@ int main(int argc, const char * argv[])
                                                  ? resumeConfig->inputWidthExpansionProvenance
                                                  : std::nullopt,
                                              runtimeTrainingObjective);
+                    DBIO::PgModelIO::bindProducerWorkerAttempt(
+                        wSave, modelId, launchArgs.schedulerWorkerAttemptId);
                     wSave.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                     if (resumeConfig.has_value())

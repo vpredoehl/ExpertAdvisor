@@ -559,9 +559,18 @@ PostgresSchedulerRepository::reserveExperimentWorkerAttempt(
         "scheduler_fencing_token,experiment_id,worker_kind,"
         "lifecycle_phase,capacity_class,ownership_origin,"
         "lifecycle_state,canonical_executable_path,"
+        "semantic_layout_version,model_input_width,semantic_worker_role,"
+        "source_commit,executable_sha256,runtime_identity,canonical_manifest_path,"
         "command_identity,log_path) "
         "VALUES($1,$2,$3,$4,'experiment',$5,$5,"
-        "'scheduler_launch','reserved',$6,$7,$8) "
+        "'scheduler_launch','reserved',$6,"
+        "CASE WHEN $5='analyze' THEN NULL ELSE $7::integer END,"
+        "CASE WHEN $5='analyze' THEN NULL ELSE $8::bigint END,"
+        "CASE WHEN $5='analyze' THEN NULL ELSE $9 END,"
+        "CASE WHEN $5='analyze' THEN NULL ELSE $10 END,"
+        "CASE WHEN $5='analyze' THEN NULL ELSE $11 END,"
+        "CASE WHEN $5='analyze' THEN NULL ELSE $12 END,"
+        "CASE WHEN $5='analyze' THEN NULL ELSE $13 END,$14,$15) "
         "RETURNING worker_attempt_id;",
         pqxx::params{
             reservation.launchAttemptIdentity,
@@ -570,6 +579,13 @@ PostgresSchedulerRepository::reserveExperimentWorkerAttempt(
             reservation.experimentId,
             reservation.phase,
             reservation.canonicalExecutablePath,
+            reservation.semanticLayoutVersion,
+            reservation.modelInputWidth,
+            reservation.semanticWorkerRole,
+            reservation.sourceCommit,
+            reservation.executableSha256,
+            reservation.runtimeIdentity,
+            reservation.canonicalManifestPath,
             reservation.commandIdentity,
             reservation.logPath});
     if (inserted.size() != 1)
@@ -648,9 +664,9 @@ PostgresSchedulerRepository::reserveCheckpointWorkerAttempt(
         "launch_attempt_identity,scheduler_invocation_id,"
         "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
         "worker_kind,lifecycle_phase,capacity_class,ownership_origin,"
-        "lifecycle_state,canonical_executable_path,command_identity,log_path) "
+        "lifecycle_state,canonical_executable_path,semantic_layout_version,model_input_width,semantic_worker_role,source_commit,executable_sha256,runtime_identity,canonical_manifest_path,command_identity,log_path) "
         "VALUES($1,$2,$3,$4,$5,'checkpoint_infer','infer','infer',"
-        "'scheduler_launch','reserved',$6,$7,$8) "
+        "'scheduler_launch','reserved',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) "
         "RETURNING worker_attempt_id;",
         pqxx::params{
             reservation.launchAttemptIdentity,
@@ -659,6 +675,13 @@ PostgresSchedulerRepository::reserveCheckpointWorkerAttempt(
             reservation.experimentId,
             reservation.checkpointEvalId,
             reservation.canonicalExecutablePath,
+            reservation.semanticLayoutVersion,
+            reservation.modelInputWidth,
+            reservation.semanticWorkerRole,
+            reservation.sourceCommit,
+            reservation.executableSha256,
+            reservation.runtimeIdentity,
+            reservation.canonicalManifestPath,
             reservation.commandIdentity,
             reservation.logPath});
     if (inserted.size() != 1)

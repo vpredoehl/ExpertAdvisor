@@ -789,6 +789,18 @@ const SemanticWorkerArtifact* SemanticWorkerRegistry::find(
     return find(semanticLayoutVersion, SemanticWorkerRole::Infer);
 }
 
+const SemanticWorkerArtifact* SemanticWorkerRegistry::findByCanonicalExecutable(
+    const std::string& canonicalExecutablePath) const noexcept
+{
+    for (const auto& [key, artifact] : workers_)
+    {
+        (void)key;
+        if (artifact.canonicalExecutablePath == canonicalExecutablePath)
+            return &artifact;
+    }
+    return nullptr;
+}
+
 const SemanticWorkerArtifact* SemanticWorkerRegistry::find(
     int semanticLayoutVersion, SemanticWorkerRole role) const noexcept
 {

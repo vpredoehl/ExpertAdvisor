@@ -27,7 +27,10 @@ Snapshot Capture(const std::string& binaryName,
                  const std::string& invocationMode);
 
 std::string CurrentUtcTimestamp();
-std::string SqlNullableBool(const std::optional<bool>& value);
+inline std::string SqlNullableBool(const std::optional<bool>& value)
+{
+    return value.has_value() ? (*value ? "TRUE" : "FALSE") : "NULL";
+}
 
 bool ColumnExists(pqxx::work& w,
                   const std::string& tableName,

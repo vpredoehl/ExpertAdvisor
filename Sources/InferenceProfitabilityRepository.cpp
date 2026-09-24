@@ -455,7 +455,7 @@ ExactFinalInferenceResultSelection ResolveExactFinalInferenceResult(
         "  JOIN inference_eval_result ier ON ier.model_id=c.model_id "
         "    AND ier.symbol=c.symbol "
         "    AND ier.prediction_horizon=c.prediction_horizon "
-        "    AND ier.threshold_logret=c.threshold_logret "
+        "    AND abs(ier.threshold_logret-c.threshold_logret)<=1e-7 "
         "    AND ier.window_size=c.window_size "
         "    AND ier.label_rule_id=c.label_rule_id "
         "    AND ier.target_type=c.target_type "

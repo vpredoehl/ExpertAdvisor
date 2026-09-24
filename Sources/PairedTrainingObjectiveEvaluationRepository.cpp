@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -49,6 +50,92 @@ std::string TextOrEmpty(const pqxx::row& row, const char* column)
 {
     return row[column].is_null() ? std::string{} :
         row[column].as<std::string>();
+}
+
+std::optional<ScientificExecutionProvenance> ReadPersistedExecution(
+    const pqxx::row& row, std::string_view phase)
+{
+    if (row["worker_attempt_id"].is_null() ||
+        row["semantic_layout_version"].is_null() ||
+        row["model_input_width"].is_null() || row["semantic_worker_role"].is_null() ||
+        row["source_commit"].is_null() || row["executable_sha256"].is_null() ||
+        row["runtime_identity"].is_null()) return std::nullopt;
+    return ScientificExecutionProvenance{
+        row["worker_attempt_id"].as<long long>(), std::string{phase},
+        row["semantic_layout_version"].as<int>(), row["model_input_width"].as<int>(),
+        row["semantic_worker_role"].as<std::string>(), row["source_commit"].as<std::string>(),
+        row["executable_sha256"].as<std::string>(),
+        phase == "train" ? "LSTM_Release" : "lstm-infer-worker",
+        row["runtime_identity"].as<std::string>(),
+        TextOrEmpty(row, "canonical_manifest_path")};
+}
+
+// A durable artifact is written before the parent scheduler observes child
+// completion, so this rule belongs to evidence comparison, not the FK trigger.
+// Reconciliation may establish completion without an exit status.
+bool SuccessfulTerminalAttempt(const pqxx::row& row, std::string_view phase)
+{
+    if (row["lifecycle_state"].is_null() || row["completed_at"].is_null() ||
+        row["lifecycle_state"].as<std::string>() != "completed") return false;
+    if (!row["exit_code"].is_null() && row["exit_code"].as<int>() == 0) return true;
+    if (row["reconciliation_result"].is_null()) return false;
+    const std::string recovered = row["reconciliation_result"].as<std::string>();
+    // Missing-process recovery is valid for train, infer, and analyze when
+    // the repository found phase-specific durable completion evidence.  The
+    // historical failed-result recovery is, by construction, infer-only.
+    return recovered == "process_missing_result_recovered" ||
+        (phase == "infer" &&
+         recovered == "historical_completed_inference_result_recovered");
+}
+
+void RequireSuccessfulTerminalExecution(const pqxx::result& rows,
+                                        long long experimentId,
+                                        std::string_view phase)
+{
+    if (rows.size() != 1)
+        ContractFailure(experimentId, std::string(phase) +
+                        "_producer_worker_attempt_missing_or_ambiguous");
+    if (!SuccessfulTerminalAttempt(rows.one_row(), phase))
+        ContractFailure(experimentId, std::string(phase) +
+                        "_producer_worker_attempt_not_successfully_terminal");
+}
+
+void LoadAuthoritativeExecutionProvenance(pqxx::transaction_base& transaction,
+                                          ArmEvidence& arm)
+{
+    const long long experimentId = arm.configuration.experimentId;
+    const long long modelId = *arm.finalModelId;
+    const pqxx::result training = transaction.exec(
+        "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
+        "FROM model m JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=m.producer_worker_attempt_id "
+        "WHERE m.model_id=$2 AND m.experiment_id=$1 AND a.experiment_id=$1 "
+        "AND a.worker_kind='experiment' AND a.lifecycle_phase='train' "
+        "AND a.capacity_class='train' ORDER BY a.worker_attempt_id;",
+        pqxx::params{experimentId, modelId});
+    RequireSuccessfulTerminalExecution(training, experimentId, "train");
+    arm.trainingExecution = ReadPersistedExecution(training.one_row(), "train");
+    if (!arm.trainingExecution)
+        ContractFailure(experimentId, "train_producer_immutable_identity_missing");
+    // Inference provenance belongs to the exact final inference artifact, not
+    // to its later analysis/profitability materializations.  This keeps the
+    // producer FK authoritative even while those consumers are unavailable.
+    const auto exact = Profitability::ResolveExactFinalInferenceResult(
+        transaction, experimentId, modelId);
+    if (exact.inferenceEvalResultId)
+    {
+        const pqxx::result inference = transaction.exec(
+            "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
+            "FROM inference_eval_result r JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=r.producer_worker_attempt_id "
+            "WHERE r.id=$2 AND r.model_id=$3 AND a.experiment_id=$1 "
+            "AND a.worker_kind='experiment' AND a.lifecycle_phase='infer' "
+            "AND a.capacity_class='infer' ORDER BY a.worker_attempt_id;",
+            pqxx::params{experimentId,
+                          *exact.inferenceEvalResultId, modelId});
+        RequireSuccessfulTerminalExecution(inference, experimentId, "infer");
+        arm.inferenceExecution = ReadPersistedExecution(inference.one_row(), "infer");
+        if (!arm.inferenceExecution)
+            ContractFailure(experimentId, "infer_producer_immutable_identity_missing");
+    }
 }
 
 struct MatrixMetadata
@@ -640,6 +727,7 @@ ArmEvidence LoadAuthoritativeArmEvidence(
     LoadFinalModelConfiguration(transaction, arm);
     LoadMaterializedObjectives(transaction, arm);
     LoadFinalClassificationAndProfitability(transaction, arm);
+    LoadAuthoritativeExecutionProvenance(transaction, arm);
     return arm;
 }
 

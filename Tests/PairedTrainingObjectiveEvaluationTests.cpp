@@ -47,7 +47,7 @@ Pair::ArmEvidence Arm(long long experimentId,
     c.coreLearningRateMultiplier = 1.0;
     c.headLearningRateMultiplier = 1.0;
     c.checkpointInterval = 20;
-    c.inputWidth = 50;
+    c.inputWidth = 64;
     c.hiddenSize = 64;
     c.layerCount = 1;
     c.windowSize = 64;
@@ -72,7 +72,7 @@ Pair::ArmEvidence Arm(long long experimentId,
     c.targetScale = 1.0;
     c.targetStandardDeviation = 1.0;
     c.modelInputMetadataSchemaVersion = 1;
-    c.modelInputLayoutVersion = 1;
+    c.modelInputLayoutVersion = 8;
     c.persistedTrainingSymbol = c.symbol;
     c.persistedTrainingStart = c.trainStart;
     c.persistedTrainingEnd = c.trainEnd;
@@ -144,6 +144,14 @@ Pair::ArmEvidence Arm(long long experimentId,
     profitability.observationIdentityHash = Objective::DeterministicHash(
         profitability.observationIdentityCanonical);
     arm.profitability = profitability;
+    arm.trainingExecution = {experimentId * 10 + 1, "train", 8, 64, "train",
+        "3b44080010c1c7eb3388c637bbf6dccc98ee35b1",
+        "387a05120862f21911f626901075e920965d529f49d50b158c1509932e958632",
+        "LSTM_Release", "abababababababababababababababababababababababababababababababab", "/fixtures/layout8/train.manifest"};
+    arm.inferenceExecution = {experimentId * 10 + 2, "infer", 8, 64, "infer",
+        "3ba4844a41dc75ec21397ceadb02802ff45743b4",
+        "30fd8f1d63d71773a0425fdf02c6ab8e98ea0df21d17a9f85e50da04dd9df5a3",
+        "lstm-infer-worker", "abababababababababababababababababababababababababababababababab", "/fixtures/layout8/infer.manifest"};
     return arm;
 }
 
@@ -232,6 +240,45 @@ int main()
     mismatch.configuration.featureAblationMask = "return_surprise";
     assert(Has(Compare(baseControl, mismatch).invalidReasons,
                "feature_ablation_mask_mismatch"));
+
+    auto creationOnlyMismatch = baseTreatment;
+    creationOnlyMismatch.configuration.runProvenance.gitCommit = "different";
+    assert(!Has(Compare(baseControl, creationOnlyMismatch).invalidReasons,
+                "run_provenance_mismatch"));
+    assert(Compare(baseControl, creationOnlyMismatch).disposition ==
+           Pair::Disposition::Promising);
+    auto trainingExecutionMismatch = baseTreatment;
+    trainingExecutionMismatch.trainingExecution->executableSha256[0] = '4';
+    assert(Has(Compare(baseControl, trainingExecutionMismatch).invalidReasons,
+               "training_execution_provenance_mismatch"));
+    auto inferenceExecutionMismatch = baseTreatment;
+    inferenceExecutionMismatch.inferenceExecution->executableSha256[0] = '4';
+    assert(Has(Compare(baseControl, inferenceExecutionMismatch).invalidReasons,
+               "inference_execution_provenance_mismatch"));
+    auto wrongTrainingModelInput = baseTreatment;
+    wrongTrainingModelInput.trainingExecution->semanticLayoutVersion = 7;
+    wrongTrainingModelInput.inferenceExecution->semanticLayoutVersion = 7;
+    auto wrongTrainingModelInputControl = baseControl;
+    wrongTrainingModelInputControl.trainingExecution->semanticLayoutVersion = 7;
+    wrongTrainingModelInputControl.inferenceExecution->semanticLayoutVersion = 7;
+    assert(Has(Compare(wrongTrainingModelInputControl, wrongTrainingModelInput).invalidReasons,
+               "control_training_execution_model_input_mismatch"));
+    assert(Has(Compare(wrongTrainingModelInputControl, wrongTrainingModelInput).invalidReasons,
+               "treatment_inference_execution_model_input_mismatch"));
+    auto wrongWidth = baseTreatment;
+    wrongWidth.trainingExecution->modelInputWidth = 63;
+    wrongWidth.inferenceExecution->modelInputWidth = 63;
+    auto wrongWidthControl = baseControl;
+    wrongWidthControl.trainingExecution->modelInputWidth = 63;
+    wrongWidthControl.inferenceExecution->modelInputWidth = 63;
+    assert(Has(Compare(wrongWidthControl, wrongWidth).invalidReasons,
+               "control_training_execution_model_input_mismatch"));
+    assert(Has(Compare(wrongWidthControl, wrongWidth).invalidReasons,
+               "treatment_inference_execution_model_input_mismatch"));
+    auto missingExecution = baseTreatment;
+    missingExecution.trainingExecution.reset();
+    assert(Has(Compare(baseControl, missingExecution).invalidReasons,
+               "treatment_training_execution_provenance_missing"));
 
     // experiment.c_next_threshold is double precision, while the model and
     // exact inference context persist the original float train metadata.  The

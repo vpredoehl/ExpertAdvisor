@@ -163,8 +163,30 @@ void InsertExperiment(pqxx::transaction_base& transaction,
                         "calculate_batch_return_by_example_count_v1"}});
 
     transaction.exec(
-        "INSERT INTO model(model_id,experiment_id) VALUES($1,$2);",
+        "INSERT INTO model(model_id,experiment_id,created_at) "
+        "VALUES($1,$2,'2024-01-01');",
         pqxx::params{ids.model, ids.experiment});
+    transaction.exec(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "worker_attempt_id,experiment_id,worker_kind,lifecycle_phase,"
+        "capacity_class,lifecycle_state,reserved_at,completed_at,exit_code,"
+        "canonical_executable_path) VALUES "
+        "($1,$2,'experiment','train','train','failed','2023-01-01',"
+        "'2023-02-01',17,$3),($4,$2,'experiment','train','train','completed',"
+        "'2023-01-01','2025-01-01',0,$5),($6,$2,'experiment','infer','infer','completed',"
+        "'2023-01-01','2025-01-01',0,$7);",
+        pqxx::params{ids.experiment * 10, ids.experiment,
+            "/fixtures/Builds/SemanticWorkers/layout8/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/LSTM_Release",
+            ids.experiment * 10 + 1,
+            "/fixtures/Builds/SemanticWorkers/layout8/3b44080010c1c7eb3388c637bbf6dccc98ee35b1/"
+            "387a05120862f21911f626901075e920965d529f49d50b158c1509932e958632/LSTM_Release",
+            ids.experiment * 10 + 2,
+            "/fixtures/Builds/SemanticWorkers/layout8/infer/3ba4844a41dc75ec21397ceadb02802ff45743b4/"
+            "30fd8f1d63d71773a0425fdf02c6ab8e98ea0df21d17a9f85e50da04dd9df5a3/lstm-infer-worker"});
+    transaction.exec("UPDATE model SET producer_worker_attempt_id=$1 WHERE model_id=$2;",
+        pqxx::params{ids.experiment * 10 + 1, ids.model});
+    transaction.exec("UPDATE experiment_scheduler_worker_attempt SET semantic_layout_version=1,model_input_width=50,semantic_worker_role=CASE WHEN lifecycle_phase='train' THEN 'train' ELSE 'infer' END,source_commit=CASE WHEN lifecycle_phase='train' THEN '3b44080010c1c7eb3388c637bbf6dccc98ee35b1' ELSE '3ba4844a41dc75ec21397ceadb02802ff45743b4' END,executable_sha256=CASE WHEN lifecycle_phase='train' THEN '387a05120862f21911f626901075e920965d529f49d50b158c1509932e958632' ELSE '30fd8f1d63d71773a0425fdf02c6ab8e98ea0df21d17a9f85e50da04dd9df5a3' END,runtime_identity='abababababababababababababababababababababababababababababababab' WHERE experiment_id=$1;", pqxx::params{ids.experiment});
 
     InsertMatrixRow(transaction, ids.model, "train_config_meta", {
         1.0, 6.0, kModelThreshold, 64.0, 1.0, 1.0, 1.0, 1.0,
@@ -211,11 +233,14 @@ void InsertInference(pqxx::transaction_base& transaction,
         "id,model_id,status,inference_scope,checkpoint_eval_id,"
         "parent_experiment_id,symbol,prediction_horizon,threshold_logret,"
         "window_size,label_rule_id,target_type,from_date,to_date,"
-        "completed_epochs,accuracy,accept_model,pred_down,pred_neutral,pred_up) "
+        "completed_epochs,accuracy,accept_model,pred_down,pred_neutral,pred_up,completed_at) "
         "VALUES($1,$2,'completed',$3,$4,$5,'synthetic_phase4d_symbol',6,$6,"
-        "64,1,1,$7,$8,80,0.70,true,0.20,0.30,0.50);",
+        "64,1,1,$7,$8,80,0.70,true,0.20,0.30,0.50,'2024-02-01');",
         pqxx::params{inferenceId, ids.model, scope, checkpointId, parent,
                      kModelThreshold, fromDate, toDate});
+    if (scope == "final")
+        transaction.exec("UPDATE inference_eval_result SET producer_worker_attempt_id=$1 WHERE id=$2;",
+            pqxx::params{ids.experiment * 10 + 2, inferenceId});
 }
 
 void InsertAnalysis(pqxx::transaction_base& transaction,
@@ -341,6 +366,10 @@ int main()
     const Pair::ArmEvidence treatment =
         LoadArm(transaction, treatmentIds.experiment);
     assert(control.finalModelId == controlIds.model);
+    assert(control.trainingExecution &&
+           control.trainingExecution->workerAttemptId == controlIds.experiment * 10 + 1);
+    assert(control.inferenceExecution &&
+           control.inferenceExecution->workerAttemptId == controlIds.experiment * 10 + 2);
     assert(treatment.finalModelId == treatmentIds.model);
     assert(control.materializedModelObjectives.size() == 1);
     assert(treatment.materializedModelObjectives.size() == 1);

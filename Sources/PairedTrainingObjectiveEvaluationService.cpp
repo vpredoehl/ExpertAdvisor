@@ -20,6 +20,11 @@ std::string Boolean(bool value)
     return value ? "true" : "false";
 }
 
+std::string OptionalBoolean(const std::optional<bool>& value)
+{
+    return value ? Boolean(*value) : "NULL";
+}
+
 std::string MachineText(std::string value)
 {
     for (char& character : value)
@@ -112,6 +117,30 @@ void PrintArm(std::ostringstream& output,
               std::string_view role,
               const ArmEvidence& arm)
 {
+    const auto printExecution = [&](std::string_view phase,
+                                    const std::optional<ScientificExecutionProvenance>& value) {
+        output << "TRAINING_OBJECTIVE_PAIR_EXECUTION_PROVENANCE"
+               << ",role=" << role << ",phase=" << phase
+               << ",worker_attempt_id=" << (value ? std::to_string(value->workerAttemptId) : "NULL")
+               << ",semantic_layout_version=" << (value ? std::to_string(value->semanticLayoutVersion) : "NULL")
+               << ",source_commit=" << (value ? value->sourceCommit : "NULL")
+               << ",executable_sha256=" << (value ? value->executableSha256 : "NULL")
+               << ",executable_name=" << (value ? value->executableName : "NULL")
+               << ",runtime_identity=" << (value ? value->runtimeIdentity : "NULL")
+               << ",model_input_width=" << (value ? std::to_string(value->modelInputWidth) : "NULL") << '\n';
+    };
+    output << "TRAINING_OBJECTIVE_PAIR_CREATION_PROVENANCE"
+           << ",role=" << role
+           << ",git_commit=" << MachineText(arm.configuration.runProvenance.gitCommit)
+           << ",git_branch=" << MachineText(arm.configuration.runProvenance.gitBranch)
+           << ",git_dirty=" << OptionalBoolean(arm.configuration.runProvenance.gitDirty)
+           << ",build_config=" << MachineText(arm.configuration.runProvenance.buildConfiguration)
+           << ",compiler_version=" << MachineText(arm.configuration.runProvenance.compilerVersion)
+           << ",schema_version=" << MachineText(arm.configuration.runProvenance.schemaVersion)
+           << ",scheduler_version=" << MachineText(arm.configuration.runProvenance.schedulerVersion)
+           << ",binary_name=" << MachineText(arm.configuration.runProvenance.binaryName) << '\n';
+    printExecution("train", arm.trainingExecution);
+    printExecution("infer", arm.inferenceExecution);
     output << "TRAINING_OBJECTIVE_PAIR_OBJECTIVE"
            << ",role=" << role
            << ",experiment_id=" << arm.configuration.experimentId

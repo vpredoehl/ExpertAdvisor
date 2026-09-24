@@ -94,6 +94,13 @@ struct ExperimentWorkerAttemptReservation
     long long experimentId = -1;
     std::string phase;
     std::string canonicalExecutablePath;
+    int semanticLayoutVersion = 0;
+    std::size_t modelInputWidth = 0;
+    std::string semanticWorkerRole;
+    std::string sourceCommit;
+    std::string executableSha256;
+    std::string runtimeIdentity;
+    std::string canonicalManifestPath;
     std::string commandIdentity;
     std::string currentOperation;
     std::string logPath;
@@ -108,6 +115,13 @@ struct CheckpointWorkerAttemptReservation
     long long experimentId = -1;
     long long checkpointEvalId = -1;
     std::string canonicalExecutablePath;
+    int semanticLayoutVersion = 0;
+    std::size_t modelInputWidth = 0;
+    std::string semanticWorkerRole;
+    std::string sourceCommit;
+    std::string executableSha256;
+    std::string runtimeIdentity;
+    std::string canonicalManifestPath;
     std::string commandIdentity;
     std::string logPath;
 };

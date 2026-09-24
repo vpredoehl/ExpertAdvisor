@@ -149,7 +149,23 @@ CREATE TABLE experiment (
 CREATE TABLE model (
     model_id bigint PRIMARY KEY,
     experiment_id bigint REFERENCES experiment(experiment_id),
-    parent_model_id bigint REFERENCES model(model_id)
+    parent_model_id bigint REFERENCES model(model_id),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE experiment_scheduler_worker_attempt (
+    worker_attempt_id bigint PRIMARY KEY,
+    experiment_id bigint NOT NULL REFERENCES experiment(experiment_id),
+    checkpoint_eval_id bigint,
+    worker_kind text NOT NULL,
+    lifecycle_phase text NOT NULL,
+    capacity_class text NOT NULL,
+    lifecycle_state text NOT NULL,
+    reserved_at timestamptz NOT NULL,
+    completed_at timestamptz,
+    exit_code integer,
+    reconciliation_result text,
+    canonical_executable_path text
 );
 
 CREATE TABLE matrix (
@@ -214,6 +230,7 @@ CREATE TABLE experiment_analysis_result (
 
 \i '${repo_root}/Database/migrations/073_inference_profitability_observation.sql'
 \i '${repo_root}/Database/migrations/079_training_objective_provenance.sql'
+\i '${repo_root}/Database/migrations/096_scientific_execution_provenance.sql'
 SQL
 
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libpqxx; then

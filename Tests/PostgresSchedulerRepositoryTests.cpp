@@ -127,6 +127,13 @@ int main(int argc, char* argv[])
             worker_process_group_id integer,
             worker_process_start_identity text,
             canonical_executable_path text,
+            semantic_layout_version integer,
+            model_input_width integer,
+            semantic_worker_role text,
+            source_commit text,
+            executable_sha256 text,
+            runtime_identity text,
+            canonical_manifest_path text,
             command_identity text,
             command_line text,
             log_path text,
@@ -448,6 +455,13 @@ int main(int argc, char* argv[])
             20,
             "analyze",
             "/tmp/LSTM_Release",
+            0,
+            0,
+            "",
+            "",
+            "",
+            "",
+            "",
             "experiment:20:analyze",
             "analyze",
             "/tmp/analyze.log",
@@ -459,6 +473,13 @@ int main(int argc, char* argv[])
     assert(experimentReservation.attempt->phase == "analyze");
     assert(experimentReservation.attempt->canonicalExecutablePath ==
            "/tmp/LSTM_Release");
+    const pqxx::row reservedAttempt = transaction.exec(
+        "SELECT semantic_layout_version,model_input_width,semantic_worker_role,"
+        "source_commit,executable_sha256,runtime_identity,canonical_manifest_path "
+        "FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=$1",
+        pqxx::params{experimentReservation.attempt->workerAttemptId}).one_row();
+    for (const auto& field : reservedAttempt)
+        assert(field.is_null());
     const pqxx::row reservedExperiment = transaction.exec(
         "SELECT status,phase,current_operation,worker_control_state,"
         "active_scheduler_worker_attempt_id,analysis_log_path "
@@ -479,12 +500,26 @@ int main(int argc, char* argv[])
             21,
             "train",
             "/tmp/LSTM_Release",
+            8,
+            64,
+            "train",
+            "3b44080010c1c7eb3388c637bbf6dccc98ee35b1",
+            "387a05120862f21911f626901075e920965d529f49d50b158c1509932e958632",
+            "abababababababababababababababababababababababababababababababab",
+            "/fixtures/layout8/train.manifest",
             "experiment:21:train",
             "train",
             "/tmp/cancellation.log",
             true});
     assert(cancellationReservation.status ==
            WorkerAttemptReservationStatus::Reserved);
+    const pqxx::row reservedTrainAttempt = transaction.exec(
+        "SELECT semantic_layout_version,model_input_width,semantic_worker_role,"
+        "source_commit,executable_sha256,runtime_identity,canonical_manifest_path "
+        "FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=$1",
+        pqxx::params{cancellationReservation.attempt->workerAttemptId}).one_row();
+    for (const auto& field : reservedTrainAttempt)
+        assert(!field.is_null());
 
     const auto checkpointReservation =
         repository.reserveCheckpointWorkerAttempt({
@@ -494,6 +529,13 @@ int main(int argc, char* argv[])
             20,
             202,
             "/tmp/LSTM_Release",
+            0,
+            0,
+            "",
+            "",
+            "",
+            "",
+            "",
             "checkpoint_infer:202",
             "/tmp/checkpoint.log"});
     assert(checkpointReservation.status ==

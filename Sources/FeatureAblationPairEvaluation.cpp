@@ -72,6 +72,72 @@ bool TaggedHash(const std::string& value)
     return true;
 }
 
+bool LowerHex(const std::string& value, std::size_t length)
+{
+    if (value.size() != length) return false;
+    for (const char character : value)
+        if (!((character >= '0' && character <= '9') ||
+              (character >= 'a' && character <= 'f')))
+            return false;
+    return true;
+}
+
+bool ValidExecution(const SharedEvidence::ScientificExecutionProvenance& value,
+                    std::string_view expectedPhase)
+{
+    return value.workerAttemptId > 0 && value.phase == expectedPhase &&
+        value.semanticLayoutVersion > 0 && value.modelInputWidth > 0 &&
+        value.workerRole == expectedPhase && LowerHex(value.sourceCommit, 40U) &&
+        LowerHex(value.executableSha256, 64U) &&
+        !value.executableName.empty() && LowerHex(value.runtimeIdentity, 64U);
+}
+
+bool SameScientificExecution(
+    const SharedEvidence::ScientificExecutionProvenance& left,
+    const SharedEvidence::ScientificExecutionProvenance& right)
+{
+    // Attempt ids and paths are audit locators. SHA identifies executable
+    // bytes; runtime identity covers materially distinct packaged runtimes.
+    return left.phase == right.phase &&
+        left.semanticLayoutVersion == right.semanticLayoutVersion &&
+        left.executableSha256 == right.executableSha256 &&
+        left.runtimeIdentity == right.runtimeIdentity;
+}
+
+void ValidateScientificExecution(
+    const FeatureAblationPairEvaluation::ArmEvidence& arm,
+    std::string_view name,
+    std::vector<std::string>& reasons)
+{
+    const auto& authoritative = arm.authoritative;
+    const auto& configuration = authoritative.configuration;
+    const std::string prefix = std::string(name) + '_';
+    if (!authoritative.trainingExecution)
+        Add(reasons, prefix + "training_execution_provenance_missing");
+    else if (!ValidExecution(*authoritative.trainingExecution, "train"))
+        Add(reasons, prefix + "training_execution_provenance_invalid");
+    else if (authoritative.trainingExecution->semanticLayoutVersion !=
+                 configuration.modelInputLayoutVersion ||
+             authoritative.trainingExecution->modelInputWidth !=
+                 configuration.inputWidth)
+        Add(reasons, prefix + "training_execution_model_input_mismatch");
+
+    // Final classification/profitability is inference-derived evidence. Its
+    // producer is the final inference result FK, never an analyzer attempt.
+    if (authoritative.classification || authoritative.profitability)
+    {
+        if (!authoritative.inferenceExecution)
+            Add(reasons, prefix + "inference_execution_provenance_missing");
+        else if (!ValidExecution(*authoritative.inferenceExecution, "infer"))
+            Add(reasons, prefix + "inference_execution_provenance_invalid");
+        else if (authoritative.inferenceExecution->semanticLayoutVersion !=
+                     configuration.modelInputLayoutVersion ||
+                 authoritative.inferenceExecution->modelInputWidth !=
+                     configuration.inputWidth)
+            Add(reasons, prefix + "inference_execution_model_input_mismatch");
+    }
+}
+
 void RequireText(const std::string& value,
                  std::string_view field,
                  std::vector<std::string>& reasons)
@@ -193,7 +259,6 @@ void ValidateExperimentPair(const ScientificConfiguration& control,
     EA_COMPARE_FIELD(resumeExpandInputWidth,
                      "resume_expand_input_width_mismatch");
     EA_COMPARE_FIELD(experimentObjective, "training_objective_mismatch");
-    EA_COMPARE_FIELD(runProvenance, "run_provenance_mismatch");
     if (control.experimentId == ablation.experimentId)
         Add(reasons, "experiment_id_reused");
 }
@@ -745,6 +810,22 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
                           result.incompleteReasons);
     ValidateProfitability(ablation, "ablation", result.invalidReasons,
                           result.incompleteReasons);
+    ValidateScientificExecution(control, "control", result.invalidReasons);
+    ValidateScientificExecution(ablation, "ablation", result.invalidReasons);
+    if (control.authoritative.trainingExecution &&
+        ablation.authoritative.trainingExecution &&
+        !SameScientificExecution(*control.authoritative.trainingExecution,
+                                 *ablation.authoritative.trainingExecution))
+        Add(result.invalidReasons, "training_execution_provenance_mismatch");
+    if ((control.authoritative.classification ||
+         control.authoritative.profitability) &&
+        (ablation.authoritative.classification ||
+         ablation.authoritative.profitability) &&
+        control.authoritative.inferenceExecution &&
+        ablation.authoritative.inferenceExecution &&
+        !SameScientificExecution(*control.authoritative.inferenceExecution,
+                                 *ablation.authoritative.inferenceExecution))
+        Add(result.invalidReasons, "inference_execution_provenance_mismatch");
     if (!result.invalidReasons.empty())
     {
         if (causalSurpriseEvaluation)

@@ -109,13 +109,6 @@ std::string CurrentUtcTimestamp()
     return out.str();
 }
 
-std::string SqlNullableBool(const std::optional<bool>& value)
-{
-    if (!value.has_value())
-        return "NULL";
-    return *value ? "TRUE" : "FALSE";
-}
-
 bool ColumnExists(pqxx::work& w,
                   const std::string& tableName,
                   const std::string& columnName)

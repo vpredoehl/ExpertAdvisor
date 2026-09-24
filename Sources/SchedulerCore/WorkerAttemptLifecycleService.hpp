@@ -14,6 +14,13 @@ struct WorkerAttemptLifecycleContext
     std::string schedulerInvocationId;
     long long schedulerFencingToken = 0;
     std::string selectedWorkerCanonicalExecutablePath;
+    int semanticLayoutVersion = 0;
+    std::size_t modelInputWidth = 0;
+    std::string semanticWorkerRole;
+    std::string sourceCommit;
+    std::string executableSha256;
+    std::string runtimeIdentity;
+    std::string canonicalManifestPath;
 };
 
 struct ExperimentWorkerAttemptRequest

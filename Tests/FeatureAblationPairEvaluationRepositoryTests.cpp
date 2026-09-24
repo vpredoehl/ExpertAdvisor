@@ -122,8 +122,26 @@ void InsertExperiment(pqxx::transaction_base& transaction,
     if (!complete) return;
 
     transaction.exec(
-        "INSERT INTO model(model_id,experiment_id) VALUES($1,$2);",
+        "INSERT INTO model(model_id,experiment_id,created_at) "
+        "VALUES($1,$2,'2024-01-01');",
         pqxx::params{ids.model, ids.experiment});
+    transaction.exec(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "worker_attempt_id,experiment_id,worker_kind,lifecycle_phase,"
+        "capacity_class,lifecycle_state,reserved_at,completed_at,exit_code,"
+        "canonical_executable_path) VALUES "
+        "($1,$2,'experiment','train','train','completed','2023-01-01',"
+        "'2025-01-01',0,$3),($4,$2,'experiment','infer','infer','completed',"
+        "'2023-01-01','2025-01-01',0,$5);",
+        pqxx::params{ids.experiment * 10 + 1, ids.experiment,
+            "/fixtures/Builds/SemanticWorkers/layout8/3b44080010c1c7eb3388c637bbf6dccc98ee35b1/"
+            "387a05120862f21911f626901075e920965d529f49d50b158c1509932e958632/LSTM_Release",
+            ids.experiment * 10 + 2,
+            "/fixtures/Builds/SemanticWorkers/layout8/infer/3ba4844a41dc75ec21397ceadb02802ff45743b4/"
+            "30fd8f1d63d71773a0425fdf02c6ab8e98ea0df21d17a9f85e50da04dd9df5a3/lstm-infer-worker"});
+    transaction.exec("UPDATE model SET producer_worker_attempt_id=$1 WHERE model_id=$2;",
+        pqxx::params{ids.experiment * 10 + 1, ids.model});
+    transaction.exec("UPDATE experiment_scheduler_worker_attempt SET semantic_layout_version=$2,model_input_width=$3,semantic_worker_role=CASE WHEN lifecycle_phase='train' THEN 'train' ELSE 'infer' END,source_commit=CASE WHEN lifecycle_phase='train' THEN '3b44080010c1c7eb3388c637bbf6dccc98ee35b1' ELSE '3ba4844a41dc75ec21397ceadb02802ff45743b4' END,executable_sha256=CASE WHEN lifecycle_phase='train' THEN '387a05120862f21911f626901075e920965d529f49d50b158c1509932e958632' ELSE '30fd8f1d63d71773a0425fdf02c6ab8e98ea0df21d17a9f85e50da04dd9df5a3' END,runtime_identity='abababababababababababababababababababababababababababababababab' WHERE experiment_id=$1;", pqxx::params{ids.experiment, modelInputLayoutVersion, modelInputWidth});
     InsertMatrixRow(transaction, ids.model, "train_config_meta", {
         1.0, 4.0, kModelThreshold, 64.0, 1.0, 1.0, 1.0, 1.0,
         1.0, 1.0, 80.0, 119.75, 25.0, 25.0});
@@ -158,9 +176,11 @@ void InsertFinalClassificationEvidence(
         "id,model_id,status,inference_scope,symbol,prediction_horizon,"
         "threshold_logret,window_size,label_rule_id,target_type,from_date,"
         "to_date,completed_epochs,accuracy,accept_model,pred_down,pred_neutral,"
-        "pred_up) VALUES($1,$2,'completed','final','audchfrmp',4,$3,64,1,0,"
-        "'2025-01-01','2026-01-01',80,$4,true,0.25,0.35,0.40);",
+        "pred_up,completed_at) VALUES($1,$2,'completed','final','audchfrmp',4,$3,64,1,0,"
+        "'2025-01-01','2026-01-01',80,$4,true,0.25,0.35,0.40,'2024-02-01');",
         pqxx::params{ids.inference, ids.model, kModelThreshold, accuracy});
+    transaction.exec("UPDATE inference_eval_result SET producer_worker_attempt_id=$1 WHERE id=$2;",
+        pqxx::params{ids.experiment * 10 + 2, ids.inference});
     transaction.exec(
         "INSERT INTO experiment_analysis_result("
         "analysis_id,experiment_id,model_id,analysis_scope,analysis_status,"
@@ -282,6 +302,7 @@ int main()
         const Ids checkpointTreatment{990632, 1990632, 2990632, 3990632};
         const Ids noProfitControl{990641, 1990641, 2990641, 3990641};
         const Ids noProfitTreatment{990642, 1990642, 2990642, 3990642};
+        const Ids inferenceOnly{990645, 1990645, 2990645, 3990645};
         const Ids incompatibleControl{990651, 1990651, 2990651, 3990651};
         const Ids incompatibleTreatment{990652, 1990652, 2990652, 3990652};
         const Ids accuracyMismatchControl{990661, 1990661, 2990661, 3990661};
@@ -300,6 +321,30 @@ int main()
         InsertFinalClassificationEvidence(
             fixture, treatment, 0.6400004, 0.64);
         InsertProfitabilityEvidence(fixture, treatment, 0.08);
+        // Creation metadata remains visible to audit output but must not
+        // control compatibility once both producer FKs name matching workers.
+        fixture.exec(
+            "UPDATE experiment SET git_commit="
+            "'aabe2cbdc0ffee1234567890abcdef1234567890' "
+            "WHERE experiment_id=$1;",
+            pqxx::params{treatment.experiment});
+        // This newer successful attempt is intentionally not an artifact
+        // producer. Normal loading must follow producer_worker_attempt_id,
+        // never a timestamp or executable-path heuristic.
+        fixture.exec(
+            "INSERT INTO experiment_scheduler_worker_attempt("
+            "worker_attempt_id,experiment_id,worker_kind,lifecycle_phase,"
+            "capacity_class,lifecycle_state,reserved_at,completed_at,exit_code,"
+            "canonical_executable_path,semantic_layout_version,model_input_width,"
+            "semantic_worker_role,source_commit,executable_sha256,runtime_identity) "
+            "SELECT $1,experiment_id,worker_kind,lifecycle_phase,capacity_class,"
+            "lifecycle_state,'2099-01-01','2099-01-01',exit_code,"
+            "canonical_executable_path,semantic_layout_version,model_input_width,"
+            "semantic_worker_role,source_commit,"
+            "'4' || substring(executable_sha256 FROM 2),runtime_identity "
+            "FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=$2;",
+            pqxx::params{control.experiment * 10 + 9,
+                         control.experiment * 10 + 1});
 
         InsertExperiment(fixture, pendingControl, true, false);
         InsertExperiment(fixture, pendingTreatment, false, false);
@@ -319,6 +364,12 @@ int main()
         InsertExperiment(fixture, noProfitTreatment, false);
         InsertFinalClassificationEvidence(fixture, noProfitControl, 0.61);
         InsertFinalEvidence(fixture, noProfitTreatment, 0.64, 0.08);
+
+        InsertExperiment(fixture, inferenceOnly, true);
+        InsertFinalClassificationEvidence(fixture, inferenceOnly, 0.61);
+        fixture.exec(
+            "DELETE FROM experiment_analysis_result WHERE experiment_id=$1;",
+            pqxx::params{inferenceOnly.experiment});
 
         InsertExperiment(fixture, incompatibleControl, true);
         InsertExperiment(fixture, incompatibleTreatment, false);
@@ -360,6 +411,27 @@ int main()
     }
 
     const std::string before = DatabaseDigest(connection);
+    {
+        pqxx::read_transaction read{connection};
+        const auto controlEvidence =
+            Feature::LoadAuthoritativeArmEvidence(read, 990601);
+        const auto treatmentEvidence =
+            Feature::LoadAuthoritativeArmEvidence(read, 990602);
+        const auto inferenceOnlyEvidence =
+            Feature::LoadAuthoritativeArmEvidence(read, 990645);
+        assert(controlEvidence.authoritative.trainingExecution &&
+               controlEvidence.authoritative.trainingExecution->workerAttemptId ==
+                   9906011);
+        assert(controlEvidence.authoritative.inferenceExecution &&
+               controlEvidence.authoritative.inferenceExecution->workerAttemptId ==
+                   9906012);
+        assert(treatmentEvidence.authoritative.trainingExecution &&
+               treatmentEvidence.authoritative.inferenceExecution);
+        assert(!inferenceOnlyEvidence.authoritative.classification &&
+               inferenceOnlyEvidence.authoritative.inferenceExecution &&
+               inferenceOnlyEvidence.authoritative.inferenceExecution
+                       ->workerAttemptId == 9906452);
+    }
     std::ostringstream output;
     std::ostringstream errors;
     const int completeExit = Feature::RunComparisonCommand(

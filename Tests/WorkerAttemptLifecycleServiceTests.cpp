@@ -164,7 +164,9 @@ int main()
         ExperimentAttempt()};
     WorkerAttemptLifecycleService service{
         repository,
-        {"scheduler-a", 17, "/tmp/LSTM_Release"}};
+        {.schedulerInvocationId = "scheduler-a", .schedulerFencingToken = 17,
+         .selectedWorkerCanonicalExecutablePath = "/tmp/LSTM_Release",
+         .semanticWorkerRole = "train"}};
 
     const auto experiment = service.reserveExperiment(
         {41, "train", "/tmp/train.log", "nonce-a", true});
@@ -193,7 +195,12 @@ int main()
     repository.reservationResult = {
         WorkerAttemptReservationStatus::Reserved,
         checkpointAttempt};
-    const auto checkpoint = service.reserveCheckpoint(
+    WorkerAttemptLifecycleService inferService{
+        repository,
+        {.schedulerInvocationId = "scheduler-a", .schedulerFencingToken = 17,
+         .selectedWorkerCanonicalExecutablePath = "/tmp/lstm-infer-worker",
+         .semanticWorkerRole = "infer"}};
+    const auto checkpoint = inferService.reserveCheckpoint(
         {41, 88, "/tmp/checkpoint.log", "nonce-b"});
     assert(checkpoint && checkpoint->workerAttemptId == 72);
     assert(repository.checkpointReservation);
@@ -218,7 +225,9 @@ int main()
         legacyInferAttempt};
     WorkerAttemptLifecycleService legacyService{
         repository,
-        {"scheduler-a", 17, "/legacy/LSTM_Release"}};
+        {.schedulerInvocationId = "scheduler-a", .schedulerFencingToken = 17,
+         .selectedWorkerCanonicalExecutablePath = "/legacy/LSTM_Release",
+         .semanticWorkerRole = "infer"}};
     const auto legacyInfer = legacyService.reserveExperiment(
         {41, "infer", "/tmp/legacy-infer.log", "nonce-legacy", false});
     assert(legacyInfer);
@@ -235,7 +244,27 @@ int main()
         WorkerAttemptReservationStatus::LifecycleUnavailable,
         std::nullopt};
     assert(!service.reserveExperiment(
-        {41, "infer", "/tmp/infer.log", "nonce-c", false}));
+        {41, "train", "/tmp/train.log", "nonce-c", false}));
+
+    assert(Throws<std::invalid_argument>([&] {
+               (void)service.reserveExperiment(
+                   {41, "infer", "/tmp/infer.log", "nonce-role-a", false});
+           }) == "semantic_worker_role_phase_mismatch");
+    assert(Throws<std::invalid_argument>([&] {
+               (void)inferService.reserveExperiment(
+                   {41, "train", "/tmp/train.log", "nonce-role-b", false});
+           }) == "semantic_worker_role_phase_mismatch");
+    assert(Throws<std::invalid_argument>([&] {
+               (void)service.reserveCheckpoint(
+                   {41, 88, "/tmp/checkpoint.log", "nonce-role-c"});
+           }) == "semantic_worker_role_phase_mismatch");
+    repository.reservationResult = {
+        WorkerAttemptReservationStatus::Reserved,
+        ExperimentAttempt()};
+    assert(service.reserveExperiment(
+        {41, "analyze", "/tmp/analyze.log", "nonce-analyze", false}));
+    assert(repository.experimentReservation);
+    assert(repository.experimentReservation->semanticWorkerRole == "train");
 
     repository.reservationResult = {
         WorkerAttemptReservationStatus::ReservationInsertFailed,
@@ -248,7 +277,7 @@ int main()
         WorkerAttemptReservationStatus::LifecycleClaimFailed,
         std::nullopt};
     assert(Throws<std::runtime_error>([&] {
-               (void)service.reserveCheckpoint(
+               (void)inferService.reserveCheckpoint(
                    {41, 88, "/tmp/checkpoint.log", "nonce-e"});
            }) == "checkpoint_worker_attempt_lifecycle_claim_failed");
 
@@ -312,7 +341,8 @@ int main()
     assert(Throws<std::invalid_argument>([] {
                MemoryRepository invalidRepository;
                WorkerAttemptLifecycleService invalid{
-                   invalidRepository, {"", 0, ""}};
+                   invalidRepository, {.schedulerInvocationId = "", .schedulerFencingToken = 0,
+                                       .selectedWorkerCanonicalExecutablePath = ""}};
            }) == "complete scheduler authority context required");
     return 0;
 }

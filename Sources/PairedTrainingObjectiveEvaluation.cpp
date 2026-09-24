@@ -93,6 +93,67 @@ bool ValidObjective(const ObjectiveProvenance& value)
     }
 }
 
+bool LowerHex(const std::string& value, std::size_t length)
+{
+    if (value.size() != length) return false;
+    for (const char character : value)
+        if (!((character >= '0' && character <= '9') ||
+              (character >= 'a' && character <= 'f')))
+            return false;
+    return true;
+}
+
+bool ValidExecution(const ScientificExecutionProvenance& value,
+                    std::string_view expectedPhase)
+{
+    return value.workerAttemptId > 0 && value.phase == expectedPhase &&
+        value.semanticLayoutVersion > 0 && value.modelInputWidth > 0 &&
+        value.workerRole == expectedPhase && LowerHex(value.sourceCommit, 40U) &&
+        LowerHex(value.executableSha256, 64U) &&
+        !value.executableName.empty() && LowerHex(value.runtimeIdentity, 64U);
+}
+
+bool SameScientificExecution(const ScientificExecutionProvenance& left,
+                             const ScientificExecutionProvenance& right)
+{
+    // Attempt ids and paths are audit locators. SHA identifies executable
+    // bytes; runtime identity covers materially distinct packaged runtimes.
+    return left.phase == right.phase &&
+        left.semanticLayoutVersion == right.semanticLayoutVersion &&
+        left.executableSha256 == right.executableSha256 &&
+        left.runtimeIdentity == right.runtimeIdentity;
+}
+
+void ValidateScientificExecution(const ArmEvidence& arm,
+                                 std::string_view name,
+                                 std::vector<std::string>& reasons)
+{
+    const std::string prefix = std::string(name) + '_';
+    if (!arm.trainingExecution)
+        Add(reasons, prefix + "training_execution_provenance_missing");
+    else if (!ValidExecution(*arm.trainingExecution, "train"))
+        Add(reasons, prefix + "training_execution_provenance_invalid");
+    else if (arm.trainingExecution->semanticLayoutVersion !=
+                 arm.configuration.modelInputLayoutVersion ||
+             arm.trainingExecution->modelInputWidth != arm.configuration.inputWidth)
+        Add(reasons, prefix + "training_execution_model_input_mismatch");
+
+    // Final classification/profitability is inference-derived evidence.  Its
+    // producer must be separately identified; analyzer attempts are not a
+    // substitute for inference provenance.
+    if (arm.classification || arm.profitability)
+    {
+        if (!arm.inferenceExecution)
+            Add(reasons, prefix + "inference_execution_provenance_missing");
+        else if (!ValidExecution(*arm.inferenceExecution, "infer"))
+            Add(reasons, prefix + "inference_execution_provenance_invalid");
+        else if (arm.inferenceExecution->semanticLayoutVersion !=
+                     arm.configuration.modelInputLayoutVersion ||
+                 arm.inferenceExecution->modelInputWidth != arm.configuration.inputWidth)
+            Add(reasons, prefix + "inference_execution_model_input_mismatch");
+    }
+}
+
 void ValidatePersistedFinalModelConfiguration(
     const ScientificConfiguration& value,
     std::string_view arm,
@@ -264,8 +325,6 @@ void ValidatePairIdentity(const ScientificConfiguration& control,
     EA_COMPARE_FIELD(resumeModelId, "resume_model_id_mismatch");
     EA_COMPARE_FIELD(resumeExpandInputWidth,
                      "resume_expand_input_width_mismatch");
-    EA_COMPARE_FIELD(runProvenance, "run_provenance_mismatch");
-
     if (control.experimentId == treatment.experimentId)
         Add(reasons, "experiment_id_reused");
     if (control.experimentObjective == treatment.experimentObjective)
@@ -533,6 +592,18 @@ ComparisonResult Compare(const ArmEvidence& control,
                           result.incompleteReasons);
     ValidateProfitability(treatment, "treatment", result.invalidReasons,
                           result.incompleteReasons);
+    ValidateScientificExecution(control, "control", result.invalidReasons);
+    ValidateScientificExecution(treatment, "treatment", result.invalidReasons);
+    if (control.trainingExecution && treatment.trainingExecution &&
+        !SameScientificExecution(*control.trainingExecution,
+                                 *treatment.trainingExecution))
+        Add(result.invalidReasons, "training_execution_provenance_mismatch");
+    if ((control.classification || control.profitability) &&
+        (treatment.classification || treatment.profitability) &&
+        control.inferenceExecution && treatment.inferenceExecution &&
+        !SameScientificExecution(*control.inferenceExecution,
+                                 *treatment.inferenceExecution))
+        Add(result.invalidReasons, "inference_execution_provenance_mismatch");
 
     if (!result.invalidReasons.empty())
     {

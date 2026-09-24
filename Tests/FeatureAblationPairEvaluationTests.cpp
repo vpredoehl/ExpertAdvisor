@@ -157,6 +157,14 @@ Feature::ArmEvidence Arm(long long experimentId,
     profitability.observationIdentityHash = Objective::DeterministicHash(
         profitability.observationIdentityCanonical);
     arm.profitability = profitability;
+    arm.trainingExecution = {experimentId * 10 + 1, "train", 4, 71, "train",
+        "3b44080010c1c7eb3388c637bbf6dccc98ee35b1",
+        "387a05120862f21911f626901075e920965d529f49d50b158c1509932e958632",
+        "LSTM_Release", "abababababababababababababababababababababababababababababababab", "/fixtures/layout4/train.manifest"};
+    arm.inferenceExecution = {experimentId * 10 + 2, "infer", 4, 71, "infer",
+        "3ba4844a41dc75ec21397ceadb02802ff45743b4",
+        "30fd8f1d63d71773a0425fdf02c6ab8e98ea0df21d17a9f85e50da04dd9df5a3",
+        "lstm-infer-worker", "abababababababababababababababababababababababababababababababab", "/fixtures/layout4/infer.manifest"};
     return result;
 }
 
@@ -223,6 +231,10 @@ int main()
         arm->extended.configuredModelInputLayoutVersion.reset();
         arm->authoritative.configuration.inputWidth = 75;
         arm->authoritative.configuration.modelInputLayoutVersion = 5;
+        arm->authoritative.trainingExecution->semanticLayoutVersion = 5;
+        arm->authoritative.trainingExecution->modelInputWidth = 75;
+        arm->authoritative.inferenceExecution->semanticLayoutVersion = 5;
+        arm->authoritative.inferenceExecution->modelInputWidth = 75;
     }
     assert(EvaluatePair(historicalControl, historicalAblation).disposition ==
            Feature::Disposition::ComparableComplete);
@@ -307,6 +319,54 @@ int main()
     mismatch.extended.trainingObjectiveVersion = 2;
     assert(Has(EvaluatePair(control, mismatch).invalidReasons,
                "training_objective_version_mismatch"));
+
+    // Creation provenance is retained for audit but is not pair-controlling.
+    auto creationOnlyMismatch = ablation;
+    creationOnlyMismatch.authoritative.configuration.runProvenance.gitCommit =
+        "aabe2cbdc0ffee1234567890abcdef1234567890";
+    const auto creationOnlyResult = EvaluatePair(control, creationOnlyMismatch);
+    assert(creationOnlyResult.disposition ==
+           Feature::Disposition::ComparableComplete);
+    assert(!Has(creationOnlyResult.invalidReasons, "run_provenance_mismatch"));
+
+    auto trainingExecutionMismatch = ablation;
+    trainingExecutionMismatch.authoritative.trainingExecution
+        ->executableSha256[0] = '4';
+    assert(Has(EvaluatePair(control, trainingExecutionMismatch).invalidReasons,
+               "training_execution_provenance_mismatch"));
+    auto inferenceExecutionMismatch = ablation;
+    inferenceExecutionMismatch.authoritative.inferenceExecution
+        ->runtimeIdentity[0] = 'b';
+    assert(Has(EvaluatePair(control, inferenceExecutionMismatch).invalidReasons,
+               "inference_execution_provenance_mismatch"));
+    auto missingTrainingExecution = ablation;
+    missingTrainingExecution.authoritative.trainingExecution.reset();
+    assert(Has(EvaluatePair(control, missingTrainingExecution).invalidReasons,
+               "ablation_training_execution_provenance_missing"));
+    auto invalidTrainingExecution = ablation;
+    invalidTrainingExecution.authoritative.trainingExecution->workerRole =
+        "infer";
+    assert(Has(EvaluatePair(control, invalidTrainingExecution).invalidReasons,
+               "ablation_training_execution_provenance_invalid"));
+    auto missingInferenceExecution = ablation;
+    missingInferenceExecution.authoritative.inferenceExecution.reset();
+    assert(Has(EvaluatePair(control, missingInferenceExecution).invalidReasons,
+               "ablation_inference_execution_provenance_missing"));
+    auto invalidInferenceExecution = ablation;
+    invalidInferenceExecution.authoritative.inferenceExecution->workerRole =
+        "train";
+    assert(Has(EvaluatePair(control, invalidInferenceExecution).invalidReasons,
+               "ablation_inference_execution_provenance_invalid"));
+    auto wrongExecutionInput = ablation;
+    wrongExecutionInput.authoritative.trainingExecution->modelInputWidth = 70;
+    wrongExecutionInput.authoritative.inferenceExecution
+        ->semanticLayoutVersion = 3;
+    const auto wrongExecutionInputResult =
+        EvaluatePair(control, wrongExecutionInput);
+    assert(Has(wrongExecutionInputResult.invalidReasons,
+               "ablation_training_execution_model_input_mismatch"));
+    assert(Has(wrongExecutionInputResult.invalidReasons,
+               "ablation_inference_execution_model_input_mismatch"));
 
     mismatch = ablation;
     mismatch.authoritative.configuration.featureAblationMask =
@@ -401,6 +461,10 @@ int main()
             "fnv1a64:67610f94f5c8e7cc";
         arm->authoritative.configuration.inputWidth = 77;
         arm->authoritative.configuration.modelInputLayoutVersion = 6;
+        arm->authoritative.trainingExecution->semanticLayoutVersion = 6;
+        arm->authoritative.trainingExecution->modelInputWidth = 77;
+        arm->authoritative.inferenceExecution->semanticLayoutVersion = 6;
+        arm->authoritative.inferenceExecution->modelInputWidth = 77;
         arm->authoritative.classification->symbol = "eurusdrmp";
         arm->authoritative.classification->analysisExperimentId =
             arm->authoritative.configuration.experimentId;
@@ -426,6 +490,8 @@ int main()
     {
         arm->extended.configuredModelInputLayoutVersion = 7;
         arm->authoritative.configuration.modelInputLayoutVersion = 7;
+        arm->authoritative.trainingExecution->semanticLayoutVersion = 7;
+        arm->authoritative.inferenceExecution->semanticLayoutVersion = 7;
         arm->authoritative.classification->analysisExperimentId =
             arm->authoritative.configuration.experimentId;
         arm->authoritative.profitability->experimentId =

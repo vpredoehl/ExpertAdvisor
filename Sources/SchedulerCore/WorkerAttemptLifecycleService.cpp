@@ -31,6 +31,17 @@ std::optional<ReservedWorkerAttempt> RequireReservation(
     throw std::runtime_error(insertFailure);
 }
 
+void RequireSemanticWorkerRoleForPhase(std::string_view phase,
+                                       std::string_view semanticWorkerRole)
+{
+    if (phase == "analyze")
+        return;
+    const std::string_view expected = phase == "train" ? "train" :
+        (phase == "infer" ? "infer" : "");
+    if (expected.empty() || semanticWorkerRole != expected)
+        throw std::invalid_argument("semantic_worker_role_phase_mismatch");
+}
+
 } // namespace
 
 WorkerAttemptLifecycleService::WorkerAttemptLifecycleService(
@@ -67,6 +78,7 @@ WorkerAttemptLifecycleService::reserveExperiment(
         throw std::invalid_argument(
             "complete experiment worker reservation required");
     }
+    RequireSemanticWorkerRoleForPhase(request.phase, context_.semanticWorkerRole);
     const std::string commandIdentity =
         "experiment:" + std::to_string(request.experimentId) + ":" +
         request.phase;
@@ -78,6 +90,10 @@ WorkerAttemptLifecycleService::reserveExperiment(
             request.experimentId,
             request.phase,
             context_.selectedWorkerCanonicalExecutablePath,
+            context_.semanticLayoutVersion, context_.modelInputWidth,
+            context_.semanticWorkerRole, context_.sourceCommit,
+            context_.executableSha256, context_.runtimeIdentity,
+            context_.canonicalManifestPath,
             commandIdentity,
             EA::ExperimentLifecycle::
                 RequireCanonicalCurrentOperationForPhase(request.phase),
@@ -97,6 +113,7 @@ WorkerAttemptLifecycleService::reserveCheckpoint(
         throw std::invalid_argument(
             "complete checkpoint worker reservation required");
     }
+    RequireSemanticWorkerRoleForPhase("infer", context_.semanticWorkerRole);
     const std::string commandIdentity =
         "checkpoint_infer:" + std::to_string(request.checkpointEvalId);
     return RequireReservation(
@@ -107,6 +124,10 @@ WorkerAttemptLifecycleService::reserveCheckpoint(
             request.experimentId,
             request.checkpointEvalId,
             context_.selectedWorkerCanonicalExecutablePath,
+            context_.semanticLayoutVersion, context_.modelInputWidth,
+            context_.semanticWorkerRole, context_.sourceCommit,
+            context_.executableSha256, context_.runtimeIdentity,
+            context_.canonicalManifestPath,
             commandIdentity,
             request.logPath}),
         "checkpoint_worker_attempt_reservation_insert_failed",
