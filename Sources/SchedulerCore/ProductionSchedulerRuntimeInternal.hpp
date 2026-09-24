@@ -137,6 +137,8 @@ struct SchedulerOptions
         compareExperimentReplications;
     std::optional<std::pair<long long, long long>>
         planExperimentReplications;
+    std::optional<std::pair<long long, long long>>
+        materializeExperimentReplications;
     std::optional<std::vector<unsigned int>> replicationSeeds;
     std::optional<std::string> expectedFeatureAblationMask;
     std::optional<std::vector<std::pair<long long, long long>>>

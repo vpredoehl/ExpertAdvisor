@@ -1,4 +1,5 @@
 #include "ExperimentReplicationPlanningService.hpp"
+#include "ExperimentReplicationPlanningPostgres.hpp"
 
 #include "FeatureAblationPairEvaluationRepository.hpp"
 #include "PairedTrainingObjectiveEvaluationRepository.hpp"
@@ -81,34 +82,32 @@ std::string RequiredIdentity(
     return *found->second;
 }
 
-class PostgresPlanningSource final :
-    public ExperimentPairComparison::EvidenceSource,
-    public EquivalentExperimentSource
+} // namespace
+
+PostgresPlanningSource::PostgresPlanningSource(
+    pqxx::transaction_base& transaction)
+    : transaction_(transaction)
 {
-public:
-    explicit PostgresPlanningSource(pqxx::transaction_base& transaction)
-        : transaction_(transaction)
-    {
-    }
+}
 
-    FeatureAblationPairEvaluation::ArmEvidence Load(
-        long long experimentId) const override
+FeatureAblationPairEvaluation::ArmEvidence PostgresPlanningSource::Load(
+    long long experimentId) const
+{
+    try
     {
-        try
-        {
-            return FeatureAblationPairEvaluation::
-                LoadAuthoritativeArmEvidence(transaction_, experimentId);
-        }
-        catch (const PairedTrainingObjectiveEvaluation::EvidenceLoadError& error)
-        {
-            throw ExperimentPairComparison::EvidenceUnavailableError(
-                error.reason());
-        }
+        return FeatureAblationPairEvaluation::LoadAuthoritativeArmEvidence(
+            transaction_, experimentId);
     }
-
-    EquivalentExperimentResult FindEquivalent(
-        const ExperimentPairComparison::ArmResultSet& proposedArm) const override
+    catch (const PairedTrainingObjectiveEvaluation::EvidenceLoadError& error)
     {
+        throw ExperimentPairComparison::EvidenceUnavailableError(
+            error.reason());
+    }
+}
+
+EquivalentExperimentResult PostgresPlanningSource::FindEquivalent(
+    const ExperimentPairComparison::ArmResultSet& proposedArm) const
+{
         const std::string symbol = RequiredIdentity(proposedArm, "symbol");
         const std::string seed = RequiredIdentity(
             proposedArm, "fresh_initialization_seed");
@@ -162,13 +161,7 @@ public:
                 : "candidate_identity_evidence_unavailable";
         }
         return result;
-    }
-
-private:
-    pqxx::transaction_base& transaction_;
-};
-
-} // namespace
+}
 
 int RunPlanningCommand(const std::string& connectionString,
                        const PlanningCommand& command,

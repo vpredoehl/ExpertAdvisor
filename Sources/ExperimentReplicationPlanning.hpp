@@ -38,6 +38,18 @@ struct EquivalentExperimentResult
     bool operator==(const EquivalentExperimentResult&) const = default;
 };
 
+// This is the single authoritative proposed-experiment representation shared
+// by planning, equivalence validation, rendering, and persistence.  The base
+// value is the exact configured scientific identity copied from the source;
+// the added fields are the authoritative persistence recipe.  Persistence
+// clones that source experiment's configured columns and applies exactly this
+// seed -- it never reconstructs configuration from rendered output.
+struct ProposedExperimentSpecification : Pair::ArmResultSet
+{
+    long long authoritativeSourceExperimentId = 0;
+    unsigned int freshInitializationSeed = 0;
+};
+
 class EquivalentExperimentSource
 {
 public:
@@ -50,7 +62,7 @@ struct ArmPlan
 {
     std::string role;
     long long sourceExperimentId = 0;
-    Pair::ArmResultSet proposed;
+    ProposedExperimentSpecification proposed;
     std::vector<Pair::IdentityDifference> changedFromSource;
     EquivalentExperimentResult equivalent;
 };

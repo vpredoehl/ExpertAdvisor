@@ -182,8 +182,8 @@ public:
 
 int main()
 {
-    assert((Pair::ParseExperimentIdPair("656:657") ==
-            std::pair<long long, long long>{656, 657}));
+    assert((Pair::ParseExperimentIdPair("101:102") ==
+            std::pair<long long, long long>{101, 102}));
     for (std::string_view malformed : {"", "0:2", "1:1", "1:2:3"})
     {
         try
@@ -203,8 +203,8 @@ int main()
              "+1", "01", " 44", "44 ", "4294967296", "x"})
         ExpectSeedParseFailure(malformed);
 
-    const auto sourceA = Arm(656, "", 42);
-    const auto sourceB = Arm(657, std::string{kMask}, 42);
+    const auto sourceA = Arm(101, "", 42);
+    const auto sourceB = Arm(102, std::string{kMask}, 42);
     auto plan = PlanFor(sourceA, sourceB, {44, 45, 46});
     assert(plan.state == Planning::PlanState::Valid);
     assert(plan.requestedSeeds == std::vector<unsigned int>({44, 45, 46}));
@@ -214,6 +214,12 @@ int main()
         const auto& pair = plan.pairs[index];
         assert(pair.ordinal == index + 1);
         assert(pair.requestedSeed == 44 + index);
+        assert(pair.armA.proposed.authoritativeSourceExperimentId == 101);
+        assert(pair.armB.proposed.authoritativeSourceExperimentId == 102);
+        assert(pair.armA.proposed.freshInitializationSeed ==
+               pair.requestedSeed);
+        assert(pair.armB.proposed.freshInitializationSeed ==
+               pair.requestedSeed);
         assert(Identity(pair.armA.proposed, "fresh_initialization_seed").value ==
                std::to_string(pair.requestedSeed));
         assert(Identity(pair.armB.proposed, "fresh_initialization_seed").value ==
@@ -304,18 +310,18 @@ int main()
     assert(rendered.find("queued=") == std::string::npos);
 
     FixtureEvidence evidence;
-    evidence.arms.emplace(656, sourceA);
-    evidence.arms.emplace(657, sourceB);
+    evidence.arms.emplace(101, sourceA);
+    evidence.arms.emplace(102, sourceB);
     std::ostringstream output;
     std::ostringstream errors;
-    Planning::PlanningCommand command{{656, 657}, {44, 45}};
+    Planning::PlanningCommand command{{101, 102}, {44, 45}};
     assert(Planning::RunPlanningCommand(
                command, evidence, equivalents, output, errors) == 0);
-    assert((evidence.loads == std::vector<long long>{656, 657}));
+    assert((evidence.loads == std::vector<long long>{101, 102}));
     assert(errors.str().empty());
     assert(output.str().find("pair_count=2") != std::string::npos);
 
-    Planning::PlanningCommand missingCommand{{656, 999}, {44}};
+    Planning::PlanningCommand missingCommand{{101, 999}, {44}};
     output.str({});
     errors.str({});
     assert(Planning::RunPlanningCommand(

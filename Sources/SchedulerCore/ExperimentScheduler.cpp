@@ -105,6 +105,7 @@
 #include "ExperimentPairComparisonService.hpp"
 #include "ExperimentReplicationComparisonService.hpp"
 #include "ExperimentReplicationPlanningService.hpp"
+#include "ExperimentReplicationMaterialization.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
 #include "CorrectedCausalSurpriseReplicationContinuationService.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
@@ -492,6 +493,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--compare-experiment-replications=", 0) == 0 ||
             arg == "--plan-experiment-replications" ||
             arg.rfind("--plan-experiment-replications=", 0) == 0 ||
+            arg == "--materialize-experiment-replications" ||
+            arg.rfind("--materialize-experiment-replications=", 0) == 0 ||
             arg == "--replication-seeds" ||
             arg.rfind("--replication-seeds=", 0) == 0)
             return true;
@@ -1554,6 +1557,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 throw std::invalid_argument(
                     "--plan-experiment-replications specified more than once");
             options.planExperimentReplications =
+                EA::ExperimentPairComparison::ParseExperimentIdPair(
+                    RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--materialize-experiment-replications")
+        {
+            if (options.materializeExperimentReplications)
+                throw std::invalid_argument(
+                    "--materialize-experiment-replications specified more than once");
+            options.materializeExperimentReplications =
                 EA::ExperimentPairComparison::ParseExperimentIdPair(
                     RequireNextArg(argc, argv, i, arg));
         }
@@ -3404,6 +3416,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.planExperimentReplications =
                 EA::ExperimentPairComparison::ParseExperimentIdPair(value);
         }
+        else if (SplitOptionWithValue(
+                     arg, "--materialize-experiment-replications", value))
+        {
+            if (options.materializeExperimentReplications)
+                throw std::invalid_argument(
+                    "--materialize-experiment-replications specified more than once");
+            options.materializeExperimentReplications =
+                EA::ExperimentPairComparison::ParseExperimentIdPair(value);
+        }
         else if (SplitOptionWithValue(arg, "--replication-seeds", value))
         {
             if (options.replicationSeeds)
@@ -3769,6 +3790,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareExperimentPair.has_value() ? 1 : 0) +
         (options.compareExperimentReplications.has_value() ? 1 : 0) +
         (options.planExperimentReplications.has_value() ? 1 : 0) +
+        (options.materializeExperimentReplications.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
         (options.correctedCausalSurpriseReplicationStatus.has_value()
              ? 1 : 0) +
@@ -3895,10 +3917,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         !options.compareExperimentPair)
         throw std::invalid_argument(
             "--summary requires --compare-experiment-pair");
-    if (options.planExperimentReplications.has_value() !=
-        options.replicationSeeds.has_value())
+    const bool replicationWaveCommand =
+        options.planExperimentReplications.has_value() ||
+        options.materializeExperimentReplications.has_value();
+    if (replicationWaveCommand != options.replicationSeeds.has_value())
         throw std::invalid_argument(
-            "--plan-experiment-replications and --replication-seeds "
+            "replication planning/materialization and --replication-seeds "
             "must be specified together");
     if (options.expectedFeatureAblationMask &&
         !options.compareFeatureAblationPair &&
@@ -12958,6 +12982,13 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Equivalent experiments are reported without selecting or mutating "
         << "them. Statistical independence is never inferred.\n"
         << "Usage: " << exe
+        << " --materialize-experiment-replications=SOURCE_A_ID:SOURCE_B_ID "
+           "--replication-seeds=SEED[,SEED...]\n"
+        << "Re-loads and revalidates the controlled replication wave under one "
+        << "serialized PostgreSQL write transaction, aborts the whole wave for "
+        << "any equivalent or ambiguous arm, and creates paused fresh experiment "
+        << "records only. It never queues, starts, schedules, or signals work.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:ABLATION_ID "
         << "--expected-ablation-mask=FEATURE[,FEATURE...]\n"
         << "Feature-ablation pair comparison canonicalizes the requested mask, "
@@ -14406,6 +14437,17 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             command.requestedSeeds = *options.replicationSeeds;
             return EA::ExperimentReplicationPlanning::RunPlanningCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.materializeExperimentReplications)
+        {
+            EA::ExperimentReplicationMaterialization::MaterializationCommand
+                command;
+            command.sourceExperimentIds =
+                *options.materializeExperimentReplications;
+            command.requestedSeeds = *options.replicationSeeds;
+            return EA::ExperimentReplicationMaterialization::
+                RunMaterializationCommand(
+                    LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.compareFeatureAblationPair)
         {

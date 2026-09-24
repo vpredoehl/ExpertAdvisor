@@ -289,11 +289,17 @@ Plan MakePlan(const Pair::ArmResultSet& sourceArmA,
         pair.requestedSeed = requestedSeeds[index];
         pair.armA.role = "arm_a";
         pair.armA.sourceExperimentId = sourceArmA.experimentId;
-        pair.armA.proposed = plan.sourceArmA;
+        static_cast<Pair::ArmResultSet&>(pair.armA.proposed) = plan.sourceArmA;
+        pair.armA.proposed.authoritativeSourceExperimentId =
+            sourceArmA.experimentId;
+        pair.armA.proposed.freshInitializationSeed = pair.requestedSeed;
         SetSeed(pair.armA.proposed, pair.requestedSeed);
         pair.armB.role = "arm_b";
         pair.armB.sourceExperimentId = sourceArmB.experimentId;
-        pair.armB.proposed = plan.sourceArmB;
+        static_cast<Pair::ArmResultSet&>(pair.armB.proposed) = plan.sourceArmB;
+        pair.armB.proposed.authoritativeSourceExperimentId =
+            sourceArmB.experimentId;
+        pair.armB.proposed.freshInitializationSeed = pair.requestedSeed;
         SetSeed(pair.armB.proposed, pair.requestedSeed);
         plan.pairs.push_back(std::move(pair));
     }
@@ -391,6 +397,20 @@ void RecomputePreflight(Plan& plan)
         const auto validateSourceChange = [&](const ArmPlan& arm,
                                               std::string_view role)
         {
+            if (arm.proposed.authoritativeSourceExperimentId !=
+                    arm.sourceExperimentId ||
+                arm.proposed.experimentId != arm.sourceExperimentId)
+            {
+                pair.preflightState = PlanState::Invalid;
+                AddReason(pair.reasons, std::string(role) +
+                          "_authoritative_source_identity_mismatch");
+            }
+            if (arm.proposed.freshInitializationSeed != pair.requestedSeed)
+            {
+                pair.preflightState = PlanState::Invalid;
+                AddReason(pair.reasons, std::string(role) +
+                          "_persistence_seed_assignment_mismatch");
+            }
             for (const auto& difference : arm.changedFromSource)
                 if (difference.field != "fresh_initialization_seed")
                 {

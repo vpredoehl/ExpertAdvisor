@@ -286,6 +286,12 @@
 		0E7D130831D4000100AAA001 /* ExperimentReplicationPlanningService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D130231D4000100AAA001 /* ExperimentReplicationPlanningService.cpp */; };
 		0E7D130931D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D130431D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp */; };
 		0E7D130A31D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D130431D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp */; };
+		0E7D140531D5000100AAA001 /* ExperimentReplicationMaterialization.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D140031D5000100AAA001 /* ExperimentReplicationMaterialization.cpp */; };
+		0E7D140631D5000100AAA001 /* ExperimentReplicationMaterialization.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D140031D5000100AAA001 /* ExperimentReplicationMaterialization.cpp */; };
+		0E7D140731D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D140231D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp */; };
+		0E7D140831D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D140231D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp */; };
+		0E7D140931D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D140331D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp */; };
+		0E7D140A31D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D140331D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp */; };
 		0E7E000431E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
 		0E7E000531E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */; };
 		0E7E000631E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */; };
@@ -850,6 +856,12 @@
 		0E7D130231D4000100AAA001 /* ExperimentReplicationPlanningService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentReplicationPlanningService.cpp; path = Sources/ExperimentReplicationPlanningService.cpp; sourceTree = SOURCE_ROOT; };
 		0E7D130331D4000100AAA001 /* ExperimentReplicationPlanningService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentReplicationPlanningService.hpp; path = Sources/ExperimentReplicationPlanningService.hpp; sourceTree = SOURCE_ROOT; };
 		0E7D130431D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentReplicationPlanningCommand.cpp; path = Sources/ExperimentReplicationPlanningCommand.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D130B31D4000100AAA001 /* ExperimentReplicationPlanningPostgres.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentReplicationPlanningPostgres.hpp; path = Sources/ExperimentReplicationPlanningPostgres.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D140031D5000100AAA001 /* ExperimentReplicationMaterialization.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentReplicationMaterialization.cpp; path = Sources/ExperimentReplicationMaterialization.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D140131D5000100AAA001 /* ExperimentReplicationMaterialization.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentReplicationMaterialization.hpp; path = Sources/ExperimentReplicationMaterialization.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D140231D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentReplicationMaterializationCommand.cpp; path = Sources/ExperimentReplicationMaterializationCommand.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D140331D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentReplicationMaterializationRepository.cpp; path = Sources/ExperimentReplicationMaterializationRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D140431D5000100AAA001 /* ExperimentReplicationMaterializationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentReplicationMaterializationRepository.hpp; path = Sources/ExperimentReplicationMaterializationRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0E7E000031E0000100AAA001 /* FeatureAblationReplicationEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluation.cpp; path = Sources/FeatureAblationReplicationEvaluation.cpp; sourceTree = SOURCE_ROOT; };
 		0E7E000131E0000100AAA001 /* FeatureAblationReplicationEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationReplicationEvaluation.hpp; path = Sources/FeatureAblationReplicationEvaluation.hpp; sourceTree = SOURCE_ROOT; };
 		0E7E000231E0000100AAA001 /* FeatureAblationReplicationEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationReplicationEvaluationService.cpp; path = Sources/FeatureAblationReplicationEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
@@ -1241,6 +1253,12 @@
 				0E7D130231D4000100AAA001 /* ExperimentReplicationPlanningService.cpp */,
 				0E7D130331D4000100AAA001 /* ExperimentReplicationPlanningService.hpp */,
 				0E7D130431D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp */,
+				0E7D130B31D4000100AAA001 /* ExperimentReplicationPlanningPostgres.hpp */,
+				0E7D140031D5000100AAA001 /* ExperimentReplicationMaterialization.cpp */,
+				0E7D140131D5000100AAA001 /* ExperimentReplicationMaterialization.hpp */,
+				0E7D140231D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp */,
+				0E7D140331D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp */,
+				0E7D140431D5000100AAA001 /* ExperimentReplicationMaterializationRepository.hpp */,
 				0E8100003350000100AAA001 /* CausalSurpriseObservability.cpp */,
 				0E8100013350000100AAA001 /* CausalSurpriseObservability.hpp */,
 				0E8100023350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp */,
@@ -2015,6 +2033,9 @@
 				0E7D130531D4000100AAA001 /* ExperimentReplicationPlanning.cpp in Sources */,
 				0E7D130731D4000100AAA001 /* ExperimentReplicationPlanningService.cpp in Sources */,
 				0E7D130931D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp in Sources */,
+				0E7D140531D5000100AAA001 /* ExperimentReplicationMaterialization.cpp in Sources */,
+				0E7D140731D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp in Sources */,
+				0E7D140931D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp in Sources */,
 				0E8100063350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */,
 				0E8100083350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */,
 				0E81000A3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */,
@@ -2174,6 +2195,9 @@
 				0E7D130631D4000100AAA001 /* ExperimentReplicationPlanning.cpp in Sources */,
 				0E7D130831D4000100AAA001 /* ExperimentReplicationPlanningService.cpp in Sources */,
 				0E7D130A31D4000100AAA001 /* ExperimentReplicationPlanningCommand.cpp in Sources */,
+				0E7D140631D5000100AAA001 /* ExperimentReplicationMaterialization.cpp in Sources */,
+				0E7D140831D5000100AAA001 /* ExperimentReplicationMaterializationCommand.cpp in Sources */,
+				0E7D140A31D5000100AAA001 /* ExperimentReplicationMaterializationRepository.cpp in Sources */,
 				0E8100073350000100AAA001 /* CausalSurpriseObservability.cpp in Sources */,
 				0E8100093350000100AAA001 /* CausalSurpriseObservabilityRepository.cpp in Sources */,
 				0E81000B3350000100AAA001 /* CausalSurpriseObservabilityService.cpp in Sources */,
