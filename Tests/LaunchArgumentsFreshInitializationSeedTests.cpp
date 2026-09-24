@@ -79,11 +79,11 @@ int main()
         "test", "--train", "--log-level=summary", "--checkpoint-every=0",
         "--new-model-name=experiment_652", "--donchian20-mode=enabled",
         "--feature-warmup-scope=full_history_warmup", "--donchian-lookback=20",
-        "--fresh-initialization-seed=42", "--scheduler-experiment-id=652",
+        "--fresh-initialization-seed=43", "--scheduler-experiment-id=656",
         "--training-objective=legacy", "--symbol=eurusd",
         "--prediction-horizon=4", "--threshold=0.0008", "--epochs=1",
         "2010-01-01", "2010-01-02"};
-    assert(Parse(schedulerEmitted).freshInitializationSeed == 42U);
+    assert(Parse(schedulerEmitted).freshInitializationSeed == 43U);
 
     ExpectInvalid({"test", "--train", "--fresh-initialization-seed", "42",
                    "--fresh-initialization-seed=43", "2010-01-01", "2010-01-02"},

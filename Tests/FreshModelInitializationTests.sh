@@ -17,17 +17,21 @@ include_flags=()
 while IFS= read -r include_dir; do
     include_flags+=("-I${include_dir}")
 done < <(find "${repo_root}/MetaNN" -type d -print)
+read -r -a pqxx_compile_flags <<< "$(pkg-config --cflags libpqxx)"
+read -r -a pqxx_link_flags <<< "$(pkg-config --libs libpqxx)"
 
 xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=26.2 \
     -O1 -Wall -Wextra -Werror \
     -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
     -Wno-unused-but-set-variable -Wno-format -Wno-ignored-qualifiers \
     -Wno-reorder-ctor -Wno-sign-compare \
-    -I"${repo_root}/Headers" "${include_flags[@]}" \
+    -I"${repo_root}/Headers" "${include_flags[@]}" "${pqxx_compile_flags[@]}" \
     "${repo_root}/Tests/FreshModelInitializationTests.cpp" \
     "${repo_root}/LSTM/LSTM.cpp" "${repo_root}/LSTM/Tensor.cpp" \
+    "${repo_root}/Sources/EconomicEventFeatures.cpp" \
     "${repo_root}/Common/PricePoint.cpp" \
     -L"${products_dir}" -lMetaNN -lMetalBuffer \
+    "${pqxx_link_flags[@]}" \
     -framework Metal -framework MetalPerformanceShaders \
     -framework Foundation \
     -o "${test_dir}/FreshModelInitializationTests"
@@ -63,7 +67,12 @@ cp "${products_dir}/MetaNN_metal.metallib" "${test_dir}/MetaNN.metallib"
     cmp legacy_a.shared.bin auxiliary_b.shared.bin
     cmp auxiliary_a.auxiliary.bin auxiliary_b.auxiliary.bin
     ./FreshModelInitializationTests legacy 43 seed43
-    cmp -s legacy_a.shared.bin seed43.shared.bin && exit 1
+    if cmp -s legacy_a.shared.bin seed43.shared.bin; then
+        printf '%s\n' \
+            'expected fresh-initialization seed 42 and seed 43 to differ' \
+            >&2
+        exit 1
+    fi
 )
 
 printf '%s\n' 'FreshModelInitializationTests passed'

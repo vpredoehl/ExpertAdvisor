@@ -40,6 +40,7 @@ int main(int argc, char* argv[])
             feature_warmup_scope text NOT NULL,
             donchian_lookback text NOT NULL,
             feature_ablation_mask text NOT NULL,
+            fresh_initialization_seed bigint NOT NULL DEFAULT 42,
             resume_expand_input_width boolean NOT NULL,
             training_objective_canonical text NOT NULL,
             training_objective_hash text NOT NULL,
@@ -262,42 +263,42 @@ int main(int argc, char* argv[])
             train_start,train_end,infer_start,infer_end,last_model_id,
             resume_model_id,train_log_path,infer_log_path,analysis_log_path,
             donchian20_mode,feature_warmup_scope,donchian_lookback,
-            feature_ablation_mask,resume_expand_input_width,
+            feature_ablation_mask,fresh_initialization_seed,resume_expand_input_width,
             training_objective_canonical,training_objective_hash,
             scheduler_priority,resume_requested,scheduler_resume_origin,
             status,phase,updated_at
         ) VALUES
         (1,'normalpreempt',4,0.1,NULL,2.5,20,10,'2020-01-01','2021-01-01',
          NULL,'2022-01-01',NULL,88,NULL,'infer.log',NULL,
-         'enabled','full_history_warmup','20','none',false,'objective','hash',
+         'enabled','full_history_warmup','20','none',43,false,'objective','hash',
          'normal',true,'preemption','pending','train','2026-01-01 00:00:00+00'),
         (2,'highnone',4,0.1,1.0,1.0,20,10,'2020-01-01','2021-01-01',
          '2021-01-01','2022-01-01',10,NULL,'train.log',NULL,'analysis.log',
-         'enabled','full_history_warmup','20','none',false,'objective','hash',
+         'enabled','full_history_warmup','20','none',42,false,'objective','hash',
          'high',false,'none','pending','train','2026-01-01 00:00:02+00'),
         (3,'normaloperatorlater',4,0.1,1.0,1.0,20,10,'2020-01-01','2021-01-01',
          NULL,NULL,NULL,NULL,NULL,NULL,NULL,'enabled','full_history_warmup','20','none',
-         false,'objective','hash','normal',true,'operator','pending','train',
+         42,false,'objective','hash','normal',true,'operator','pending','train',
          '2026-01-01 00:00:02+00'),
         (4,'normaloperatorearlier',4,0.1,1.0,1.0,20,10,'2020-01-01','2021-01-01',
          NULL,NULL,NULL,NULL,NULL,NULL,NULL,'enabled','full_history_warmup','20','none',
-         false,'objective','hash','normal',true,'operator','pending','train',
+         42,false,'objective','hash','normal',true,'operator','pending','train',
          '2026-01-01 00:00:01+00'),
         (5,'lowoperator',4,0.1,1.0,1.0,20,10,'2020-01-01','2021-01-01',
          NULL,NULL,NULL,NULL,NULL,NULL,NULL,'enabled','full_history_warmup','20','none',
-         false,'objective','hash','low',true,'operator','pending','train',
+         42,false,'objective','hash','low',true,'operator','pending','train',
          '2025-01-01 00:00:00+00'),
         (10,'running',4,0.1,NULL,NULL,20,10,'2020-01-01','2021-01-01',
          NULL,NULL,NULL,NULL,NULL,NULL,NULL,'enabled','full_history_warmup','20',
-         'none',false,'objective','hash','normal',false,'none','running','train',
+         'none',42,false,'objective','hash','normal',false,'none','running','train',
          '2026-01-02 00:00:00+00'),
         (20,'reserveexperiment',4,0.1,1.0,1.0,20,10,
          '2020-01-01','2021-01-01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,
-         'enabled','full_history_warmup','20','none',false,'objective','hash',
+         'enabled','full_history_warmup','20','none',42,false,'objective','hash',
          'normal',false,'none','pending','analyze',clock_timestamp()),
         (21,'reservecancellation',4,0.1,1.0,1.0,20,10,
          '2020-01-01','2021-01-01',NULL,NULL,NULL,NULL,NULL,NULL,NULL,
-         'enabled','full_history_warmup','20','none',false,'objective','hash',
+         'enabled','full_history_warmup','20','none',42,false,'objective','hash',
          'normal',false,'none','pending','train',clock_timestamp());
         UPDATE experiment SET cancellation_request_id=77,
             cancel_after_checkpoint_epoch=10 WHERE experiment_id=21;
@@ -445,6 +446,7 @@ int main(int argc, char* argv[])
     assert(!nullRecord.trainLogPath);
     assert(nullRecord.inferLogPath == "infer.log");
     assert(!nullRecord.analysisLogPath);
+    assert(nullRecord.freshInitializationSeed == 43U);
     assert(!pending[3].activeWorkerAttemptId);
 
     const auto experimentReservation =

@@ -161,6 +161,7 @@ int main()
     persisted.experiment.inferEnd = "2026-01-01";
     persisted.experiment.lastModelId = std::nullopt;
     persisted.experiment.resumeModelId = 88;
+    persisted.experiment.freshInitializationSeed = 43U;
     persisted.experiment.trainLogPath = std::nullopt;
     persisted.experiment.inferLogPath = "infer.log";
     persisted.experiment.analysisLogPath = std::nullopt;
@@ -174,6 +175,7 @@ int main()
     assert(roundTrip[0].experiment.inferEnd == "2026-01-01");
     assert(!roundTrip[0].experiment.lastModelId);
     assert(roundTrip[0].experiment.resumeModelId == 88);
+    assert(roundTrip[0].experiment.freshInitializationSeed == 43U);
     assert(!roundTrip[0].experiment.trainLogPath);
     assert(roundTrip[0].experiment.inferLogPath == "infer.log");
     assert(!roundTrip[0].experiment.analysisLogPath);

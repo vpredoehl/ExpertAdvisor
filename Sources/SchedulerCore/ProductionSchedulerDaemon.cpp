@@ -1702,6 +1702,7 @@ ExperimentRow RepositoryRecordToExperiment(
         ParseDonchianLookback(record.donchianLookback);
     experiment.featureAblationMask = EA::FeatureAblationMask::Parse(
         record.featureAblationMask).CanonicalText();
+    experiment.freshInitializationSeed = record.freshInitializationSeed;
     experiment.resumeExpandInputWidth = record.resumeExpandInputWidth;
     experiment.trainingObjective = EA::TrainingObjective::ResolvePersisted(
         record.trainingObjectiveCanonical,

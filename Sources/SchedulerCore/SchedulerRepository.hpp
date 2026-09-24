@@ -34,6 +34,7 @@ struct SchedulerExperimentRecord
     std::string featureWarmupScope;
     std::string donchianLookback;
     std::string featureAblationMask;
+    unsigned int freshInitializationSeed = 42U;
     bool resumeExpandInputWidth = false;
     std::string trainingObjectiveCanonical;
     std::string trainingObjectiveHash;

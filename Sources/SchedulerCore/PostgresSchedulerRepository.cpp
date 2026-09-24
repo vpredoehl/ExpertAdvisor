@@ -43,9 +43,10 @@ SchedulerExperimentRecord MapExperiment(const pqxx::row& row)
     record.featureWarmupScope = row[18].as<std::string>();
     record.donchianLookback = row[19].as<std::string>();
     record.featureAblationMask = row[20].as<std::string>();
-    record.resumeExpandInputWidth = row[21].as<bool>();
-    record.trainingObjectiveCanonical = row[22].as<std::string>();
-    record.trainingObjectiveHash = row[23].as<std::string>();
+    record.freshInitializationSeed = row[21].as<unsigned int>();
+    record.resumeExpandInputWidth = row[22].as<bool>();
+    record.trainingObjectiveCanonical = row[23].as<std::string>();
+    record.trainingObjectiveHash = row[24].as<std::string>();
     return record;
 }
 
@@ -55,7 +56,8 @@ constexpr const char* kExperimentProjection =
     "train_start::text, train_end::text, infer_start::text, infer_end::text, "
     "last_model_id, resume_model_id, train_log_path, infer_log_path, "
     "analysis_log_path, donchian20_mode, feature_warmup_scope, "
-    "donchian_lookback, feature_ablation_mask, resume_expand_input_width, "
+    "donchian_lookback, feature_ablation_mask, fresh_initialization_seed, "
+    "resume_expand_input_width, "
     "training_objective_canonical, training_objective_hash";
 
 bool TableExists(
@@ -427,10 +429,10 @@ PostgresSchedulerRepository::loadPendingExperiments(
     {
         PendingSchedulerExperimentRecord record;
         record.experiment = MapExperiment(row);
-        record.schedulerPriority = row[24].as<std::string>();
-        record.resumeRequested = row[25].as<bool>();
-        record.schedulerResumeOrigin = row[26].as<std::string>();
-        record.activeWorkerAttemptId = OptionalCell<long long>(row, 27);
+        record.schedulerPriority = row[25].as<std::string>();
+        record.resumeRequested = row[26].as<bool>();
+        record.schedulerResumeOrigin = row[27].as<std::string>();
+        record.activeWorkerAttemptId = OptionalCell<long long>(row, 28);
         records.push_back(std::move(record));
     }
     return records;
@@ -451,9 +453,9 @@ PostgresSchedulerRepository::loadRunningExperiments()
     {
         records.push_back(RunningSchedulerExperimentRecord{
             MapExperiment(row),
-            row[24].as<std::string>(),
-            OptionalCell<int>(row, 25),
-            row[26].as<double>()});
+            row[25].as<std::string>(),
+            OptionalCell<int>(row, 26),
+            row[27].as<double>()});
     }
     return records;
 }
@@ -1054,19 +1056,19 @@ PostgresSchedulerRepository::loadExperimentTransition(
 
     ExperimentTransitionRecord record;
     record.experiment = MapExperiment(rows[0]);
-    record.status = rows[0][24].as<std::string>();
-    record.phase = rows[0][25].as<std::string>();
-    record.currentEpoch = OptionalCell<int>(rows[0], 26);
-    record.schedulerPriority = rows[0][27].as<std::string>();
-    record.schedulerResumeOrigin = rows[0][28].as<std::string>();
-    record.activeWorkerAttemptId = OptionalCell<long long>(rows[0], 29);
-    record.workerPid = OptionalCell<int>(rows[0], 30);
-    record.workerProcessGroupId = OptionalCell<long long>(rows[0], 31);
+    record.status = rows[0][25].as<std::string>();
+    record.phase = rows[0][26].as<std::string>();
+    record.currentEpoch = OptionalCell<int>(rows[0], 27);
+    record.schedulerPriority = rows[0][28].as<std::string>();
+    record.schedulerResumeOrigin = rows[0][29].as<std::string>();
+    record.activeWorkerAttemptId = OptionalCell<long long>(rows[0], 30);
+    record.workerPid = OptionalCell<int>(rows[0], 31);
+    record.workerProcessGroupId = OptionalCell<long long>(rows[0], 32);
     record.workerProcessStartIdentity =
-        OptionalCell<std::string>(rows[0], 32);
-    record.workerExecutable = OptionalCell<std::string>(rows[0], 33);
-    record.workerCommandLine = OptionalCell<std::string>(rows[0], 34);
-    record.hasAttachedWorkerAttempt = rows[0][35].as<bool>();
+        OptionalCell<std::string>(rows[0], 33);
+    record.workerExecutable = OptionalCell<std::string>(rows[0], 34);
+    record.workerCommandLine = OptionalCell<std::string>(rows[0], 35);
+    record.hasAttachedWorkerAttempt = rows[0][36].as<bool>();
     return record;
 }
 
