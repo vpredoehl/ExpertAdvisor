@@ -1603,6 +1603,7 @@
 				0F17000B3370000100AAA001 /* PBXTargetDependency */,
 				0F18000B3380000100AAA001 /* PBXTargetDependency */,
 				0F20000B33D0000100AAA001 /* PBXTargetDependency */,
+				0F6000203600000100AAA001 /* PBXTargetDependency */,
 			);
 			name = "LSTM Release";
 			productName = LSTM_Release;
@@ -2576,6 +2577,11 @@
 			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
 			targetProxy = 0F17000C3370000100AAA001 /* PBXContainerItemProxy */;
 		};
+		0F6000203600000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "lstm-analyze-worker";
+			target = 0F6000143600000100AAA001 /* lstm-analyze-worker */;
+		};
 		0F7000053700000100AAA001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = "lstm-scheduler";
@@ -3261,7 +3267,7 @@
 					"LSTM_TARGET_RELEASE=1",
 					"$(inherited)",
 				);
-				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/lstm-scheduler.map";
+				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/$(CURRENT_ARCH)/lstm-scheduler.map";
 				LD_GENERATE_MAP_FILE = YES;
 				LIBRARY_SEARCH_PATHS = (
 					"/opt/homebrew/opt/libpqxx@7.10.1/lib",
@@ -3309,7 +3315,7 @@
 				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
 				GCC_PREPROCESSOR_DEFINITIONS = ("NDEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
-				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/lstm-analyze-worker.map";
+				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/$(CURRENT_ARCH)/lstm-analyze-worker.map";
 				LD_GENERATE_MAP_FILE = YES;
 				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)");
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
@@ -3352,7 +3358,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_OPTIMIZATION_LEVEL = 3;
 				GCC_PREPROCESSOR_DEFINITIONS = ("NDEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
-				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/lstm-infer-worker.map";
+				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/$(CURRENT_ARCH)/lstm-infer-worker.map";
 				LD_GENERATE_MAP_FILE = YES;
 				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)", /opt/homebrew/opt/libomp/lib);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;

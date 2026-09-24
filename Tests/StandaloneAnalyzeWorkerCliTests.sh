@@ -9,6 +9,16 @@ legacy="${products_dir}/LSTM_Release"
 test -x "${worker}"
 test -x "${legacy}"
 
+# The analyzer consumes the feature-ablation vocabulary directly. A normal
+# Release build must refresh this adjacent scheduler worker in DerivedData.
+for feature in \
+    tg4_inner_break_any \
+    tg4_source_tg3_structurally_eligible \
+    tg4_source_tg3_confluent
+do
+    /usr/bin/strings "${worker}" | rg -Fxq "${feature}"
+done
+
 worker_output="$(mktemp)"
 legacy_output="$(mktemp)"
 trap 'rm -f "${worker_output}" "${legacy_output}"' EXIT
