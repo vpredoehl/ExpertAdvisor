@@ -7608,7 +7608,7 @@ bool ApplyStructuredInferenceMetrics(pqxx::work& w,
         "WHERE model_id = $1 "
         "AND symbol = $2 "
         "AND prediction_horizon = $3 "
-        "AND threshold_logret = $4 "
+        "AND abs(threshold_logret - $4) <= 1e-7 "
         "AND from_date = $5 "
         "AND to_date = $6 "
         "AND status = 'completed' "
