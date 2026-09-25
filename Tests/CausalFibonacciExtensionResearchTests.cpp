@@ -4,6 +4,8 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -451,6 +453,209 @@ void TestHistoricalBoundaryIsExclusiveAndFailClosed()
     assert(records.empty());
 }
 
+Candle HistoricalSyntheticBar(std::size_t bar, double high, double low,
+                              double close)
+{
+    return {static_cast<std::int64_t>(bar * 900U), close, high, low, close};
+}
+
+std::vector<Candle> HistoricalSyntheticABSeed()
+{
+    const std::vector<double> lows =
+        {10.0, 9.0, 5.0, 8.0, 10.0, 9.0,
+         10.0, 7.0, 10.0, 10.0, 7.0, 7.1};
+    const std::vector<double> highs =
+        {20.0, 20.5, 21.0, 23.0, 25.0, 22.0,
+         21.0, 20.5, 21.0, 20.0, 8.1, 8.0};
+    std::vector<Candle> result;
+    for (std::size_t bar = 0; bar < lows.size(); ++bar)
+        result.push_back(HistoricalSyntheticBar(
+            bar, highs[bar], lows[bar], 0.5 * (highs[bar] + lows[bar])));
+    return result;
+}
+
+Fib::HistoricalStudySpecification SyntheticHistoricalStudy(
+    std::int64_t scoreStart, std::int64_t outcomeEnd)
+{
+    return {"synthetic-historical-boundary", {0, scoreStart, outcomeEnd,
+            outcomeEnd}, false, "synthetic historical boundary"};
+}
+
+std::vector<Fib::ObservationRecord> EvaluateSyntheticHistorical(
+    const Fib::HistoricalStudySpecification& study,
+    const std::vector<Candle>& suffix)
+{
+    const EA::TG4::EvaluationConfiguration configuration =
+        EA::TG4::LoadConfigurationFile(EA_TEST_TG4_CONFIG_PATH);
+    std::vector<Fib::ObservationRecord> records;
+    Fib::HistoricalEvaluator evaluator(
+        "eurusdrmp", configuration, study,
+        [&records](Fib::ObservationRecord record)
+        { records.push_back(std::move(record)); });
+    for (const Candle& candle : HistoricalSyntheticABSeed())
+        evaluator.AddCompletedBar(candle);
+    for (const Candle& candle : suffix) evaluator.AddCompletedBar(candle);
+    evaluator.Finalize();
+    return records;
+}
+
+const Fib::ObservationRecord& OnlyRecord(
+    const std::vector<Fib::ObservationRecord>& records)
+{
+    assert(records.size() == 1);
+    return records.front();
+}
+
+void TestHistoricalEvaluatorSyntheticScoringBoundaries()
+{
+    // The seed causally creates its A/B during warmup. H1 becomes eligible at
+    // score start, but the 1.618 target on that same candle cannot resolve it.
+    std::vector<Candle> h1AtScoreStart;
+    for (std::size_t bar = 12; bar < 18; ++bar)
+        h1AtScoreStart.push_back(
+            HistoricalSyntheticBar(bar, 20.0, 7.0, 15.0));
+    h1AtScoreStart.push_back(HistoricalSyntheticBar(18, 40.0, 7.0, 40.0));
+    const auto h1Records = EvaluateSyntheticHistorical(
+        SyntheticHistoricalStudy(18 * 900, 19 * 900), h1AtScoreStart);
+    const Fib::ObservationRecord& h1 = OnlyRecord(h1Records);
+    assert(h1.sourceAB.identity.availabilityTimestamp < 18 * 900);
+    assert(h1.h1.eligibility.has_value());
+    assert(h1.h1.eligibility->timestamp == 18 * 900);
+    assert(h1.extension1618.zoneLowerPrice <= 40.0);
+    assert(h1.h1.state == Fib::OutcomeState::RightCensored);
+    assert(h1.h1.censorReason == Fib::CensorReason::StudyWindowBoundary);
+    assert(!h1.h1.resolution.has_value());
+
+    // The same close-beyond one completed bar before score start must not be
+    // retained as a scored confirmation observation.
+    const auto h1PreScoreRecords = EvaluateSyntheticHistorical(
+        SyntheticHistoricalStudy(19 * 900, 20 * 900), h1AtScoreStart);
+    assert(h1PreScoreRecords.empty());
+
+    // A 1.272 touch during warmup remains available to the rejection observer.
+    // The close at score start confirms H2 and starts all H2 endpoints there.
+    std::vector<Candle> h2AtScoreStart;
+    for (std::size_t bar = 12; bar < 17; ++bar)
+        h2AtScoreStart.push_back(
+            HistoricalSyntheticBar(bar, 20.0, 7.0, 15.0));
+    h2AtScoreStart.push_back(HistoricalSyntheticBar(17, 30.5, 7.0, 30.0));
+    h2AtScoreStart.push_back(HistoricalSyntheticBar(18, 30.0, 7.0, 30.0));
+    const auto h2Records = EvaluateSyntheticHistorical(
+        SyntheticHistoricalStudy(18 * 900, 19 * 900), h2AtScoreStart);
+    const Fib::ObservationRecord& h2 = OnlyRecord(h2Records);
+    assert(h2.sourceAB.identity.availabilityTimestamp < 18 * 900);
+    assert(h2.extension1272Touched.has_value());
+    assert(h2.extension1272Touched->timestamp == 17 * 900);
+    assert(h2.h2.eligibility.has_value());
+    assert(h2.h2.eligibility->timestamp == 18 * 900);
+    assert(7.0 <= h2.pullback0382.zoneUpperPrice);
+    assert(h2.h2.state == Fib::OutcomeState::RightCensored);
+    assert(h2.h2.censorReason == Fib::CensorReason::StudyWindowBoundary);
+    assert(!h2.h2.resolution.has_value());
+
+    // The identical rejection before score start cannot enter the H2
+    // confirmation denominator.
+    const auto h2PreScoreRecords = EvaluateSyntheticHistorical(
+        SyntheticHistoricalStudy(19 * 900, 20 * 900), h2AtScoreStart);
+    assert(h2PreScoreRecords.empty());
+
+    // The exclusive outcome boundary is enforced by the evaluator itself.
+    const EA::TG4::EvaluationConfiguration configuration =
+        EA::TG4::LoadConfigurationFile(EA_TEST_TG4_CONFIG_PATH);
+    const auto boundaryStudy = SyntheticHistoricalStudy(18 * 900, 19 * 900);
+    Fib::HistoricalEvaluator boundary(
+        "eurusdrmp", configuration, boundaryStudy,
+        [](Fib::ObservationRecord) {});
+    AssertInvalid([&]
+    {
+        boundary.AddCompletedBar(
+            HistoricalSyntheticBar(19, 40.0, 7.0, 40.0));
+    });
+}
+
+std::string ReadFile(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+void TestHistoricalStudySpecificationsAndMetadata()
+{
+    const auto first = Fib::Pre2025FirstStudySpecification();
+    const auto confirmation = Fib::Confirmation2025StudySpecification();
+    assert(first.identity == Fib::kFirstStudyIdentity);
+    assert(first.range.warmupStart == Fib::kFirstStudyStart);
+    assert(first.range.scoreStart == Fib::kFirstStudyStart);
+    assert(first.range.scoreEnd == Fib::kFirstStudyEndExclusive);
+    assert(!first.uses2025Bars);
+    assert(confirmation.range.warmupStart == Fib::kFirstStudyStart);
+    assert(confirmation.range.scoreStart == Fib::kFirstStudyEndExclusive);
+    assert(confirmation.range.scoreEnd == 1'767'225'600);
+    assert(confirmation.range.outcomeEnd == 1'767'225'600);
+    assert(confirmation.uses2025Bars);
+    // H1 close-beyond and H2 rejection use the same eligibility boundary:
+    // pre-score events are excluded while events at score start are included.
+    assert(!Fib::IsHistoricalStudyEligibilityTimestamp(
+        confirmation, confirmation.range.scoreStart - 1));
+    assert(Fib::IsHistoricalStudyEligibilityTimestamp(
+        confirmation, confirmation.range.scoreStart));
+    assert(Fib::IsHistoricalStudyEligibilityTimestamp(
+        confirmation, confirmation.range.scoreEnd - 1));
+    assert(!Fib::IsHistoricalStudyEligibilityTimestamp(
+        confirmation, confirmation.range.scoreEnd));
+
+    const EA::TG4::EvaluationConfiguration configuration =
+        EA::TG4::LoadConfigurationFile(EA_TEST_TG4_CONFIG_PATH);
+    std::vector<Fib::ObservationRecord> records;
+    Fib::HistoricalEvaluator evaluator(
+        "eurusdrmp", configuration, confirmation,
+        [&records](Fib::ObservationRecord record)
+        { records.push_back(std::move(record)); });
+    evaluator.AddCompletedBar(
+        {confirmation.range.warmupStart, 1.0, 1.1, 0.9, 1.0});
+    evaluator.AddCompletedBar(
+        {confirmation.range.scoreStart, 1.0, 1.1, 0.9, 1.0});
+    AssertInvalid([&]
+    {
+        evaluator.AddCompletedBar(
+            {confirmation.range.outcomeEnd, 1.0, 1.1, 0.9, 1.0});
+    });
+    evaluator.Finalize();
+    assert(records.empty());
+
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path() /
+        "causal_fibonacci_confirmation_metadata_test";
+    std::filesystem::remove_all(directory);
+    Fib::HistoricalArtifactWriter firstWriter(
+        directory / "first", configuration, first, "baseline", {"eurusdrmp"},
+        "bash Scripts/run_causal_fibonacci_extension_study.sh --output-dir tmp");
+    firstWriter.Complete();
+    const std::string firstManifest = ReadFile(directory / "first" / "manifest.json");
+    assert(firstManifest.find("causal-fibonacci-extension-pre-2025-first-study-v1") !=
+           std::string::npos);
+    assert(firstManifest.find("\"score_start\": \"2010-01-01T00:00:00Z\"") !=
+           std::string::npos);
+    assert(firstManifest.find("\"score_end_exclusive\": \"2025-01-01T00:00:00Z\"") !=
+           std::string::npos);
+    assert(firstManifest.find("\"uses_2025_bars\": false") != std::string::npos);
+    Fib::HistoricalArtifactWriter writer(
+        directory, configuration, confirmation, "baseline", {"eurusdrmp"},
+        "bash Scripts/run_causal_fibonacci_extension_study.sh --output-dir tmp --study confirmation2025");
+    writer.Complete();
+    const std::string manifest = ReadFile(directory / "manifest.json");
+    const std::string summary = ReadFile(directory / "summary.md");
+    assert(manifest.find("causal-fibonacci-extension-2025-confirmation-v1") !=
+           std::string::npos);
+    assert(manifest.find("\"score_start\": \"2025-01-01T00:00:00Z\"") !=
+           std::string::npos);
+    assert(manifest.find("\"outcome_end_exclusive\": \"2026-01-01T00:00:00Z\"") !=
+           std::string::npos);
+    assert(manifest.find("\"uses_2025_bars\": true") != std::string::npos);
+    assert(summary.find("confirmation study") != std::string::npos);
+    std::filesystem::remove_all(directory);
+}
+
 Fib::ObservationRecord SuccessfulRecord()
 {
     Fib::CausalExtensionTracker tracker(
@@ -633,6 +838,8 @@ int main()
     TestH2CausalStartHorizonCensoringAndAmbiguity();
     TestH3FailsClosedWithoutAuthoritativeDContract();
     TestHistoricalBoundaryIsExclusiveAndFailClosed();
+    TestHistoricalEvaluatorSyntheticScoringBoundaries();
+    TestHistoricalStudySpecificationsAndMetadata();
     TestStableIdentityDeduplicationStatisticsAndSchema();
     TestFutureBarsCannotRewriteFrozenGeometryOrEarlierEvents();
     std::cout << "Causal Fibonacci extension research tests passed\n";

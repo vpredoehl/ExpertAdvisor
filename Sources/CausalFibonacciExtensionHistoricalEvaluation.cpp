@@ -74,25 +74,45 @@ std::string CsvLine(const std::vector<std::string>& fields)
 
 } // namespace
 
+void ValidateHistoricalStudySpecification(
+    const HistoricalStudySpecification& specification)
+{
+    const TG4::TemporalRange& range = specification.range;
+    if (specification.identity.empty() ||
+        range.warmupStart > range.scoreStart ||
+        range.scoreStart >= range.scoreEnd ||
+        range.scoreEnd > range.outcomeEnd)
+        throw std::invalid_argument("invalid Fibonacci historical study specification");
+}
+
+bool IsHistoricalStudyEligibilityTimestamp(
+    const HistoricalStudySpecification& specification, std::int64_t timestamp)
+{
+    return timestamp >= specification.range.scoreStart &&
+        timestamp < specification.range.scoreEnd;
+}
+
 class HistoricalEvaluator::Implementation
 {
 public:
     Implementation(std::string symbol,
                    TG4::EvaluationConfiguration configuration,
+                   HistoricalStudySpecification specification,
                    RecordSink sink)
         : symbol_(std::move(symbol)), configuration_(std::move(configuration)),
-          sink_(std::move(sink)), integration_(
+          specification_(specification), sink_(std::move(sink)), integration_(
               TG1B::CalibrationConfiguration(configuration_.referenceBarScale),
               FibonacciConfiguration(), configuration_.geometry,
               configuration_.behavior, {symbol_, configuration_.timeframe})
     {
         TG4::ValidateConfiguration(configuration_);
+        ValidateHistoricalStudySpecification(specification_);
         if (!sink_) throw std::invalid_argument("Fibonacci record sink is empty");
         if (configuration_.timeframe != "15m" ||
             configuration_.candlePeriod != 15 ||
             configuration_.candleUnit != "minute")
             throw std::invalid_argument(
-                "Fibonacci first study requires canonical 15-minute bars");
+                "Fibonacci historical study requires canonical 15-minute bars");
         (void)FrozenProspectiveEvaluationConfiguration(symbol_);
         audit_.symbol = symbol_;
     }
@@ -101,10 +121,10 @@ public:
     {
         if (finalized_)
             throw std::logic_error("Fibonacci evaluator is finalized");
-        if (candle.timestamp < kFirstStudyStart ||
-            candle.timestamp >= kFirstStudyEndExclusive)
+        if (candle.timestamp < specification_.range.warmupStart ||
+            candle.timestamp >= specification_.range.outcomeEnd)
             throw std::invalid_argument(
-                "Fibonacci first study rejects bars outside the exclusive pre-2025 range");
+                "Fibonacci study rejects bars outside its temporal range");
         Audit(candle);
         const TG3::Update update = integration_.AddCompletedBar(candle);
         AddStructures(update.newlyAvailableABStructures);
@@ -130,8 +150,10 @@ public:
             {
                 return left.record.eventIdentity < right.record.eventIdentity;
             });
-        for (State& state : states_) sink_(std::move(state.record));
-        emitted_ = states_.size();
+        emitted_ = std::count_if(states_.begin(), states_.end(),
+            [this](const State& state) { return ShouldEmit(state); });
+        for (State& state : states_)
+            if (ShouldEmit(state)) sink_(std::move(state.record));
         finalized_ = true;
     }
 
@@ -149,6 +171,7 @@ private:
 
     std::string symbol_;
     TG4::EvaluationConfiguration configuration_;
+    HistoricalStudySpecification specification_;
     RecordSink sink_;
     TG3::CausalFibonacciConfluenceIntegration integration_;
     HistoricalDataQuality audit_;
@@ -165,6 +188,31 @@ private:
     std::vector<Index> h2Pending_;
     std::size_t emitted_ = 0;
     bool finalized_ = false;
+
+    bool IsScoreTimestamp(std::int64_t timestamp) const
+    {
+        return IsHistoricalStudyEligibilityTimestamp(specification_, timestamp);
+    }
+
+    static bool IsScored(const Outcome& outcome)
+    {
+        return outcome.eligibility.has_value();
+    }
+
+    static bool RelevantToScoringWindow(const State& state)
+    {
+        return IsScored(state.record.h1) || IsScored(state.record.h2) ||
+            IsScored(state.record.h2Pullback0500Descriptive) ||
+            IsScored(state.record.h2Pullback0618Descriptive);
+    }
+
+    bool ShouldEmit(const State& state) const
+    {
+        // The completed discovery study had no distinct warmup interval, so
+        // retaining every structural observation preserves its frozen artifact.
+        return specification_.range.warmupStart == specification_.range.scoreStart ||
+            RelevantToScoringWindow(state);
+    }
 
     TG3::Configuration FibonacciConfiguration() const
     {
@@ -277,12 +325,15 @@ private:
             EventOccurrence occurrence{EventType::Extension1272Beyond, bar,
                                        candle.timestamp, candle.close};
             state.record.extension1272Beyond = occurrence;
-            Start(state.record.h1, occurrence,
-                  "h1_1.618_after_1.272_beyond");
-            if (!state.h1PendingListed)
+            if (IsScoreTimestamp(candle.timestamp))
             {
-                h1Pending_.push_back(index);
-                state.h1PendingListed = true;
+                Start(state.record.h1, occurrence,
+                      "h1_1.618_after_1.272_beyond");
+                if (!state.h1PendingListed)
+                {
+                    h1Pending_.push_back(index);
+                    state.h1PendingListed = true;
+                }
             }
         };
         ExtractRange(upBeyond_, upBeyond_.begin(),
@@ -302,16 +353,19 @@ private:
                 EventType::Extension1272RejectionConfirmed, bar,
                 candle.timestamp, candle.close};
             state.record.rejectionConfirmed = occurrence;
-            Start(state.record.h2, occurrence,
-                  "h2_0.382_after_rejection");
-            Start(state.record.h2Pullback0500Descriptive, occurrence,
-                  "h2_descriptive_0.500_after_rejection");
-            Start(state.record.h2Pullback0618Descriptive, occurrence,
-                  "h2_secondary_0.618_after_rejection");
-            if (!state.h2PendingListed)
+            if (IsScoreTimestamp(candle.timestamp))
             {
-                h2Pending_.push_back(index);
-                state.h2PendingListed = true;
+                Start(state.record.h2, occurrence,
+                      "h2_0.382_after_rejection");
+                Start(state.record.h2Pullback0500Descriptive, occurrence,
+                      "h2_descriptive_0.500_after_rejection");
+                Start(state.record.h2Pullback0618Descriptive, occurrence,
+                      "h2_secondary_0.618_after_rejection");
+                if (!state.h2PendingListed)
+                {
+                    h2Pending_.push_back(index);
+                    state.h2PendingListed = true;
+                }
             }
         };
         ExtractRange(upRejection_, upRejection_.upper_bound(candle.close),
@@ -407,9 +461,17 @@ private:
 
 HistoricalEvaluator::HistoricalEvaluator(
     std::string symbol, TG4::EvaluationConfiguration configuration,
+    HistoricalStudySpecification specification, RecordSink sink)
+    : implementation_(std::make_unique<Implementation>(
+          std::move(symbol), std::move(configuration), specification,
+          std::move(sink))) {}
+
+HistoricalEvaluator::HistoricalEvaluator(
+    std::string symbol, TG4::EvaluationConfiguration configuration,
     RecordSink sink)
     : implementation_(std::make_unique<Implementation>(
-          std::move(symbol), std::move(configuration), std::move(sink))) {}
+          std::move(symbol), std::move(configuration),
+          Pre2025FirstStudySpecification(), std::move(sink))) {}
 
 HistoricalEvaluator::~HistoricalEvaluator() = default;
 HistoricalEvaluator::HistoricalEvaluator(HistoricalEvaluator&&) noexcept = default;
@@ -429,14 +491,19 @@ class HistoricalArtifactWriter::Implementation
 public:
     Implementation(std::filesystem::path outputDirectory,
                    TG4::EvaluationConfiguration configuration,
+                   HistoricalStudySpecification specification,
                    std::string baselineCommit,
                    std::vector<std::string> symbols,
                    std::string reproductionCommand)
         : outputDirectory_(std::move(outputDirectory)),
           configuration_(std::move(configuration)),
+          specification_(specification),
           baselineCommit_(std::move(baselineCommit)),
           symbols_(std::move(symbols)),
-          reproductionCommand_(std::move(reproductionCommand)) {}
+          reproductionCommand_(std::move(reproductionCommand))
+    {
+        ValidateHistoricalStudySpecification(specification_);
+    }
 
     void Complete()
     {
@@ -463,6 +530,7 @@ public:
 
     std::filesystem::path outputDirectory_;
     TG4::EvaluationConfiguration configuration_;
+    HistoricalStudySpecification specification_;
     std::string baselineCommit_;
     std::vector<std::string> symbols_;
     std::string reproductionCommand_;
@@ -553,13 +621,19 @@ public:
         auto output = Open("manifest.json");
         output << "{\n"
             "  \"schema_version\": \"causal-fibonacci-extension-manifest-v1\",\n"
-            "  \"study_identity\": \"" << kFirstStudyIdentity << "\",\n"
+            "  \"study_identity\": \"" << specification_.identity << "\",\n"
             "  \"baseline_commit\": \"" << baselineCommit_ << "\",\n"
             "  \"policy_id\": \"" << kStudyContractVersion << "\",\n"
             "  \"observation_schema\": \"" << kObservationSchemaVersion << "\",\n"
             "  \"aggregate_schema\": \"" << kAggregateSchemaVersion << "\",\n"
-            "  \"warmup_start\": \"2010-01-01T00:00:00Z\",\n"
-            "  \"score_outcome_end_exclusive\": \"2025-01-01T00:00:00Z\",\n"
+            "  \"warmup_start\": \"" << TG4::FormatUtcTimestamp(
+                specification_.range.warmupStart) << "\",\n"
+            "  \"score_start\": \"" << TG4::FormatUtcTimestamp(
+                specification_.range.scoreStart) << "\",\n"
+            "  \"score_end_exclusive\": \"" << TG4::FormatUtcTimestamp(
+                specification_.range.scoreEnd) << "\",\n"
+            "  \"outcome_end_exclusive\": \"" << TG4::FormatUtcTimestamp(
+                specification_.range.outcomeEnd) << "\",\n"
             "  \"timeframe\": \"15m\",\n"
             "  \"configuration_fingerprint\": \""
                << TG4::ConfigurationFingerprint(configuration_) << "\",\n"
@@ -578,17 +652,28 @@ public:
         output << "\",\n  \"h3_status\": "
                   "\"missing_authoritative_d_extension_contract\",\n"
                   "  \"read_only_database\": true,\n"
-                  "  \"uses_2025_bars\": false\n}\n";
+                  "  \"uses_2025_bars\": "
+               << (specification_.uses2025Bars ? "true" : "false") << "\n}\n";
     }
 
     void WriteSummary()
     {
         const AggregateAccumulator accumulator = Accumulator();
         auto output = Open("summary.md");
-        output << "# Frozen pre-2025 causal Fibonacci extension study\n\n"
+        output << "# " << specification_.summaryTitle << "\n\n"
                   "Policy: `" << kStudyContractVersion << "`\n\n"
-                  "Boundary: `[2010-01-01T00:00:00Z, "
-                  "2025-01-01T00:00:00Z)`; 2025 bars were not loaded.\n\n"
+                  "Warmup: `[" << TG4::FormatUtcTimestamp(
+                      specification_.range.warmupStart) << ", "
+               << TG4::FormatUtcTimestamp(specification_.range.scoreStart)
+               << ")`; scoring: `[" << TG4::FormatUtcTimestamp(
+                      specification_.range.scoreStart) << ", "
+               << TG4::FormatUtcTimestamp(specification_.range.scoreEnd)
+               << ")`; outcomes end before `" << TG4::FormatUtcTimestamp(
+                      specification_.range.outcomeEnd) << "`."
+               << (specification_.uses2025Bars
+                       ? "\n\n"
+                       : " 2025 bars were not loaded.\n\n")
+               <<
                   "| Endpoint | Eligible | Success | Failure | Censored | "
                   "Ineligible | Resolved | Probability | Wilson 95% | "
                   "Bars to target (min/median/max) |\n"
@@ -637,11 +722,12 @@ public:
 
 HistoricalArtifactWriter::HistoricalArtifactWriter(
     std::filesystem::path outputDirectory,
-    TG4::EvaluationConfiguration configuration, std::string baselineCommit,
+    TG4::EvaluationConfiguration configuration,
+    HistoricalStudySpecification specification, std::string baselineCommit,
     std::vector<std::string> symbols, std::string reproductionCommand)
     : implementation_(std::make_unique<Implementation>(
           std::move(outputDirectory), std::move(configuration),
-          std::move(baselineCommit), std::move(symbols),
+          specification, std::move(baselineCommit), std::move(symbols),
           std::move(reproductionCommand))) {}
 HistoricalArtifactWriter::~HistoricalArtifactWriter() = default;
 void HistoricalArtifactWriter::AddRecord(ObservationRecord record)

@@ -16,6 +16,35 @@ inline constexpr std::int64_t kFirstStudyEndExclusive = 1'735'689'600;
 inline constexpr std::string_view kFirstStudyIdentity =
     "causal-fibonacci-extension-pre-2025-first-study-v1";
 
+struct HistoricalStudySpecification
+{
+    std::string_view identity;
+    TG4::TemporalRange range;
+    bool uses2025Bars = false;
+    std::string_view summaryTitle;
+};
+
+inline HistoricalStudySpecification Pre2025FirstStudySpecification()
+{
+    return {kFirstStudyIdentity,
+            {kFirstStudyStart, kFirstStudyStart, kFirstStudyEndExclusive,
+             kFirstStudyEndExclusive},
+            false, "Frozen pre-2025 causal Fibonacci extension study"};
+}
+
+inline HistoricalStudySpecification Confirmation2025StudySpecification()
+{
+    return {"causal-fibonacci-extension-2025-confirmation-v1",
+            {kFirstStudyStart, kFirstStudyEndExclusive, 1'767'225'600,
+             1'767'225'600},
+            true, "2025 causal Fibonacci extension confirmation study"};
+}
+
+void ValidateHistoricalStudySpecification(
+    const HistoricalStudySpecification& specification);
+bool IsHistoricalStudyEligibilityTimestamp(
+    const HistoricalStudySpecification& specification, std::int64_t timestamp);
+
 struct HistoricalDataQuality
 {
     std::string symbol;
@@ -33,6 +62,10 @@ class HistoricalEvaluator
 public:
     using RecordSink = std::function<void(ObservationRecord)>;
 
+    HistoricalEvaluator(std::string symbol,
+                        TG4::EvaluationConfiguration configuration,
+                        HistoricalStudySpecification specification,
+                        RecordSink sink);
     HistoricalEvaluator(std::string symbol,
                         TG4::EvaluationConfiguration configuration,
                         RecordSink sink);
@@ -58,6 +91,7 @@ class HistoricalArtifactWriter
 public:
     HistoricalArtifactWriter(std::filesystem::path outputDirectory,
                              TG4::EvaluationConfiguration configuration,
+                             HistoricalStudySpecification specification,
                              std::string baselineCommit,
                              std::vector<std::string> symbols,
                              std::string reproductionCommand);
