@@ -1,0 +1,19 @@
+{
+  "schema_version": "causal-fibonacci-extension-manifest-v1",
+  "study_identity": "causal-fibonacci-extension-2025-confirmation-v1",
+  "baseline_commit": "0440faa9a054d7c7c02df75e9162d3d85b33533d",
+  "policy_id": "causal-fibonacci-extension-h1-h2-policy-frozen-v2",
+  "observation_schema": "causal-fibonacci-extension-observation-v2",
+  "aggregate_schema": "causal-fibonacci-extension-aggregate-v2",
+  "warmup_start": "2010-01-01T00:00:00Z",
+  "score_start": "2025-01-01T00:00:00Z",
+  "score_end_exclusive": "2026-01-01T00:00:00Z",
+  "outcome_end_exclusive": "2026-01-01T00:00:00Z",
+  "timeframe": "15m",
+  "configuration_fingerprint": "fnv1a64:bf809ce38a4a444a",
+  "symbols": ["audcadrmp", "audusdrmp", "eurusdrmp", "gbpusdrmp", "usdcadrmp", "usdjpyrmp"],
+  "reproduction_command": "bash Scripts/run_causal_fibonacci_extension_study.sh --output-dir Artifacts/causal-fibonacci-extension-2025-confirmation-v1 --study confirmation2025",
+  "h3_status": "missing_authoritative_d_extension_contract",
+  "read_only_database": true,
+  "uses_2025_bars": true
+}
