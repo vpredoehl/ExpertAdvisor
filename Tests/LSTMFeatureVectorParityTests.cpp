@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "../Headers/ModelInputContract.hpp"
@@ -229,6 +231,107 @@ int main()
     AssertByteIdentical(legacyTraining, legacyInference);
     assert(legacyTraining.size() == EA::kLegacyModelInputWidth);
     assert(trainingAtOffset16.size() == EA::kCurrentModelInputWidth);
+
+    // Layout-9 Fibonacci ablation is a pure projected-input treatment. Use
+    // distinct nonzero sentinels across the whole 103-value model input so a
+    // zero-valued producer output cannot hide an incorrectly omitted column.
+    static_assert(fibRecentPriceScaleValidCol == 76);
+    static_assert(fibDownRecentMedianPullback0618Col == 98);
+    static_assert(feature_size == 99);
+    static_assert(EA::kModelReturnFeatureCount == 4);
+    static_assert(EA::kCurrentModelInputWidth == 103);
+    const std::array<std::string_view, 23> fibonacciNames{{
+        "fib_recent_price_scale_valid",
+        "fib_up_recent_union_count_log",
+        "fib_up_recent_h1_count_log",
+        "fib_up_recent_h2_count_log",
+        "fib_up_recent_h1_h2_both_count_log",
+        "fib_up_recent_h1_youngest_age_20",
+        "fib_up_recent_h2_youngest_age_20",
+        "fib_up_recent_median_1272_signed_atr",
+        "fib_up_recent_median_1618_signed_atr",
+        "fib_up_recent_median_pullback_0382_signed_atr",
+        "fib_up_recent_median_pullback_0500_signed_atr",
+        "fib_up_recent_median_pullback_0618_signed_atr",
+        "fib_down_recent_union_count_log",
+        "fib_down_recent_h1_count_log",
+        "fib_down_recent_h2_count_log",
+        "fib_down_recent_h1_h2_both_count_log",
+        "fib_down_recent_h1_youngest_age_20",
+        "fib_down_recent_h2_youngest_age_20",
+        "fib_down_recent_median_1272_signed_atr",
+        "fib_down_recent_median_1618_signed_atr",
+        "fib_down_recent_median_pullback_0382_signed_atr",
+        "fib_down_recent_median_pullback_0500_signed_atr",
+        "fib_down_recent_median_pullback_0618_signed_atr",
+    }};
+    std::vector<float> ablationSource(feature_size);
+    for (std::size_t column = 0; column < ablationSource.size(); ++column)
+        ablationSource[column] = static_cast<float>(1000 + column);
+    const auto layout9Contract = EA::ResolveModelInputContract(
+        EA::kCurrentModelInputWidth, ablationSource.size());
+    const auto completeFibonacciMask = EA::FeatureAblationMask::Parse(
+        std::string{EA::kCausalFibonacciStructuralAblationMaskText});
+    assert(completeFibonacciMask.tensorColumns().size() == fibonacciNames.size());
+    assert((completeFibonacciMask.tensorColumns() ==
+            std::vector<std::size_t>{
+                fibRecentPriceScaleValidCol, fibUpRecentUnionCountLogCol,
+                fibUpRecentH1CountLogCol, fibUpRecentH2CountLogCol,
+                fibUpRecentH1H2BothCountLogCol, fibUpRecentH1YoungestAge20Col,
+                fibUpRecentH2YoungestAge20Col, fibUpRecentMedian1272Col,
+                fibUpRecentMedian1618Col, fibUpRecentMedianPullback0382Col,
+                fibUpRecentMedianPullback0500Col, fibUpRecentMedianPullback0618Col,
+                fibDownRecentUnionCountLogCol, fibDownRecentH1CountLogCol,
+                fibDownRecentH2CountLogCol, fibDownRecentH1H2BothCountLogCol,
+                fibDownRecentH1YoungestAge20Col, fibDownRecentH2YoungestAge20Col,
+                fibDownRecentMedian1272Col, fibDownRecentMedian1618Col,
+                fibDownRecentMedianPullback0382Col,
+                fibDownRecentMedianPullback0500Col,
+                fibDownRecentMedianPullback0618Col}));
+    std::string reverseFibonacciNames;
+    for (auto it = fibonacciNames.rbegin(); it != fibonacciNames.rend(); ++it) {
+        if (!reverseFibonacciNames.empty()) reverseFibonacciNames += ',';
+        reverseFibonacciNames += *it;
+        const auto individual = EA::FeatureAblationMask::Parse(std::string{*it});
+        assert(individual.tensorColumns().size() == 1);
+    }
+    assert(EA::FeatureAblationMask::Parse(reverseFibonacciNames).CanonicalText() ==
+           EA::kCausalFibonacciStructuralAblationMaskText);
+    assert(completeFibonacciMask.CanonicalText() ==
+           EA::kCausalFibonacciStructuralAblationMaskText);
+
+    const auto BuildSentinelModelInput = [&](const EA::FeatureAblationMask& mask) {
+        std::vector<float> values(EA::kCurrentModelInputWidth);
+        EA::CopyTensorFeaturesForModelInput(values.data(), ablationSource.data(),
+                                            layout9Contract, mask);
+        for (std::size_t column = feature_size;
+             column < EA::kCurrentModelInputWidth; ++column)
+            values[column] = static_cast<float>(1000 + column);
+        return values;
+    };
+    const auto sentinelControl = BuildSentinelModelInput({});
+    const auto sentinelEmptyMask = BuildSentinelModelInput(
+        EA::FeatureAblationMask::Parse(""));
+    AssertByteIdentical(sentinelControl, sentinelEmptyMask);
+    const auto sentinelAblation = BuildSentinelModelInput(completeFibonacciMask);
+    std::size_t changed = 0;
+    for (std::size_t column = 0; column < sentinelControl.size(); ++column) {
+        const bool fibonacciColumn = column >= fibRecentPriceScaleValidCol &&
+            column <= fibDownRecentMedianPullback0618Col;
+        assert(sentinelAblation[column] ==
+               (fibonacciColumn ? 0.0f : sentinelControl[column]));
+        changed += sentinelAblation[column] != sentinelControl[column] ? 1 : 0;
+    }
+    assert(changed == fibonacciNames.size());
+    for (std::size_t column = 0; column < fibRecentPriceScaleValidCol; ++column)
+        assert(sentinelAblation[column] == sentinelControl[column]);
+    for (std::size_t column = feature_size;
+         column < EA::kCurrentModelInputWidth; ++column)
+        assert(sentinelAblation[column] == sentinelControl[column]);
+    bool unknownFibonacciNameRejected = false;
+    try { (void)EA::FeatureAblationMask::Parse("fib_unknown_feature"); }
+    catch (const std::invalid_argument&) { unknownFibonacciNameRejected = true; }
+    assert(unknownFibonacciNameRejected);
 
     return 0;
 }

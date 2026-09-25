@@ -2,6 +2,8 @@
 
 #include "FeatureAblation.hpp"
 #include "InferenceProfitability.hpp"
+#include "ModelInputContract.hpp"
+#include "ModelInputExpansion.hpp"
 #include "TrainingObjective.hpp"
 
 #include <algorithm>
@@ -222,6 +224,39 @@ int main()
     assert(EvaluatePair(arbitraryControl, arbitraryAblation,
                    "relative_tick_volume")
                .disposition == Feature::Disposition::ComparableComplete);
+
+    // The generic comparison path accepts a layout-9 empty-mask control and
+    // the complete registered Fibonacci treatment without a family-specific
+    // production branch.
+    auto fibonacciControl = control;
+    auto fibonacciAblation = ablation;
+    for (auto* arm : {&fibonacciControl, &fibonacciAblation})
+    {
+        arm->authoritative.configuration.inputWidth = EA::kCurrentModelInputWidth;
+        arm->authoritative.configuration.modelInputLayoutVersion =
+            EA::kModelInputSemanticLayoutVersion;
+        arm->extended.configuredModelInputWidth = EA::kCurrentModelInputWidth;
+        arm->extended.configuredModelInputLayoutVersion =
+            EA::kModelInputSemanticLayoutVersion;
+        arm->authoritative.trainingExecution->semanticLayoutVersion =
+            EA::kModelInputSemanticLayoutVersion;
+        arm->authoritative.trainingExecution->modelInputWidth =
+            EA::kCurrentModelInputWidth;
+        arm->authoritative.inferenceExecution->semanticLayoutVersion =
+            EA::kModelInputSemanticLayoutVersion;
+        arm->authoritative.inferenceExecution->modelInputWidth =
+            EA::kCurrentModelInputWidth;
+    }
+    fibonacciControl.authoritative.configuration.featureAblationMask.clear();
+    fibonacciAblation.authoritative.configuration.featureAblationMask =
+        std::string(EA::kCausalFibonacciStructuralAblationMaskText);
+    const auto fibonacciComparable = EvaluatePair(
+        fibonacciControl, fibonacciAblation,
+        EA::kCausalFibonacciStructuralAblationMaskText);
+    assert(fibonacciComparable.disposition ==
+           Feature::Disposition::ComparableComplete);
+    assert(fibonacciComparable.canonicalAblatedFeatureSet ==
+           EA::kCausalFibonacciStructuralAblationMaskText);
 
     auto historicalControl = control;
     auto historicalAblation = ablation;

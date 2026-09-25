@@ -23,7 +23,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 24> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 47> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -53,6 +53,35 @@ inline constexpr std::array<AblatableFeature, 24> kAblatableFeatures{{
     {"tg4_source_tg3_structurally_eligible",
      tg4SourceTg3StructurallyEligibleCol},
     {"tg4_source_tg3_confluent", tg4SourceTg3ConfluentCol},
+    {"fib_recent_price_scale_valid", fibRecentPriceScaleValidCol},
+    {"fib_up_recent_union_count_log", fibUpRecentUnionCountLogCol},
+    {"fib_up_recent_h1_count_log", fibUpRecentH1CountLogCol},
+    {"fib_up_recent_h2_count_log", fibUpRecentH2CountLogCol},
+    {"fib_up_recent_h1_h2_both_count_log", fibUpRecentH1H2BothCountLogCol},
+    {"fib_up_recent_h1_youngest_age_20", fibUpRecentH1YoungestAge20Col},
+    {"fib_up_recent_h2_youngest_age_20", fibUpRecentH2YoungestAge20Col},
+    {"fib_up_recent_median_1272_signed_atr", fibUpRecentMedian1272Col},
+    {"fib_up_recent_median_1618_signed_atr", fibUpRecentMedian1618Col},
+    {"fib_up_recent_median_pullback_0382_signed_atr",
+     fibUpRecentMedianPullback0382Col},
+    {"fib_up_recent_median_pullback_0500_signed_atr",
+     fibUpRecentMedianPullback0500Col},
+    {"fib_up_recent_median_pullback_0618_signed_atr",
+     fibUpRecentMedianPullback0618Col},
+    {"fib_down_recent_union_count_log", fibDownRecentUnionCountLogCol},
+    {"fib_down_recent_h1_count_log", fibDownRecentH1CountLogCol},
+    {"fib_down_recent_h2_count_log", fibDownRecentH2CountLogCol},
+    {"fib_down_recent_h1_h2_both_count_log", fibDownRecentH1H2BothCountLogCol},
+    {"fib_down_recent_h1_youngest_age_20", fibDownRecentH1YoungestAge20Col},
+    {"fib_down_recent_h2_youngest_age_20", fibDownRecentH2YoungestAge20Col},
+    {"fib_down_recent_median_1272_signed_atr", fibDownRecentMedian1272Col},
+    {"fib_down_recent_median_1618_signed_atr", fibDownRecentMedian1618Col},
+    {"fib_down_recent_median_pullback_0382_signed_atr",
+     fibDownRecentMedianPullback0382Col},
+    {"fib_down_recent_median_pullback_0500_signed_atr",
+     fibDownRecentMedianPullback0500Col},
+    {"fib_down_recent_median_pullback_0618_signed_atr",
+     fibDownRecentMedianPullback0618Col},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -82,6 +111,28 @@ inline constexpr std::string_view
 inline constexpr std::string_view kTG4AblationMaskText =
     "tg4_inner_break_any,tg4_source_tg3_structurally_eligible,"
     "tg4_source_tg3_confluent";
+
+// Layout-9 causal Fibonacci structural control. This is intentionally a
+// concrete persisted feature list, not a parser alias, so pair provenance
+// remains canonical and independently auditable.
+inline constexpr std::string_view kCausalFibonacciStructuralAblationMaskText =
+    "fib_recent_price_scale_valid,"
+    "fib_up_recent_union_count_log,fib_up_recent_h1_count_log,"
+    "fib_up_recent_h2_count_log,fib_up_recent_h1_h2_both_count_log,"
+    "fib_up_recent_h1_youngest_age_20,fib_up_recent_h2_youngest_age_20,"
+    "fib_up_recent_median_1272_signed_atr,"
+    "fib_up_recent_median_1618_signed_atr,"
+    "fib_up_recent_median_pullback_0382_signed_atr,"
+    "fib_up_recent_median_pullback_0500_signed_atr,"
+    "fib_up_recent_median_pullback_0618_signed_atr,"
+    "fib_down_recent_union_count_log,fib_down_recent_h1_count_log,"
+    "fib_down_recent_h2_count_log,fib_down_recent_h1_h2_both_count_log,"
+    "fib_down_recent_h1_youngest_age_20,fib_down_recent_h2_youngest_age_20,"
+    "fib_down_recent_median_1272_signed_atr,"
+    "fib_down_recent_median_1618_signed_atr,"
+    "fib_down_recent_median_pullback_0382_signed_atr,"
+    "fib_down_recent_median_pullback_0500_signed_atr,"
+    "fib_down_recent_median_pullback_0618_signed_atr";
 
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.
