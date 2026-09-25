@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 8;
+inline constexpr int kModelInputSemanticLayoutVersion = 9;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -37,7 +37,7 @@ struct ModelInputSemanticLayoutRegistryEntry
 // version as predecessor. A corrected interpretation at an existing width
 // instead branches from the newest genuinely compatible predecessor; old
 // entries and their fixed maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 8>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 9>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
@@ -54,6 +54,7 @@ inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 8>
         // Layout 8 adds three TG4 same-bar pulse bits before the stable
         // return suffix. It remains append-only at semantic-feature level.
         {8, kTG4ProductionPulseModelInputWidth, 7},
+        {9, kCausalFibonacciStructuralModelInputWidth, 8},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -196,7 +197,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 44>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 67>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -252,6 +253,29 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 44>
         {tg4SourceTg3StructurallyEligibleCol,
          "tg4_source_tg3_structurally_eligible"},
         {tg4SourceTg3ConfluentCol, "tg4_source_tg3_confluent"},
+        {fibRecentPriceScaleValidCol, "fib_recent_price_scale_valid"},
+        {fibUpRecentUnionCountLogCol, "fib_up_recent_union_count_log"},
+        {fibUpRecentH1CountLogCol, "fib_up_recent_h1_count_log"},
+        {fibUpRecentH2CountLogCol, "fib_up_recent_h2_count_log"},
+        {fibUpRecentH1H2BothCountLogCol, "fib_up_recent_h1_h2_both_count_log"},
+        {fibUpRecentH1YoungestAge20Col, "fib_up_recent_h1_youngest_age_20"},
+        {fibUpRecentH2YoungestAge20Col, "fib_up_recent_h2_youngest_age_20"},
+        {fibUpRecentMedian1272Col, "fib_up_recent_median_1272_signed_atr"},
+        {fibUpRecentMedian1618Col, "fib_up_recent_median_1618_signed_atr"},
+        {fibUpRecentMedianPullback0382Col, "fib_up_recent_median_pullback_0382_signed_atr"},
+        {fibUpRecentMedianPullback0500Col, "fib_up_recent_median_pullback_0500_signed_atr"},
+        {fibUpRecentMedianPullback0618Col, "fib_up_recent_median_pullback_0618_signed_atr"},
+        {fibDownRecentUnionCountLogCol, "fib_down_recent_union_count_log"},
+        {fibDownRecentH1CountLogCol, "fib_down_recent_h1_count_log"},
+        {fibDownRecentH2CountLogCol, "fib_down_recent_h2_count_log"},
+        {fibDownRecentH1H2BothCountLogCol, "fib_down_recent_h1_h2_both_count_log"},
+        {fibDownRecentH1YoungestAge20Col, "fib_down_recent_h1_youngest_age_20"},
+        {fibDownRecentH2YoungestAge20Col, "fib_down_recent_h2_youngest_age_20"},
+        {fibDownRecentMedian1272Col, "fib_down_recent_median_1272_signed_atr"},
+        {fibDownRecentMedian1618Col, "fib_down_recent_median_1618_signed_atr"},
+        {fibDownRecentMedianPullback0382Col, "fib_down_recent_median_pullback_0382_signed_atr"},
+        {fibDownRecentMedianPullback0500Col, "fib_down_recent_median_pullback_0500_signed_atr"},
+        {fibDownRecentMedianPullback0618Col, "fib_down_recent_median_pullback_0618_signed_atr"},
     }};
 
 constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()

@@ -149,49 +149,6 @@ std::optional<double> DistanceDistribution::Quantile(double q,
   return {};
 }
 
-std::optional<NormalizedDistance>
-NormalizeDistance(bool up, double level, double close,
-                  const std::optional<double> &atr, double pip) {
-  if (!std::isfinite(level) || !std::isfinite(close) || !std::isfinite(pip) ||
-      pip <= 0)
-    return {};
-  const bool useAtr = atr && std::isfinite(*atr) && *atr > pip;
-  const double denominator = useAtr ? *atr : pip;
-  const double value = (up ? 1. : -1.) * (level - close) / denominator;
-  if (!std::isfinite(value))
-    return {};
-  return NormalizedDistance{value, !useAtr};
-}
-bool IsEventRelevantAtBar(std::size_t eventBar, std::size_t currentBar,
-                          std::size_t horizonBars) {
-  return currentBar >= eventBar && currentBar - eventBar <= horizonBars;
-}
-
-std::size_t EventAgeAtBar(std::size_t eventBar, std::size_t currentBar) {
-  if (currentBar < eventBar)
-    throw std::invalid_argument("event bar is after current bar");
-  return currentBar - eventBar;
-}
-EventRelevance ClassifyEventRelevance(const std::optional<std::size_t> &h1,
-                                      const std::optional<std::size_t> &h2,
-                                      std::size_t bar,
-                                      std::size_t horizonBars) {
-  const bool a = h1 && IsEventRelevantAtBar(*h1, bar, horizonBars),
-             b = h2 && IsEventRelevantAtBar(*h2, bar, horizonBars);
-  return a ? (b ? EventRelevance::Both : EventRelevance::H1Only)
-           : (b ? EventRelevance::H2Only : EventRelevance::None);
-}
-void AdvanceH1H2EventState(H1H2EventState &state, std::size_t bar, bool touched,
-                           bool beyond, bool rejected) {
-  const bool earlierTouch = state.touchBar && bar > *state.touchBar;
-  if (!state.touchBar && touched)
-    state.touchBar = bar;
-  if (!state.h1BeyondBar && beyond)
-    state.h1BeyondBar = bar;
-  if (!state.h2RejectionBar && earlierTouch && rejected)
-    state.h2RejectionBar = bar;
-}
-
 void Summary::Merge(const Summary &x) {
   bars += x.bars;
   capacityEvictions += x.capacityEvictions;

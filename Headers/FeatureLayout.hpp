@@ -158,8 +158,36 @@ inline constexpr std::size_t tg4SourceTg3ConfluentCol =
     tg4SourceTg3StructurallyEligibleCol + 1;
 inline constexpr std::size_t tg4_production_pulse_feature_size =
     tg4SourceTg3ConfluentCol + 1;
-inline constexpr std::size_t feature_size =
+// Frozen causal Fibonacci H1/H2 structural aggregates are a separate,
+// symmetric producer.  They append after the unchanged layout-8 TG4 pulses.
+inline constexpr std::size_t fibRecentPriceScaleValidCol =
     tg4_production_pulse_feature_size;
+inline constexpr std::size_t fibUpRecentUnionCountLogCol = fibRecentPriceScaleValidCol + 1;
+inline constexpr std::size_t fibUpRecentH1CountLogCol = fibUpRecentUnionCountLogCol + 1;
+inline constexpr std::size_t fibUpRecentH2CountLogCol = fibUpRecentH1CountLogCol + 1;
+inline constexpr std::size_t fibUpRecentH1H2BothCountLogCol = fibUpRecentH2CountLogCol + 1;
+inline constexpr std::size_t fibUpRecentH1YoungestAge20Col = fibUpRecentH1H2BothCountLogCol + 1;
+inline constexpr std::size_t fibUpRecentH2YoungestAge20Col = fibUpRecentH1YoungestAge20Col + 1;
+inline constexpr std::size_t fibUpRecentMedian1272Col = fibUpRecentH2YoungestAge20Col + 1;
+inline constexpr std::size_t fibUpRecentMedian1618Col = fibUpRecentMedian1272Col + 1;
+inline constexpr std::size_t fibUpRecentMedianPullback0382Col = fibUpRecentMedian1618Col + 1;
+inline constexpr std::size_t fibUpRecentMedianPullback0500Col = fibUpRecentMedianPullback0382Col + 1;
+inline constexpr std::size_t fibUpRecentMedianPullback0618Col = fibUpRecentMedianPullback0500Col + 1;
+inline constexpr std::size_t fibDownRecentUnionCountLogCol = fibUpRecentMedianPullback0618Col + 1;
+inline constexpr std::size_t fibDownRecentH1CountLogCol = fibDownRecentUnionCountLogCol + 1;
+inline constexpr std::size_t fibDownRecentH2CountLogCol = fibDownRecentH1CountLogCol + 1;
+inline constexpr std::size_t fibDownRecentH1H2BothCountLogCol = fibDownRecentH2CountLogCol + 1;
+inline constexpr std::size_t fibDownRecentH1YoungestAge20Col = fibDownRecentH1H2BothCountLogCol + 1;
+inline constexpr std::size_t fibDownRecentH2YoungestAge20Col = fibDownRecentH1YoungestAge20Col + 1;
+inline constexpr std::size_t fibDownRecentMedian1272Col = fibDownRecentH2YoungestAge20Col + 1;
+inline constexpr std::size_t fibDownRecentMedian1618Col = fibDownRecentMedian1272Col + 1;
+inline constexpr std::size_t fibDownRecentMedianPullback0382Col = fibDownRecentMedian1618Col + 1;
+inline constexpr std::size_t fibDownRecentMedianPullback0500Col = fibDownRecentMedianPullback0382Col + 1;
+inline constexpr std::size_t fibDownRecentMedianPullback0618Col = fibDownRecentMedianPullback0500Col + 1;
+inline constexpr std::size_t causal_fibonacci_structural_feature_size =
+    fibDownRecentMedianPullback0618Col + 1;
+inline constexpr std::size_t feature_size =
+    causal_fibonacci_structural_feature_size;
 
 static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
@@ -177,5 +205,10 @@ static_assert(tg4InnerBreakAnyCol ==
 static_assert(tg4SourceTg3StructurallyEligibleCol ==
               tg4InnerBreakAnyCol + 1);
 static_assert(tg4SourceTg3ConfluentCol == tg4InnerBreakAnyCol + 2);
+static_assert(fibRecentPriceScaleValidCol == 76);
+static_assert(causal_fibonacci_structural_feature_size -
+                  tg4_production_pulse_feature_size ==
+              23);
+static_assert(feature_size == 99);
 
 #endif /* FeatureLayout_hpp */

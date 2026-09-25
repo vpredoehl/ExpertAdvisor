@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CausalFibonacciExtensionResearch.hpp"
+#include "CausalFibonacciStructuralPrimitives.hpp"
 #include "TG4HistoricalEmpiricalEvaluation.hpp"
 
 #include <array>
@@ -44,39 +45,16 @@ private:
   std::map<std::int32_t, std::uint64_t> positive_, negative_;
 };
 
-struct NormalizedDistance {
-  double value = 0.0;
-  bool usedPipFallback = false;
-};
-
-// Returns nullopt only when the price inputs or canonical pip size are not
-// finite/positive.  Missing, nonfinite, nonpositive, or no-larger-than-pip ATR
-// deliberately selects the pip denominator.
-std::optional<NormalizedDistance>
-NormalizeDistance(bool upAB, double level, double close,
-                  const std::optional<double> &atr, double canonicalPipSize);
-
-// Event ages are inclusive at the twenty-bar horizon: event bar is age zero.
-bool IsEventRelevantAtBar(std::size_t eventBar, std::size_t currentBar,
-                          std::size_t horizonBars = 20);
-std::size_t EventAgeAtBar(std::size_t eventBar, std::size_t currentBar);
-
-enum class EventRelevance { None, H1Only, H2Only, Both };
-EventRelevance ClassifyEventRelevance(const std::optional<std::size_t> &h1Bar,
-                                      const std::optional<std::size_t> &h2Bar,
-                                      std::size_t currentBar,
-                                      std::size_t horizonBars = 20);
-
-struct H1H2EventState {
-  std::optional<std::size_t> touchBar;
-  std::optional<std::size_t> h1BeyondBar;
-  std::optional<std::size_t> h2RejectionBar;
-};
-
-// Applies the documented causal order on one completed bar: touch, H1 beyond,
-// then H2 rejection (which always requires a strictly earlier touch).
-void AdvanceH1H2EventState(H1H2EventState &state, std::size_t bar, bool touched,
-                           bool beyond, bool rejected);
+// The diagnostic and runtime producer share these outcome-blind causal
+// primitives; this namespace retains aliases for its stable test API.
+using CausalFibonacciStructural::AdvanceH1H2EventState;
+using CausalFibonacciStructural::ClassifyEventRelevance;
+using CausalFibonacciStructural::EventAgeAtBar;
+using CausalFibonacciStructural::EventRelevance;
+using CausalFibonacciStructural::H1H2EventState;
+using CausalFibonacciStructural::IsEventRelevantAtBar;
+using CausalFibonacciStructural::NormalizedDistance;
+using CausalFibonacciStructural::NormalizeDistance;
 
 struct Summary {
   std::string symbol;

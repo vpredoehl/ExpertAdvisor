@@ -6,6 +6,7 @@
 #include "ReturnFeatureHistory.hpp"
 #include "Tensor.hpp"
 #include "TG4ProductionStreamingPulseAdapter.hpp"
+#include "CausalFibonacciStructuralFeatures.hpp"
 
 #include <algorithm>
 #include <array>
@@ -96,9 +97,9 @@ void AssertExact(const std::vector<float>& lhs, const std::vector<float>& rhs)
 
 void TestLayoutAndCanonicalPulseAlignment()
 {
-    static_assert(EA::kModelInputSemanticLayoutVersion == 8);
-    static_assert(EA::kCurrentModelInputWidth == 80);
-    static_assert(feature_size == 76);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 9);
+    static_assert(EA::kCurrentModelInputWidth == 103);
+    static_assert(feature_size == 99);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);
@@ -106,9 +107,14 @@ void TestLayoutAndCanonicalPulseAlignment()
     std::vector<Feature> bars;
     bars.reserve(192);
     Tensor tensor{"eurusdrmp"};
+    EA::CausalFibonacciFeatures::Producer fibReplayProducer{"eurusdrmp"};
+    std::vector<std::array<float, EA::CausalFibonacciFeatures::kFeatureCount>> fibReplay;
     for (std::size_t index = 0; index < 192; ++index)
     {
         bars.push_back(Bar(index));
+        fibReplay.push_back(fibReplayProducer.AddCompletedBar(
+            {bars.back().time.time_since_epoch().count(), bars.back().open,
+             bars.back().high, bars.back().low, bars.back().close}));
         tensor.Add(bars.back());
     }
     const auto replay = EA::TG4Pulse::ReplayCanonicalCompletedBars(
@@ -131,16 +137,21 @@ void TestLayoutAndCanonicalPulseAlignment()
                values[tg4SourceTg3StructurallyEligibleCol]);
         assert(values[tg4SourceTg3StructurallyEligibleCol] <=
                values[tg4InnerBreakAnyCol]);
+        for (std::size_t column = 0; column < fibReplay[row].size(); ++column)
+            assert(values[fibRecentPriceScaleValidCol + column] ==
+                   fibReplay[row][column]);
     }
 
-    const auto semantics = EA::ModelInputFeatureSemantics(80);
+    const auto semantics = EA::ModelInputFeatureSemantics(103);
     assert(semantics.at(73).name == "tg4_inner_break_any");
     assert(semantics.at(74).name == "tg4_source_tg3_structurally_eligible");
     assert(semantics.at(75).name == "tg4_source_tg3_confluent");
     assert(semantics.at(73).categorical && semantics.at(74).categorical &&
            semantics.at(75).categorical);
-    assert(semantics.at(76).name == "lookback_log_return_1_scaled");
-    assert(semantics.at(79).name == "lookback_log_return_16_scaled");
+    assert(semantics.at(76).name == "fib_recent_price_scale_valid");
+    assert(semantics.at(98).name == "fib_down_recent_median_pullback_0618_signed_atr");
+    assert(semantics.at(99).name == "lookback_log_return_1_scaled");
+    assert(semantics.at(102).name == "lookback_log_return_16_scaled");
 
     // Full-history construction occurs before the scored window. Both model
     // consumers therefore use the exact stateful Tensor row at its boundary.
@@ -152,6 +163,19 @@ void TestLayoutAndCanonicalPulseAlignment()
     for (std::size_t column = tg4InnerBreakAnyCol;
          column <= tg4SourceTg3ConfluentCol; ++column)
         assert(training[column] == 0.0f || training[column] == 1.0f);
+
+    // State is causal: extending a stream cannot mutate already-emitted rows.
+    std::vector<std::array<float, EA::CausalFibonacciFeatures::kFeatureCount>>
+        prefix = fibReplay;
+    for (std::size_t index = 192; index < 224; ++index)
+        tensor.Add(Bar(index));
+    for (std::size_t row = 0; row < prefix.size(); ++row) {
+        const auto physical = MetaNN::LowerAccess(
+            *(tensor.begin() + static_cast<std::ptrdiff_t>(row)));
+        for (std::size_t column = 0; column < prefix[row].size(); ++column)
+            assert(physical.RawMemory()[fibRecentPriceScaleValidCol + column] ==
+                   prefix[row][column]);
+    }
 
     // The retained layout-7 identity projects only the unchanged prefix and
     // retains its return suffix semantics at its historical positions.

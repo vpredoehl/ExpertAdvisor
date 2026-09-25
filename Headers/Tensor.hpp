@@ -35,6 +35,7 @@
 #include "CausalHistoricalLevelProximityFeatures.hpp"
 #include "CausalReturnAutocorrelationFeatures.hpp"
 #include "TG4ProductionStreamingPulseAdapter.hpp"
+#include "CausalFibonacciStructuralFeatures.hpp"
 #include "../Sources/EconomicEventFeatures.hpp"
 
 using std::string;
@@ -96,6 +97,7 @@ class Tensor
     CausalReturnAutocorrelation32 causalReturnAutocorrelation;
     EA::EconomicCalendar::EconomicEventFeatureEngine economicEventFeatures;
     EA::TG4Pulse::ProductionStreamingAdapter tg4ProductionPulses;
+    EA::CausalFibonacciFeatures::Producer causalFibonacciStructuralFeatures;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
@@ -151,7 +153,7 @@ public:
         : table { name }, donchian20Mode { mode },
           donchianLookback { ValidateDonchianLookback(lookback) },
           economicEventFeatures { std::move(economicEvents) },
-          tg4ProductionPulses { name } {}
+          tg4ProductionPulses { name }, causalFibonacciStructuralFeatures { name } {}
     const string& TableName() const { return table; }
     Donchian20Mode GetDonchian20Mode() const { return donchian20Mode; }
     std::size_t GetDonchianLookback() const { return donchianLookback; }

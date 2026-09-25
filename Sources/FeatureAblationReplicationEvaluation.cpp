@@ -268,8 +268,8 @@ bool SoftwareReady(const SoftwareReadinessAudit& audit)
         audit.deterministicFeaturePathTested &&
         audit.availabilityDiagnosticsPresent && audit.readOnlyEvaluation &&
         audit.activationMutationPathAbsent &&
-        EA::kCurrentModelInputWidth == 80 &&
-        EA::kModelInputSemanticLayoutVersion == 8;
+        EA::kCurrentModelInputWidth == 103 &&
+        EA::kModelInputSemanticLayoutVersion == 9;
 }
 
 ReplicationEvaluation Evaluate(

@@ -56,10 +56,12 @@ inline constexpr std::size_t kCausalEconomicEventSurpriseModelInputWidth =
     causal_economic_event_surprise_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kTG4ProductionPulseModelInputWidth =
     tg4_production_pulse_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalFibonacciStructuralModelInputWidth =
+    causal_fibonacci_structural_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kPreEconomicEventModelInputWidth =
     kReturnAutocorrelationModelInputWidth;
 inline constexpr std::size_t kCurrentModelInputWidth =
-    kTG4ProductionPulseModelInputWidth;
+    kCausalFibonacciStructuralModelInputWidth;
 
 static_assert(kEconomicEventModelInputWidth ==
               kPreEconomicEventModelInputWidth +
@@ -72,12 +74,12 @@ static_assert(kCausalEconomicEventSurpriseModelInputWidth ==
               kEconomicEventReleaseActualModelInputWidth +
               EA::EconomicCalendar::kCausalEconomicEventSurpriseFeatureWidth);
 static_assert(kCurrentModelInputWidth ==
-              kCausalEconomicEventSurpriseModelInputWidth + 3);
+              kTG4ProductionPulseModelInputWidth + 23);
 
 // Every persisted width whose Tensor portion has a registered, stable
 // semantic prefix.  Append-only feature additions must retain these entries
 // and append their new width.
-inline constexpr std::array<std::size_t, 21> kRegisteredModelInputWidths{{
+inline constexpr std::array<std::size_t, 22> kRegisteredModelInputWidths{{
     kLegacyModelInputWidth,
     kDonchianModelInputWidth,
     kSessionPhaseModelInputWidth,
@@ -99,6 +101,7 @@ inline constexpr std::array<std::size_t, 21> kRegisteredModelInputWidths{{
     kEconomicEventReleaseActualModelInputWidth,
     kCausalEconomicEventSurpriseModelInputWidth,
     kTG4ProductionPulseModelInputWidth,
+    kCausalFibonacciStructuralModelInputWidth,
 }};
 
 struct ModelInputContract
@@ -156,6 +159,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
             return {modelInputWidth,
                     causal_economic_event_surprise_feature_size, 0};
         case kTG4ProductionPulseModelInputWidth:
+            return {modelInputWidth, tg4_production_pulse_feature_size, 0};
+        case kCausalFibonacciStructuralModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
             throw std::runtime_error(

@@ -34,7 +34,7 @@ int main()
     static_assert(return_autocorrelation_feature_size == 49);
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
-    static_assert(feature_size == 76);
+    static_assert(feature_size == 99);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -57,7 +57,8 @@ int main()
     static_assert(EA::kEconomicEventReleaseActualModelInputWidth == 75);
     static_assert(EA::kCausalEconomicEventSurpriseModelInputWidth == 77);
     static_assert(EA::kTG4ProductionPulseModelInputWidth == 80);
-    static_assert(EA::kCurrentModelInputWidth == 80);
+    static_assert(EA::kCausalFibonacciStructuralModelInputWidth == 103);
+    static_assert(EA::kCurrentModelInputWidth == 103);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)

@@ -93,9 +93,9 @@ int main()
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
-    static_assert(EA::kCurrentModelInputWidth == 80);
-    static_assert(EA::kModelInputSemanticLayoutVersion == 8);
-    static_assert(feature_size == 76);
+    static_assert(EA::kCurrentModelInputWidth == 103);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 9);
+    static_assert(feature_size == 99);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);
