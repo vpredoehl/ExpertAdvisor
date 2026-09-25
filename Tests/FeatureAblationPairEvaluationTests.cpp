@@ -258,6 +258,41 @@ int main()
     assert(fibonacciComparable.canonicalAblatedFeatureSet ==
            EA::kCausalFibonacciStructuralAblationMaskText);
 
+    // The Fibonacci intervention is the complete, concrete layout-9 mask;
+    // it is not satisfied by a subset or by an adjacent extra channel.
+    auto missingFibonacciChannel = fibonacciAblation;
+    missingFibonacciChannel.authoritative.configuration.featureAblationMask =
+        "fib_recent_price_scale_valid,"
+        "fib_up_recent_union_count_log,fib_up_recent_h1_count_log,"
+        "fib_up_recent_h2_count_log,fib_up_recent_h1_h2_both_count_log,"
+        "fib_up_recent_h1_youngest_age_20,fib_up_recent_h2_youngest_age_20,"
+        "fib_up_recent_median_1272_signed_atr,"
+        "fib_up_recent_median_1618_signed_atr,"
+        "fib_up_recent_median_pullback_0382_signed_atr,"
+        "fib_up_recent_median_pullback_0500_signed_atr,"
+        "fib_down_recent_union_count_log,fib_down_recent_h1_count_log,"
+        "fib_down_recent_h2_count_log,fib_down_recent_h1_h2_both_count_log,"
+        "fib_down_recent_h1_youngest_age_20,fib_down_recent_h2_youngest_age_20,"
+        "fib_down_recent_median_1272_signed_atr,"
+        "fib_down_recent_median_1618_signed_atr,"
+        "fib_down_recent_median_pullback_0382_signed_atr,"
+        "fib_down_recent_median_pullback_0500_signed_atr,"
+        "fib_down_recent_median_pullback_0618_signed_atr";
+    assert(Has(EvaluatePair(
+                   fibonacciControl, missingFibonacciChannel,
+                   EA::kCausalFibonacciStructuralAblationMaskText)
+                   .invalidReasons,
+               "ablation_mask_does_not_match_expected"));
+
+    auto extraFibonacciChannel = fibonacciAblation;
+    extraFibonacciChannel.authoritative.configuration.featureAblationMask +=
+        ",relative_tick_volume";
+    assert(Has(EvaluatePair(
+                   fibonacciControl, extraFibonacciChannel,
+                   EA::kCausalFibonacciStructuralAblationMaskText)
+                   .invalidReasons,
+               "ablation_mask_does_not_match_expected"));
+
     auto historicalControl = control;
     auto historicalAblation = ablation;
     for (auto* arm : {&historicalControl, &historicalAblation})
