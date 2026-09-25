@@ -1,0 +1,29 @@
+{
+  "schema": "causal-fibonacci-model-feature-structural-diagnostic-v1",
+  "source_baseline_commit": "91b87aa4de2695eeeac3629326aa160d53b6da71",
+  "configuration_identity": "causal-fibonacci-h1-h2-symmetric-structural-diagnostic-v1",
+  "source_configuration": "tg4a-first-study-preconfirmation-frozen-v1",
+  "source_configuration_schema": "tg4-analysis-configuration-v1",
+  "symbols_in_actual_order": ["audcadrmp", "audusdrmp", "eurusdrmp", "gbpusdrmp", "usdcadrmp", "usdjpyrmp"],
+  "requested_warmup_range": null,
+  "warmup_policy": "none; repository stream begins at measurement_start, so no pre-measurement bars are replayed",
+  "requested_measurement_range": "[2010-01-01T00:00:00Z,2026-01-01T00:00:00Z)",
+  "actual_measurement_timestamps_per_symbol": [
+    {"symbol": "audcadrmp", "first_measurement_epoch": 1262556000, "last_measurement_epoch": 1767217500},
+    {"symbol": "audusdrmp", "first_measurement_epoch": 1262556000, "last_measurement_epoch": 1767217500},
+    {"symbol": "eurusdrmp", "first_measurement_epoch": 1262556000, "last_measurement_epoch": 1767217500},
+    {"symbol": "gbpusdrmp", "first_measurement_epoch": 1262556000, "last_measurement_epoch": 1767217500},
+    {"symbol": "usdcadrmp", "first_measurement_epoch": 1262556000, "last_measurement_epoch": 1767217500},
+    {"symbol": "usdjpyrmp", "first_measurement_epoch": 1262556000, "last_measurement_epoch": 1767217500}
+  ],
+  "actual_combined_first_measurement_epoch": 1262556000,
+  "actual_combined_last_measurement_epoch": 1767217500,
+  "read_only": true,
+  "outcome_blind": true,
+  "maxABAgeBars": 2048,
+  "maxActiveABStructures": 512,
+  "both_directions": "symmetric_directional_diagnostic_hypothesis",
+  "normalization": "direction_sign*(level-close)/max(completed_bar_wilder_atr14_raw,canonical_symbol_pip_size)",
+  "quantiles": "exact value-frequency nearest-rank for counts and ages; mergeable signed logarithmic bins for finite normalized distances, zero exact; bin gamma=2*log(1.001), geometric-centre representatives have relative value error <=0.1%",
+  "reproduction_command": "bash Scripts/run_causal_fibonacci_structural_diagnostic.sh --output-dir Artifacts/causal-fibonacci-model-feature-structural-diagnostic-v1"
+}

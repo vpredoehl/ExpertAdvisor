@@ -2,9 +2,11 @@
 
 ## 1. Scope and non-goals
 
-This is a design for a fixed-width, causal model-input representation of the
-empirically confirmed Fibonacci H1/H2 structural state. It is not an
-implementation authorization.
+This is a design freeze for a future fixed-width, causal model-input
+representation of Fibonacci H1/H2 structural state. It is not an
+implementation authorization. Sections 9--16 preserve the earlier conditional
+proposal and its now-resolved gate; sections 17--23 record the later structural
+diagnostic evidence and replace that proposal.
 
 It does not change the frozen H1/H2 methodology, ratios, A/B construction,
 TG1/TG3 semantics, one-canonical-pip tolerance, eligibility/rejection rules,
@@ -167,7 +169,7 @@ rule, or structural-strength rule is therefore selected from outcome evidence.
 | Direction-separated set aggregation | Fixed, causal, permutation-invariant | Loses identity and joint cross-level geometry; must define live set exactly | Counts, nearest distances, and state/age summaries preserve key H1/H2 state | Strong deterministic and group-ablation properties |
 | Hybrid aggregate plus top-K | Fixed | Retains aggregate robustness but reintroduces K/ranking churn and extra width | Richer | Appropriate only if diagnostics justify K |
 
-## 9. Conditional recommended representation
+## 9. Historical conditional recommended representation
 
 Subject to the implementation gate in section 21, the recommended family is a
 **direction-separated set aggregate**. It does not select a winner and has no
@@ -181,7 +183,7 @@ UpAB-only production adapter must be diagnosed first. If that diagnostic finds
 that the proposed H1/H2 state cannot share a deterministic bounded live set
 with the desired source configuration, no feature layout should be added.
 
-## 10. Conditional proposed fixed-width feature schema
+## 10. Historical conditional 27-column feature schema
 
 If the gate is satisfied, append the following 27 Tensor columns. Each
 `{dir}` expands identically for `up` and `down`, for 13 columns per direction.
@@ -252,7 +254,7 @@ event ages is a representation cap aligned with the frozen H1/H2 horizon; it
 does not alter the endpoint. Ages beyond 20 map to 1, and no empirical
 probability is attached to any age value.
 
-## 13. Expected width and semantic-layout transition
+## 13. Historical projected width and semantic-layout transition
 
 If, and only if, section 21's gate passes:
 
@@ -306,7 +308,7 @@ The comparison must not encode empirical outcome rates, optimize the feature
 schema against 2025, or change target/model/training semantics. Any future
 campaign, queueing, or model operation needs separate authorization.
 
-## 16. Open diagnostics and implementation gate
+## 16. Historical open diagnostic and implementation gate
 
 **Implementation is not ready.** A small read-only diagnostic is required
 before implementation because the available event artifacts cannot recover the
@@ -331,3 +333,133 @@ production configuration can be made semantically compatible without changing
 the existing layout-8 pulse contract. The answer must be versioned, tested,
 and append-only. Neither 2025 outcomes nor any post-confirmation performance
 comparison may be used to choose the representation.
+
+## 17. Completed structural diagnostic and artifact audit
+
+The historical gate is resolved by the read-only artifact
+`causal-fibonacci-model-feature-structural-diagnostic-v1`, recorded at source
+baseline `91b87aa4de2695eeeac3629326aa160d53b6da71`. Direct audit of
+`manifest.json`, `per_symbol.csv`, `distance_distributions.csv`, and
+`summary.md` found the manifest internally consistent: it records frozen
+source configuration `tg4a-first-study-preconfirmation-frozen-v1` under
+`tg4-analysis-configuration-v1`, read-only/outcome-blind execution, no
+warmup replay, requested measurement range
+`[2010-01-01T00:00:00Z,2026-01-01T00:00:00Z)`, six symbols
+`audcadrmp`, `audusdrmp`, `eurusdrmp`, `gbpusdrmp`, `usdcadrmp`, and
+`usdjpyrmp`, and matching per-symbol/combined actual timestamps.
+
+It records `maxABAgeBars=2048`, `maxActiveABStructures=512`, and the explicit
+`symmetric_directional_diagnostic_hypothesis`, rather than production's
+`SourceUTLUpABOnly` policy. The `combined` CSV row is a sufficient-statistics
+merge, not a rendered average: six symbol bar counts
+394751/394799/394894/394808/394778/394804 sum to 2,368,834; capacity evictions
+497,223, age expirations 106,385, and H1-only/H2-only/both counters
+6,059,942/6,099,596/5,834,852 also reconcile additively.
+
+Each symbol, plus combined, has both `geometric` and `event_relevant_20`
+distance populations at levels 1.272, 1.618, .382, .500, and .618. Across all
+five levels, combined geometric finite/invalid/pip-fallback accounting is
+1,189,455,481/0/3,072 and event-relevant accounting is 17,994,390/0/43; each
+equals the sum of constituent rows. Metadata specifies exact nearest-rank
+count/age quantiles and signed logarithmic distance bins with zero exact and
+at-most-0.1-percent representative relative error. Zero invalid counts do not
+hide pip fallback use.
+
+This diagnostic establishes structural representation properties, not
+profitability, expected return, trading efficacy, or model usefulness. Its
+512 saturation describes the actual configured bounded tracker, not the
+unbounded theoretical number of structures: capacity evictions show a
+constraint, not that 512 is a natural market-state size.
+
+## 18. Audited empirical conclusions
+
+Full geometric state is capacity saturated: combined total p50/p90/p95/p99/max
+is 512/512/512/512/512; Up and Down p50 are 254 and 255; multiple and both
+directions occur on 99.993499% and 99.992908% of bars. Every symbol has all
+five geometric quantiles equal to 512. A/B age p50/p90/p95/p99/max is
+981/1768/1869/1980/2048.
+
+Lifetime event state is likewise stale and large: H1 total p50/p90/p95/p99/max
+is 444/467/473/481/508, H2 is 449/470/474/482/504, and only 1.146762% of H1
+and 1.141716% of H2 state is age 0--20. In contrast, the causal 20-bar union
+has total p50/p90/p95/p99/max 6/15/18/27/97, Up/Down p50 3/3, multiple 93.559405%,
+and both directions 68.746438%. It is therefore the primary population.
+
+The union contains each structure once if it has a recent H1 or H2 event.
+H1-only/H2-only/both-event observed counts are 6,059,942/6,099,596/5,834,852.
+For 1.272, geometric absolute p50/p95/p99/max is
+12.9063747034/49.1586487738/73.4681465438/309.863665355, while the recent
+population is 1.37553205622/4.81730201751/6.80761023897/21.104272671. All
+other levels were directly audited. The finite observed recent tails do not
+justify clipping, so proposed distances remain un-clipped.
+
+The resolved answers are: use direction-separated permutation-invariant set
+aggregation; summarize the narrower recent union rather than full/lifetime
+state; replace the historical 27-column proposal; and use a separate symmetric
+structural producer while preserving the production TG4 pulse unchanged. The
+empirical gate is satisfied, but it did not authorize implementation of the
+unchanged 27-column schema.
+
+## 19. Replacement fixed-width schema
+
+The future family has **23 append-only columns**: one shared validity bit and
+eleven mirror-image columns for each `up` and `down`. At post-completed bar
+*t*, its primary population `U_t` contains each currently retained A/B
+structure once when it has H1 beyond or H2 rejection with event age in
+`[0,20]`. Age is `t - event_bar`: event bar is age zero, it increases once per
+completed bar, age 20 is included, and age 21 is excluded. No unconfirmed
+pivot, future bar, target resolution, outcome, profitability, or empirical
+success probability enters.
+
+For direction `d`, `U_t,d` is the directional union, `H1_t,d` and `H2_t,d`
+are its respective-event subsets, and `B_t,d` their intersection. A both-event
+structure counts once in U, but intentionally appears in both H1 and H2
+channels and in B; this makes overlap explicit without double-counting the
+union. The audited maximum of 97 remains diagnostic evidence only; it is not
+a structural bound or a feature-semantic threshold. For exact nonnegative
+causal cardinality `n`, define `count_log(n)=log1p(n)`.
+
+| Exact feature name | Population/direction | Definition and normalization | Empty/missing and availability |
+|---|---|---|---|
+| `fib_recent_price_scale_valid` | shared | 1 iff completed close and ATR/pip denominator are finite and positive; else 0 | 0 when invalid; post *t* |
+| `fib_{dir}_recent_union_count_log` | `U_t,d` | `count_log(|U_t,d|)` | 0 empty; post *t* |
+| `fib_{dir}_recent_h1_count_log` | `H1_t,d` | `count_log(|H1_t,d|)` | 0 empty; post *t* |
+| `fib_{dir}_recent_h2_count_log` | `H2_t,d` | `count_log(|H2_t,d|)` | 0 empty; post *t* |
+| `fib_{dir}_recent_h1_h2_both_count_log` | `B_t,d` | `count_log(|B_t,d|)` | 0 empty; post *t* |
+| `fib_{dir}_recent_h1_youngest_age_20` | `H1_t,d` | `min(event_age)/20` | 0 empty; H1 may appear at age 0 on *t* |
+| `fib_{dir}_recent_h2_youngest_age_20` | `H2_t,d` | `min(event_age)/20` | 0 empty; H2 needs an earlier touch |
+| `fib_{dir}_recent_median_1272_signed_atr` | `U_t,d` | exact nearest-rank signed median at 1.272 | 0 empty/invalid scale; post *t* |
+| `fib_{dir}_recent_median_1618_signed_atr` | `U_t,d` | same at 1.618 | 0 empty/invalid scale; post *t* |
+| `fib_{dir}_recent_median_pullback_0382_signed_atr` | `U_t,d` | same at .382 | 0 empty/invalid scale; post *t* |
+| `fib_{dir}_recent_median_pullback_0500_signed_atr` | `U_t,d` | same at .500 | 0 empty/invalid scale; post *t* |
+| `fib_{dir}_recent_median_pullback_0618_signed_atr` | `U_t,d` | same at .618 | 0 empty/invalid scale; post *t* |
+
+`{dir}` expands to up/down: 1 + (11 x 2) = 23. Each distance is
+`direction_sign*(level-completed_close)/max(completed_bar_wilder_atr14_raw,canonical_symbol_pip_size)`, sign +1 for UpAB and -1 for DownAB. The exact
+nearest-rank signed median uses every qualifying directional-union member, is
+permutation-invariant, and selects no winner, Top-K, rank, or tie-break. Each
+count transform is the raw monotonic `log1p(n)`: zero maps exactly to zero,
+there is no clipping or empirical denominator, and future causal populations
+larger than the observed maximum retain their count information.
+
+## 20. Future implementation boundary and projection
+
+This is documentation/design freeze only. A separate task must implement and
+test a symmetric producer without changing current production TG4 behavior.
+Nothing here changes Tensor width 76, model input width 80, layout 8, the
+four completed-close-return suffix, persisted semantics, database schema,
+scheduler, experiments, or training/inference.
+
+If a future task implements this frozen 23-column schema, the projection is
+Tensor width **99** (`76+23`), model input width **103** (`80+23`, retaining
+the suffix), and append-only semantic layout **9**. These are projections only.
+
+## 21. Remaining implementation boundary
+
+No design issue blocks a separate implementation task. That task must add
+producer-level tests for causality, mirror direction, event ordering/age,
+union de-duplication and intentional H1/H2 overlap, scale validity, empty
+sets, non-saturating count-log aggregation, exact median aggregation, streaming-prefix parity,
+and layout-8 prefix/layout-9 expansion compatibility.
+
+**Ready for separate model-feature implementation task.**

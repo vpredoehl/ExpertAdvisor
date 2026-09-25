@@ -128,6 +128,10 @@ public:
         ValidateConfiguration();
     }
 
+    // The completed-bar Wilder ATR is useful to read-only structural
+    // diagnostics.  Exposing it avoids reimplementing a second ATR convention.
+    const std::optional<double>& CurrentAtr() const { return currentAtr_; }
+
     static CausalFractalTrendLineGeometry FromHistorical(
         std::vector<Candle> candles,
         Configuration configuration = {},
