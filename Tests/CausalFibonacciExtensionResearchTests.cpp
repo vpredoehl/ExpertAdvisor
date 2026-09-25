@@ -1,4 +1,5 @@
 #include "CausalFibonacciExtensionResearch.hpp"
+#include "CausalFibonacciExtensionHistoricalEvaluation.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -428,6 +430,27 @@ void TestH3FailsClosedWithoutAuthoritativeDContract()
         "missing_authoritative_d_extension_contract") != std::string::npos);
 }
 
+void TestHistoricalBoundaryIsExclusiveAndFailClosed()
+{
+    const EA::TG4::EvaluationConfiguration configuration =
+        EA::TG4::LoadConfigurationFile(EA_TEST_TG4_CONFIG_PATH);
+    std::vector<Fib::ObservationRecord> records;
+    Fib::HistoricalEvaluator evaluator(
+        "eurusdrmp", configuration,
+        [&records](Fib::ObservationRecord record)
+        { records.push_back(std::move(record)); });
+    const auto valid = Fib::kFirstStudyEndExclusive - 900;
+    evaluator.AddCompletedBar({valid, 1.0, 1.1, 0.9, 1.0});
+    AssertInvalid([&]
+    {
+        evaluator.AddCompletedBar(
+            {Fib::kFirstStudyEndExclusive, 1.0, 1.1, 0.9, 1.0});
+    });
+    evaluator.Finalize();
+    assert(evaluator.IsFinalized());
+    assert(records.empty());
+}
+
 Fib::ObservationRecord SuccessfulRecord()
 {
     Fib::CausalExtensionTracker tracker(
@@ -609,6 +632,7 @@ int main()
     TestH1FrozenHorizonBoundariesAndExactTolerance();
     TestH2CausalStartHorizonCensoringAndAmbiguity();
     TestH3FailsClosedWithoutAuthoritativeDContract();
+    TestHistoricalBoundaryIsExclusiveAndFailClosed();
     TestStableIdentityDeduplicationStatisticsAndSchema();
     TestFutureBarsCannotRewriteFrozenGeometryOrEarlierEvents();
     std::cout << "Causal Fibonacci extension research tests passed\n";
