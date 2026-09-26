@@ -260,9 +260,18 @@ def load_registry(path: Path) -> dict:
     if schema_version != REGISTRY_SCHEMA_VERSION:
         workers = []
         for worker in value["workers"]:
-            roles = ["infer"]
-            if "train" in worker["capabilities"]:
-                roles.append("train")
+            # Schemas 1 and 2 predate worker_role.  Their layout-only
+            # bindings must be expanded so a legacy training/reference
+            # capability remains available as a TRAIN binding.  Schemas 3
+            # and 4 already carry authoritative role bindings; re-splitting
+            # them would synthesize an INFER binding for a TRAIN artifact (or
+            # duplicate an existing INFER binding).
+            if schema_version < ROLE_AWARE_REGISTRY_SCHEMA_VERSION:
+                roles = ["infer"]
+                if "train" in worker["capabilities"]:
+                    roles.append("train")
+            else:
+                roles = [worker["worker_role"]]
             for role in roles:
                 upgraded = dict(worker)
                 upgraded["worker_role"] = role
@@ -367,7 +376,11 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
             role == "infer" and manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION and
             set(capabilities) != {"infer"}):
             raise PublishError("existing role-aware inference worker capabilities are invalid")
-        if (registry["schema_version"] != REGISTRY_SCHEMA_VERSION and
+        # Layout-only schemas used one current worker for all phases.  Once
+        # worker_role exists, the current TRAIN and INFER contracts differ:
+        # a legacy-manifest TRAIN worker may retain its train/infer/analyze
+        # capabilities while a role-aware INFER worker is infer-only.
+        if (registry["schema_version"] < ROLE_AWARE_REGISTRY_SCHEMA_VERSION and
                 rule == "current" and
                 set(capabilities) != {"train", "infer", "analyze"}):
             raise PublishError("existing current semantic worker capabilities are invalid")

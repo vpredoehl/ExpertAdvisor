@@ -8,6 +8,8 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
     "${repo_root}/Tests/SemanticWorkerRegistryTests.cpp" \
     "${repo_root}/Sources/SchedulerCore/SemanticWorkerRegistry.cpp" \
     -o "${test_dir}/SemanticWorkerRegistryTests"
-EA_TRAINING_SELECTION_REGISTRY_UNDER_TEST="${repo_root}/Builds/SemanticWorkers/registry.json" \
-    "${test_dir}/SemanticWorkerRegistryTests"
+# The binary's optional external-registry check remains available to callers
+# that explicitly set EA_TRAINING_SELECTION_REGISTRY_UNDER_TEST.  This suite
+# itself uses only its disposable fixtures and never exercises live artifacts.
+"${test_dir}/SemanticWorkerRegistryTests"
 printf '%s\n' "SemanticWorkerRegistryTests passed"

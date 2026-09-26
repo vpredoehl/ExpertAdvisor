@@ -52,11 +52,11 @@ class HistoricalTrainingCandidatePublisherTests(unittest.TestCase):
         return path
 
     def stage(self, executable: Path, layout: int, width: int, commit: str,
-              role: str, capabilities: list[str], runtime: dict) -> dict:
+              role: str, capabilities: list[str], runtime: dict,
+              manifest_schema: int = publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION) -> dict:
         digest = publisher.sha256(executable)
         relative, manifest, worker = rollover._worker_value(
-            layout, width, commit, digest, role,
-            publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
+            layout, width, commit, digest, role, manifest_schema,
             capabilities, runtime["identity"])
         rollover._stage_worker(self.root, executable, relative, manifest, digest, runtime)
         return worker
@@ -88,6 +88,37 @@ class HistoricalTrainingCandidatePublisherTests(unittest.TestCase):
                     "workers": [old, current_train, current_infer]}
         publisher.validate_existing_registry(self.root, registry)
         (self.root / "registry.json").write_text(publisher.json_text(registry), encoding="utf-8")
+
+    def seed_role_aware_v4_registry(self) -> dict:
+        """Create the production-shaped v4 registry in this disposable root."""
+        manifest, identity = publisher.runtime_manifest(dict(self.runtime_resources))
+        runtime = publisher.stage_runtime_package(
+            self.root, dict(self.runtime_resources), manifest, identity)
+        historical_train = self.stage(
+            self.executable("historical-train", b"historical train"),
+            8, 80, self.old_commit, "train", ["train", "infer", "analyze"], runtime)
+        historical_train["worker_rule"] = "historical"
+        historical_infer = self.stage(
+            self.executable("historical-infer", b"historical infer"),
+            8, 80, "b" * 40, "infer", ["infer"], runtime,
+            publisher.WORKER_MANIFEST_SCHEMA_VERSION)
+        historical_infer["worker_rule"] = "historical"
+        current_train = self.stage(
+            self.executable("v4-current-train", b"v4 current train"),
+            9, 103, self.current_commit, "train", ["train", "infer", "analyze"], runtime)
+        current_infer = self.stage(
+            self.executable("v4-current-infer", b"current infer"),
+            9, 103, "9" * 40, "infer", ["infer"], runtime,
+            publisher.WORKER_MANIFEST_SCHEMA_VERSION)
+        workers = [historical_train, historical_infer, current_train, current_infer]
+        for worker in workers:
+            worker.pop("selection_priority")
+        registry = {"schema_version": publisher.PREVIOUS_REGISTRY_SCHEMA_VERSION,
+                    "current_layout": 9, "runtimes": [runtime], "workers": workers}
+        publisher.validate_existing_registry(self.root, registry)
+        (self.root / "registry.json").write_text(
+            publisher.json_text(registry), encoding="utf-8")
+        return registry
 
     def registry(self) -> dict:
         return json.loads((self.root / "registry.json").read_text(encoding="utf-8"))
@@ -197,6 +228,102 @@ class HistoricalTrainingCandidatePublisherTests(unittest.TestCase):
                          if worker["semantic_layout"] == 8 and
                          worker["selection_priority"] == 1)
         self.assertEqual(published["sha256"], digest)
+
+    def test_v4_role_aware_upgrade_preserves_each_binding_without_capability_changes(self) -> None:
+        original = self.seed_role_aware_v4_registry()
+        original_bytes = (self.root / "registry.json").read_bytes()
+
+        upgraded = publisher.load_registry(self.root / "registry.json")
+
+        self.assertEqual((self.root / "registry.json").read_bytes(), original_bytes)
+        self.assertEqual(upgraded["schema_version"], publisher.REGISTRY_SCHEMA_VERSION)
+        self.assertEqual(len(upgraded["workers"]), len(original["workers"]))
+        original_by_binding = {
+            (worker["semantic_layout"], worker["worker_role"]): worker
+            for worker in original["workers"]
+        }
+        upgraded_by_binding = {
+            (worker["semantic_layout"], worker["worker_role"]): worker
+            for worker in upgraded["workers"]
+        }
+        self.assertEqual(set(upgraded_by_binding), set(original_by_binding))
+        self.assertEqual(set(upgraded_by_binding),
+                         {(8, "train"), (8, "infer"), (9, "train"), (9, "infer")})
+        for binding, original_worker in original_by_binding.items():
+            upgraded_worker = upgraded_by_binding[binding]
+            expected = dict(original_worker)
+            expected["selection_priority"] = 0
+            self.assertEqual(upgraded_worker, expected)
+            self.assertNotIn("train_feature_ablation_v1", upgraded_worker["capabilities"])
+        self.assertEqual(upgraded_by_binding[8, "train"]["capabilities"],
+                         ["train", "infer", "analyze"])
+        self.assertEqual(upgraded_by_binding[8, "infer"]["capabilities"], ["infer"])
+
+    def test_v4_upgrade_rejects_malformed_role_aware_workers(self) -> None:
+        registry = self.seed_role_aware_v4_registry()
+        duplicate = dict(registry)
+        duplicate["workers"] = list(registry["workers"]) + [dict(registry["workers"][0])]
+        (self.root / "registry.json").write_text(
+            publisher.json_text(duplicate), encoding="utf-8")
+        with self.assertRaisesRegex(
+                publisher.PublishError, "duplicate/malformed layout roles"):
+            publisher.load_registry(self.root / "registry.json")
+
+        registry = self.seed_role_aware_v4_registry()
+        infer = next(worker for worker in registry["workers"]
+                     if worker["semantic_layout"] == 9 and worker["worker_role"] == "infer")
+        infer["capabilities"] = ["infer", "train"]
+        manifest = self.root / infer["manifest"]
+        manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest_value["capabilities"] = ["infer", "train"]
+        manifest.chmod(0o600)
+        manifest.write_text(publisher.json_text(manifest_value), encoding="utf-8")
+        (self.root / "registry.json").write_text(
+            publisher.json_text(registry), encoding="utf-8")
+        with self.assertRaisesRegex(
+                publisher.PublishError, "role-aware inference worker capabilities are invalid"):
+            publisher.load_registry(self.root / "registry.json")
+
+    def test_append_candidate_upgrades_production_shaped_v4_without_replacing_bindings(self) -> None:
+        original = self.seed_role_aware_v4_registry()
+        candidate = self.executable("LSTM_Release", b"qualified v4 candidate")
+
+        candidate_publisher.append_historical_training_candidate(
+            self.root, candidate, 8, 80, self.new_commit,
+            ["train", "train_feature_ablation_v1"], 1,
+            feature_ablation_qualified=True, check_embedded_commit=False,
+            runtime_resources=dict(self.runtime_resources))
+
+        after = self.registry()
+        self.assertEqual(after["schema_version"], publisher.REGISTRY_SCHEMA_VERSION)
+        self.assertEqual(len(after["workers"]), len(original["workers"]) + 1)
+        original_by_binding = {
+            (worker["semantic_layout"], worker["worker_role"]): worker
+            for worker in original["workers"]
+        }
+        for worker in after["workers"]:
+            binding = (worker["semantic_layout"], worker["worker_role"])
+            if (binding in original_by_binding and
+                    worker["selection_priority"] == 0):
+                expected = dict(original_by_binding[binding])
+                expected["selection_priority"] = 0
+                self.assertEqual(worker, expected)
+        historical_train = [worker for worker in after["workers"]
+                            if worker["semantic_layout"] == 8 and
+                            worker["worker_role"] == "train"]
+        self.assertEqual(len(historical_train), 2)
+        self.assertEqual(
+            next(worker for worker in historical_train
+                 if worker["selection_priority"] == 0)["capabilities"],
+            ["train", "infer", "analyze"])
+        qualified = next(worker for worker in historical_train
+                         if worker["selection_priority"] == 1)
+        self.assertEqual(qualified["capabilities"],
+                         ["train", "train_feature_ablation_v1"])
+        self.assertEqual(
+            {(worker["semantic_layout"], worker["worker_role"])
+             for worker in after["workers"] if worker["worker_role"] == "infer"},
+            {(8, "infer"), (9, "infer")})
 
 
 if __name__ == "__main__":
