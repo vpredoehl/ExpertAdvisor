@@ -1,5 +1,9 @@
 #include "../Sources/SchedulerCore/SemanticWorkerRegistry.hpp"
+#include "../Sources/SchedulerCore/TrainingWorkerCommand.hpp"
+#include "../Sources/SchedulerCore/TrainingWorkerSelection.hpp"
+#include "FeatureAblation.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
@@ -99,6 +103,22 @@ struct Fixture
     {
         write(path, contents);
         assert(::chmod(path.c_str(), 0700) == 0);
+    }
+
+    static void replaceText(const fs::path& path,
+                            const std::string& before,
+                            const std::string& after)
+    {
+        std::ifstream input{path, std::ios::binary};
+        assert(input.good());
+        std::string contents{
+            std::istreambuf_iterator<char>{input},
+            std::istreambuf_iterator<char>{}};
+        input.close();
+        const std::size_t offset = contents.find(before);
+        assert(offset != std::string::npos);
+        contents.replace(offset, before.size(), after);
+        write(path, contents);
     }
 
     void writeRuntime()
@@ -213,6 +233,85 @@ struct Fixture
             "\",\"capabilities\":[\"infer\"]}]}");
     }
 
+    void writeHistoricalTrainingRegistry()
+    {
+        const fs::path historicalExecutable =
+            artifact(8, kCommit6, kHash6) / "LSTM_Release";
+        const fs::path currentExecutable =
+            artifact(9, kCommit7, kHash7) / "LSTM_Release";
+        const fs::path currentInferenceExecutable =
+            roleArtifact(9, "infer", kInferCommit7, kInferHash7) /
+            "lstm-infer-worker";
+        writeExecutable(historicalExecutable, "worker-six\n");
+        writeExecutable(currentExecutable,
+            "#!/bin/sh\n"
+            "worker_dir=${0%/*}\n"
+            "test -r \"$worker_dir/default.metallib\" || exit 40\n"
+            "test -r \"$worker_dir/MetaNN.metallib\" || exit 41\n"
+            "exit 0\n");
+        writeExecutable(currentInferenceExecutable, "infer-worker\n");
+        write(historicalExecutable.parent_path() / "manifest.json",
+            "{\"schema_version\":1,\"semantic_layout\":8,"
+            "\"storage\":\"immutable\",\"model_input_width\":80,"
+            "\"source_commit\":\"" + std::string{kCommit6} +
+            "\",\"sha256\":\"" + kHash6 +
+            "\",\"executable_identity\":\"LSTM_Release\","
+            "\"capabilities\":[\"train\"]}");
+        write(currentExecutable.parent_path() / "manifest.json",
+            "{\"schema_version\":1,\"semantic_layout\":9,"
+            "\"storage\":\"immutable\",\"model_input_width\":103,"
+            "\"source_commit\":\"" + std::string{kCommit7} +
+            "\",\"sha256\":\"" + kHash7 +
+            "\",\"executable_identity\":\"LSTM_Release\","
+            "\"capabilities\":[\"train\",\"infer\",\"analyze\"]}");
+        write(currentInferenceExecutable.parent_path() / "manifest.json",
+            "{\"schema_version\":2,\"semantic_layout\":9,"
+            "\"storage\":\"immutable\",\"model_input_width\":103,"
+            "\"source_commit\":\"" + std::string{kInferCommit7} +
+            "\",\"sha256\":\"" + kInferHash7 +
+            "\",\"executable_identity\":\"lstm-infer-worker\","
+            "\"worker_role\":\"infer\",\"capabilities\":[\"infer\"]}");
+        linkRuntime(historicalExecutable.parent_path());
+        linkRuntime(currentExecutable.parent_path());
+        linkRuntime(currentInferenceExecutable.parent_path());
+        write(root / "registry.json",
+            "{\"schema_version\":4,\"current_layout\":9,\"runtimes\":["
+            "{\"identity\":\"" + std::string{kRuntimeIdentity} +
+            "\",\"directory\":\"runtime/" + kRuntimeIdentity +
+            "\",\"manifest\":\"runtime/" + kRuntimeIdentity +
+            "/manifest.json\"}],\"workers\":["
+            "{\"semantic_layout\":8,\"worker_role\":\"train\","
+            "\"artifact_manifest_schema_version\":1,"
+            "\"worker_rule\":\"historical\",\"model_input_width\":80,"
+            "\"source_commit\":\"" + std::string{kCommit6} +
+            "\",\"sha256\":\"" + kHash6 +
+            "\",\"executable\":\"layout8/" + kCommit6 + "/" + kHash6 +
+            "/LSTM_Release\",\"manifest\":\"layout8/" + kCommit6 + "/" +
+            kHash6 + "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity + "\",\"capabilities\":[\"train\"]},"
+            "{\"semantic_layout\":9,\"worker_role\":\"train\","
+            "\"artifact_manifest_schema_version\":1,"
+            "\"worker_rule\":\"current\",\"model_input_width\":103,"
+            "\"source_commit\":\"" + std::string{kCommit7} +
+            "\",\"sha256\":\"" + kHash7 +
+            "\",\"executable\":\"layout9/" + kCommit7 + "/" + kHash7 +
+            "/LSTM_Release\",\"manifest\":\"layout9/" + kCommit7 + "/" +
+            kHash7 + "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity +
+            "\",\"capabilities\":[\"train\",\"infer\",\"analyze\"]},"
+            "{\"semantic_layout\":9,\"worker_role\":\"infer\","
+            "\"artifact_manifest_schema_version\":2,"
+            "\"worker_rule\":\"current\",\"model_input_width\":103,"
+            "\"source_commit\":\"" + std::string{kInferCommit7} +
+            "\",\"sha256\":\"" + kInferHash7 +
+            "\",\"executable\":\"layout9/infer/" + kInferCommit7 + "/" +
+            kInferHash7 +
+            "/lstm-infer-worker\",\"manifest\":\"layout9/infer/" +
+            kInferCommit7 + "/" + kInferHash7 +
+            "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity + "\",\"capabilities\":[\"infer\"]}]}");
+    }
+
     EA::Scheduler::SemanticWorkerRegistry load(
         std::optional<std::string> assertion = std::nullopt) const
     {
@@ -240,6 +339,64 @@ bool Contains(const std::string& value, const std::string& expected)
     return value.find(expected) != std::string::npos;
 }
 
+void AssertTrainingCommandAblationIdentity(
+    const EA::Scheduler::TrainingWorkerSelection& historical,
+    const EA::Scheduler::TrainingWorkerSelection& current)
+{
+    const auto freshControlCommand =
+        EA::Scheduler::BeginTrainingWorkerCommand(
+            historical.canonicalExecutablePath, "");
+    assert(freshControlCommand.size() == 2);
+    assert(freshControlCommand.front() ==
+           historical.canonicalExecutablePath);
+    assert(freshControlCommand[1] == "--train");
+
+    const std::string noncanonicalMask =
+        "return_direction_imbalance, return_sign_persistence";
+    const std::string canonicalMask =
+        EA::FeatureAblationMask::Parse(noncanonicalMask).CanonicalText();
+    assert(canonicalMask ==
+           "return_sign_persistence,return_direction_imbalance");
+    const std::string expectedAblationArgument =
+        "--ablate-features=" + canonicalMask;
+
+    const auto freshAblationCommand =
+        EA::Scheduler::BeginTrainingWorkerCommand(
+            historical.canonicalExecutablePath, canonicalMask);
+    assert(freshAblationCommand.size() == 3);
+    assert(freshAblationCommand.front() ==
+           historical.canonicalExecutablePath);
+    assert(freshAblationCommand[1] == "--train");
+    assert(freshAblationCommand[2] == expectedAblationArgument);
+    assert(std::find(freshAblationCommand.begin(),
+                     freshAblationCommand.end(),
+                     "--ablate-features=" + noncanonicalMask) ==
+           freshAblationCommand.end());
+
+    // Resumed and fresh training share this command prefix. These cases
+    // protect both sides of BuildTrainCommand's later resume branch.
+    const auto resumedControlCommand =
+        EA::Scheduler::BeginTrainingWorkerCommand(
+            historical.canonicalExecutablePath, "");
+    assert(std::none_of(
+        resumedControlCommand.begin(), resumedControlCommand.end(),
+        [](const std::string& argument) {
+            return argument.starts_with("--ablate-features");
+        }));
+    const auto resumedAblationCommand =
+        EA::Scheduler::BeginTrainingWorkerCommand(
+            historical.canonicalExecutablePath, canonicalMask);
+    assert(resumedAblationCommand.front() ==
+           historical.canonicalExecutablePath);
+    assert(std::count(resumedAblationCommand.begin(),
+                      resumedAblationCommand.end(),
+                      expectedAblationArgument) == 1);
+    assert(std::find(resumedAblationCommand.begin(),
+                     resumedAblationCommand.end(),
+                     current.canonicalExecutablePath) ==
+           resumedAblationCommand.end());
+}
+
 } // namespace
 
 int main()
@@ -250,6 +407,16 @@ int main()
     const auto registry = valid.load();
     assert(registry.currentWorker().semanticLayoutVersion == 7);
     assert(registry.currentWorker().canonicalExecutablePath ==
+           fs::canonical(valid.executable7));
+    const auto legacyRegistryFreshTraining =
+        registry.selectTrainingReferenceWorker({});
+    assert(legacyRegistryFreshTraining.selected);
+    assert(legacyRegistryFreshTraining.canonicalExecutablePath ==
+           fs::canonical(valid.executable7));
+    const auto legacyRegistryExplicitTraining =
+        registry.selectTrainingReferenceWorker({{77}, {7}, true});
+    assert(legacyRegistryExplicitTraining.selected);
+    assert(legacyRegistryExplicitTraining.canonicalExecutablePath ==
            fs::canonical(valid.executable7));
 
     const auto selected6 = registry.selectInferenceWorker({{77}, {6}, true});
@@ -303,6 +470,33 @@ int main()
            fs::canonical(roleAware.executable7));
     assert(roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Infer) !=
            roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Train));
+    const auto freshLegacyTraining =
+        EA::Scheduler::SelectTrainingWorker({}, roleAwareRegistry);
+    assert(freshLegacyTraining.selected);
+    assert(freshLegacyTraining.canonicalExecutablePath ==
+           fs::canonical(roleAware.executable7));
+    assert(freshLegacyTraining.reason == "current_published_semantic_worker");
+    const auto modelIdentityMissing = EA::Scheduler::SelectTrainingWorker(
+        {{}, {}, true}, roleAwareRegistry);
+    assert(!modelIdentityMissing.selected);
+    assert(modelIdentityMissing.diagnostic ==
+           "semantic_worker_identity_unavailable");
+    const auto widthOnly = EA::Scheduler::SelectTrainingWorker(
+        {{77}, {}, false}, roleAwareRegistry);
+    const auto layoutOnly = EA::Scheduler::SelectTrainingWorker(
+        {{}, {7}, false}, roleAwareRegistry);
+    assert(!widthOnly.selected && !layoutOnly.selected);
+    assert(widthOnly.diagnostic == "semantic_worker_identity_incomplete");
+    assert(layoutOnly.diagnostic == "semantic_worker_identity_incomplete");
+    const auto unsupportedHistorical = EA::Scheduler::SelectTrainingWorker(
+        {{77}, {6}, true}, roleAwareRegistry);
+    assert(!unsupportedHistorical.selected);
+    assert(Contains(unsupportedHistorical.diagnostic,
+                    "semantic_worker_layout_unsupported:layout=6"));
+    const auto widthMismatch = EA::Scheduler::SelectTrainingWorker(
+        {{76}, {7}, true}, roleAwareRegistry);
+    assert(!widthMismatch.selected);
+    assert(widthMismatch.diagnostic == "semantic_worker_incompatible");
 
     if (const char* externalRegistry = std::getenv("EA_SEMANTIC_REGISTRY_UNDER_TEST"))
     {
@@ -348,6 +542,93 @@ int main()
         assert(!published.selectInferenceWorker({{77}, {8}, true}).selected);
         assert(!published.selectTrainingReferenceWorker({{80}, {7}, true}).selected);
         assert(!published.selectTrainingReferenceWorker({{77}, {8}, true}).selected);
+    }
+
+    Fixture combinedHistoricalTraining;
+    combinedHistoricalTraining.writeHistoricalTrainingRegistry();
+    const auto combinedRegistry = EA::Scheduler::SemanticWorkerRegistry::Load({
+        (combinedHistoricalTraining.root / "registry.json").string(),
+        std::nullopt,
+        9,
+        103});
+    const auto combinedHistorical = EA::Scheduler::SelectTrainingWorker(
+        {{80}, {8}, true}, combinedRegistry);
+    const auto combinedCurrent = EA::Scheduler::SelectTrainingWorker(
+        {{103}, {9}, true}, combinedRegistry);
+    assert(combinedHistorical.selected);
+    assert(combinedHistorical.semanticLayoutVersion == 8);
+    assert(combinedHistorical.maximumInputWidth == 80);
+    assert(combinedHistorical.reason ==
+           "immutable_historical_semantic_worker");
+    assert(combinedCurrent.selected);
+    assert(combinedCurrent.semanticLayoutVersion == 9);
+    assert(combinedCurrent.maximumInputWidth == 103);
+    assert(combinedCurrent.reason == "current_published_semantic_worker");
+    assert(combinedHistorical.canonicalExecutablePath !=
+           combinedCurrent.canonicalExecutablePath);
+    AssertTrainingCommandAblationIdentity(
+        combinedHistorical, combinedCurrent);
+
+    if (const char* trainingSelectionRegistry =
+            std::getenv("EA_TRAINING_SELECTION_REGISTRY_UNDER_TEST"))
+    {
+        const auto published = EA::Scheduler::SemanticWorkerRegistry::Load({
+            trainingSelectionRegistry,
+            std::nullopt,
+            EA::kModelInputSemanticLayoutVersion,
+            EA::kCurrentModelInputWidth});
+        const auto historical = EA::Scheduler::SelectTrainingWorker(
+            {{80}, {8}, true}, published);
+        const auto current = EA::Scheduler::SelectTrainingWorker(
+            {{103}, {9}, true}, published);
+        assert(historical.selected);
+        assert(historical.semanticLayoutVersion == 8);
+        assert(historical.maximumInputWidth == 80);
+        assert(historical.reason == "immutable_historical_semantic_worker");
+        assert(current.selected);
+        assert(current.semanticLayoutVersion == 9);
+        assert(current.maximumInputWidth == 103);
+        assert(current.reason == "current_published_semantic_worker");
+        assert(historical.canonicalExecutablePath !=
+               current.canonicalExecutablePath);
+        const auto* historicalArtifact =
+            published.findByCanonicalExecutable(
+                historical.canonicalExecutablePath);
+        assert(historicalArtifact != nullptr);
+        assert(historicalArtifact->role ==
+               EA::Scheduler::SemanticWorkerRole::Train);
+        assert(historicalArtifact->semanticLayoutVersion == 8);
+        assert(historicalArtifact->modelInputWidth == 80);
+        assert(!historicalArtifact->sourceCommit.empty());
+        assert(!historicalArtifact->sha256.empty());
+        assert(!historicalArtifact->runtimeIdentity.empty());
+        assert(!historicalArtifact->canonicalManifestPath.empty());
+        assert(published.validateRuntimeForExecutable(
+                   historical.canonicalExecutablePath).ready);
+        assert(EA::Scheduler::SelectTrainingWorker({}, published)
+                   .canonicalExecutablePath == current.canonicalExecutablePath);
+        assert(!EA::Scheduler::SelectTrainingWorker(
+                    {{}, {}, true}, published).selected);
+        assert(!EA::Scheduler::SelectTrainingWorker(
+                    {{80}, {}, false}, published).selected);
+        assert(!EA::Scheduler::SelectTrainingWorker(
+                    {{}, {8}, false}, published).selected);
+        assert(!EA::Scheduler::SelectTrainingWorker(
+                    {{80}, {7}, true}, published).selected);
+        assert(!EA::Scheduler::SelectTrainingWorker(
+                    {{103}, {8}, true}, published).selected);
+        assert(!EA::Scheduler::SelectTrainingWorker(
+                    {{80}, {9}, true}, published).selected);
+
+        // Existing role-aware inference selection remains independent.
+        const auto inference8 = published.selectInferenceWorker(
+            {{80}, {8}, true});
+        const auto inference9 = published.selectInferenceWorker(
+            {{103}, {9}, true});
+        assert(inference8.selected && inference8.semanticLayoutVersion == 8);
+        assert(inference9.selected && inference9.semanticLayoutVersion == 9);
+        assert(inference8.canonicalExecutablePath !=
+               historical.canonicalExecutablePath);
     }
 
     assert(valid.load(valid.executable6.string()).find(6) != nullptr);
@@ -402,14 +683,37 @@ int main()
                     "semantic_worker_runtime_dependency_missing:resource=MetaNN.metallib"));
 
     Fixture runtimeRemovedAfterLoad;
+    runtimeRemovedAfterLoad.writeRoleAwareRegistry();
     const auto loadedBeforeRemoval = runtimeRemovedAfterLoad.load();
+    const auto selectedTrainingBeforeRemoval =
+        loadedBeforeRemoval.selectTrainingReferenceWorker(
+            {{77}, {7}, true});
+    assert(selectedTrainingBeforeRemoval.selected);
     fs::remove(runtimeRemovedAfterLoad.executable7.parent_path() /
                "default.metallib");
     const auto missingAtAdmission =
         loadedBeforeRemoval.validateRuntimeForExecutable(
-            fs::canonical(runtimeRemovedAfterLoad.executable7).string());
+            selectedTrainingBeforeRemoval.canonicalExecutablePath);
     assert(!missingAtAdmission.ready);
     assert(Contains(missingAtAdmission.diagnostic,
                     "semantic_worker_runtime_dependency_missing:resource=default.metallib"));
+
+    Fixture trainingCapabilityMissing;
+    trainingCapabilityMissing.writeRoleAwareRegistry();
+    const std::string allCapabilities =
+        "\"capabilities\":[\"train\",\"infer\",\"analyze\"]";
+    const std::string noTrainCapability =
+        "\"capabilities\":[\"infer\",\"analyze\"]";
+    Fixture::replaceText(
+        trainingCapabilityMissing.executable7.parent_path() / "manifest.json",
+        allCapabilities,
+        noTrainCapability);
+    Fixture::replaceText(
+        trainingCapabilityMissing.root / "registry.json",
+        allCapabilities,
+        noTrainCapability);
+    assert(Contains(Failure([&] {
+        (void)trainingCapabilityMissing.load();
+    }), "semantic_worker_capability_mismatch:layout=7:role_required=train"));
     return 0;
 }

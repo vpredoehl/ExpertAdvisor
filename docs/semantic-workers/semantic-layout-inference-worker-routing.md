@@ -4,20 +4,25 @@ The scheduler reads `Builds/SemanticWorkers/registry.json` once, validates all
 entries before acquiring scheduler authority, and keeps the resulting typed
 `SemanticWorkerRegistry` in memory. The registry maps exact semantic-layout and
 executable-role pairs; it
-it never derives compatibility from layout ordering, experiment IDs, directory
+never derives compatibility from layout ordering, experiment IDs, directory
 contents, timestamps, or `layout <= current` rules.
 
 The three executable identities are deliberately separate:
 
 - `schedulerExecutablePath` is the executable that owns the scheduler lease
   and fencing identity.
-- `currentWorkerExecutablePath` remains the existing immutable training/reference
-  `LSTM_Release` binding. New train and final-analysis attempts use it.
-  Checkpoint analysis remains in-process scheduler work and therefore uses
-  scheduler identity.
-- `selectedWorkerExecutablePath` is chosen per dispatch. Final and checkpoint
-  inference both resolve the model's exact semantic layout through the same
-  registry and persist that canonical immutable path before launch.
+- `currentWorkerExecutablePath` remains the startup snapshot's published current
+  training/reference `LSTM_Release` binding. It is used for a fresh legacy train
+  experiment with no persisted semantic identity, but it is not forced onto an
+  experiment that already has an explicit persisted identity. Final analysis
+  continues to use it. Checkpoint analysis remains in-process scheduler work and
+  therefore uses scheduler identity.
+- `selectedWorkerExecutablePath` is chosen per train or infer dispatch. Training
+  resolves the experiment's exact persisted semantic identity through
+  `selectTrainingReferenceWorker`; final and checkpoint inference resolve the
+  model's exact semantic layout through the inference selector. The selected
+  registry artifact supplies the canonical executable and all persisted worker
+  provenance before launch.
 
 Role-aware inference executables are stored at:
 
@@ -63,6 +68,37 @@ Admission revalidates the selected worker's two runtime links and resource
 hashes before capacity reservation or process spawn. An incomplete runtime is
 reported as `SCHEDULER_SEMANTIC_WORKER_RUNTIME_UNAVAILABLE`; the experiment is
 left pending and no worker attempt is created.
+
+## Training selection
+
+An experiment's explicit `model_input_width` and
+`model_input_semantic_layout_version` are authoritative and immutable. Training
+preflight and attempt reservation both load that identity through the semantic
+admission workflow and then select the exact registered train-capable artifact.
+They validate the selected artifact's runtime before consuming capacity. There
+is no fallback to the current worker when an exact historical artifact is
+unavailable, incompatible, or lacks train capability.
+
+A truly fresh legacy experiment with both identity columns null retains the
+established behavior of selecting the registry's current published training
+artifact without inventing or persisting an identity during selection. An
+incomplete identity, an expected-but-missing identity, or a width/layout
+mismatch is rejected. `SCHEDULER_TRAIN_WORKER_SELECTED` records the experiment,
+persisted and selected identities, canonical executable, and selection reason.
+
+Reservation persists semantic layout, input width, worker role, source commit,
+executable SHA-256, runtime identity, and canonical manifest path directly from
+the selected artifact. The launch command uses that reserved canonical
+executable. A stopped train attempt is not resumed when its executable differs
+from the exact selection; it remains stopped and admission is deferred for
+operator reconciliation.
+
+TRAIN command construction also preserves the experiment's persisted feature-
+ablation identity. A nonempty canonical `feature_ablation_mask` is forwarded to
+both fresh and resumed training as
+`--ablate-features=<canonical-mask>`; an empty mask emits no ablation option.
+This command identity is initialized alongside the selected TRAIN executable,
+before command construction branches for fresh or resumed training.
 
 The publisher is the sole registry writer; schedulers are read-only consumers
 of the startup snapshot. A startup validation failure occurs before authority

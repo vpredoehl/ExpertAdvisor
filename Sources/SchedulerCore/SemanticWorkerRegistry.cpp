@@ -900,6 +900,20 @@ SemanticWorkerSelection SelectWorkerForRole(
         return {false, "semantic_worker_identity_incomplete", {}, 0, 0, {}};
     const SemanticWorkerArtifact* worker = registry.find(
         *persisted.layoutVersion, role);
+    // Schema-v2 registries predate explicit roles.  Their combined current
+    // artifact is stored under the inference-role key, but currentWorker()
+    // exposes it as the training/reference executable.  Permit only that
+    // exact current identity; an unsupported historical train identity must
+    // still fail closed rather than falling back.
+    if (worker == nullptr && role == SemanticWorkerRole::Train)
+    {
+        const SemanticWorkerArtifact& legacyCurrent = registry.currentWorker();
+        if (legacyCurrent.semanticLayoutVersion == *persisted.layoutVersion &&
+            legacyCurrent.capabilities.contains("train"))
+        {
+            worker = &legacyCurrent;
+        }
+    }
     if (worker == nullptr)
         return {false,
                 "semantic_worker_layout_unsupported:layout=" +
@@ -936,6 +950,29 @@ SemanticWorkerSelection SemanticWorkerRegistry::selectInferenceWorker(
 SemanticWorkerSelection SemanticWorkerRegistry::selectTrainingReferenceWorker(
     const PersistedWorkerSemanticIdentity& persisted) const
 {
+    // A genuinely fresh legacy experiment has no model-bearing identity yet.
+    // Preserve that explicit legacy admission contract by choosing the
+    // published current training artifact without manufacturing persisted
+    // width/layout values.  Missing identity for a resume/model remains
+    // fail-closed in SelectWorkerForRole.
+    if (!persisted.inputWidth && !persisted.layoutVersion &&
+        !persisted.modelIdentityExpected)
+    {
+        const SemanticWorkerArtifact& worker = currentWorker();
+        // Schema-v2 registries represent the combined current executable as
+        // the inference-role fallback returned by currentWorker().  Its
+        // explicit train capability is the authoritative legacy role proof.
+        if (!worker.capabilities.contains("train"))
+        {
+            return {false, "semantic_worker_incompatible", {},
+                    worker.semanticLayoutVersion, worker.modelInputWidth, {}};
+        }
+        return {true, "semantic_worker_compatible",
+                worker.canonicalExecutablePath,
+                worker.semanticLayoutVersion,
+                worker.modelInputWidth,
+                "current_published_semantic_worker"};
+    }
     return SelectWorkerForRole(*this, persisted, SemanticWorkerRole::Train);
 }
 

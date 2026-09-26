@@ -166,7 +166,13 @@ int main()
         repository,
         {.schedulerInvocationId = "scheduler-a", .schedulerFencingToken = 17,
          .selectedWorkerCanonicalExecutablePath = "/tmp/LSTM_Release",
-         .semanticWorkerRole = "train"}};
+         .semanticLayoutVersion = 8,
+         .modelInputWidth = 80,
+         .semanticWorkerRole = "train",
+         .sourceCommit = "historical-layout-8-commit",
+         .executableSha256 = "historical-layout-8-sha256",
+         .runtimeIdentity = "historical-layout-8-runtime",
+         .canonicalManifestPath = "/tmp/layout8/manifest.json"}};
 
     const auto experiment = service.reserveExperiment(
         {41, "train", "/tmp/train.log", "nonce-a", true});
@@ -181,6 +187,17 @@ int main()
     assert(experimentRequest.commandIdentity == "experiment:41:train");
     assert(experimentRequest.currentOperation == "train");
     assert(experimentRequest.cancellationOnly);
+    assert(experimentRequest.canonicalExecutablePath == "/tmp/LSTM_Release");
+    assert(experimentRequest.semanticLayoutVersion == 8);
+    assert(experimentRequest.modelInputWidth == 80);
+    assert(experimentRequest.semanticWorkerRole == "train");
+    assert(experimentRequest.sourceCommit == "historical-layout-8-commit");
+    assert(experimentRequest.executableSha256 ==
+           "historical-layout-8-sha256");
+    assert(experimentRequest.runtimeIdentity ==
+           "historical-layout-8-runtime");
+    assert(experimentRequest.canonicalManifestPath ==
+           "/tmp/layout8/manifest.json");
 
     ReservedWorkerAttempt checkpointAttempt{
         72,

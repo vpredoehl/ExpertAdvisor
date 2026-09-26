@@ -76,6 +76,8 @@
 #include "SchedulerCore/ExperimentTransitionService.hpp"
 #include "SchedulerCore/FinalExperimentDispatchService.hpp"
 #include "SchedulerCore/InferenceWorkerSelection.hpp"
+#include "SchedulerCore/TrainingWorkerCommand.hpp"
+#include "SchedulerCore/TrainingWorkerSelection.hpp"
 #include "SchedulerCore/PostgresSchedulerRepository.hpp"
 #include "SchedulerCore/ReconciliationService.hpp"
 #include "SchedulerCore/SchedulerAdmissionService.hpp"
@@ -1926,6 +1928,22 @@ EA::Scheduler::InferenceWorkerSelection LoadInferenceWorkerSelection(
         persisted, SemanticWorkerRegistryFor(options));
 }
 
+EA::Scheduler::TrainingWorkerSelection LoadTrainingWorkerSelection(
+    pqxx::transaction_base& transaction,
+    const SchedulerOptions& options,
+    long long experimentId,
+    EA::Scheduler::PersistedWorkerSemanticIdentity* loaded = nullptr)
+{
+    EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
+    const auto admission = LoadSemanticWorkerAdmission(
+        transaction, experimentId, "train", &persisted);
+    if (loaded != nullptr) *loaded = persisted;
+    if (!admission.admissible)
+        return {false, admission.diagnostic, {}, 0, 0, {}};
+    return EA::Scheduler::SelectTrainingWorker(
+        persisted, SemanticWorkerRegistryFor(options));
+}
+
 bool SemanticWorkerPreflight(
     const SchedulerOptions& options,
     long long experimentId,
@@ -1939,23 +1957,22 @@ bool SemanticWorkerPreflight(
     pqxx::read_transaction transaction{connection};
     EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
     EA::Scheduler::SemanticAdmissionDecision decision;
-    std::optional<EA::Scheduler::InferenceWorkerSelection> selection;
+    std::optional<EA::Scheduler::SemanticWorkerSelection> selection;
     if (phase == "infer")
     {
         selection = LoadInferenceWorkerSelection(
             transaction, options, experimentId, &persisted);
         decision = {selection->selected, selection->diagnostic};
     }
-    else
+    else if (phase == "train")
     {
-        decision = LoadSemanticWorkerAdmission(
-            transaction, experimentId, phase, &persisted);
+        selection = LoadTrainingWorkerSelection(
+            transaction, options, experimentId, &persisted);
+        decision = {selection->selected, selection->diagnostic};
     }
     if (decision.admissible)
     {
-        const std::string& executable = selection
-            ? selection->canonicalExecutablePath
-            : options.currentWorkerExecutablePath;
+        const std::string& executable = selection->canonicalExecutablePath;
         const auto runtime = SemanticWorkerRegistryFor(options)
             .validateRuntimeForExecutable(executable);
         if (!runtime.ready)
@@ -1989,20 +2006,44 @@ bool SemanticWorkerPreflight(
                 logState->currentWorkerSelectionKeys.insert(key.str());
             if (!alreadyLogged)
             {
-                std::cout << "SCHEDULER_INFER_WORKER_SELECTED"
-                          << ",experiment_id=" << experimentId
-                          << ",model_id="
-                          << (modelId ? std::to_string(*modelId) : "NULL")
-                          << ",model_input_width="
-                          << *persisted.inputWidth
-                          << ",model_input_semantic_layout_version="
-                          << *persisted.layoutVersion
-                          << ",worker_semantic_layout_version="
-                          << selection->semanticLayoutVersion
-                          << ",worker_executable="
-                          << selection->canonicalExecutablePath
-                          << ",reason=" << selection->reason
-                          << std::endl;
+                if (phase == "infer")
+                {
+                    std::cout << "SCHEDULER_INFER_WORKER_SELECTED"
+                              << ",experiment_id=" << experimentId
+                              << ",model_id="
+                              << (modelId ? std::to_string(*modelId) : "NULL")
+                              << ",model_input_width="
+                              << *persisted.inputWidth
+                              << ",model_input_semantic_layout_version="
+                              << *persisted.layoutVersion
+                              << ",worker_semantic_layout_version="
+                              << selection->semanticLayoutVersion
+                              << ",worker_executable="
+                              << selection->canonicalExecutablePath
+                              << ",reason=" << selection->reason
+                              << std::endl;
+                }
+                else
+                {
+                    std::cout << "SCHEDULER_TRAIN_WORKER_SELECTED"
+                              << ",experiment_id=" << experimentId
+                              << ",model_input_width="
+                              << (persisted.inputWidth
+                                      ? std::to_string(*persisted.inputWidth)
+                                      : "NULL")
+                              << ",model_input_semantic_layout_version="
+                              << (persisted.layoutVersion
+                                      ? std::to_string(*persisted.layoutVersion)
+                                      : "NULL")
+                              << ",worker_input_width="
+                              << selection->maximumInputWidth
+                              << ",worker_semantic_layout_version="
+                              << selection->semanticLayoutVersion
+                              << ",worker_executable="
+                              << selection->canonicalExecutablePath
+                              << ",reason=" << selection->reason
+                              << std::endl;
+                }
             }
         }
         return true;
@@ -2621,6 +2662,30 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
         return StoppedWorkerAdmissionResult::DeferredUnsafe;
     }
 
+    // A stopped TRAIN process may have been created before semantic worker
+    // selection was coupled to admission.  Never resume it unless its exact
+    // executable is the artifact selected for the experiment's persisted
+    // semantic identity.
+    if (phase == "train")
+    {
+        const auto selection = LoadTrainingWorkerSelection(
+            transaction, options, experiment.experimentId);
+        if (!selection.selected ||
+            !exact->canonicalExecutablePath.has_value() ||
+            *exact->canonicalExecutablePath !=
+                selection.canonicalExecutablePath)
+        {
+            std::cout << "SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",worker_attempt_id=" << exact->workerAttemptId
+                      << ",phase=train"
+                      << ",reason=semantic_worker_selection_mismatch"
+                      << std::endl;
+            transaction.commit();
+            return StoppedWorkerAdmissionResult::DeferredUnsafe;
+        }
+    }
+
     EA::GlobalExperimentControl::ManagedWorker worker;
     worker.workerAttemptId = exact->workerAttemptId;
     worker.workerKind = exact->workerKind;
@@ -2860,11 +2925,19 @@ ReserveExperimentWorkerAttempt(
     std::string selectedWorkerExecutable =
         phase == "analyze"
             ? options.analyzeWorkerExecutablePath
-            : options.currentWorkerExecutablePath;
+            : std::string{};
     EA::Scheduler::SemanticAdmissionDecision semanticAdmission;
     if (phase == "infer")
     {
         const auto selection = LoadInferenceWorkerSelection(
+            transaction, options, experiment.experimentId);
+        semanticAdmission = {selection.selected, selection.diagnostic};
+        if (selection.selected)
+            selectedWorkerExecutable = selection.canonicalExecutablePath;
+    }
+    else if (phase == "train")
+    {
+        const auto selection = LoadTrainingWorkerSelection(
             transaction, options, experiment.experimentId);
         semanticAdmission = {selection.selected, selection.diagnostic};
         if (selection.selected)
@@ -3409,17 +3482,20 @@ pid_t LaunchReservedChildProcess(
     return pid;
 }
 
-std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
-                                                  const ExperimentRow& experiment)
+std::vector<std::string> BuildTrainCommand(
+    const SchedulerOptions& options,
+    const ExperimentRow& experiment,
+    const std::string& selectedWorkerExecutable)
 {
     // ResolvePersisted already rejected unknown identities. Re-canonicalize
     // here so only an exact supported objective can reach a training child.
     (void)EA::TrainingObjective::ParseSupportedCanonicalText(
         EA::TrainingObjective::CanonicalText(
             experiment.trainingObjective));
-    std::vector<std::string> argv;
-    argv.push_back(options.currentWorkerExecutablePath);
-    AddCliFlag(argv, "--train");
+    std::vector<std::string> argv =
+        EA::Scheduler::BeginTrainingWorkerCommand(
+            selectedWorkerExecutable,
+            experiment.featureAblationMask);
     AddCliOption(argv, "--log-level", "summary");
     AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
     AddCliOption(argv, "--new-model-name", BaseModelName(experiment));
@@ -10053,7 +10129,16 @@ int RunFinalExperimentPhase(
             const ExperimentRow& job = jobs.at(candidate.sourceIndex);
             std::vector<std::string> command;
             if (phase == FinalExperimentPhase::Train)
-                command = BuildTrainCommand(options, job);
+            {
+                pqxx::connection connection{LstmDbConnectionString()};
+                pqxx::read_transaction transaction{connection};
+                const auto selection = LoadTrainingWorkerSelection(
+                    transaction, options, job.experimentId);
+                if (!selection.selected)
+                    throw std::runtime_error(selection.diagnostic);
+                command = BuildTrainCommand(
+                    options, job, selection.canonicalExecutablePath);
+            }
             else if (phase == FinalExperimentPhase::Infer)
             {
                 pqxx::connection connection{LstmDbConnectionString()};
@@ -10113,7 +10198,8 @@ int RunFinalExperimentPhase(
             std::vector<std::string> command;
             if (phase == FinalExperimentPhase::Train)
             {
-                command = BuildTrainCommand(options, job);
+                command = BuildTrainCommand(
+                    options, job, reservedAttempt->canonicalExecutablePath);
                 std::cout << "EXPERIMENT_STARTED"
                           << ",experiment_id=" << job.experimentId
                           << ",phase=train,worker_attempt_id="
