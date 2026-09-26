@@ -123,6 +123,12 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         self.assertTrue(all(worker["worker_rule"] == "current" for worker in current))
         self.assertTrue(all(worker["model_input_width"] == 80 for worker in current))
         self.assertEqual({worker["source_commit"] for worker in current}, {self.new_commit8})
+        training_current = next(worker for worker in current
+                                if worker["worker_role"] == "train")
+        self.assertEqual(training_current["capabilities"],
+                         rollover.TRAINING_CAPABILITIES)
+        self.assertNotIn("train_feature_ablation_v1",
+                         training_current["capabilities"])
         self.assertEqual([worker for worker in after["workers"] if worker["semantic_layout"] in {6, 7}],
                          old_historical)
         self.assertEqual([self.immutable_bytes(worker) for worker in old_historical],
@@ -131,6 +137,16 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         self.assertEqual(training.name, "LSTM_Release")
         self.assertEqual(inference.name, "lstm-infer-worker")
         self.assertEqual((self.root / "current").resolve(), inference.parent)
+
+    def test_explicit_feature_ablation_qualification_is_recorded(self) -> None:
+        self.publish(feature_ablation_qualified=True)
+        registry = self.registry()
+        training = next(worker for worker in registry["workers"]
+                        if worker["semantic_layout"] == 8 and
+                        worker["worker_role"] == "train")
+        self.assertEqual(training["capabilities"],
+                         rollover.training_capabilities(True))
+        self.assertIn("train_feature_ablation_v1", training["capabilities"])
 
     def test_registry_replacement_failure_leaves_prior_registry_byte_identical(self) -> None:
         before = self.registry_bytes()

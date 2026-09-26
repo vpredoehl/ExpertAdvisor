@@ -98,6 +98,37 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
     def registry(self) -> dict:
         return json.loads((self.root / "registry.json").read_text(encoding="utf-8"))
 
+    def test_v2_and_v3_current_registry_capabilities_remain_legacy_valid(self) -> None:
+        original = self.registry()
+        for schema_version in (2, 3):
+            with self.subTest(schema_version=schema_version):
+                registry = json.loads(json.dumps(original))
+                registry["schema_version"] = schema_version
+                if schema_version == 3:
+                    for worker in registry["workers"]:
+                        worker["worker_role"] = "infer"
+                        worker["artifact_manifest_schema_version"] = 1
+                publisher.validate_existing_registry(self.root, registry)
+                (self.root / "registry.json").write_text(
+                    publisher.json_text(registry), encoding="utf-8")
+                upgraded = publisher.load_registry(self.root / "registry.json")
+                self.assertEqual(upgraded["schema_version"], 4)
+                self.assertEqual(
+                    {tuple(worker["capabilities"]) for worker in upgraded["workers"]},
+                    {("train", "infer", "analyze")},
+                )
+
+    def test_train_feature_ablation_requires_train_role(self) -> None:
+        registry = publisher.load_registry(self.root / "registry.json")
+        inference = next(worker for worker in registry["workers"]
+                         if worker["worker_role"] == "infer")
+        inference["capabilities"].append("train_feature_ablation_v1")
+        with self.assertRaisesRegex(
+            publisher.PublishError,
+            "train feature ablation capability requires a train-role worker",
+        ):
+            publisher.validate_existing_registry(self.root, registry)
+
     def test_role_publication_preserves_training_reference_and_never_overwrites(self) -> None:
         worker7 = self.executable("worker7", b"layout-seven")
         commit7 = "7" * 40

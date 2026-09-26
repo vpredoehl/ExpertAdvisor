@@ -101,10 +101,11 @@ class SemanticWorkerRolloverTests(unittest.TestCase):
     def registry_bytes(self) -> bytes:
         return (self.root / "registry.json").read_bytes()
 
-    def publish_rollover(self) -> tuple[Path, Path]:
+    def publish_rollover(self, **kwargs: object) -> tuple[Path, Path]:
         return rollover.rollover(
             self.root, self.training8, self.inference8, 8, 80, self.commit8,
-            check_embedded_commit=False, runtime_resources=dict(self.runtime_resources))
+            check_embedded_commit=False, runtime_resources=dict(self.runtime_resources),
+            **kwargs)
 
     def test_successful_rollover_has_exact_role_layout_matrix(self) -> None:
         training, inference = self.publish_rollover()
@@ -124,6 +125,8 @@ class SemanticWorkerRolloverTests(unittest.TestCase):
         self.assertEqual(by_role[8, "train"]["model_input_width"], 80)
         self.assertEqual(by_role[8, "train"]["capabilities"],
                          rollover.TRAINING_CAPABILITIES)
+        self.assertNotIn("train_feature_ablation_v1",
+                         by_role[8, "train"]["capabilities"])
         self.assertEqual(by_role[8, "infer"]["capabilities"],
                          rollover.INFERENCE_CAPABILITIES)
         self.assertEqual(training.name, "LSTM_Release")
@@ -134,6 +137,16 @@ class SemanticWorkerRolloverTests(unittest.TestCase):
             self.assertTrue(directory.is_file())
             self.assertTrue((directory.parent / "default.metallib").is_symlink())
             self.assertTrue((directory.parent / "MetaNN.metallib").is_symlink())
+
+    def test_explicit_feature_ablation_qualification_is_recorded(self) -> None:
+        self.publish_rollover(feature_ablation_qualified=True)
+        registry = self.registry()
+        training = next(entry for entry in registry["workers"]
+                        if entry["semantic_layout"] == 8 and
+                        entry["worker_role"] == "train")
+        self.assertEqual(training["capabilities"],
+                         rollover.training_capabilities(True))
+        self.assertIn("train_feature_ablation_v1", training["capabilities"])
 
     def test_inference_only_current_advance_is_still_rejected(self) -> None:
         before = self.registry_bytes()

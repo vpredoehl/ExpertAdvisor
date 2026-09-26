@@ -79,6 +79,15 @@ They validate the selected artifact's runtime before consuming capacity. There
 is no fallback to the current worker when an exact historical artifact is
 unavailable, incompatible, or lacks train capability.
 
+Execution capabilities are separate from model-input semantic identity. A
+nonempty persisted `feature_ablation_mask` requires the positive,
+versioned `train_feature_ablation_v1` capability in addition to exact
+layout/width/`train` matching. Capability absence is never inferred from an
+artifact's source commit or layout: an older manifest remains valid for a
+control with an empty mask, while an ablated TRAIN is rejected before capacity
+reservation or spawn with a capability-incompatible diagnostic. The scheduler
+does not remove the ablation option or substitute another semantic layout.
+
 A truly fresh legacy experiment with both identity columns null retains the
 established behavior of selecting the registry's current published training
 artifact without inventing or persisting an identity during selection. An
@@ -191,7 +200,10 @@ requires a clean exact `HEAD`, verifies that exact commit is embedded in both
 binaries, verifies the standalone infer-worker build-identity contract, and
 requires identical Metal runtime resources from the two Release products. The
 training/reference candidate must be named `LSTM_Release` and is bound with
-`[train,infer,analyze]`; the infer candidate must be named
+`[train,infer,analyze]` by default; the optional
+`train_feature_ablation_v1` is recorded only with the explicit
+`--train-feature-ablation-qualified` attestation for that exact executable.
+The infer candidate must be named
 `lstm-infer-worker` and is bound with `[infer]` only.
 
 Under the shared publisher lock the command validates the entire prior v4

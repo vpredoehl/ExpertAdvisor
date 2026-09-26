@@ -28,7 +28,10 @@ The command derives layout and width from `Headers/ModelInputExpansion.hpp` and
 requires clean source `HEAD`. It accepts only two absolute product paths:
 
 - `--training-executable`: `LSTM_Release`, embedded exact `HEAD`, published as
-  role `train` with `[train,infer,analyze]` and manifest schema 1;
+  role `train` with `[train,infer,analyze]` and manifest schema 1. The
+  optional `train_feature_ablation_v1` capability is added only when the
+  caller explicitly passes `--train-feature-ablation-qualified` for that
+  exact executable after separate capability qualification;
 - `--inference-executable`: `lstm-infer-worker`, embedded exact `HEAD` and
   matching its `--build-identity` SHA-256/source-commit contract, published as
   role `infer` with `[infer]` and manifest schema 2.

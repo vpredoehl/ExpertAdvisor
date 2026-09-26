@@ -23,7 +23,9 @@ WORKER_MANIFEST_SCHEMA_VERSION = 2
 RUNTIME_MANIFEST_SCHEMA_VERSION = 1
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
-VALID_CAPABILITIES = frozenset({"train", "infer", "analyze"})
+VALID_CAPABILITIES = frozenset({
+    "train", "infer", "analyze", "train_feature_ablation_v1",
+})
 RUNTIME_RESOURCE_SPECS = (
     ("MetaNN_metal.metallib", "MetaNN.metallib"),
     ("default.metallib", "default.metallib"),
@@ -343,12 +345,17 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
             raise PublishError("existing semantic worker role is invalid")
         if role not in capabilities:
             raise PublishError("existing semantic worker role capability is invalid")
+        if ("train_feature_ablation_v1" in capabilities and
+                (role != "train" or "train" not in capabilities)):
+            raise PublishError(
+                "train feature ablation capability requires a train-role worker")
         if (registry["schema_version"] >= ROLE_AWARE_REGISTRY_SCHEMA_VERSION and
-                role == "infer" and manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION and
-                set(capabilities) != {"infer"}):
+            role == "infer" and manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION and
+            set(capabilities) != {"infer"}):
             raise PublishError("existing role-aware inference worker capabilities are invalid")
         if (registry["schema_version"] != REGISTRY_SCHEMA_VERSION and
-                rule == "current" and set(capabilities) != VALID_CAPABILITIES):
+                rule == "current" and
+                set(capabilities) != {"train", "infer", "analyze"}):
             raise PublishError("existing current semantic worker capabilities are invalid")
         relative_directory = (Path(f"layout{layout}") / role / commit / digest
                               if manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION

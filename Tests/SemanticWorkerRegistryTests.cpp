@@ -233,8 +233,13 @@ struct Fixture
             "\",\"capabilities\":[\"infer\"]}]}");
     }
 
-    void writeHistoricalTrainingRegistry()
+    void writeHistoricalTrainingRegistry(
+        bool historicalSupportsFeatureAblation = false)
     {
+        const std::string historicalCapabilities =
+            historicalSupportsFeatureAblation
+                ? "[\"train\",\"train_feature_ablation_v1\"]"
+                : "[\"train\"]";
         const fs::path historicalExecutable =
             artifact(8, kCommit6, kHash6) / "LSTM_Release";
         const fs::path currentExecutable =
@@ -256,7 +261,7 @@ struct Fixture
             "\"source_commit\":\"" + std::string{kCommit6} +
             "\",\"sha256\":\"" + kHash6 +
             "\",\"executable_identity\":\"LSTM_Release\","
-            "\"capabilities\":[\"train\"]}");
+            "\"capabilities\":" + historicalCapabilities + "}");
         write(currentExecutable.parent_path() / "manifest.json",
             "{\"schema_version\":1,\"semantic_layout\":9,"
             "\"storage\":\"immutable\",\"model_input_width\":103,"
@@ -288,7 +293,8 @@ struct Fixture
             "\",\"executable\":\"layout8/" + kCommit6 + "/" + kHash6 +
             "/LSTM_Release\",\"manifest\":\"layout8/" + kCommit6 + "/" +
             kHash6 + "/manifest.json\",\"runtime_identity\":\"" +
-            kRuntimeIdentity + "\",\"capabilities\":[\"train\"]},"
+            kRuntimeIdentity + "\",\"capabilities\":" +
+            historicalCapabilities + "},"
             "{\"semantic_layout\":9,\"worker_role\":\"train\","
             "\"artifact_manifest_schema_version\":1,"
             "\"worker_rule\":\"current\",\"model_input_width\":103,"
@@ -470,6 +476,20 @@ int main()
            fs::canonical(roleAware.executable7));
     assert(roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Infer) !=
            roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Train));
+
+    Fixture ablationOnInferenceWorker;
+    ablationOnInferenceWorker.writeRoleAwareRegistry();
+    Fixture::replaceText(
+        ablationOnInferenceWorker.executable6.parent_path() / "manifest.json",
+        "\"capabilities\":[\"infer\"]",
+        "\"capabilities\":[\"infer\",\"train_feature_ablation_v1\"]");
+    Fixture::replaceText(
+        ablationOnInferenceWorker.root / "registry.json",
+        "\"capabilities\":[\"infer\"]",
+        "\"capabilities\":[\"infer\",\"train_feature_ablation_v1\"]");
+    assert(Contains(Failure([&] { (void)ablationOnInferenceWorker.load(); }),
+                    "semantic_worker_capability_mismatch:train_feature_ablation_requires_train_role"));
+
     const auto freshLegacyTraining =
         EA::Scheduler::SelectTrainingWorker({}, roleAwareRegistry);
     assert(freshLegacyTraining.selected);
@@ -563,6 +583,41 @@ int main()
     assert(combinedCurrent.selected);
     assert(combinedCurrent.semanticLayoutVersion == 9);
     assert(combinedCurrent.maximumInputWidth == 103);
+
+    const EA::Scheduler::SemanticWorkerCapabilities ablationRequired{
+        EA::Scheduler::kTrainFeatureAblationCapability};
+    assert(EA::Scheduler::RequiredTrainingWorkerCapabilities({}).empty());
+    assert(EA::Scheduler::RequiredTrainingWorkerCapabilities(
+               "tg4_inner_break_any,tg4_source_tg3_structurally_eligible,"
+               "tg4_source_tg3_confluent") == ablationRequired);
+    const auto combinedHistoricalAblation = EA::Scheduler::SelectTrainingWorker(
+        {{80}, {8}, true}, combinedRegistry, ablationRequired);
+    assert(!combinedHistoricalAblation.selected);
+    assert(Contains(combinedHistoricalAblation.diagnostic,
+                    "semantic_worker_capability_incompatible:layout=8:role=train:required=train_feature_ablation_v1"));
+    assert(!EA::Scheduler::SelectTrainingWorker(
+        {}, combinedRegistry, ablationRequired).selected);
+    // A capability requirement never relaxes exact width/layout/role matching.
+    assert(!EA::Scheduler::SelectTrainingWorker(
+        {{103}, {8}, true}, combinedRegistry, ablationRequired).selected);
+    assert(!combinedRegistry.selectInferenceWorker({{80}, {8}, true}).selected);
+
+    Fixture capabilityHistoricalTraining;
+    capabilityHistoricalTraining.writeHistoricalTrainingRegistry(true);
+    const auto capabilityRegistry = EA::Scheduler::SemanticWorkerRegistry::Load({
+        (capabilityHistoricalTraining.root / "registry.json").string(),
+        std::nullopt,
+        9,
+        103});
+    const auto capableHistoricalAblation =
+        EA::Scheduler::SelectTrainingWorker(
+            {{80}, {8}, true}, capabilityRegistry, ablationRequired);
+    assert(capableHistoricalAblation.selected);
+    assert(capableHistoricalAblation.semanticLayoutVersion == 8);
+    assert(capableHistoricalAblation.maximumInputWidth == 80);
+    // Missing metadata is relevant only to experiments that actually need it.
+    assert(EA::Scheduler::SelectTrainingWorker(
+        {{103}, {9}, true}, combinedRegistry).selected);
     assert(combinedCurrent.reason == "current_published_semantic_worker");
     assert(combinedHistorical.canonicalExecutablePath !=
            combinedCurrent.canonicalExecutablePath);

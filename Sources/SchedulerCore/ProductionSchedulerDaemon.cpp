@@ -1860,11 +1860,12 @@ EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
     pqxx::transaction_base& transaction,
     long long experimentId,
     const std::string& phase,
-    EA::Scheduler::PersistedWorkerSemanticIdentity* loaded = nullptr)
+    EA::Scheduler::PersistedWorkerSemanticIdentity* loaded = nullptr,
+    std::string* canonicalFeatureAblationMask = nullptr)
 {
     const pqxx::result rows = transaction.exec_params(
         "SELECT model_input_width,model_input_semantic_layout_version,"
-        "last_model_id,resume_model_id "
+        "last_model_id,resume_model_id,feature_ablation_mask "
         "FROM experiment WHERE experiment_id=$1;",
         experimentId);
     if (rows.size() != 1)
@@ -1887,6 +1888,21 @@ EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
 
     persisted.modelIdentityExpected =
         lastModelId.has_value() || resumeModelId.has_value();
+
+    if (canonicalFeatureAblationMask != nullptr)
+    {
+        if (rows[0][4].is_null())
+            return {false, "semantic_worker_training_capability_identity_unavailable"};
+        try
+        {
+            *canonicalFeatureAblationMask = EA::FeatureAblationMask::Parse(
+                rows[0][4].as<std::string>()).CanonicalText();
+        }
+        catch (const std::exception&)
+        {
+            return {false, "semantic_worker_training_capability_identity_invalid"};
+        }
+    }
 
     // Migration 089 intentionally preserves historical experiments as
     // NULL/NULL.  If an explicit experiment identity exists, it remains
@@ -1974,16 +1990,28 @@ EA::Scheduler::TrainingWorkerSelection LoadTrainingWorkerSelection(
     pqxx::transaction_base& transaction,
     const SchedulerOptions& options,
     long long experimentId,
-    EA::Scheduler::PersistedWorkerSemanticIdentity* loaded = nullptr)
+    EA::Scheduler::PersistedWorkerSemanticIdentity* loaded = nullptr,
+    const std::string* expectedFeatureAblationMask = nullptr)
 {
     EA::Scheduler::PersistedWorkerSemanticIdentity persisted;
+    std::string canonicalFeatureAblationMask;
     const auto admission = LoadSemanticWorkerAdmission(
-        transaction, experimentId, "train", &persisted);
+        transaction, experimentId, "train", &persisted,
+        &canonicalFeatureAblationMask);
     if (loaded != nullptr) *loaded = persisted;
     if (!admission.admissible)
         return {false, admission.diagnostic, {}, 0, 0, {}};
+    if (expectedFeatureAblationMask != nullptr &&
+        *expectedFeatureAblationMask != canonicalFeatureAblationMask)
+    {
+        return {false, "semantic_worker_training_capability_identity_mismatch",
+                {}, 0, 0, {}};
+    }
+    const auto requiredCapabilities =
+        EA::Scheduler::RequiredTrainingWorkerCapabilities(
+            canonicalFeatureAblationMask);
     return EA::Scheduler::SelectTrainingWorker(
-        persisted, SemanticWorkerRegistryFor(options));
+        persisted, SemanticWorkerRegistryFor(options), requiredCapabilities);
 }
 
 bool SemanticWorkerPreflight(
@@ -2711,7 +2739,8 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
     if (phase == "train")
     {
         const auto selection = LoadTrainingWorkerSelection(
-            transaction, options, experiment.experimentId);
+            transaction, options, experiment.experimentId, nullptr,
+            &experiment.featureAblationMask);
         if (!selection.selected ||
             !exact->canonicalExecutablePath.has_value() ||
             *exact->canonicalExecutablePath !=
@@ -2980,7 +3009,8 @@ ReserveExperimentWorkerAttempt(
     else if (phase == "train")
     {
         const auto selection = LoadTrainingWorkerSelection(
-            transaction, options, experiment.experimentId);
+            transaction, options, experiment.experimentId, nullptr,
+            &experiment.featureAblationMask);
         semanticAdmission = {selection.selected, selection.diagnostic};
         if (selection.selected)
             selectedWorkerExecutable = selection.canonicalExecutablePath;
@@ -10174,7 +10204,8 @@ int RunFinalExperimentPhase(
                 pqxx::connection connection{LstmDbConnectionString()};
                 pqxx::read_transaction transaction{connection};
                 const auto selection = LoadTrainingWorkerSelection(
-                    transaction, options, job.experimentId);
+                    transaction, options, job.experimentId, nullptr,
+                    &job.featureAblationMask);
                 if (!selection.selected)
                     throw std::runtime_error(selection.diagnostic);
                 command = BuildTrainCommand(

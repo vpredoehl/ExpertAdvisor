@@ -17,6 +17,13 @@ inline constexpr int kLegacySemanticWorkerRegistrySchemaVersion = 2;
 inline constexpr int kLegacySemanticWorkerArtifactManifestSchemaVersion = 1;
 inline constexpr int kSemanticWorkerArtifactManifestSchemaVersion = 2;
 inline constexpr int kSemanticWorkerRuntimeManifestSchemaVersion = 1;
+// An artifact which advertises this capability has the version-1 canonical
+// --ablate-features parser and applies its persisted FeatureAblationMask to
+// TRAIN input materialization.  Capability absence is deliberately not
+// inferred from source age or semantic layout.
+inline constexpr const char* kTrainFeatureAblationCapability =
+    "train_feature_ablation_v1";
+using SemanticWorkerCapabilities = std::set<std::string>;
 
 enum class SemanticWorkerArtifactKind
 {
@@ -107,7 +114,8 @@ public:
     SemanticWorkerSelection selectInferenceWorker(
         const PersistedWorkerSemanticIdentity& persisted) const;
     SemanticWorkerSelection selectTrainingReferenceWorker(
-        const PersistedWorkerSemanticIdentity& persisted) const;
+        const PersistedWorkerSemanticIdentity& persisted,
+        const SemanticWorkerCapabilities& requiredCapabilities = {}) const;
 
 private:
     std::string canonicalRegistryPath_;

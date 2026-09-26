@@ -31,6 +31,14 @@ TRAINING_CAPABILITIES = ["train", "infer", "analyze"]
 INFERENCE_CAPABILITIES = ["infer"]
 
 
+def training_capabilities(feature_ablation_qualified: bool = False) -> list[str]:
+    """Return capabilities explicitly qualified for this exact TRAIN artifact."""
+    capabilities = list(TRAINING_CAPABILITIES)
+    if feature_ablation_qualified:
+        capabilities.append("train_feature_ablation_v1")
+    return capabilities
+
+
 def _resolve_executable(path: Path, expected_name: str) -> Path:
     if not path.is_absolute():
         raise publisher.PublishError("worker executable must be an absolute existing regular file")
@@ -168,6 +176,7 @@ def rollover(
     *,
     check_embedded_commit: bool = True,
     runtime_resources: dict[str, Path] | None = None,
+    feature_ablation_qualified: bool = False,
 ) -> tuple[Path, Path]:
     """Stage both immutable artifacts, then atomically advance current_layout."""
     training = _resolve_executable(training_executable, "LSTM_Release")
@@ -191,7 +200,7 @@ def rollover(
     training_relative, training_manifest, training_worker = _worker_value(
         layout, width, commit, training_digest, "train",
         publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
-        TRAINING_CAPABILITIES, runtime_identity)
+        training_capabilities(feature_ablation_qualified), runtime_identity)
     inference_relative, inference_manifest, inference_worker = _worker_value(
         layout, width, commit, inference_digest, "infer",
         publisher.WORKER_MANIFEST_SCHEMA_VERSION,
@@ -249,6 +258,7 @@ def rollover_from_repository(
     inference_executable: Path,
     artifact_root: Path | None = None,
     source_commit: str | None = None,
+    feature_ablation_qualified: bool = False,
 ) -> tuple[Path, Path, int, int, str]:
     repository_root = repository_root.resolve(strict=True)
     commit = publisher.clean_source_commit(repository_root)
@@ -257,7 +267,8 @@ def rollover_from_repository(
     layout, width = publisher.current_semantic_contract(repository_root)
     training, inference = rollover(
         artifact_root or repository_root / "Builds" / "SemanticWorkers",
-        training_executable, inference_executable, layout, width, commit)
+        training_executable, inference_executable, layout, width, commit,
+        feature_ablation_qualified=feature_ablation_qualified)
     return training, inference, layout, width, commit
 
 
@@ -268,6 +279,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--inference-executable", required=True, type=Path)
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--source-commit")
+    parser.add_argument("--train-feature-ablation-qualified", action="store_true")
     return parser.parse_args()
 
 
@@ -276,7 +288,8 @@ def main() -> int:
     training, inference, layout, width, commit = rollover_from_repository(
         arguments.repository_root, arguments.training_executable,
         arguments.inference_executable, arguments.artifact_root,
-        arguments.source_commit)
+        arguments.source_commit,
+        arguments.train_feature_ablation_qualified)
     print(f"Semantic layout rollover published: layout={layout}, width={width}")
     print(f"source_commit={commit}")
     print(f"training_reference={training}")

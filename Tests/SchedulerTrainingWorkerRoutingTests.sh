@@ -8,14 +8,17 @@ command="${repo_root}/Sources/SchedulerCore/TrainingWorkerCommand.hpp"
 
 test -f "${selection}"
 test -f "${command}"
-rg -q 'registry\.selectTrainingReferenceWorker\(persisted\)' "${selection}"
+rg -U -q 'registry\.selectTrainingReferenceWorker\([\s\S]{0,120}persisted' "${selection}"
 
 # Both preflight and reservation resolve TRAIN through the same loader.  The
-# loader itself must retain the existing authoritative admission/identity path.
+# loader itself must retain the existing authoritative admission/identity path
+# and derive optional execution requirements from the same experiment snapshot
+# used to build the command before any child can be spawned.
 test "$(rg -c 'LoadTrainingWorkerSelection\(' "${daemon}")" -ge 4
-rg -U -q 'LoadTrainingWorkerSelection[\s\S]{0,900}LoadSemanticWorkerAdmission\([\s\S]{0,200}"train"[\s\S]{0,500}SelectTrainingWorker' "${daemon}"
+rg -U -q 'LoadSemanticWorkerAdmission\([\s\S]{0,700}feature_ablation_mask[\s\S]{0,1000}canonicalFeatureAblationMask' "${daemon}"
+rg -U -q 'LoadTrainingWorkerSelection[\s\S]{0,900}expectedFeatureAblationMask[\s\S]{0,1000}semantic_worker_training_capability_identity_mismatch[\s\S]{0,500}RequiredTrainingWorkerCapabilities[\s\S]{0,900}SelectTrainingWorker' "${daemon}"
 rg -U -q 'SemanticWorkerPreflight\([\s\S]{0,1800}phase == "train"[\s\S]{0,400}LoadTrainingWorkerSelection[\s\S]{0,700}validateRuntimeForExecutable\(executable\)' "${daemon}"
-rg -U -q 'ReserveExperimentWorkerAttempt\([\s\S]{0,1800}phase == "train"[\s\S]{0,400}LoadTrainingWorkerSelection[\s\S]{0,1400}validateRuntimeForExecutable\(selectedWorkerExecutable\)[\s\S]{0,1400}findByCanonicalExecutable\(selectedWorkerExecutable\)' "${daemon}"
+rg -U -q 'ReserveExperimentWorkerAttempt\([\s\S]{0,1800}phase == "train"[\s\S]{0,500}LoadTrainingWorkerSelection\([\s\S]{0,300}&experiment\.featureAblationMask[\s\S]{0,1400}validateRuntimeForExecutable\(selectedWorkerExecutable\)[\s\S]{0,1400}findByCanonicalExecutable\(selectedWorkerExecutable\)' "${daemon}"
 rg -U -q 'validateRuntimeForExecutable\(selectedWorkerExecutable\)[\s\S]{0,1000}hasCapacity\(phase, maximumCapacity\)' "${daemon}"
 
 # Attempt provenance is copied from the selected registry artifact, not rebuilt
@@ -35,6 +38,7 @@ fi
 # one shared argv before the resume branch. Empty masks are omitted by the
 # command helper; nonempty masks use the training CLI's exact equals form.
 rg -U -q 'BeginTrainingWorkerCommand\([\s\S]{0,200}selectedWorkerExecutable,[\s\S]{0,100}experiment\.featureAblationMask' "${daemon}"
+rg -U -q 'operations\.reserveWorkerAttempt[\s\S]{0,900}const ExperimentRow& job[\s\S]{0,700}ReserveExperimentWorkerAttempt\([\s\S]{0,300}job[\s\S]{0,1400}operations\.prepareReservedLaunch[\s\S]{0,500}const ExperimentRow& job[\s\S]{0,500}BuildTrainCommand\([\s\S]{0,200}job' "${daemon}"
 rg -U -q 'BeginTrainingWorkerCommand\([\s\S]{0,1200}const std::optional<long long> resumeFrom[\s\S]{0,500}return argv' "${daemon}"
 rg -U -q 'if \(!canonicalFeatureAblationMask\.empty\(\)\)[\s\S]{0,200}"--ablate-features=" \+ canonicalFeatureAblationMask' "${command}"
 if rg -q -- '"--ablate-features=" \+ experiment\.' "${daemon}"; then

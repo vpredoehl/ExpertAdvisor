@@ -347,7 +347,8 @@ std::set<std::string> Capabilities(const JsonValue& value)
     {
         const std::string capability = String(item, "capability");
         if (capability != "train" && capability != "infer" &&
-            capability != "analyze")
+            capability != "analyze" &&
+            capability != kTrainFeatureAblationCapability)
             Fail("semantic_worker_capability_mismatch:unknown=" + capability);
         if (!result.insert(capability).second)
             Fail("semantic_worker_registry_malformed:duplicate_capability=" +
@@ -567,6 +568,13 @@ SemanticWorkerArtifact ParseWorker(
         // explicitly interpreted as the immutable inference binding.
         worker.artifactManifestSchemaVersion =
             kLegacySemanticWorkerArtifactManifestSchemaVersion;
+    }
+
+    if (worker.capabilities.contains(kTrainFeatureAblationCapability) &&
+        (worker.role != SemanticWorkerRole::Train ||
+         !worker.capabilities.contains("train")))
+    {
+        Fail("semantic_worker_capability_mismatch:train_feature_ablation_requires_train_role");
     }
 
     const std::string roleComponent = worker.role == SemanticWorkerRole::Infer
@@ -892,7 +900,8 @@ namespace
 SemanticWorkerSelection SelectWorkerForRole(
     const SemanticWorkerRegistry& registry,
     const PersistedWorkerSemanticIdentity& persisted,
-    SemanticWorkerRole role)
+    SemanticWorkerRole role,
+    const SemanticWorkerCapabilities& requiredCapabilities)
 {
     if (!persisted.inputWidth && !persisted.layoutVersion)
         return {false, "semantic_worker_identity_unavailable", {}, 0, 0, {}};
@@ -924,6 +933,16 @@ SemanticWorkerSelection SelectWorkerForRole(
         *persisted.inputWidth != worker->modelInputWidth)
         return {false, "semantic_worker_incompatible", {},
                 worker->semanticLayoutVersion, worker->modelInputWidth, {}};
+    for (const std::string& requiredCapability : requiredCapabilities)
+    {
+        if (!worker->capabilities.contains(requiredCapability))
+            return {false,
+                    "semantic_worker_capability_incompatible:layout=" +
+                        std::to_string(worker->semanticLayoutVersion) +
+                        ":role=" + phase + ":required=" + requiredCapability,
+                    {}, worker->semanticLayoutVersion,
+                    worker->modelInputWidth, {}};
+    }
     WorkerSemanticCapability capability;
     capability.layoutVersion = worker->semanticLayoutVersion;
     capability.maximumInputWidth = worker->modelInputWidth;
@@ -944,11 +963,13 @@ SemanticWorkerSelection SelectWorkerForRole(
 SemanticWorkerSelection SemanticWorkerRegistry::selectInferenceWorker(
     const PersistedWorkerSemanticIdentity& persisted) const
 {
-    return SelectWorkerForRole(*this, persisted, SemanticWorkerRole::Infer);
+    return SelectWorkerForRole(
+        *this, persisted, SemanticWorkerRole::Infer, {});
 }
 
 SemanticWorkerSelection SemanticWorkerRegistry::selectTrainingReferenceWorker(
-    const PersistedWorkerSemanticIdentity& persisted) const
+    const PersistedWorkerSemanticIdentity& persisted,
+    const SemanticWorkerCapabilities& requiredCapabilities) const
 {
     // A genuinely fresh legacy experiment has no model-bearing identity yet.
     // Preserve that explicit legacy admission contract by choosing the
@@ -967,13 +988,24 @@ SemanticWorkerSelection SemanticWorkerRegistry::selectTrainingReferenceWorker(
             return {false, "semantic_worker_incompatible", {},
                     worker.semanticLayoutVersion, worker.modelInputWidth, {}};
         }
+        for (const std::string& requiredCapability : requiredCapabilities)
+        {
+            if (!worker.capabilities.contains(requiredCapability))
+                return {false,
+                        "semantic_worker_capability_incompatible:layout=" +
+                            std::to_string(worker.semanticLayoutVersion) +
+                            ":role=train:required=" + requiredCapability,
+                        {}, worker.semanticLayoutVersion,
+                        worker.modelInputWidth, {}};
+        }
         return {true, "semantic_worker_compatible",
                 worker.canonicalExecutablePath,
                 worker.semanticLayoutVersion,
                 worker.modelInputWidth,
                 "current_published_semantic_worker"};
     }
-    return SelectWorkerForRole(*this, persisted, SemanticWorkerRole::Train);
+    return SelectWorkerForRole(
+        *this, persisted, SemanticWorkerRole::Train, requiredCapabilities);
 }
 
 } // namespace EA::Scheduler
