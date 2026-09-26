@@ -43,6 +43,8 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/095_fresh_initialization_seed_identity.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/097_resume_seed_conditional_identity.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/InputWidthExpansionMigrationTests.sql"
 # LSTMModelInputIdentityMigrationTests.sql asserts migration 089's exact
 # pre-092 index shape.  Its dedicated harness reconstructs that predecessor
