@@ -148,6 +148,25 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
                          rollover.training_capabilities(True))
         self.assertIn("train_feature_ablation_v1", training["capabilities"])
 
+    def test_refresh_preserves_historical_train_candidate_at_current_layout(self) -> None:
+        registry = self.registry()
+        runtime = registry["runtimes"][0]
+        candidate = self.stage(
+            self.executable("historical-extra", b"historical extra train"),
+            8, 80, "a" * 40, "train",
+            publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
+            ["train", "train_feature_ablation_v1"], runtime)
+        candidate["worker_rule"] = "historical"
+        candidate["selection_priority"] = 1
+        registry["workers"].append(candidate)
+        publisher.validate_existing_registry(self.root, registry)
+        (self.root / "registry.json").write_text(
+            publisher.json_text(registry), encoding="utf-8")
+        self.publish()
+        preserved = next(worker for worker in self.registry()["workers"]
+                         if worker["source_commit"] == "a" * 40)
+        self.assertEqual(preserved, candidate)
+
     def test_registry_replacement_failure_leaves_prior_registry_byte_identical(self) -> None:
         before = self.registry_bytes()
         with mock.patch.object(

@@ -109,6 +109,7 @@ def _worker_value(
         "manifest": str(relative_directory / "manifest.json"),
         "runtime_identity": runtime_identity,
         "capabilities": capabilities,
+        "selection_priority": 0,
     }
     return relative_directory, manifest, worker
 
@@ -237,7 +238,9 @@ def rollover(
                 worker["worker_rule"] = "historical"
         registry["workers"].extend([training_worker, inference_worker])
         registry["workers"].sort(
-            key=lambda worker: (worker["semantic_layout"], worker["worker_role"]))
+            key=lambda worker: (worker["semantic_layout"], worker["worker_role"],
+                                worker.get("model_input_width", 0),
+                                worker.get("selection_priority", 0)))
         registry["current_layout"] = layout
         # This validates the complete prospective state, including both role
         # bindings and all old artifacts, before registry replacement.

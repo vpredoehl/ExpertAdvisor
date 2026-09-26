@@ -121,6 +121,27 @@ struct Fixture
         write(path, contents);
     }
 
+    static void swapFirstTwoWorkers(const fs::path& path)
+    {
+        std::ifstream input{path, std::ios::binary};
+        assert(input.good());
+        std::string contents{std::istreambuf_iterator<char>{input},
+                             std::istreambuf_iterator<char>{}};
+        const std::string marker = "{\"semantic_layout\":8,\"worker_role\":\"train\"";
+        const std::size_t firstBegin = contents.find(marker);
+        const std::size_t firstEnd = contents.find("},{\"semantic_layout\":8",
+                                                   firstBegin) + 1U;
+        const std::size_t secondBegin = firstEnd + 1U;
+        const std::size_t secondEnd = contents.find("},{\"semantic_layout\":9",
+                                                    secondBegin) + 1U;
+        assert(firstBegin != std::string::npos && firstEnd != std::string::npos &&
+               secondEnd != std::string::npos);
+        const std::string first = contents.substr(firstBegin, firstEnd - firstBegin);
+        const std::string second = contents.substr(secondBegin, secondEnd - secondBegin);
+        contents.replace(firstBegin, secondEnd - firstBegin, second + "," + first);
+        write(path, contents);
+    }
+
     void writeRuntime()
     {
         const fs::path directory = root / "runtime" / kRuntimeIdentity;
@@ -234,7 +255,8 @@ struct Fixture
     }
 
     void writeHistoricalTrainingRegistry(
-        bool historicalSupportsFeatureAblation = false)
+        bool historicalSupportsFeatureAblation = false,
+        bool addQualifiedCandidate = false)
     {
         const std::string historicalCapabilities =
             historicalSupportsFeatureAblation
@@ -247,6 +269,8 @@ struct Fixture
         const fs::path currentInferenceExecutable =
             roleArtifact(9, "infer", kInferCommit7, kInferHash7) /
             "lstm-infer-worker";
+        const fs::path qualifiedExecutable =
+            artifact(8, kCommit7, kHash7) / "LSTM_Release";
         writeExecutable(historicalExecutable, "worker-six\n");
         writeExecutable(currentExecutable,
             "#!/bin/sh\n"
@@ -255,6 +279,22 @@ struct Fixture
             "test -r \"$worker_dir/MetaNN.metallib\" || exit 41\n"
             "exit 0\n");
         writeExecutable(currentInferenceExecutable, "infer-worker\n");
+        if (addQualifiedCandidate)
+        {
+            writeExecutable(qualifiedExecutable,
+                "#!/bin/sh\n"
+                "worker_dir=${0%/*}\n"
+                "test -r \"$worker_dir/default.metallib\" || exit 40\n"
+                "test -r \"$worker_dir/MetaNN.metallib\" || exit 41\n"
+                "exit 0\n");
+            write(qualifiedExecutable.parent_path() / "manifest.json",
+                "{\"schema_version\":1,\"semantic_layout\":8,"
+                "\"storage\":\"immutable\",\"model_input_width\":80,"
+                "\"source_commit\":\"" + std::string{kCommit7} +
+                "\",\"sha256\":\"" + kHash7 +
+                "\",\"executable_identity\":\"LSTM_Release\","
+                "\"capabilities\":[\"train\",\"train_feature_ablation_v1\"]}");
+        }
         write(historicalExecutable.parent_path() / "manifest.json",
             "{\"schema_version\":1,\"semantic_layout\":8,"
             "\"storage\":\"immutable\",\"model_input_width\":80,"
@@ -279,8 +319,25 @@ struct Fixture
         linkRuntime(historicalExecutable.parent_path());
         linkRuntime(currentExecutable.parent_path());
         linkRuntime(currentInferenceExecutable.parent_path());
+        if (addQualifiedCandidate) linkRuntime(qualifiedExecutable.parent_path());
+        const std::string priority = addQualifiedCandidate
+            ? ",\"selection_priority\":0" : "";
+        const std::string qualifiedEntry = addQualifiedCandidate
+            ? ",{\"semantic_layout\":8,\"worker_role\":\"train\","
+              "\"artifact_manifest_schema_version\":1,"
+              "\"worker_rule\":\"historical\",\"model_input_width\":80,"
+              "\"source_commit\":\"" + std::string{kCommit7} +
+              "\",\"sha256\":\"" + kHash7 +
+              "\",\"executable\":\"layout8/" + kCommit7 + "/" + kHash7 +
+              "/LSTM_Release\",\"manifest\":\"layout8/" + kCommit7 + "/" +
+              kHash7 + "/manifest.json\",\"runtime_identity\":\"" +
+              kRuntimeIdentity +
+              "\",\"capabilities\":[\"train\",\"train_feature_ablation_v1\"],"
+              "\"selection_priority\":1}"
+            : "";
         write(root / "registry.json",
-            "{\"schema_version\":4,\"current_layout\":9,\"runtimes\":["
+            std::string{"{\"schema_version\":"} + (addQualifiedCandidate ? "5" : "4") +
+            ",\"current_layout\":9,\"runtimes\":["
             "{\"identity\":\"" + std::string{kRuntimeIdentity} +
             "\",\"directory\":\"runtime/" + kRuntimeIdentity +
             "\",\"manifest\":\"runtime/" + kRuntimeIdentity +
@@ -294,7 +351,7 @@ struct Fixture
             "/LSTM_Release\",\"manifest\":\"layout8/" + kCommit6 + "/" +
             kHash6 + "/manifest.json\",\"runtime_identity\":\"" +
             kRuntimeIdentity + "\",\"capabilities\":" +
-            historicalCapabilities + "},"
+            historicalCapabilities + priority + "}" + qualifiedEntry + ","
             "{\"semantic_layout\":9,\"worker_role\":\"train\","
             "\"artifact_manifest_schema_version\":1,"
             "\"worker_rule\":\"current\",\"model_input_width\":103,"
@@ -304,7 +361,7 @@ struct Fixture
             "/LSTM_Release\",\"manifest\":\"layout9/" + kCommit7 + "/" +
             kHash7 + "/manifest.json\",\"runtime_identity\":\"" +
             kRuntimeIdentity +
-            "\",\"capabilities\":[\"train\",\"infer\",\"analyze\"]},"
+            "\",\"capabilities\":[\"train\",\"infer\",\"analyze\"]" + priority + "},"
             "{\"semantic_layout\":9,\"worker_role\":\"infer\","
             "\"artifact_manifest_schema_version\":2,"
             "\"worker_rule\":\"current\",\"model_input_width\":103,"
@@ -315,7 +372,7 @@ struct Fixture
             "/lstm-infer-worker\",\"manifest\":\"layout9/infer/" +
             kInferCommit7 + "/" + kInferHash7 +
             "/manifest.json\",\"runtime_identity\":\"" +
-            kRuntimeIdentity + "\",\"capabilities\":[\"infer\"]}]}");
+            kRuntimeIdentity + "\",\"capabilities\":[\"infer\"]" + priority + "}]}");
     }
 
     EA::Scheduler::SemanticWorkerRegistry load(
@@ -623,6 +680,85 @@ int main()
            combinedCurrent.canonicalExecutablePath);
     AssertTrainingCommandAblationIdentity(
         combinedHistorical, combinedCurrent);
+
+    // V5 keeps two immutable layout-8 TRAIN candidates.  A control sees the
+    // narrower historical worker; an ablation experiment sees only the
+    // explicitly qualified candidate.
+    Fixture dualCandidateTraining;
+    dualCandidateTraining.writeHistoricalTrainingRegistry(false, true);
+    const auto dualRegistry = EA::Scheduler::SemanticWorkerRegistry::Load({
+        (dualCandidateTraining.root / "registry.json").string(),
+        std::nullopt, 9, 103});
+    const auto dualControl = EA::Scheduler::SelectTrainingWorker(
+        {{80}, {8}, true}, dualRegistry);
+    const auto dualAblation = EA::Scheduler::SelectTrainingWorker(
+        {{80}, {8}, true}, dualRegistry, ablationRequired);
+    assert(dualControl.selected && dualAblation.selected);
+    assert(dualControl.canonicalExecutablePath ==
+           fs::canonical(dualCandidateTraining.artifact(8, kCommit6, kHash6) /
+                         "LSTM_Release"));
+    assert(dualAblation.canonicalExecutablePath ==
+           fs::canonical(dualCandidateTraining.artifact(8, kCommit7, kHash7) /
+                         "LSTM_Release"));
+    assert(dualControl.canonicalExecutablePath != dualAblation.canonicalExecutablePath);
+    const auto* trainCandidates = dualRegistry.findCandidates(
+        8, EA::Scheduler::SemanticWorkerRole::Train);
+    assert(trainCandidates != nullptr && trainCandidates->size() == 2U);
+    assert(dualRegistry.find(8, EA::Scheduler::SemanticWorkerRole::Train) == nullptr);
+    assert(!dualRegistry.selectInferenceWorker({{80}, {8}, true}).selected);
+
+    Fixture reorderedDualCandidateTraining;
+    reorderedDualCandidateTraining.writeHistoricalTrainingRegistry(false, true);
+    Fixture::swapFirstTwoWorkers(reorderedDualCandidateTraining.root / "registry.json");
+    const auto reorderedDualRegistry = EA::Scheduler::SemanticWorkerRegistry::Load({
+        (reorderedDualCandidateTraining.root / "registry.json").string(),
+        std::nullopt, 9, 103});
+    assert(EA::Scheduler::SelectTrainingWorker(
+               {{80}, {8}, true}, reorderedDualRegistry).canonicalExecutablePath ==
+           fs::canonical(reorderedDualCandidateTraining.artifact(8, kCommit6, kHash6) /
+                         "LSTM_Release"));
+    assert(EA::Scheduler::SelectTrainingWorker(
+               {{80}, {8}, true}, reorderedDualRegistry, ablationRequired)
+               .canonicalExecutablePath ==
+           fs::canonical(reorderedDualCandidateTraining.artifact(8, kCommit7, kHash7) /
+                         "LSTM_Release"));
+
+    Fixture priorityTraining;
+    priorityTraining.writeHistoricalTrainingRegistry(false, true);
+    Fixture::replaceText(
+        priorityTraining.artifact(8, kCommit7, kHash7) / "manifest.json",
+        "\"capabilities\":[\"train\",\"train_feature_ablation_v1\"]",
+        "\"capabilities\":[\"train\"]");
+    Fixture::replaceText(
+        priorityTraining.root / "registry.json",
+        "\"capabilities\":[\"train\",\"train_feature_ablation_v1\"]",
+        "\"capabilities\":[\"train\"]");
+    const auto priorityRegistry = EA::Scheduler::SemanticWorkerRegistry::Load({
+        (priorityTraining.root / "registry.json").string(), std::nullopt, 9, 103});
+    const auto prioritySelected = EA::Scheduler::SelectTrainingWorker(
+        {{80}, {8}, true}, priorityRegistry);
+    assert(prioritySelected.selected);
+    assert(prioritySelected.canonicalExecutablePath ==
+           fs::canonical(priorityTraining.artifact(8, kCommit6, kHash6) /
+                         "LSTM_Release"));
+
+    Fixture tiedPriority;
+    tiedPriority.writeHistoricalTrainingRegistry(false, true);
+    Fixture::replaceText(tiedPriority.root / "registry.json",
+                         "\"selection_priority\":1",
+                         "\"selection_priority\":0");
+    assert(Contains(Failure([&] { (void)EA::Scheduler::SemanticWorkerRegistry::Load({
+        (tiedPriority.root / "registry.json").string(), std::nullopt, 9, 103}); }),
+                    "semantic_worker_registry_duplicate_selection_priority"));
+
+    Fixture invalidPriority;
+    invalidPriority.writeHistoricalTrainingRegistry(false, true);
+    Fixture::replaceText(invalidPriority.root / "registry.json",
+                         "\"selection_priority\":1",
+                         "\"selection_priority\":-1");
+    assert(Contains(Failure([&] { (void)EA::Scheduler::SemanticWorkerRegistry::Load({
+        (invalidPriority.root / "registry.json").string(), std::nullopt, 9, 103}); }),
+                    "semantic_worker_registry_malformed:selection_priority_invalid"));
 
     if (const char* trainingSelectionRegistry =
             std::getenv("EA_TRAINING_SELECTION_REGISTRY_UNDER_TEST"))

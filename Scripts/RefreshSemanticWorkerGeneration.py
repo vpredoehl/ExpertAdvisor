@@ -33,7 +33,8 @@ def _validate_refresh_prestate(registry: dict, layout: int, width: int) -> None:
             "current semantic worker refresh requires registry layout to match source contract")
     current_layout_workers = [
         worker for worker in registry["workers"]
-        if worker["semantic_layout"] == layout
+        if worker["semantic_layout"] == layout and
+        worker["worker_rule"] == "current"
     ]
     if (len(current_layout_workers) != 2 or
             {worker["worker_role"] for worker in current_layout_workers} != {"train", "infer"} or
@@ -114,7 +115,8 @@ def refresh(
         # complete current-layout pair is replaced in this prospective value.
         registry["workers"] = [
             worker for worker in registry["workers"]
-            if worker["semantic_layout"] != layout
+            if not (worker["semantic_layout"] == layout and
+                    worker["worker_rule"] == "current")
         ]
         registry["workers"].extend([training_worker, inference_worker])
         publisher.validate_existing_registry(artifact_root, registry)

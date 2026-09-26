@@ -112,7 +112,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
                 (self.root / "registry.json").write_text(
                     publisher.json_text(registry), encoding="utf-8")
                 upgraded = publisher.load_registry(self.root / "registry.json")
-                self.assertEqual(upgraded["schema_version"], 4)
+                self.assertEqual(upgraded["schema_version"], publisher.REGISTRY_SCHEMA_VERSION)
                 self.assertEqual(
                     {tuple(worker["capabilities"]) for worker in upgraded["workers"]},
                     {("train", "infer", "analyze")},
@@ -150,7 +150,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         self.assertEqual(archived7.read_bytes(), original7)
         self.assertEqual(archived8.read_bytes(), b"layout-eight")
         self.assertEqual((self.root / "current").resolve(), archived8.parent)
-        self.assertEqual(registry["schema_version"], 4)
+        self.assertEqual(registry["schema_version"], publisher.REGISTRY_SCHEMA_VERSION)
         self.assertEqual(len(registry["runtimes"]), 1)
         runtime_identity = by_role[7, "infer"]["runtime_identity"]
         self.assertEqual(by_role[6, "infer"]["runtime_identity"], runtime_identity)
@@ -294,7 +294,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         upgraded = self.registry()
         by_layout = {entry["semantic_layout"]: entry
                      for entry in upgraded["workers"]}
-        self.assertEqual(upgraded["schema_version"], 4)
+        self.assertEqual(upgraded["schema_version"], publisher.REGISTRY_SCHEMA_VERSION)
         self.assertEqual(archived7.read_bytes(), original)
         self.assertEqual(by_layout[7]["sha256"], digest7)
         self.assertTrue((archived7.parent / "default.metallib").is_symlink())

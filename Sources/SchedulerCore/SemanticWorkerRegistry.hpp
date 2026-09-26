@@ -7,11 +7,13 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace EA::Scheduler
 {
 
-inline constexpr int kSemanticWorkerRegistrySchemaVersion = 4;
+inline constexpr int kSemanticWorkerRegistrySchemaVersion = 5;
+inline constexpr int kPreviousSemanticWorkerRegistrySchemaVersion = 4;
 inline constexpr int kRoleAwareSemanticWorkerRegistrySchemaVersion = 3;
 inline constexpr int kLegacySemanticWorkerRegistrySchemaVersion = 2;
 inline constexpr int kLegacySemanticWorkerArtifactManifestSchemaVersion = 1;
@@ -46,6 +48,9 @@ struct SemanticWorkerArtifact
     std::string canonicalManifestPath;
     std::string runtimeIdentity;
     std::set<std::string> capabilities;
+    // Registry routing policy.  Artifact manifests deliberately do not carry
+    // this field: their immutable capabilities remain the executable claim.
+    int selectionPriority = 0;
 };
 
 struct SemanticWorkerRuntimeResource
@@ -104,6 +109,10 @@ public:
     const SemanticWorkerArtifact* find(int semanticLayoutVersion) const noexcept;
     const SemanticWorkerArtifact* find(
         int semanticLayoutVersion, SemanticWorkerRole role) const noexcept;
+    // TRAIN may have several immutable candidates.  INFER is validated as a
+    // singleton and continues to use find() exclusively.
+    const std::vector<SemanticWorkerArtifact>* findCandidates(
+        int semanticLayoutVersion, SemanticWorkerRole role) const noexcept;
     // Exact lookup of an already validated registry artifact.  Callers that
     // persist launch evidence must use this, rather than reverse engineering
     // identity from a deployment path.
@@ -121,7 +130,8 @@ private:
     std::string canonicalRegistryPath_;
     int currentLayoutVersion_ = 0;
     std::map<std::string, SemanticWorkerRuntimePackage> runtimes_;
-    std::map<std::pair<int, SemanticWorkerRole>, SemanticWorkerArtifact> workers_;
+    std::map<std::pair<int, SemanticWorkerRole>,
+             std::vector<SemanticWorkerArtifact>> workers_;
 };
 
 std::string ValidateAndCanonicalizeWorkerExecutable(
