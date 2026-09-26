@@ -172,6 +172,31 @@ int main()
          col < EA::kCurrentModelInputWidth; ++col)
         assert(ablatedTraining[col] == trainingAtOffset16[col]);
 
+    // Layout-8 TG4 ablation is the same pure model-input treatment in the
+    // training prebuild and inference window paths. Position 19 carries all
+    // three legal TG4 bits so each zero is observable.
+    constexpr std::size_t kTG4ActiveGlobalPosition = 19;
+    const auto tg4Treatment = BuildTrainingStyleModelInputRow(
+        sourceRows, rawCloses, kTG4ActiveGlobalPosition, 0,
+        EA::kCurrentModelInputWidth);
+    const auto tg4Ablation = EA::FeatureAblationMask::Parse(
+        std::string{EA::kTG4AblationMaskText});
+    const auto tg4AblatedTraining = BuildTrainingStyleModelInputRow(
+        sourceRows, rawCloses, kTG4ActiveGlobalPosition, 0,
+        EA::kCurrentModelInputWidth, tg4Ablation);
+    const auto tg4AblatedInference = BuildInferenceStyleModelInputRow(
+        sourceRows, rawCloses, kTG4ActiveGlobalPosition, 0,
+        EA::kCurrentModelInputWidth, tg4Ablation);
+    AssertByteIdentical(tg4AblatedTraining, tg4AblatedInference);
+    assert(tg4AblatedTraining.size() == EA::kCurrentModelInputWidth);
+    for (std::size_t col = 0; col < EA::kCurrentModelInputWidth; ++col)
+    {
+        const bool tg4Column = col >= tg4InnerBreakAnyCol &&
+            col <= tg4SourceTg3ConfluentCol;
+        assert(tg4AblatedTraining[col] ==
+               (tg4Column ? 0.0f : tg4Treatment[col]));
+    }
+
     // Cover the availability boundaries before and at 1, 4, 8, and 16 bars,
     // plus a window beginning well after the maximum lookback.
     for (const std::size_t globalPosition : {0u, 1u, 3u, 4u, 7u, 8u, 15u, 16u, 48u})

@@ -61,6 +61,7 @@
 #include "FeatureWarmupScope.hpp"
 #include "ModelInputContract.hpp"
 #include "ModelInputExpansion.hpp"
+#include "TrainingFeatureAblationReconciliation.hpp"
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
 #include "../Sources/InferenceEvaluationFacts.hpp"
@@ -5682,7 +5683,7 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--controlled-fixed-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-evaluation=<artifact_path>] [--probability-conditioned-stop-extension-evaluation=<artifact_path>] [--probability-stop-extension-state-analysis=<artifact_path>] [--probability-stop-extension-path-mechanism=<artifact_path>] [--phase19c-causal-path-predictability=<output_dir> --phase19b-path-artifact-dir=<dir>] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] [--ablate-features=NAME[,NAME...]] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred Phase 18B controlled evaluation: " << argv[0] << " --infer --model=<model_id> --probability-conditioned-stop-extension-evaluation=<artifact_path> <fromDate> <toDate>\n"
                   << "Preferred Phase 19 state analysis: " << argv[0] << " --infer --model=<model_id> --probability-stop-extension-state-analysis=<artifact_path> <fromDate> <toDate>\n"
@@ -6054,6 +6055,27 @@ int main(int argc, const char * argv[])
                 LoadSchedulerModelInputIdentity(configurationRead, launchArgs);
             schedulerFeatureAblationMask =
                 LoadSchedulerFeatureAblationMask(configurationRead, launchArgs);
+            if (!gRuntimeInferenceMode)
+            {
+                const std::optional<EA::FeatureAblationMask>
+                    ordinaryResumeSourceMask =
+                        resumeConfig.has_value() &&
+                        !resumeConfig->expandInputWidthRequested
+                            ? std::optional<EA::FeatureAblationMask>{
+                                  resumeConfig->featureAblationMask}
+                            : std::nullopt;
+                schedulerFeatureAblationMask =
+                    EA::ReconcileSchedulerTrainFeatureAblationMask(
+                        launchArgs.featureAblationMask,
+                        *schedulerFeatureAblationMask,
+                        ordinaryResumeSourceMask);
+                if (launchArgs.featureAblationMask.has_value() &&
+                    !schedulerModelInputIdentity.has_value())
+                {
+                    throw std::runtime_error(
+                        "TRAIN_FEATURE_ABLATION_MODEL_INPUT_IDENTITY_UNAVAILABLE");
+                }
+            }
             if (resumeConfig.has_value())
             {
                 ValidateSchedulerResumeFeatureAblationMask(
@@ -6065,6 +6087,26 @@ int main(int argc, const char * argv[])
                     inferenceConfig->featureAblationMask,
                     *schedulerFeatureAblationMask,
                     inferenceConfig->modelId);
+            }
+            if (!gRuntimeInferenceMode &&
+                launchArgs.featureAblationMask.has_value())
+            {
+                const SchedulerModelInputIdentity& identity =
+                    *schedulerModelInputIdentity;
+                std::cout << "TRAIN_FEATURE_ABLATION_ACTIVE"
+                          << ",source=scheduler"
+                          << ",cli_mask="
+                          << launchArgs.featureAblationMask->CanonicalText()
+                          << ",persisted_mask="
+                          << schedulerFeatureAblationMask->CanonicalText()
+                          << ",effective_mask="
+                          << schedulerFeatureAblationMask->CanonicalText()
+                          << ",semantic_layout="
+                          << identity.semanticLayoutVersion
+                          << ",model_input_width=" << identity.width
+                          << ",resume="
+                          << (resumeConfig.has_value() ? 1 : 0)
+                          << std::endl;
             }
         }
         configurationRead.commit();

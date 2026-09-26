@@ -535,7 +535,7 @@ int main()
            "rolling_range_expansion,historical_level_proximity,"
            "return_autocorrelation");
     const auto mask = EA::FeatureAblationMask::Parse(
-        " return_direction_imbalance,return_sign_persistence,return_direction_imbalance ");
+        " return_direction_imbalance,return_sign_persistence ");
     assert(mask.CanonicalText() == "return_sign_persistence,return_direction_imbalance");
     std::vector<float> ablatedInput(53, -1.0f);
     EA::CopyTensorFeaturesForModelInput(ablatedInput.data(), physicalTensor.data(),
@@ -552,6 +552,20 @@ int main()
            physicalTensor[historicalLevelProximityCol]);
     assert(physicalTensor[causalReturnSignPersistenceCol] ==
            static_cast<float>(100 + causalReturnSignPersistenceCol));
+    bool duplicateFeatureRejected = false;
+    try
+    {
+        (void)EA::FeatureAblationMask::Parse(
+            "return_direction_imbalance,return_direction_imbalance");
+    }
+    catch (const std::invalid_argument& error)
+    {
+        duplicateFeatureRejected =
+            std::string_view{error.what()}.find(
+                "FEATURE_ABLATION_MASK_DUPLICATE_FEATURE") !=
+            std::string_view::npos;
+    }
+    assert(duplicateFeatureRejected);
     bool absentFeatureRejected = false;
     try
     {

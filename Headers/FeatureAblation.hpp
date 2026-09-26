@@ -132,8 +132,13 @@ public:
             const AblatableFeature* feature = FindAblatableFeature(token);
             if (feature == nullptr)
                 throw std::invalid_argument("FEATURE_ABLATION_MASK_UNKNOWN_FEATURE:" + token);
-            if (std::find(result.columns_.begin(), result.columns_.end(), feature->tensorColumn) == result.columns_.end())
-                result.columns_.push_back(feature->tensorColumn);
+            if (std::find(result.columns_.begin(), result.columns_.end(),
+                          feature->tensorColumn) != result.columns_.end())
+            {
+                throw std::invalid_argument(
+                    "FEATURE_ABLATION_MASK_DUPLICATE_FEATURE:" + token);
+            }
+            result.columns_.push_back(feature->tensorColumn);
             if (end == std::string::npos) break;
             start = end + 1;
         }

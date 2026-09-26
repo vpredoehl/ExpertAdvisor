@@ -614,6 +614,17 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 parsed.schedulerWorkerAttemptId =
                     ParseModelIdArg(value);
             }
+            else if (SplitOptionWithValue(arg, "--ablate-features", value))
+            {
+                if (parsed.featureAblationMask.has_value())
+                    throw std::invalid_argument(
+                        "--ablate-features specified more than once");
+                if (value.empty())
+                    throw std::invalid_argument(
+                        "--ablate-features requires a non-empty feature mask");
+                parsed.featureAblationMask =
+                    EA::FeatureAblationMask::Parse(value);
+            }
             else if (SplitOptionWithValue(
                          arg, "--training-objective", value))
             {
@@ -684,6 +695,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             parsed.schedulerExperimentId.has_value() ||
             parsed.schedulerCheckpointEvalId.has_value() ||
             parsed.schedulerWorkerAttemptId.has_value() ||
+            parsed.featureAblationMask.has_value() ||
             parsed.trainingObjective.has_value() || parsed.inferAll ||
             parsed.forceInfer || parsed.evalTrading ||
             parsed.resumeExpandInputWidth || parsed.featureWarmupScope.has_value() ||
@@ -713,6 +725,19 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         if (!parsed.inferenceMode.has_value() || *parsed.inferenceMode)
             throw std::invalid_argument(
                 "--training-objective is valid only for scheduler-managed training");
+    }
+
+    if (parsed.featureAblationMask.has_value())
+    {
+        if (!parsed.schedulerExperimentId.has_value())
+            throw std::invalid_argument(
+                "--ablate-features requires --scheduler-experiment-id");
+        if (!parsed.inferenceMode.has_value() || *parsed.inferenceMode)
+            throw std::invalid_argument(
+                "--ablate-features requires explicit scheduler-managed --train");
+        if (parsed.schedulerCheckpointEvalId.has_value())
+            throw std::invalid_argument(
+                "--ablate-features is not valid for checkpoint inference");
     }
 
     if (parsed.resumeModelId.has_value())

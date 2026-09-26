@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Donchian20Mode.hpp"
+#include "FeatureAblation.hpp"
 #include "FeatureWarmupScope.hpp"
 #include "LstmRuntimeLogging.hpp"
 #include "TrainingObjective.hpp"
@@ -35,6 +36,7 @@ struct LaunchArgs
     std::optional<long long> schedulerExperimentId;
     std::optional<long long> schedulerCheckpointEvalId;
     std::optional<long long> schedulerWorkerAttemptId;
+    std::optional<EA::FeatureAblationMask> featureAblationMask;
     std::optional<EA::TrainingObjective::Configuration> trainingObjective;
     std::optional<unsigned int> freshInitializationSeed;
     std::optional<long long> inferStartAfterModelId;
