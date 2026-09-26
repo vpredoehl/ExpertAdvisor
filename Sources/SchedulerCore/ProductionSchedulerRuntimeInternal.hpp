@@ -360,6 +360,7 @@ struct SchedulerOptions
     std::string featureAblationMask;
     bool featureAblationMaskSpecified = false;
     unsigned int freshInitializationSeed = 42U;
+    bool freshInitializationSeedSpecified = false;
     std::optional<int> targetEpochs;
     std::optional<int> epochs;
     int checkpointInterval = 20;

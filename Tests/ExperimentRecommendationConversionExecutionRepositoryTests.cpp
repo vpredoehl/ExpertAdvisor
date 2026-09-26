@@ -186,7 +186,7 @@ int main()
                 "coalesce(resume_model_id,-1),donchian20_mode,feature_warmup_scope,donchian_lookback,"
                 "model_input_width,model_input_semantic_layout_version,duplicate_nonce) "
                 "WHERE status<>'cancelled';"
-                "CREATE TABLE model(model_id bigint PRIMARY KEY,marker text NOT NULL);"
+                "CREATE TABLE model(model_id bigint PRIMARY KEY,experiment_id bigint,marker text NOT NULL);"
                 "CREATE TABLE matrix(model_id bigint NOT NULL,param_name text NOT NULL,"
                 "n_rows integer NOT NULL,n_cols integer NOT NULL,row_idx integer NOT NULL,"
                 "col_idx integer NOT NULL,value double precision NOT NULL);"
@@ -200,11 +200,12 @@ int main()
                 "model_input_semantic_layout_version) VALUES (17,'eurusd',12,"
                 "0.001,1,5,120,15,'2010-01-01 America/Chicago',"
                 "'2025-01-01 America/Chicago','2025-01-01 America/Chicago',"
-                "'2026-01-01 America/Chicago',77,'paused','train','unchanged',51,5);"
-                "INSERT INTO model VALUES (77,'unchanged');"
+                "'2026-01-01 America/Chicago',77,'paused','train','unchanged',80,8);"
+                "INSERT INTO model VALUES (77,17,'unchanged');"
                 "INSERT INTO matrix VALUES "
-                "(77,'model_meta',1,3,0,0,1),(77,'model_meta',1,3,0,1,51),"
-                "(77,'model_meta',1,3,0,2,1),(77,'param',52,4,0,0,0);"
+                "(77,'model_meta',1,3,0,0,1),(77,'model_meta',1,3,0,1,80),"
+                "(77,'model_meta',1,3,0,2,1),(77,'model_input_semantics_meta',1,2,0,0,1),"
+                "(77,'model_input_semantics_meta',1,2,0,1,8),(77,'param',81,4,0,0,0);"
                 "INSERT INTO experiment_recommendation VALUES (42,17,'approved');");
             for (const char* migration : {
                      "Database/migrations/036_experiment_recommendation_conversion_proposal.sql",
@@ -350,8 +351,8 @@ int main()
             assert(row["invocation_mode"].as<std::string>() ==
                    "recommendation_conversion");
             assert(row["marker"].is_null());
-            assert(row["model_input_width"].as<int>() == 51);
-            assert(row["model_input_semantic_layout_version"].as<int>() == 6);
+            assert(row["model_input_width"].as<int>() == 80);
+            assert(row["model_input_semantic_layout_version"].as<int>() == 8);
         }
 
         // A later review reversal does not duplicate or erase a completed

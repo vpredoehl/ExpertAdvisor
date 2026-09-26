@@ -2679,6 +2679,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             if (seed > std::numeric_limits<unsigned int>::max())
                 throw std::invalid_argument("--fresh-initialization-seed exceeds uint32 range");
             options.freshInitializationSeed = static_cast<unsigned int>(seed);
+            options.freshInitializationSeedSpecified = true;
         }
         else if (arg == "--train-start")
             options.trainStart = RequireNextArg(argc, argv, i, arg);
@@ -2772,6 +2773,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             if (seed > std::numeric_limits<unsigned int>::max())
                 throw std::invalid_argument("--fresh-initialization-seed exceeds uint32 range");
             options.freshInitializationSeed = static_cast<unsigned int>(seed);
+            options.freshInitializationSeedSpecified = true;
         }
         else if (SplitOptionWithValue(arg, "--train-start", value))
             options.trainStart = value;
@@ -5364,7 +5366,6 @@ std::string DuplicateWhereClause(pqxx::work& w,
         << " AND donchian_lookback = " << DonchianLookbackDatabaseValue(
             options.donchianLookback)
         << " AND feature_ablation_mask = " << w.quote(options.featureAblationMask)
-        << " AND fresh_initialization_seed = " << options.freshInitializationSeed
         << " AND resume_model_id IS NOT DISTINCT FROM " << SqlNullable(w, options.resumeModelId)
         << " AND resume_expand_input_width = "
         << (options.resumeExpandInputWidth ? "true" : "false")
@@ -5384,6 +5385,12 @@ std::string DuplicateWhereClause(pqxx::work& w,
                 ? w.quote(options.economicCalendarSnapshot->contentHash)
                 : "NULL")
         << " AND status <> 'cancelled'";
+    // A resumed worker restores the source checkpoint; its non-null seed is
+    // retained only for schema compatibility and is not an initialization
+    // input. Fresh rows retain seed as a scientific duplicate dimension.
+    if (!options.resumeModelId.has_value())
+        sql << " AND fresh_initialization_seed = "
+            << options.freshInitializationSeed;
     return sql.str();
 }
 
@@ -5403,7 +5410,6 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
         << " AND feature_warmup_scope = " << w.quote(
             EA::FeatureWarmupScopeText(options.featureWarmupScope))
         << " AND feature_ablation_mask = " << w.quote(options.featureAblationMask)
-        << " AND fresh_initialization_seed = " << options.freshInitializationSeed
         << " AND donchian_lookback = " << DonchianLookbackDatabaseValue(
             options.donchianLookback)
         << " AND resume_expand_input_width = "
@@ -5426,7 +5432,22 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
+    // See DuplicateWhereClause: only fresh training consumes this seed.
+    if (!options.resumeModelId.has_value())
+        sql << " AND fresh_initialization_seed = "
+            << options.freshInitializationSeed;
     return sql.str();
+}
+
+void RejectExplicitFreshInitializationSeedForResume(
+    const SchedulerOptions& options)
+{
+    if (options.resumeModelId.has_value() &&
+        options.freshInitializationSeedSpecified)
+    {
+        throw std::invalid_argument(
+            "--fresh-initialization-seed is not valid with --resume-model-id");
+    }
 }
 
 long long CurrentDuplicateNonce()
@@ -5439,6 +5460,7 @@ long long CurrentDuplicateNonce()
 int EnqueueExperiment(const SchedulerOptions& rawOptions)
 {
     SchedulerOptions options = rawOptions;
+    RejectExplicitFreshInitializationSeedForResume(options);
     EnsureRequiredEnqueueOptions(options);
 
     std::optional<std::string> dryRunSymbol;
@@ -5480,6 +5502,27 @@ int EnqueueExperiment(const SchedulerOptions& rawOptions)
     w.exec("LOCK TABLE economic_calendar_snapshot IN SHARE ROW EXCLUSIVE MODE;");
     if (!RequireSchedulerTables(w))
         return 1;
+
+    // Enqueue is the explicit-config counterpart of queueing, but a resume
+    // still derives its compatible scientific configuration from the source
+    // model.  Do not let its independently parsed runtime defaults replace
+    // that persisted configuration.
+    if (options.resumeModelId.has_value())
+    {
+        if (rawOptions.coreLrMult.has_value())
+            ThrowQueueResumeInvalid(
+                "core_lr_override_not_allowed_in_resume",
+                *options.resumeModelId);
+        if (rawOptions.headLrMult.has_value())
+            ThrowQueueResumeInvalid(
+                "head_lr_override_not_allowed_in_resume",
+                *options.resumeModelId);
+        const QueueResumeMeta meta = LoadQueueResumeMeta(
+            w, *options.resumeModelId);
+        (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
+            w, *options.resumeModelId);
+        MergeResumeMetaIntoQueueOptions(options, meta);
+    }
 
     const std::string canonicalSymbol = ResolveExperimentCanonicalSymbol(w, options);
     ResolveEconomicCalendarSnapshotForQueue(
@@ -5631,6 +5674,8 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
 {
     SchedulerOptions options = rawOptions;
 
+    RejectExplicitFreshInitializationSeedForResume(options);
+
     if (options.resumeModelId.has_value() && options.epochs.has_value())
     {
         ThrowQueueResumeInvalid("epochs_conflicts_with_absolute_target_epochs",
@@ -5664,6 +5709,7 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
         EnsureRequiredQueueOptions(options);
         options.resumeModelId = ResolveAutoResumeModelId(w, options);
         options.autoResume = false;
+        RejectExplicitFreshInitializationSeedForResume(options);
     }
 
     if (options.resumeModelId.has_value())

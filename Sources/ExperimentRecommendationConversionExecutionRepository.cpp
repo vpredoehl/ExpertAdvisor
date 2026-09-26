@@ -202,12 +202,47 @@ long long InsertPausedExperiment(
 {
     const auto& configuration = invocation.configuration;
     std::size_t modelInputWidth = EA::kCurrentModelInputWidth;
+    int modelInputSemanticLayoutVersion =
+        EA::kModelInputSemanticLayoutVersion;
     if (invocation.resumeModelId)
     {
         (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
             transaction, *invocation.resumeModelId);
-        modelInputWidth = DBIO::PgModelIO::loadRequiredModelMeta(
+        const std::size_t modelWidth = DBIO::PgModelIO::loadRequiredModelMeta(
             transaction, *invocation.resumeModelId).inputWidth;
+        const pqxx::result sourceExperiment = transaction.exec(
+            "SELECT e.model_input_width,e.model_input_semantic_layout_version "
+            "FROM model m JOIN experiment e ON e.experiment_id=m.experiment_id "
+            "WHERE m.model_id=$1;",
+            pqxx::params{*invocation.resumeModelId});
+        if (sourceExperiment.size() != 1 ||
+            sourceExperiment[0][0].is_null() ||
+            sourceExperiment[0][1].is_null())
+        {
+            throw std::runtime_error(
+                "recommendation resume source experiment semantic identity unavailable");
+        }
+        modelInputWidth = sourceExperiment[0][0].as<std::size_t>();
+        modelInputSemanticLayoutVersion = sourceExperiment[0][1].as<int>();
+        if (modelInputWidth != modelWidth)
+        {
+            throw std::runtime_error(
+                "recommendation resume source experiment model input width disagrees with model");
+        }
+        const auto semanticMetadata =
+            DBIO::PgModelIO::loadModelInputSemanticMetadata(
+                transaction, *invocation.resumeModelId);
+        if (semanticMetadata.has_value())
+        {
+            if (semanticMetadata->schemaVersion !=
+                    EA::kModelInputSemanticMetaSchemaVersion ||
+                semanticMetadata->layoutVersion !=
+                    modelInputSemanticLayoutVersion)
+            {
+                throw std::runtime_error(
+                    "recommendation resume source experiment semantic identity disagrees with model");
+            }
+        }
     }
     return transaction.exec(
         "INSERT INTO experiment (symbol,prediction_horizon,c_next_threshold,"
@@ -242,7 +277,7 @@ long long InsertPausedExperiment(
             EA::TrainingObjective::Identity(
                 configuration.trainingObjective),
             modelInputWidth,
-            EA::kModelInputSemanticLayoutVersion})
+            modelInputSemanticLayoutVersion})
         .one_row()[0].as<long long>();
 }
 

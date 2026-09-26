@@ -1360,16 +1360,58 @@ QueuedModelInputIdentity ResolveQueuedModelInputIdentity(
             "model input identity migration required; run ./migrate_lstm_db.sh");
     }
 
+    // A resume is derived from its owning experiment's persisted identity.
+    // Neither the current process layout nor a width-based heuristic may
+    // replace that scientific identity.
     QueuedModelInputIdentity identity;
     if (options.resumeModelId.has_value())
     {
         (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
             w, *options.resumeModelId);
-        const std::size_t sourceWidth =
+        const std::size_t modelWidth =
             DBIO::PgModelIO::loadRequiredModelMeta(
                 w, *options.resumeModelId).inputWidth;
-        identity.width = options.resumeExpandInputWidth
-            ? EA::kCurrentModelInputWidth : sourceWidth;
+        const pqxx::result sourceExperiment = w.exec_params(
+            "SELECT e.model_input_width,e.model_input_semantic_layout_version "
+            "FROM model m JOIN experiment e ON e.experiment_id=m.experiment_id "
+            "WHERE m.model_id=$1;",
+            *options.resumeModelId);
+        if (sourceExperiment.size() != 1 ||
+            sourceExperiment[0][0].is_null() ||
+            sourceExperiment[0][1].is_null())
+        {
+            throw std::runtime_error(
+                "resume source experiment semantic identity unavailable");
+        }
+        identity.width = sourceExperiment[0][0].as<std::size_t>();
+        identity.semanticLayoutVersion = sourceExperiment[0][1].as<int>();
+        if (identity.width != modelWidth)
+        {
+            throw std::runtime_error(
+                "resume source experiment model input width disagrees with model");
+        }
+        const auto sourceSemanticMetadata =
+            DBIO::PgModelIO::loadModelInputSemanticMetadata(
+                w, *options.resumeModelId);
+        if (sourceSemanticMetadata.has_value())
+        {
+            if (sourceSemanticMetadata->schemaVersion !=
+                    EA::kModelInputSemanticMetaSchemaVersion ||
+                sourceSemanticMetadata->layoutVersion !=
+                    identity.semanticLayoutVersion)
+            {
+                throw std::runtime_error(
+                    "resume source experiment semantic identity disagrees with model");
+            }
+        }
+        if (options.resumeExpandInputWidth)
+        {
+            // Input-width expansion is an explicit semantic transition.  Its
+            // target is therefore the current, separately validated layout.
+            identity.width = EA::kCurrentModelInputWidth;
+            identity.semanticLayoutVersion =
+                EA::kModelInputSemanticLayoutVersion;
+        }
     }
     (void)EA::ContractForModelInputWidth(identity.width);
     if (!EA::IsModelInputSemanticLayoutWidthCompatible(
@@ -5850,11 +5892,10 @@ std::optional<long long> FindEquivalentContinuationExperiment(
     long long sourceModelId,
     int targetEpochs)
 {
-    (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
-        w, sourceModelId);
-    const std::size_t sourceInputWidth =
-        DBIO::PgModelIO::loadRequiredModelMeta(
-            w, sourceModelId).inputWidth;
+    SchedulerOptions sourceOptions;
+    sourceOptions.resumeModelId = sourceModelId;
+    const QueuedModelInputIdentity sourceInputIdentity =
+        ResolveQueuedModelInputIdentity(w, sourceOptions);
     pqxx::result rows = w.exec_params(
         "SELECT experiment_id FROM experiment "
         "WHERE experiment_id <> $1 "
@@ -5871,8 +5912,8 @@ std::optional<long long> FindEquivalentContinuationExperiment(
         sourceExperimentId,
         sourceModelId,
         targetEpochs,
-        sourceInputWidth,
-        EA::kModelInputSemanticLayoutVersion);
+        sourceInputIdentity.width,
+        sourceInputIdentity.semanticLayoutVersion);
     if (rows.empty())
         return std::nullopt;
     return rows[0][0].as<long long>();
