@@ -15,7 +15,7 @@
 namespace EA::CausalFibonacciIncrementalInformation::Analysis {
 
 inline constexpr std::string_view kRunnerIdentity =
-    "causal-fibonacci-layout9-pre2025-artifact-analysis-v1";
+    "causal-fibonacci-layout9-pre2025-artifact-analysis-v2";
 
 struct ParsedTarget { int assignedClass = 1; float terminalReturn = 0.0f; bool eligible = false; };
 struct ParsedRow {
@@ -254,9 +254,18 @@ inline std::pair<double,std::vector<double>> MultiRowsObjective(const std::vecto
 {
     const std::size_t p=features.size();double loss=0;std::vector<double> g(b.size());for(auto index:selected){const auto& row=rows[index];const int y=label(row).assignedClass;std::array<double,3> z{};double maximum=-std::numeric_limits<double>::infinity();for(std::size_t c=0;c<3;++c){z[c]=b[c*(p+1)];for(std::size_t j=0;j<p;++j)z[c]+=b[c*(p+1)+j+1]*InputValue(row,features[j]);maximum=std::max(maximum,z[c]);}double sum=0;for(auto&v:z){v=std::exp(v-maximum);sum+=v;}for(auto&v:z)v/=sum;loss-=std::log(std::max(z[y],1e-300));for(std::size_t c=0;c<3;++c){const double e=z[c]-(y==static_cast<int>(c));g[c*(p+1)]+=e;for(std::size_t j=0;j<p;++j)g[c*(p+1)+j+1]+=e*InputValue(row,features[j]);}}for(std::size_t c=0;c<3;++c)for(std::size_t j=1;j<=p;++j){const std::size_t n=c*(p+1)+j;loss+=b[n]*b[n];g[n]+=2*b[n];}return {loss,std::move(g)};
 }
-// This is intentionally separate from FitMultiRows: only diagnostics may
-// provide non-default optimizer options.  The scientific path always calls
-// FitMultiRows below, which constructs untouched frozen defaults.
+inline constexpr std::size_t kScientificMultinomialMaxIterations = 4000;
+inline LbfgsOptions ScientificMultinomialOptions()
+{
+    LbfgsOptions options;
+    options.maxIterations = kScientificMultinomialMaxIterations;
+    return options;
+}
+
+// This is intentionally separate from FitMultiRows so the ordinary scientific
+// path owns its frozen options below, while diagnostics explicitly supply
+// theirs.  The scientific 4000-iteration budget is the V2 solver-budget
+// amendment.
 template <typename Label>
 inline MultiRowsModel FitMultiRowsDiagnostic(const std::vector<ParsedRow>& rows,const std::vector<std::size_t>& selected,const std::vector<FeatureRef>& features,Label label,LbfgsOptions options)
 {
@@ -267,7 +276,7 @@ inline MultiRowsModel FitMultiRowsDiagnostic(const std::vector<ParsedRow>& rows,
 template <typename Label>
 inline MultiRowsModel FitMultiRows(const std::vector<ParsedRow>& rows,const std::vector<std::size_t>& selected,const std::vector<FeatureRef>& features,Label label)
 {
-    return FitMultiRowsDiagnostic(rows,selected,features,label,LbfgsOptions{});
+    return FitMultiRowsDiagnostic(rows,selected,features,label,ScientificMultinomialOptions());
 }
 
 struct MultiRowsMetrics { bool available=false;std::string unavailableReason;double logLoss=std::numeric_limits<double>::quiet_NaN(),brier=std::numeric_limits<double>::quiet_NaN(),accuracy=std::numeric_limits<double>::quiet_NaN();std::vector<double> rowLoss,rowBrier; };
@@ -563,7 +572,7 @@ inline void Run(const Options& options)
         std::cerr << "FIBONACCI_PRE2025_SYMBOL_COMPLETE symbol=" << symbol << '\n';
     });
     WriteEqualSymbolSummary(crossSymbol,conditionalRecords);structural.close();fibonacciLedger.close();reconstruction.close();conditional.close();monthly.close();association.close();coverageDegeneracy.close();crossSymbol.close();
-    const auto manifestPath=options.outputDirectory/"manifest.json";std::ofstream manifest(manifestPath);manifest<<"{\n\"runner_identity\":\""<<kRunnerIdentity<<"\",\n\"protocol_id\":\""<<kProtocolId<<"\",\n\"protocol_sha256\":\""<<kProtocolSha256<<"\",\n\"input_manifest_sha256\":\""<<FileSha256(options.artifactDirectory/"manifest.json")<<"\",\n\"input_rows_sha256\":\""<<FileSha256(options.artifactDirectory/"rows.csv")<<"\",\n\"code_commit\":\""<<options.codeCommit<<"\",\n\"confirmation_2025\":\"sealed_and_discarded_before_parsing\",\n\"lambda\":1.0,\n\"lbfgs_max_iterations\":250,\n\"lbfgs_gradient_infinity_tolerance\":1e-8,\n\"lbfgs_relative_objective_tolerance\":1e-12\n}\n";manifest.close();
+    const auto manifestPath=options.outputDirectory/"manifest.json";std::ofstream manifest(manifestPath);manifest<<"{\n\"runner_identity\":\""<<kRunnerIdentity<<"\",\n\"protocol_id\":\""<<kProtocolId<<"\",\n\"protocol_sha256\":\""<<kProtocolSha256<<"\",\n\"input_manifest_sha256\":\""<<FileSha256(options.artifactDirectory/"manifest.json")<<"\",\n\"input_rows_sha256\":\""<<FileSha256(options.artifactDirectory/"rows.csv")<<"\",\n\"code_commit\":\""<<options.codeCommit<<"\",\n\"confirmation_2025\":\"sealed_and_discarded_before_parsing\",\n\"lambda\":1.0,\n\"lbfgs_max_iterations\":4000,\n\"lbfgs_gradient_infinity_tolerance\":1e-8,\n\"lbfgs_relative_objective_tolerance\":1e-12\n}\n";manifest.close();
     std::ofstream sums(options.outputDirectory/"sha256sums.txt");for(const char* name:{"structural_ledgers.csv","fibonacci_ledgers.csv","reconstruction.csv","conditional_incremental.csv","monthly_deltas.csv","associations.csv","coverage_degeneracy.csv","cross_symbol_equal_summary.csv","manifest.json"})sums<<FileSha256(options.outputDirectory/name)<<"  "<<name<<'\n';
 }
 } // namespace EA::CausalFibonacciIncrementalInformation::Analysis

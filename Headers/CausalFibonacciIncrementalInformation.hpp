@@ -33,8 +33,12 @@
 namespace EA::CausalFibonacciIncrementalInformation {
 
 inline constexpr std::string_view kProtocolId =
-    "causal-fibonacci-layout9-incremental-information-v1";
+    "causal-fibonacci-layout9-incremental-information-v2";
 inline constexpr std::string_view kProtocolSha256 =
+    "9f39886dc46ede11e2322fd8c0afcef6b09505132bfdc243c85ae8b790352c53";
+inline constexpr std::string_view kV1SourceArtifactProtocolId =
+    "causal-fibonacci-layout9-incremental-information-v1";
+inline constexpr std::string_view kV1SourceArtifactProtocolSha256 =
     "f0eae946cd935f1aeb6184d3611204909697f7c47b2c58c8d733121b9e706aaa";
 inline constexpr std::size_t kBaselineWidth = kTG4ProductionPulseModelInputWidth;
 inline constexpr std::size_t kFibonacciWidth = 23;
@@ -196,7 +200,12 @@ struct ArtifactProvenance {
 
 inline void ValidateArtifactProvenance(const ArtifactProvenance& value)
 {
-    if (value.protocolId != kProtocolId || value.protocolSha256 != kProtocolSha256)
+    const bool currentProtocol = value.protocolId == kProtocolId &&
+        value.protocolSha256 == kProtocolSha256;
+    const bool immutableV1SourceArtifact =
+        value.protocolId == kV1SourceArtifactProtocolId &&
+        value.protocolSha256 == kV1SourceArtifactProtocolSha256;
+    if (!currentProtocol && !immutableV1SourceArtifact)
         throw std::invalid_argument("fibonacci_artifact_protocol_identity_mismatch");
     if (value.codeCommit.empty() || value.economicCalendarSnapshotId.empty() || value.economicCalendarSnapshotSha256.empty())
         throw std::invalid_argument("fibonacci_artifact_missing_economic_calendar_snapshot_identity");

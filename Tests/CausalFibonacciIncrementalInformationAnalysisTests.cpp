@@ -272,6 +272,13 @@ int main()
     const auto root = std::filesystem::temp_directory_path() / "ea_fibonacci_pre2025_analysis_fixture";
     const auto artifact = root / "artifact", output = root / "output";
     std::filesystem::remove_all(root);
+    auto immutableV1SourceArtifact =
+        EA::CausalFibonacciIncrementalInformation::FixtureArtifactProvenance();
+    immutableV1SourceArtifact.protocolId =
+        std::string(F::kV1SourceArtifactProtocolId);
+    immutableV1SourceArtifact.protocolSha256 =
+        std::string(F::kV1SourceArtifactProtocolSha256);
+    F::ValidateArtifactProvenance(immutableV1SourceArtifact);
     std::vector<EA::CausalFibonacciIncrementalInformation::Row> rows;
     const std::array<std::string, 6> symbols{{"audcadrmp","audusdrmp","eurusdrmp","gbpusdrmp","usdcadrmp","usdjpyrmp"}};
     for (const auto& symbol : symbols) {
@@ -298,8 +305,9 @@ int main()
     EA::CausalFibonacciIncrementalInformation::WriteArtifact(artifact,
         EA::CausalFibonacciIncrementalInformation::FixtureArtifactProvenance(), rows);
 
-    // Scientific FitMultiRows continues to use frozen defaults.  The
-    // qualification-only options are the separate 5,000-iteration path.
+    // The generic optimizer default remains untouched.  The ordinary
+    // scientific multinomial path is V2's 4,000-iteration amendment, while
+    // the qualification-only path remains at 5,000 iterations.
     const auto frozenOptions = A::AudcadH4BaselineMultinomialDiagnosticOptions(
         A::AudcadH4BaselineMultinomialDiagnosticMode::Frozen250);
     const auto continuationOptions = A::AudcadH4BaselineMultinomialDiagnosticOptions(
@@ -307,11 +315,18 @@ int main()
     assert(F::LbfgsOptions{}.maxIterations == 250);
     assert(frozenOptions.maxIterations == 250);
     assert(continuationOptions.maxIterations == 5000);
+    const auto scientificOptions = A::ScientificMultinomialOptions();
+    assert(scientificOptions.maxIterations == 4000);
+    assert(scientificOptions.gradientInfinityTolerance == 1e-8);
+    assert(scientificOptions.relativeObjectiveTolerance == 1e-12);
+    assert(!scientificOptions.captureTrajectory);
     const auto qualificationOptions = A::SolverBudgetQualificationOptions();
     assert(qualificationOptions.maxIterations == 5000);
     assert(qualificationOptions.gradientInfinityTolerance == 1e-8);
     assert(qualificationOptions.relativeObjectiveTolerance == 1e-12);
     assert(qualificationOptions.captureTrajectory);
+    assert(scientificOptions.gradientInfinityTolerance == frozenOptions.gradientInfinityTolerance);
+    assert(scientificOptions.relativeObjectiveTolerance == frozenOptions.relativeObjectiveTolerance);
     assert(frozenOptions.gradientInfinityTolerance == continuationOptions.gradientInfinityTolerance);
     assert(frozenOptions.relativeObjectiveTolerance == continuationOptions.relativeObjectiveTolerance);
     assert(frozenOptions.captureTrajectory && continuationOptions.captureTrajectory);
@@ -324,17 +339,19 @@ int main()
         [](const auto& row) -> const A::ParsedTarget& { return row.h4; });
     const auto label = [](const A::ParsedRow& row) -> const A::ParsedTarget& { return row.h4; };
     const auto scientificModel = A::FitMultiRows(audcadRows, developmentRows, transform.baseline, label);
+    const auto scientificOptionsModel = A::FitMultiRowsDiagnostic(
+        audcadRows, developmentRows, transform.baseline, label, scientificOptions);
     const auto frozenDiagnosticModel = A::FitMultiRowsDiagnostic(
         audcadRows, developmentRows, transform.baseline, label, frozenOptions);
-    assert(scientificModel.optimizer && frozenDiagnosticModel.optimizer);
-    assert(scientificModel.optimizer->iterations <= 250);
-    assert(scientificModel.optimizer->terminationReason == frozenDiagnosticModel.optimizer->terminationReason);
-    assert(scientificModel.optimizer->iterations == frozenDiagnosticModel.optimizer->iterations);
-    assert(scientificModel.optimizer->initialObjective == frozenDiagnosticModel.optimizer->initialObjective);
-    assert(scientificModel.optimizer->finalObjective == frozenDiagnosticModel.optimizer->finalObjective);
-    assert(scientificModel.optimizer->finalGradientInfinityNorm == frozenDiagnosticModel.optimizer->finalGradientInfinityNorm);
-    assert(scientificModel.available == frozenDiagnosticModel.available);
-    assert(scientificModel.unavailableReason == frozenDiagnosticModel.unavailableReason);
+    assert(scientificModel.optimizer && scientificOptionsModel.optimizer && frozenDiagnosticModel.optimizer);
+    assert(scientificModel.optimizer->iterations <= 4000);
+    assert(scientificModel.optimizer->terminationReason == scientificOptionsModel.optimizer->terminationReason);
+    assert(scientificModel.optimizer->iterations == scientificOptionsModel.optimizer->iterations);
+    assert(scientificModel.optimizer->initialObjective == scientificOptionsModel.optimizer->initialObjective);
+    assert(scientificModel.optimizer->finalObjective == scientificOptionsModel.optimizer->finalObjective);
+    assert(scientificModel.optimizer->finalGradientInfinityNorm == scientificOptionsModel.optimizer->finalGradientInfinityNorm);
+    assert(scientificModel.available == scientificOptionsModel.available);
+    assert(scientificModel.unavailableReason == scientificOptionsModel.unavailableReason);
 
     std::ostringstream diagnostic;
     A::RunAudcadH4BaselineMultinomialDiagnostic(artifact, diagnostic);
@@ -431,5 +448,12 @@ int main()
     std::ifstream sums(output / "sha256sums.txt");
     const std::string sumsContents((std::istreambuf_iterator<char>(sums)), {});
     assert(sumsContents.find(EA::CausalFibonacciIncrementalInformation::FileSha256(output / "coverage_degeneracy.csv") + "  coverage_degeneracy.csv\n") != std::string::npos);
+    std::ifstream resultManifest(output / "manifest.json");
+    const std::string resultManifestContents((std::istreambuf_iterator<char>(resultManifest)), {});
+    assert(resultManifestContents.find("\"protocol_id\":\"causal-fibonacci-layout9-incremental-information-v2\"") != std::string::npos);
+    assert(resultManifestContents.find("\"lbfgs_max_iterations\":4000") != std::string::npos);
+    assert(resultManifestContents.find("\"lbfgs_gradient_infinity_tolerance\":1e-8") != std::string::npos);
+    assert(resultManifestContents.find("\"lbfgs_relative_objective_tolerance\":1e-12") != std::string::npos);
+    assert(resultManifestContents.find("\"confirmation_2025\":\"sealed_and_discarded_before_parsing\"") != std::string::npos);
     std::filesystem::remove_all(root);
 }

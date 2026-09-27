@@ -1,10 +1,18 @@
 # Causal Fibonacci layout-9 incremental-information protocol
 
-**Protocol identifier:** `causal-fibonacci-layout9-incremental-information-v1`
+**Protocol identifier:** `causal-fibonacci-layout9-incremental-information-v2`
 
-**Status:** frozen before execution
+**Status:** frozen solver-budget amendment before rerun
 
 **Scope:** read-only research screen; not a training experiment or an LSTM ablation
+
+**Amendment lineage:** this is a narrowly scoped successor to
+`causal-fibonacci-layout9-incremental-information-v1`.  The prior V1
+extraction artifact remains immutable and is the accepted read-only source
+artifact for this amendment.  V1's provenance-valid `pre2025-results-v1`
+directory remains preserved, but it is scientifically uninterpretable for
+incremental evidence: all 72 conditional rows were unavailable because the
+multinomial fits exhausted V1's 250-iteration budget.
 
 ## 1. Question and scope
 
@@ -35,7 +43,9 @@ experiment is warranted.
 No ratio, anchor policy, feature, target, diagnostic hyperparameter, partition,
 or decision interpretation may be changed after incremental results are
 inspected under this identifier.  A changed choice requires a new protocol
-identifier and a separately held-out confirmation period.
+identifier and a separately held-out confirmation period.  This V2 identifier
+exists solely because the scientific solver iteration budget was amended
+without inspecting predictive or confirmation evidence.
 
 ## 2. Frozen input identity
 
@@ -250,11 +260,40 @@ Both use the identical eligible development observations, class encoding,
 preprocessing convention in section 6, natural class prevalence (no class
 reweighting), unpenalized class intercepts, L2 coefficient penalty
 `lambda = 1.0`, canonical schema order, zero initialization, and a deterministic
-full-batch L-BFGS solver (`max_iterations=250`, infinity-norm gradient tolerance
+full-batch L-BFGS solver (`max_iterations=4000`, infinity-norm gradient tolerance
 `1e-8`, relative-objective tolerance `1e-12`).  No interactions, trees,
 neural network, ratio selection, or hyperparameter search are permitted.  If a
 development symbol/target lacks any of the three classes, its diagnostic and
 every dependent holdout result are unavailable with that exact reason.
+
+### Solver-budget amendment record
+
+V1's `max_iterations=250` ceiling was inadequate: its first provenance-valid
+pre-2025 execution left all 72 conditional rows unavailable because neither
+member of each paired multinomial diagnostic converged within that budget.
+Before this amendment, a diagnostic-only qualification changed no scientific
+parameter except a temporary 5000-iteration ceiling.  It fit exactly the
+canonical 24 development-only models: six symbols (`audcadrmp`, `audusdrmp`,
+`eurusdrmp`, `gbpusdrmp`, `usdcadrmp`, `usdjpyrmp`) x H4/H6 x baseline80/
+augmented103.  It neither evaluated nor exposed validation,
+`pre2025_lock_test`, or `confirmation_2025` predictive evidence.
+
+All 24/24 qualification fits converged; none reached 5000 iterations.  Their
+convergence iterations were minimum 1098, median 1691.5, and maximum 2806;
+the maximum was `eurusdrmp:H6:augmented`.  Every fit terminated via the
+already-frozen `relative_objective_tolerance`, not a reinterpreted gradient
+criterion.  The replacement scientific `max_iterations=4000` gives 1194
+iterations (about 42.6%) of headroom above the observed maximum while staying
+below the diagnostic ceiling.
+
+This amendment changes only the scientific maximum iteration budget.  The
+gradient infinity tolerance (`1e-8`), relative-objective tolerance (`1e-12`),
+history size (8), lambda (1), zero initialization, deterministic full-batch
+L-BFGS, objective and penalty convention, preprocessing, feature population,
+three-class parameterization, baseline80/augmented103 definitions, target
+definitions, partitions, six-symbol universe, and all confirmation guards are
+unchanged.  The diagnostic-only 5000-iteration qualification facility remains
+separate and is not a scientific fitting configuration.
 
 The fitted diagnostics are evaluated unchanged on validation, pre-2025
 lock-test, and 2025 confirmation.  For each identical row set, report:
@@ -328,7 +367,7 @@ are partitioned.
 The generated, uncommitted artifact directory is:
 
 ```
-causal-fibonacci-layout9-incremental-information-v1/
+causal-fibonacci-layout9-incremental-information-v2/
   manifest.json
   feature_schema.csv
   rows.csv
@@ -354,6 +393,12 @@ snapshot cannot be identified, extraction is unavailable; it must not silently
 use a mutable later calendar corpus.  The harness validates all hashes before
 diagnostics run and writes a second result manifest containing the fixed solver
 and preprocessing parameters.
+
+The existing V1 extraction manifest remains immutable and is accepted only as
+the fixed source artifact for this solver-budget amendment; it is not rewritten
+or reinterpreted as a V2 extraction.  A V2 result manifest records the amended
+4000-iteration scientific solver budget and binds itself to the immutable V1
+source artifact through its input-manifest and input-row hashes.
 
 The current source uses canonical 15-minute ask-OHLC candlesticks through the
 established candlestick/Tensor path.  The execution manifest must record the
