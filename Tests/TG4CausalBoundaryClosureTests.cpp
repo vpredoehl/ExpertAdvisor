@@ -216,8 +216,12 @@ std::size_t AuthoritativeActiveObservationCount(
 void AssertActiveObservationCountMatches(
     const EA::TG3::FibonacciConfluenceTracker& tracker)
 {
-    assert(tracker.ActiveObservationCount() ==
-           AuthoritativeActiveObservationCount(tracker.Observations()));
+    const std::size_t authoritative =
+        AuthoritativeActiveObservationCount(tracker.Observations());
+    assert(tracker.ActiveObservationCount() == authoritative);
+    assert(tracker.PendingSynchronizationMembershipMatchesObservationsForTesting());
+    assert(tracker.PendingSynchronizationObservationCountForTesting() ==
+           authoritative);
 }
 
 void ReferenceCensor(EA::TG2::OutcomeResolution& outcome,
@@ -282,6 +286,7 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
     BreakObservation first = InnerBreak(1, 1);
     behavior.push_back(first);
     assert(tracker.ObserveInnerBreak(first).has_value());
+    AssertActiveObservationCountMatches(tracker);
 
     tracker.Advance(2, Timestamp(2));
     behavior.front().retest.state = ResolutionState::Succeeded;
@@ -293,6 +298,7 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
     assert(ReferenceSynchronizeFullRescan(expected, behavior, 2, Timestamp(2)) == 1);
     tracker.SynchronizeOutcomes(behavior, 2, Timestamp(2));
     AssertOutcomeSnapshotsEqual(tracker.Observations(), expected);
+    AssertActiveObservationCountMatches(tracker);
 
     // Once terminal, a removed TG2 record cannot alter the immutable snapshot.
     tracker.Advance(3, Timestamp(3));
@@ -302,11 +308,13 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
     assert(ReferenceSynchronizeFullRescan(expected, behavior, 3, Timestamp(3)) == 0);
     tracker.SynchronizeOutcomes(behavior, 3, Timestamp(3));
     AssertOutcomeSnapshotsEqual(tracker.Observations(), expected);
+    AssertActiveObservationCountMatches(tracker);
 
     // A still-pending record removed by TG2 capacity is censored at this bar.
     tracker.Advance(4, Timestamp(4));
     const BreakObservation pending = InnerBreak(2, 4);
     assert(tracker.ObserveInnerBreak(pending).has_value());
+    AssertActiveObservationCountMatches(tracker);
     expected.assign(tracker.Observations().begin(),
                     tracker.Observations().end());
     assert(ReferenceSynchronizeFullRescan(expected, behavior, 4, Timestamp(4)) == 0);
@@ -328,15 +336,16 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
 
     const auto& work = tracker.OutcomeSynchronizationWork();
     assert(work.calls == 3);
-    assert(work.retainedObservationsExamined == 4);
-    assert(work.terminalObservationsSkipped == 2);
+    assert(work.retainedObservationsExamined == 2);
+    assert(work.terminalObservationsSkipped == 0);
     assert(work.pendingObservationsVisited == 2);
     assert(work.behaviorLookupsAttempted == 2);
     assert(work.behaviorObservationsCompared == 2);
     assert(work.observationsStateChanged == 2);
     assert(work.activeToTerminalTransitions == 2);
-    assert(work.terminalObservationsRevisited == 2);
+    assert(work.terminalObservationsRevisited == 0);
     assert(work.maxRetainedObservations == 2);
+    assert(work.maxSynchronizationObservationsExamined == 1);
     assert(work.maxPendingObservations == 1);
 }
 
@@ -368,20 +377,19 @@ void TestOutcomeSynchronizationDoesNotRescanTerminalHistory()
         const std::size_t bar = observationCount + index + 1;
         tracker.SynchronizeOutcomes(behavior, bar, Timestamp(bar));
     }
+    AssertActiveObservationCountMatches(tracker);
     const auto& work = tracker.OutcomeSynchronizationWork();
     assert(work.calls == synchronizationCalls);
-    assert(work.retainedObservationsExamined ==
-           synchronizationCalls * observationCount);
+    assert(work.retainedObservationsExamined == 0);
     assert(work.pendingObservationsVisited == 0);
     assert(work.behaviorLookupsAttempted == 0);
     assert(work.behaviorObservationsCompared == 0);
-    assert(work.terminalObservationsSkipped ==
-           synchronizationCalls * observationCount);
-    assert(work.terminalObservationsRevisited ==
-           (synchronizationCalls - 1) * observationCount);
+    assert(work.terminalObservationsSkipped == 0);
+    assert(work.terminalObservationsRevisited == 0);
     assert(work.observationsStateChanged == 0);
     assert(work.activeToTerminalTransitions == 0);
     assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxSynchronizationObservationsExamined == 0);
     assert(work.maxPendingObservations == 0);
 
     // The former implementation performed this deterministic full-rescan
@@ -429,17 +437,17 @@ void TestTerminalHistoryWithSmallPendingTail()
     const auto& work = tracker.OutcomeSynchronizationWork();
     assert(work.calls == synchronizationCalls);
     assert(work.retainedObservationsExamined ==
-           synchronizationCalls * observationCount);
-    assert(work.terminalObservationsSkipped ==
-           synchronizationCalls * terminalCount);
+           synchronizationCalls * (observationCount - terminalCount));
+    assert(work.terminalObservationsSkipped == 0);
     assert(work.pendingObservationsVisited ==
            synchronizationCalls * (observationCount - terminalCount));
     assert(work.behaviorLookupsAttempted == work.pendingObservationsVisited);
-    assert(work.terminalObservationsRevisited ==
-           (synchronizationCalls - 1) * terminalCount);
+    assert(work.terminalObservationsRevisited == 0);
     assert(work.observationsStateChanged == 0);
     assert(work.activeToTerminalTransitions == 0);
     assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxSynchronizationObservationsExamined ==
+           observationCount - terminalCount);
     assert(work.maxPendingObservations == observationCount - terminalCount);
 }
 
@@ -479,18 +487,57 @@ void TestTerminalAndPendingObservationsCanInterleave()
 
     tracker.SynchronizeOutcomes(behavior, observationCount + 2,
                                 Timestamp(observationCount + 2));
+    AssertActiveObservationCountMatches(tracker);
     const auto& work = tracker.OutcomeSynchronizationWork();
     assert(work.calls == 2);
-    assert(work.retainedObservationsExamined == 2 * observationCount);
-    assert(work.terminalObservationsSkipped == observationCount / 2);
-    assert(work.pendingObservationsVisited ==
+    assert(work.retainedObservationsExamined ==
            observationCount + observationCount / 2);
+    assert(work.terminalObservationsSkipped == 0);
+    assert(work.pendingObservationsVisited == work.retainedObservationsExamined);
     assert(work.behaviorLookupsAttempted == work.pendingObservationsVisited);
     assert(work.observationsStateChanged == observationCount / 2);
     assert(work.activeToTerminalTransitions == observationCount / 2);
-    assert(work.terminalObservationsRevisited == observationCount / 2);
+    assert(work.terminalObservationsRevisited == 0);
     assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxSynchronizationObservationsExamined == observationCount);
     assert(work.maxPendingObservations == observationCount);
+}
+
+void TestInteriorActiveCapacityEvictionMaintainsPendingPositions()
+{
+    EA::TG3::Configuration configuration = FibonacciConfiguration();
+    configuration.maxActiveConfluenceObservations = 2;
+    configuration.maxRetainedConfluenceObservations = 4;
+    EA::TG3::FibonacciConfluenceTracker tracker(configuration);
+
+    tracker.Advance(1, Timestamp(1));
+    BreakObservation terminal = InnerBreak(1, 1);
+    terminal.retest.state = ResolutionState::Succeeded;
+    terminal.retest.resolutionBar = 1;
+    terminal.retest.resolutionTimestamp = Timestamp(1);
+    terminal.retest.latencyBars = 0;
+    assert(tracker.ObserveInnerBreak(terminal).has_value());
+    AssertActiveObservationCountMatches(tracker);
+
+    tracker.Advance(2, Timestamp(2));
+    assert(tracker.ObserveInnerBreak(InnerBreak(2, 2)).has_value());
+    tracker.Advance(3, Timestamp(3));
+    assert(tracker.ObserveInnerBreak(InnerBreak(3, 3)).has_value());
+    AssertActiveObservationCountMatches(tracker);
+    assert(tracker.ActiveObservationCount() == 2);
+
+    // The terminal prefix makes the oldest active observation interior. Its
+    // removal must shift the later pending position without changing order.
+    tracker.Advance(4, Timestamp(4));
+    assert(tracker.ObserveInnerBreak(InnerBreak(4, 4)).has_value());
+    AssertActiveObservationCountMatches(tracker);
+    assert(tracker.Observations().size() == 3);
+    assert(tracker.Observations()[0].breakEventSequence == 1);
+    assert(tracker.Observations()[1].breakEventSequence == 3);
+    assert(tracker.Observations()[2].breakEventSequence == 4);
+    assert(tracker.ActiveObservationCount() == 2);
+    assert(tracker.AggregateSummary().innerBreakObservations == 4);
+    assert(tracker.AggregateSummary().capacityEvictedObservations == 1);
 }
 
 void TestActiveObservationCountBookkeepingAndO1Access()
@@ -605,6 +652,7 @@ void TestOutcomeSynchronizationUsesLogarithmicPendingLookup()
 
     tracker.SynchronizeOutcomes(behavior, observationCount + 1,
                                 Timestamp(observationCount + 1));
+    AssertActiveObservationCountMatches(tracker);
     const auto& work = tracker.OutcomeSynchronizationWork();
     assert(work.calls == 1);
     assert(work.retainedObservationsExamined == observationCount);
@@ -615,6 +663,7 @@ void TestOutcomeSynchronizationUsesLogarithmicPendingLookup()
     assert(work.activeToTerminalTransitions == 0);
     assert(work.terminalObservationsRevisited == 0);
     assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxSynchronizationObservationsExamined == observationCount);
     assert(work.maxPendingObservations == observationCount);
     // Each successful lower-bound lookup needs at most log2(256) probes plus
     // one equality check, rather than the old triangular full-rescan count.
@@ -702,6 +751,7 @@ int main()
     TestOutcomeSynchronizationDoesNotRescanTerminalHistory();
     TestTerminalHistoryWithSmallPendingTail();
     TestTerminalAndPendingObservationsCanInterleave();
+    TestInteriorActiveCapacityEvictionMaintainsPendingPositions();
     TestOutcomeSynchronizationUsesLogarithmicPendingLookup();
     TestActiveObservationCountBookkeepingAndO1Access();
     std::cout << "TG4CausalBoundaryClosureTests passed\n";

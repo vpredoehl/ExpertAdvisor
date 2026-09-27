@@ -10,17 +10,16 @@
 #include <ctime>
 #include <deque>
 #include <iomanip>
+#include <list>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
-#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
-#include <unordered_set>
-#endif
 
 namespace EA::TG3
 {
@@ -205,7 +204,8 @@ struct SynchronizationWork
     // Test-only accounting for O(1) ActiveObservationCount calls.
     std::size_t activeObservationCountCalls = 0;
     std::size_t activeObservationCountObservationsExamined = 0;
-    // Every retained TG3 record reached by SynchronizeOutcomes' outer loop.
+    // Every retained TG3 record reached by SynchronizeOutcomes' pending-only
+    // outer loop. This remains directly comparable with the former full scan.
     std::size_t retainedObservationsExamined = 0;
     // A visited record skipped immediately because all three synchronized
     // outcomes were terminal at the start of this call.
@@ -229,9 +229,12 @@ struct SynchronizationWork
     // terminal during this synchronization call.
     std::size_t activeToTerminalTransitions = 0;
     std::size_t behaviorObservationsAvailable = 0;
-    // observations_ is not structurally modified by SynchronizeOutcomes, so
-    // this is exactly the maximum retained observations examined in one call.
+    // Maximum retained history available to a synchronization call. This is
+    // context, not necessarily the number visited by the pending-only loop.
     std::size_t maxRetainedObservations = 0;
+    // Maximum records actually reached by SynchronizeOutcomes' pending-only
+    // loop in one call.
+    std::size_t maxSynchronizationObservationsExamined = 0;
     // Maximum pending observations encountered in one call.
     std::size_t maxPendingObservations = 0;
     std::size_t maxBehaviorObservations = 0;
@@ -387,7 +390,12 @@ public:
         ClassifyConfluence(observation);
         observations_.push_back(std::move(observation));
         if (ObservationActive(observations_.back()))
+        {
             ++activeObservationCount_;
+            AddPendingObservation(observations_.back().breakEventSequence,
+                                  ObservationPositionForIndex(
+                                      observations_.size() - 1));
+        }
         lastBreakEventSequence_ = event.eventSequence;
         return event.eventSequence;
     }
@@ -408,28 +416,17 @@ public:
             behaviorObservations.size());
         std::size_t pendingThisCall = 0;
 #endif
-        for (ConfluenceObservation& observation : observations_)
+        for (auto pending = pendingObservations_.begin();
+             pending != pendingObservations_.end();)
         {
+            const auto current = pending++;
+            ConfluenceObservation& observation = observations_[
+                ObservationIndexForPosition(current->observationPosition)];
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
             ++synchronizationWork_.retainedObservationsExamined;
 #endif
-            // TG2 mutates only pending outcomes. Once all three snapshots are
-            // terminal, later bars and TG2 record eviction cannot alter this
-            // observation, so a historical lookup is redundant.
-            if (!IsPending(observation.retest) &&
-                !IsPending(observation.outerTarget) &&
-                !IsPending(observation.outerTargetAfterRetest))
-            {
-#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
-                ++synchronizationWork_.terminalObservationsSkipped;
-                if (!synchronizedObservationSequences_.insert(
-                        observation.breakEventSequence).second)
-                    ++synchronizationWork_.terminalObservationsRevisited;
-#endif
-                continue;
-            }
-
             const bool wasActive = ObservationActive(observation);
+            assert(wasActive);
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
             const TG2::ResolutionState retestState = observation.retest.state;
             const TG2::ResolutionState outerTargetState =
@@ -495,6 +492,7 @@ public:
 #endif
                 assert(activeObservationCount_ != 0);
                 --activeObservationCount_;
+                RemovePendingObservation(current);
             }
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
             if (observation.retest.state != retestState ||
@@ -502,11 +500,12 @@ public:
                 observation.outerTargetAfterRetest.state !=
                     outerTargetAfterRetestState)
                 ++synchronizationWork_.observationsStateChanged;
-            synchronizedObservationSequences_.insert(
-                observation.breakEventSequence);
 #endif
         }
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+        synchronizationWork_.maxSynchronizationObservationsExamined = std::max(
+            synchronizationWork_.maxSynchronizationObservationsExamined,
+            pendingThisCall);
         synchronizationWork_.maxPendingObservations = std::max(
             synchronizationWork_.maxPendingObservations, pendingThisCall);
 #endif
@@ -534,6 +533,47 @@ public:
     const SynchronizationWork& OutcomeSynchronizationWork() const
     {
         return synchronizationWork_;
+    }
+
+    bool PendingSynchronizationMembershipMatchesObservationsForTesting() const
+    {
+        if (pendingObservations_.size() != pendingObservationsBySequence_.size())
+            return false;
+        std::size_t previousPosition = 0;
+        bool first = true;
+        for (const PendingObservation& pending : pendingObservations_)
+        {
+            if (pending.observationPosition < observationPositionBase_ ||
+                pending.observationPosition >=
+                    observationPositionBase_ + observations_.size() ||
+                (!first && pending.observationPosition <= previousPosition))
+                return false;
+            const ConfluenceObservation& observation = observations_[
+                ObservationIndexForPosition(pending.observationPosition)];
+            const auto found = pendingObservationsBySequence_.find(
+                pending.breakEventSequence);
+            if (found == pendingObservationsBySequence_.end() ||
+                found->second == pendingObservations_.end() ||
+                found->second->breakEventSequence !=
+                    observation.breakEventSequence ||
+                !ObservationActive(observation))
+                return false;
+            previousPosition = pending.observationPosition;
+            first = false;
+        }
+        for (std::size_t index = 0; index < observations_.size(); ++index)
+        {
+            const ConfluenceObservation& observation = observations_[index];
+            const bool represented = pendingObservationsBySequence_.contains(
+                observation.breakEventSequence);
+            if (represented != ObservationActive(observation)) return false;
+        }
+        return true;
+    }
+
+    std::size_t PendingSynchronizationObservationCountForTesting() const
+    {
+        return pendingObservations_.size();
     }
 #endif
 
@@ -745,6 +785,18 @@ private:
     std::vector<TG1A::ConfirmedFractal> lowFractals_;
     std::vector<ABStructure> abStructures_;
     std::deque<ConfluenceObservation> observations_;
+    struct PendingObservation
+    {
+        std::uint64_t breakEventSequence = 0;
+        // Logical deque position. observationPositionBase_ advances on front
+        // removal, preserving O(1) position resolution for the common case.
+        std::size_t observationPosition = 0;
+    };
+    std::list<PendingObservation> pendingObservations_;
+    std::unordered_map<std::uint64_t,
+                       std::list<PendingObservation>::iterator>
+        pendingObservationsBySequence_;
+    std::size_t observationPositionBase_ = 0;
     std::size_t activeObservationCount_ = 0;
     Summary archivedSummary_;
     std::optional<std::size_t> lastBar_;
@@ -755,7 +807,6 @@ private:
     std::size_t abAgeExpirations_ = 0;
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
     mutable SynchronizationWork synchronizationWork_;
-    std::unordered_set<std::uint64_t> synchronizedObservationSequences_;
 #endif
 
     using ABKey = std::tuple<std::size_t, std::size_t, int,
@@ -1019,6 +1070,75 @@ private:
             IsPending(observation.outerTargetAfterRetest);
     }
 
+    std::size_t ObservationPositionForIndex(std::size_t index) const
+    {
+        assert(index < observations_.size());
+        return observationPositionBase_ + index;
+    }
+
+    std::size_t ObservationIndexForPosition(std::size_t position) const
+    {
+        assert(position >= observationPositionBase_);
+        const std::size_t index = position - observationPositionBase_;
+        assert(index < observations_.size());
+        return index;
+    }
+
+    void AddPendingObservation(std::uint64_t eventSequence,
+                               std::size_t observationPosition)
+    {
+        assert(!pendingObservationsBySequence_.contains(eventSequence));
+        pendingObservations_.push_back({eventSequence, observationPosition});
+        const auto inserted = pendingObservationsBySequence_.emplace(
+            eventSequence, std::prev(pendingObservations_.end()));
+        assert(inserted.second);
+    }
+
+    void RemovePendingObservation(
+        std::list<PendingObservation>::iterator pending)
+    {
+        const auto found = pendingObservationsBySequence_.find(
+            pending->breakEventSequence);
+        assert(found != pendingObservationsBySequence_.end());
+        assert(found->second == pending);
+        pendingObservationsBySequence_.erase(found);
+        pendingObservations_.erase(pending);
+    }
+
+    void RemovePendingObservation(std::uint64_t eventSequence)
+    {
+        const auto found = pendingObservationsBySequence_.find(eventSequence);
+        assert(found != pendingObservationsBySequence_.end());
+        RemovePendingObservation(found->second);
+    }
+
+    void AdjustPendingPositionsAfterInteriorErase(
+        std::size_t erasedPosition)
+    {
+        for (PendingObservation& pending : pendingObservations_)
+            if (pending.observationPosition > erasedPosition)
+                --pending.observationPosition;
+    }
+
+    void EraseObservationAt(std::size_t index)
+    {
+        assert(index < observations_.size());
+        const std::size_t erasedPosition = ObservationPositionForIndex(index);
+        observations_.erase(observations_.begin() +
+                            static_cast<std::ptrdiff_t>(index));
+        if (index == 0)
+            ++observationPositionBase_;
+        else
+            AdjustPendingPositionsAfterInteriorErase(erasedPosition);
+    }
+
+    void PopFrontObservation()
+    {
+        assert(!observations_.empty());
+        observations_.pop_front();
+        ++observationPositionBase_;
+    }
+
     void ArchiveAndErase(std::size_t index,
                          std::size_t bar,
                          std::int64_t timestamp)
@@ -1037,9 +1157,9 @@ private:
         {
             assert(activeObservationCount_ != 0);
             --activeObservationCount_;
+            RemovePendingObservation(observation.breakEventSequence);
         }
-        observations_.erase(observations_.begin() +
-                            static_cast<std::ptrdiff_t>(index));
+        EraseObservationAt(index);
     }
 
     void EnsureObservationCapacity(std::size_t bar, std::int64_t timestamp)
@@ -1073,8 +1193,9 @@ private:
             {
                 assert(activeObservationCount_ != 0);
                 --activeObservationCount_;
+                RemovePendingObservation(observation.breakEventSequence);
             }
-            observations_.pop_front();
+            PopFrontObservation();
         }
     }
 

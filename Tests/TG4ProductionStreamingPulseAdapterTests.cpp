@@ -116,6 +116,10 @@ void TestProductionReplayAndCausalInvariants()
            synchronization.observationsStateChanged);
     assert(synchronization.terminalObservationsRevisited <=
            synchronization.terminalObservationsSkipped);
+    assert(synchronization.retainedObservationsExamined ==
+           synchronization.pendingObservationsVisited);
+    assert(synchronization.maxSynchronizationObservationsExamined ==
+           synchronization.maxPendingObservations);
     std::cout << "TG3_PRODUCTION_REPLAY_SYNC calls=" << synchronization.calls
               << ",retained_examined="
               << synchronization.retainedObservationsExamined
@@ -137,6 +141,8 @@ void TestProductionReplayAndCausalInvariants()
               << synchronization.behaviorObservationsAvailable
               << ",max_retained="
               << synchronization.maxRetainedObservations
+              << ",max_scanned="
+              << synchronization.maxSynchronizationObservationsExamined
               << ",max_pending=" << synchronization.maxPendingObservations
               << ",max_behavior="
               << synchronization.maxBehaviorObservations << '\n';
