@@ -200,6 +200,26 @@ bool Pending(const EA::TG2::OutcomeResolution& outcome)
     return outcome.state == ResolutionState::Pending;
 }
 
+std::size_t AuthoritativeActiveObservationCount(
+    const std::deque<ConfluenceObservation>& observations)
+{
+    return static_cast<std::size_t>(std::count_if(
+        observations.begin(), observations.end(),
+        [](const ConfluenceObservation& observation)
+        {
+            return Pending(observation.retest) ||
+                Pending(observation.outerTarget) ||
+                Pending(observation.outerTargetAfterRetest);
+        }));
+}
+
+void AssertActiveObservationCountMatches(
+    const EA::TG3::FibonacciConfluenceTracker& tracker)
+{
+    assert(tracker.ActiveObservationCount() ==
+           AuthoritativeActiveObservationCount(tracker.Observations()));
+}
+
 void ReferenceCensor(EA::TG2::OutcomeResolution& outcome,
                      std::size_t currentBar, std::int64_t currentTimestamp,
                      std::size_t breakBar)
@@ -346,6 +366,98 @@ void TestOutcomeSynchronizationDoesNotRescanTerminalHistory()
     assert(formerComparisons == 1'052'672);
 }
 
+void TestActiveObservationCountBookkeepingAndO1Access()
+{
+    EA::TG3::Configuration configuration = FibonacciConfiguration();
+    configuration.maxActiveConfluenceObservations = 4;
+    configuration.maxRetainedConfluenceObservations = 4;
+    EA::TG3::FibonacciConfluenceTracker tracker(configuration);
+    std::deque<BreakObservation> behavior;
+
+    tracker.Advance(1, Timestamp(1));
+    BreakObservation first = InnerBreak(1, 1);
+    behavior.push_back(first);
+    assert(tracker.ObserveInnerBreak(first).has_value());
+    assert(tracker.ActiveObservationCount() == 1);
+    AssertActiveObservationCountMatches(tracker);
+
+    tracker.Advance(2, Timestamp(2));
+    behavior.front().retest.state = ResolutionState::Succeeded;
+    behavior.front().retest.resolutionBar = 2;
+    behavior.front().retest.resolutionTimestamp = Timestamp(2);
+    behavior.front().retest.latencyBars = 1;
+    tracker.SynchronizeOutcomes(behavior, 2, Timestamp(2));
+    assert(tracker.ActiveObservationCount() == 0);
+    AssertActiveObservationCountMatches(tracker);
+
+    // Re-synchronizing an already terminal snapshot must not decrement again.
+    tracker.Advance(3, Timestamp(3));
+    tracker.SynchronizeOutcomes(behavior, 3, Timestamp(3));
+    assert(tracker.ActiveObservationCount() == 0);
+    AssertActiveObservationCountMatches(tracker);
+
+    // Active-capacity archival censors and removes the oldest active record.
+    EA::TG3::Configuration activeBounded = FibonacciConfiguration();
+    activeBounded.maxActiveConfluenceObservations = 1;
+    activeBounded.maxRetainedConfluenceObservations = 4;
+    EA::TG3::FibonacciConfluenceTracker activeTracker(activeBounded);
+    activeTracker.Advance(1, Timestamp(1));
+    assert(activeTracker.ObserveInnerBreak(InnerBreak(1, 1)).has_value());
+    assert(activeTracker.ActiveObservationCount() == 1);
+    activeTracker.Advance(2, Timestamp(2));
+    assert(activeTracker.ObserveInnerBreak(InnerBreak(2, 2)).has_value());
+    assert(activeTracker.Observations().size() == 1);
+    assert(activeTracker.Observations().front().breakEventSequence == 2);
+    assert(activeTracker.ActiveObservationCount() == 1);
+    assert(activeTracker.AggregateSummary().capacityEvictedObservations == 1);
+    AssertActiveObservationCountMatches(activeTracker);
+
+    // Retained-capacity archival follows the same active-count transition.
+    EA::TG3::Configuration retainedBounded = FibonacciConfiguration();
+    retainedBounded.maxActiveConfluenceObservations = 3;
+    retainedBounded.maxRetainedConfluenceObservations = 1;
+    EA::TG3::FibonacciConfluenceTracker retainedTracker(retainedBounded);
+    retainedTracker.Advance(1, Timestamp(1));
+    assert(retainedTracker.ObserveInnerBreak(InnerBreak(1, 1)).has_value());
+    assert(retainedTracker.ActiveObservationCount() == 1);
+    retainedTracker.Advance(2, Timestamp(2));
+    assert(retainedTracker.ObserveInnerBreak(InnerBreak(2, 2)).has_value());
+    assert(retainedTracker.Observations().size() == 1);
+    assert(retainedTracker.Observations().front().breakEventSequence == 2);
+    assert(retainedTracker.ActiveObservationCount() == 1);
+    assert(retainedTracker.AggregateSummary().capacityEvictedObservations == 1);
+    AssertActiveObservationCountMatches(retainedTracker);
+
+    // A large retained terminal population makes any count scan observable in
+    // deterministic work accounting, without relying on elapsed time.
+    EA::TG3::Configuration terminalConfiguration = FibonacciConfiguration();
+    terminalConfiguration.maxActiveConfluenceObservations = 64;
+    terminalConfiguration.maxRetainedConfluenceObservations = 64;
+    EA::TG3::FibonacciConfluenceTracker terminalTracker(terminalConfiguration);
+    for (std::size_t index = 0; index < 64; ++index)
+    {
+        const std::size_t bar = index + 1;
+        terminalTracker.Advance(bar, Timestamp(bar));
+        BreakObservation terminal = InnerBreak(index + 1, bar);
+        terminal.retest.state = ResolutionState::Succeeded;
+        terminal.retest.resolutionBar = bar;
+        terminal.retest.resolutionTimestamp = Timestamp(bar);
+        terminal.retest.latencyBars = 0;
+        assert(terminalTracker.ObserveInnerBreak(terminal).has_value());
+    }
+    AssertActiveObservationCountMatches(terminalTracker);
+    const auto before = terminalTracker.OutcomeSynchronizationWork();
+    assert(terminalTracker.ActiveObservationCount() == 0);
+    const auto after = terminalTracker.OutcomeSynchronizationWork();
+    assert(after.activeObservationCountCalls ==
+           before.activeObservationCountCalls + 1);
+    assert(after.activeObservationCountObservationsExamined ==
+           before.activeObservationCountObservationsExamined);
+    assert(after.activeObservationCountObservationsExamined == 0);
+    assert(terminalTracker.Observations().size() == 64);
+    AssertActiveObservationCountMatches(terminalTracker);
+}
+
 void TestOutcomeSynchronizationUsesLogarithmicPendingLookup()
 {
     constexpr std::size_t observationCount = 256;
@@ -449,6 +561,7 @@ int main()
     TestOutcomeSynchronizationMatchesFullRescanAndCensoring();
     TestOutcomeSynchronizationDoesNotRescanTerminalHistory();
     TestOutcomeSynchronizationUsesLogarithmicPendingLookup();
+    TestActiveObservationCountBookkeepingAndO1Access();
     std::cout << "TG4CausalBoundaryClosureTests passed\n";
     return 0;
 }

@@ -198,6 +198,8 @@ struct Summary
 struct SynchronizationWork
 {
     std::size_t calls = 0;
+    std::size_t activeObservationCountCalls = 0;
+    std::size_t activeObservationCountObservationsExamined = 0;
     std::size_t retainedObservationsExamined = 0;
     std::size_t pendingObservationsVisited = 0;
     std::size_t behaviorObservationsCompared = 0;
@@ -356,6 +358,8 @@ public:
 
         ClassifyConfluence(observation);
         observations_.push_back(std::move(observation));
+        if (ObservationActive(observations_.back()))
+            ++activeObservationCount_;
         lastBreakEventSequence_ = event.eventSequence;
         return event.eventSequence;
     }
@@ -388,6 +392,8 @@ public:
                 !IsPending(observation.outerTarget) &&
                 !IsPending(observation.outerTargetAfterRetest))
                 continue;
+
+            const bool wasActive = ObservationActive(observation);
 
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
             ++synchronizationWork_.pendingObservationsVisited;
@@ -441,6 +447,11 @@ public:
                 CensorPending(observation.outerTargetAfterRetest, currentBar,
                               currentTimestamp, observation.innerBreakBar);
             }
+            if (wasActive && !ObservationActive(observation))
+            {
+                assert(activeObservationCount_ != 0);
+                --activeObservationCount_;
+            }
         }
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
         synchronizationWork_.maxPendingObservations = std::max(
@@ -475,14 +486,10 @@ public:
 
     std::size_t ActiveObservationCount() const
     {
-        return static_cast<std::size_t>(std::count_if(
-            observations_.begin(), observations_.end(),
-            [](const ConfluenceObservation& observation)
-            {
-                return IsPending(observation.retest) ||
-                    IsPending(observation.outerTarget) ||
-                    IsPending(observation.outerTargetAfterRetest);
-            }));
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+        ++synchronizationWork_.activeObservationCountCalls;
+#endif
+        return activeObservationCount_;
     }
 
     Summary AggregateSummary() const
@@ -685,6 +692,7 @@ private:
     std::vector<TG1A::ConfirmedFractal> lowFractals_;
     std::vector<ABStructure> abStructures_;
     std::deque<ConfluenceObservation> observations_;
+    std::size_t activeObservationCount_ = 0;
     Summary archivedSummary_;
     std::optional<std::size_t> lastBar_;
     std::optional<std::int64_t> lastTimestamp_;
@@ -693,7 +701,7 @@ private:
     std::size_t abCapacityEvictions_ = 0;
     std::size_t abAgeExpirations_ = 0;
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
-    SynchronizationWork synchronizationWork_;
+    mutable SynchronizationWork synchronizationWork_;
 #endif
 
     using ABKey = std::tuple<std::size_t, std::size_t, int,
@@ -962,6 +970,7 @@ private:
                          std::int64_t timestamp)
     {
         ConfluenceObservation& observation = observations_[index];
+        const bool wasActive = ObservationActive(observation);
         CensorPending(observation.retest, bar, timestamp,
                       observation.innerBreakBar);
         CensorPending(observation.outerTarget, bar, timestamp,
@@ -970,6 +979,11 @@ private:
                       observation.innerBreakBar);
         Accumulate(archivedSummary_, observation);
         ++archivedSummary_.capacityEvictedObservations;
+        if (wasActive)
+        {
+            assert(activeObservationCount_ != 0);
+            --activeObservationCount_;
+        }
         observations_.erase(observations_.begin() +
                             static_cast<std::ptrdiff_t>(index));
     }
@@ -991,6 +1005,7 @@ private:
                configuration_.maxRetainedConfluenceObservations)
         {
             ConfluenceObservation& observation = observations_.front();
+            const bool wasActive = ObservationActive(observation);
             CensorPending(observation.retest, bar, timestamp,
                           observation.innerBreakBar);
             CensorPending(observation.outerTarget, bar, timestamp,
@@ -1000,6 +1015,11 @@ private:
                           observation.innerBreakBar);
             Accumulate(archivedSummary_, observation);
             ++archivedSummary_.capacityEvictedObservations;
+            if (wasActive)
+            {
+                assert(activeObservationCount_ != 0);
+                --activeObservationCount_;
+            }
             observations_.pop_front();
         }
     }
