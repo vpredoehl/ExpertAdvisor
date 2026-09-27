@@ -256,12 +256,15 @@ struct Fixture
 
     void writeHistoricalTrainingRegistry(
         bool historicalSupportsFeatureAblation = false,
-        bool addQualifiedCandidate = false)
+        bool addQualifiedCandidate = false,
+        bool historicalAdvertisesOtherRoleCapabilities = false)
     {
         const std::string historicalCapabilities =
             historicalSupportsFeatureAblation
                 ? "[\"train\",\"train_feature_ablation_v1\"]"
-                : "[\"train\"]";
+                : (historicalAdvertisesOtherRoleCapabilities
+                       ? "[\"train\",\"infer\",\"analyze\"]"
+                       : "[\"train\"]");
         const fs::path historicalExecutable =
             artifact(8, kCommit6, kHash6) / "LSTM_Release";
         const fs::path currentExecutable =
@@ -395,6 +398,25 @@ std::string Failure(const std::function<void()>& operation)
     }
     assert(false && "operation should have failed closed");
     return {};
+}
+
+// Characterization only: this is deliberately not shared with the production
+// selector. It makes the unresolved alternative policy concrete: after a
+// TRAIN-role match, ignore capabilities belonging to the infer/analyze roles
+// when measuring excess.
+std::size_t TrainRoleScopedExcessForCharacterization(
+    const EA::Scheduler::SemanticWorkerCapabilities& capabilities,
+    const EA::Scheduler::SemanticWorkerCapabilities& required)
+{
+    EA::Scheduler::SemanticWorkerCapabilities baseline = required;
+    baseline.insert("train");
+    std::size_t result = 0;
+    for (const std::string& capability : capabilities)
+    {
+        if (capability == "infer" || capability == "analyze") continue;
+        if (!baseline.contains(capability)) ++result;
+    }
+    return result;
 }
 
 bool Contains(const std::string& value, const std::string& expected)
@@ -681,9 +703,9 @@ int main()
     AssertTrainingCommandAblationIdentity(
         combinedHistorical, combinedCurrent);
 
-    // V5 keeps two immutable layout-8 TRAIN candidates.  A control sees the
-    // narrower historical worker; an ablation experiment sees only the
-    // explicitly qualified candidate.
+    // Synthetic minimal-capability V5 fixture: a control sees the narrower
+    // historical worker; an ablation experiment sees only the explicitly
+    // qualified candidate. The production-faithful fixture follows below.
     Fixture dualCandidateTraining;
     dualCandidateTraining.writeHistoricalTrainingRegistry(false, true);
     const auto dualRegistry = EA::Scheduler::SemanticWorkerRegistry::Load({
@@ -706,6 +728,81 @@ int main()
     assert(trainCandidates != nullptr && trainCandidates->size() == 2U);
     assert(dualRegistry.find(8, EA::Scheduler::SemanticWorkerRole::Train) == nullptr);
     assert(!dualRegistry.selectInferenceWorker({{80}, {8}, true}).selected);
+
+    // This fixture matches the published layout-8 TRAIN candidates. The
+    // production selector counts the baseline's infer/analyze capabilities as
+    // excess for a TRAIN request, before it considers priority. Therefore the
+    // priority-1 ablation-capable artifact wins an ordinary no-mask control
+    // over the priority-0 baseline artifact.
+    Fixture publishedCapabilityDualCandidateTraining;
+    publishedCapabilityDualCandidateTraining.writeHistoricalTrainingRegistry(
+        false, true, true);
+    const auto publishedCapabilityDualRegistry =
+        EA::Scheduler::SemanticWorkerRegistry::Load({
+            (publishedCapabilityDualCandidateTraining.root / "registry.json").string(),
+            std::nullopt, 9, 103});
+    const auto publishedCapabilityControl =
+        EA::Scheduler::SelectTrainingWorker(
+            {{80}, {8}, true}, publishedCapabilityDualRegistry);
+    const auto publishedCapabilityAblation =
+        EA::Scheduler::SelectTrainingWorker(
+            {{80}, {8}, true}, publishedCapabilityDualRegistry,
+            ablationRequired);
+    const fs::path publishedCapabilityBaseline = fs::canonical(
+        publishedCapabilityDualCandidateTraining.artifact(8, kCommit6, kHash6) /
+        "LSTM_Release");
+    const fs::path publishedCapabilityAblationWorker = fs::canonical(
+        publishedCapabilityDualCandidateTraining.artifact(8, kCommit7, kHash7) /
+        "LSTM_Release");
+    const auto* publishedBaselineArtifact =
+        publishedCapabilityDualRegistry.findByCanonicalExecutable(
+            publishedCapabilityBaseline.string());
+    const auto* publishedAblationArtifact =
+        publishedCapabilityDualRegistry.findByCanonicalExecutable(
+            publishedCapabilityAblationWorker.string());
+    assert(publishedBaselineArtifact != nullptr);
+    assert(publishedAblationArtifact != nullptr);
+    assert((publishedBaselineArtifact->capabilities ==
+            EA::Scheduler::SemanticWorkerCapabilities{
+                "train", "infer", "analyze"}));
+    assert(!publishedBaselineArtifact->capabilities.contains(
+        EA::Scheduler::kTrainFeatureAblationCapability));
+    assert(publishedBaselineArtifact->selectionPriority == 0);
+    assert((publishedAblationArtifact->capabilities ==
+            EA::Scheduler::SemanticWorkerCapabilities{
+                "train", EA::Scheduler::kTrainFeatureAblationCapability}));
+    assert(publishedAblationArtifact->selectionPriority == 1);
+    assert(publishedCapabilityControl.selected);
+    assert(publishedCapabilityControl.canonicalExecutablePath ==
+           publishedCapabilityAblationWorker);
+    assert(publishedCapabilityAblation.selected);
+    assert(publishedCapabilityAblation.canonicalExecutablePath ==
+           publishedCapabilityAblationWorker);
+
+    // The production-faithful baseline alone cannot satisfy a nonempty
+    // feature-ablation request: absence of the capability fails closed.
+    Fixture publishedCapabilityBaselineOnly;
+    publishedCapabilityBaselineOnly.writeHistoricalTrainingRegistry(
+        false, false, true);
+    const auto publishedCapabilityBaselineOnlyRegistry =
+        EA::Scheduler::SemanticWorkerRegistry::Load({
+            (publishedCapabilityBaselineOnly.root / "registry.json").string(),
+            std::nullopt, 9, 103});
+    const auto baselineOnlyAblation = EA::Scheduler::SelectTrainingWorker(
+        {{80}, {8}, true}, publishedCapabilityBaselineOnlyRegistry,
+        ablationRequired);
+    assert(!baselineOnlyAblation.selected);
+    assert(Contains(baselineOnlyAblation.diagnostic,
+                    "semantic_worker_capability_incompatible:layout=8:role=train:required=train_feature_ablation_v1"));
+
+    // Characterization/design evidence only. A hypothetical role-scoped
+    // TRAIN excess policy would ignore infer/analyze and consequently prefer
+    // the baseline for an ordinary control. The production selector above
+    // deliberately does not use this calculation.
+    assert(TrainRoleScopedExcessForCharacterization(
+               publishedBaselineArtifact->capabilities, {}) == 0U);
+    assert(TrainRoleScopedExcessForCharacterization(
+               publishedAblationArtifact->capabilities, {}) == 1U);
 
     Fixture reorderedDualCandidateTraining;
     reorderedDualCandidateTraining.writeHistoricalTrainingRegistry(false, true);
@@ -747,6 +844,8 @@ int main()
     Fixture::replaceText(tiedPriority.root / "registry.json",
                          "\"selection_priority\":1",
                          "\"selection_priority\":0");
+    // A priority tie is rejected at registry load, preserving V5's fail-closed
+    // ambiguity behavior rather than permitting registry-entry-order routing.
     assert(Contains(Failure([&] { (void)EA::Scheduler::SemanticWorkerRegistry::Load({
         (tiedPriority.root / "registry.json").string(), std::nullopt, 9, 103}); }),
                     "semantic_worker_registry_duplicate_selection_priority"));

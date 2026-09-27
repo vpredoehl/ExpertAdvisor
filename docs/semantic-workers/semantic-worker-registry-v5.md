@@ -11,6 +11,12 @@ matching, required-capability filtering, and minimal capability-superset
 filtering. Publication appends historical TRAIN candidates with a greater
 priority than every existing candidate in that exact group.
 
+Minimal capability-superset filtering counts every advertised capability not
+required by the request plus its selected role capability. For example, during
+a `train` selection, advertised `infer` and `analyze` capabilities count as
+excess before `selection_priority` is considered. This is the current V5
+behavior; the registry does not apply a role-scoped excess calculation.
+
 Capabilities remain immutable manifest properties and must exactly agree with
 the registry entry. `selection_priority` is registry routing policy and is not
 written into an artifact manifest.
