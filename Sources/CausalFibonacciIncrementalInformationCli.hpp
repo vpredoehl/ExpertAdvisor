@@ -39,7 +39,8 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
     const std::string_view command(argv[1]);
     if (command != "--fibonacci-incremental-information-verify-artifact" &&
         command != "--fibonacci-incremental-information-extract" &&
-        command != "--fibonacci-incremental-information-analyze-pre2025")
+        command != "--fibonacci-incremental-information-analyze-pre2025" &&
+        command != "--fibonacci-incremental-information-diagnose-pre2025-multinomial")
         return std::nullopt;
     try {
         VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");
@@ -47,6 +48,12 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
             if (argc != 3) throw std::invalid_argument("usage: --fibonacci-incremental-information-verify-artifact ARTIFACT_DIRECTORY");
             VerifyArtifactDirectory(std::filesystem::path(argv[2]));
             std::cout << "FIBONACCI_INCREMENTAL_ARTIFACT_VERIFIED protocol=" << kProtocolId << '\n';
+            return 0;
+        }
+        if (command == "--fibonacci-incremental-information-diagnose-pre2025-multinomial") {
+            if (argc != 4 || std::string_view(argv[2]) != "--artifact-dir")
+                throw std::invalid_argument("usage: --fibonacci-incremental-information-diagnose-pre2025-multinomial --artifact-dir ARTIFACT_DIRECTORY");
+            Analysis::RunAudcadH4BaselineMultinomialDiagnostic(std::filesystem::path(argv[3]), std::cerr);
             return 0;
         }
         if (command == "--fibonacci-incremental-information-analyze-pre2025") {

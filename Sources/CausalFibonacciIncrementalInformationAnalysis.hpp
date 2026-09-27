@@ -213,7 +213,7 @@ inline ReconstructionMetrics EvaluateBinaryRows(const BinaryRowsModel& model,con
     ReconstructionMetrics result;if(!model.available){result.unavailableReason=model.unavailableReason;return result;}if(selected.empty()){result.unavailableReason="empty_holdout";return result;}double loss=0,brier=0;for(auto index:selected){const auto& row=rows[index];double z=model.beta[0];for(std::size_t j=0;j<features.size();++j)z+=model.beta[j+1]*InputValue(row,features[j]);const double p=std::clamp(StableSigmoid(z),1e-15,1.0-1e-15);const int y=row.fibonacci[0]>=.5f;loss-=y?std::log(p):std::log(1-p);const double d=p-y;brier+=d*d;}result.available=true;result.logLoss=loss/selected.size();result.brier=brier/selected.size();return result;
 }
 
-struct MultiRowsModel { bool available=false;std::string unavailableReason;std::size_t featureCount=0;std::vector<double> parameters; };
+struct MultiRowsModel { bool available=false;std::string unavailableReason;std::size_t featureCount=0;std::vector<double> parameters;std::optional<LbfgsResult> optimizer; };
 inline std::array<double,3> MultiProbability(const MultiRowsModel& model,const ParsedRow& row,const std::vector<FeatureRef>& features)
 {
     std::array<double,3> z{};double maximum=-std::numeric_limits<double>::infinity();for(std::size_t c=0;c<3;++c){z[c]=model.parameters[c*(features.size()+1)];for(std::size_t j=0;j<features.size();++j)z[c]+=model.parameters[c*(features.size()+1)+j+1]*InputValue(row,features[j]);maximum=std::max(maximum,z[c]);}double sum=0;for(auto&v:z){v=std::exp(v-maximum);sum+=v;}for(auto&v:z)v/=sum;return z;
@@ -223,7 +223,7 @@ inline MultiRowsModel FitMultiRows(const std::vector<ParsedRow>& rows,const std:
 {
     MultiRowsModel result;if(selected.empty()){result.unavailableReason="no_development_target_rows";return result;}std::array<bool,3> present{};for(auto i:selected){const int y=label(rows[i]).assignedClass;if(y<0||y>2){result.unavailableReason="invalid_directional_target";return result;}present[y]=true;}if(!present[0]||!present[1]||!present[2]){result.unavailableReason="development_missing_directional_class";return result;}const std::size_t p=features.size();
     const auto optimized=OptimizeLbfgs(std::vector<double>(3*(p+1)),[&](const std::vector<double>& b){double loss=0;std::vector<double> g(b.size());for(auto index:selected){const auto& row=rows[index];const int y=label(row).assignedClass;std::array<double,3> z{};double maximum=-std::numeric_limits<double>::infinity();for(std::size_t c=0;c<3;++c){z[c]=b[c*(p+1)];for(std::size_t j=0;j<p;++j)z[c]+=b[c*(p+1)+j+1]*InputValue(row,features[j]);maximum=std::max(maximum,z[c]);}double sum=0;for(auto&v:z){v=std::exp(v-maximum);sum+=v;}for(auto&v:z)v/=sum;loss-=std::log(std::max(z[y],1e-300));for(std::size_t c=0;c<3;++c){const double e=z[c]-(y==static_cast<int>(c));g[c*(p+1)]+=e;for(std::size_t j=0;j<p;++j)g[c*(p+1)+j+1]+=e*InputValue(row,features[j]);}}for(std::size_t c=0;c<3;++c)for(std::size_t j=1;j<=p;++j){const std::size_t n=c*(p+1)+j;loss+=b[n]*b[n];g[n]+=2*b[n];}return std::pair{loss,g};});
-    if(!optimized.converged){result.unavailableReason="multinomial_lbfgs_not_converged";return result;}result.available=true;result.featureCount=p;result.parameters=optimized.parameters;return result;
+    result.optimizer=optimized;if(!optimized.converged){result.unavailableReason="multinomial_lbfgs_not_converged";return result;}result.available=true;result.featureCount=p;result.parameters=optimized.parameters;return result;
 }
 
 struct MultiRowsMetrics { bool available=false;std::string unavailableReason;double logLoss=std::numeric_limits<double>::quiet_NaN(),brier=std::numeric_limits<double>::quiet_NaN(),accuracy=std::numeric_limits<double>::quiet_NaN();std::vector<double> rowLoss,rowBrier; };
@@ -235,6 +235,36 @@ inline MultiRowsMetrics EvaluateMultiRows(const MultiRowsModel& model,const std:
 
 inline std::string Csv(std::string_view value) { if(value.find_first_of(",\"\r\n")==std::string_view::npos)return std::string(value);std::string out="\"";for(char c:value)out+=c=='\"'?"\"\"":std::string(1,c);return out+"\""; }
 inline std::string Number(double value) { if(!std::isfinite(value))return "";std::ostringstream out;out<<std::setprecision(17)<<value;return out.str(); }
+
+inline bool IsFibonacciCountColumn(std::size_t fibonacciColumn) noexcept
+{
+    return (fibonacciColumn >= 1 && fibonacciColumn <= 4) ||
+           (fibonacciColumn >= 12 && fibonacciColumn <= 15);
+}
+inline double FibonacciTargetVariance(const std::vector<ParsedRow>& rows, Partition partition, std::size_t fibonacciColumn)
+{
+    double sum = 0.0; std::size_t count = 0;
+    for (const auto& row : rows) if (row.partition == partition) { sum += row.fibonacci[fibonacciColumn]; ++count; }
+    if (count == 0) return std::numeric_limits<double>::quiet_NaN();
+    const double mean = sum / count; double variance = 0.0;
+    for (const auto& row : rows) if (row.partition == partition) { const double difference = row.fibonacci[fibonacciColumn] - mean; variance += difference * difference; }
+    return variance / count;
+}
+inline std::string ReconstructionUnavailableReason(const BinaryRowsModel& model, std::size_t selected)
+{
+    if (!model.available) return model.unavailableReason;
+    return selected == 0 ? "empty_holdout" : "";
+}
+inline std::string ReconstructionUnavailableReason(const RidgeModel& model, std::size_t selected, double targetVariance)
+{
+    if (!model.available) return model.unavailableReason;
+    if (selected == 0) return "empty_holdout";
+    return targetVariance == 0.0 ? "zero_variance_holdout_target" : "";
+}
+inline void WriteCoverageDegeneracyRows(std::ofstream& out,const std::string& symbol,const std::vector<ParsedRow>& rows,const BinaryRowsModel& binary,const std::array<RidgeModel,kFibonacciWidth-1>& ridgeModels)
+{
+    for(const Partition partition:{Partition::Development,Partition::Validation,Partition::Pre2025LockTest})for(std::size_t f=0;f<kFibonacciWidth;++f){std::size_t rowsInPartition=0,scaleValid=0,finite=0,nonzero=0;for(const auto&row:rows)if(row.partition==partition){++rowsInPartition;scaleValid+=row.fibonacci[0]>.5f;finite+=std::isfinite(row.fibonacci[f]);nonzero+=row.fibonacci[f]!=0.0f;}const bool scaleValidity=f==0;const bool countColumn=IsFibonacciCountColumn(f);const double targetVariance=f==0?std::numeric_limits<double>::quiet_NaN():FibonacciTargetVariance(rows,partition,f);const std::string reason=f==0?ReconstructionUnavailableReason(binary,rowsInPartition):ReconstructionUnavailableReason(ridgeModels[f-1],rowsInPartition,targetVariance);out<<symbol<<','<<PartitionName(partition)<<','<<f<<','<<(scaleValidity?std::to_string(scaleValid):"")<<','<<(scaleValidity?std::to_string(rowsInPartition):"")<<','<<(scaleValidity?Number(rowsInPartition?static_cast<double>(scaleValid)/rowsInPartition:std::numeric_limits<double>::quiet_NaN()):"")<<','<<(countColumn?std::to_string(nonzero):"")<<','<<(countColumn?std::to_string(rowsInPartition):"")<<','<<(countColumn?Number(rowsInPartition?static_cast<double>(nonzero)/rowsInPartition:std::numeric_limits<double>::quiet_NaN()):"")<<','<<finite<<','<<rowsInPartition<<','<<Number(targetVariance)<<','<<Csv(reason)<<'\n';}
+}
 
 struct StateAccumulator { std::size_t rows=0;std::array<std::size_t,3> classes{};std::vector<double> returns;void Add(const ParsedTarget& target){if(!target.eligible)return;++rows;++classes[target.assignedClass];returns.push_back(target.terminalReturn);} };
 inline void WriteStructuralRows(std::ofstream& out,const std::string& symbol,const std::vector<ParsedRow>& rows)
@@ -252,10 +282,30 @@ inline std::size_t FrozenBinIndex(const std::vector<double>& edges, double value
         : static_cast<std::size_t>(it - edges.begin());
 }
 
+inline std::vector<double> FrozenDevelopmentBinEdges(const std::vector<ParsedRow>& rows, std::size_t fibonacciColumn, bool h6)
+{
+    if (fibonacciColumn == 0) return {0.0, 1.0};
+    std::vector<double> values;
+    for (const auto& row : rows) {
+        const auto& target = h6 ? row.h6 : row.h4;
+        if (row.partition == Partition::Development && target.eligible)
+            values.push_back(row.fibonacci[fibonacciColumn]);
+    }
+    std::sort(values.begin(), values.end());
+    std::vector<double> edges;
+    for (std::size_t q = 1; q <= 5 && !values.empty(); ++q)
+        edges.push_back(values[(q * values.size() + 4) / 5 - 1]);
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    if (edges.size() < 2) edges.clear();
+    return edges;
+}
+
 inline void WriteFibonacciLedgers(std::ofstream& out,const std::string& symbol,const std::vector<ParsedRow>& rows)
 {
-    for(std::size_t f=0;f<kFibonacciWidth;++f){std::vector<double> edges;if(f==0)edges={0.0,1.0};else{std::vector<double> values;for(const auto&r:rows)if(r.partition==Partition::Development)values.push_back(r.fibonacci[f]);std::sort(values.begin(),values.end());for(std::size_t q=1;q<=5&&!values.empty();++q)edges.push_back(values[(q*values.size()+4)/5-1]);edges.erase(std::unique(edges.begin(),edges.end()),edges.end());if(edges.size()<2)edges.clear();}
-        for(const Partition partition:{Partition::Development,Partition::Validation,Partition::Pre2025LockTest})for(const bool h6:{false,true}){if(edges.empty()){out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<",,0,0,0,0,,,insufficient_distinct_development_values_after_tied_edge_collapse\n";continue;}std::vector<StateAccumulator> bins(edges.size());for(const auto&r:rows)if(r.partition==partition){const auto&t=h6?r.h6:r.h4;if(!t.eligible)continue;const double value=r.fibonacci[f];const auto bin=FrozenBinIndex(edges,value);bins[bin].Add(t);}for(std::size_t b=0;b<bins.size();++b){const auto&v=bins[b];double mean=0;for(double x:v.returns)mean+=x;if(!v.returns.empty())mean/=v.returns.size();out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<','<<b<<','<<Number(edges[b])<<','<<v.rows<<','<<v.classes[0]<<','<<v.classes[1]<<','<<v.classes[2]<<','<<Number(mean)<<','<<Number(Median(v.returns))<<",\n";}}
+    for(std::size_t f=0;f<kFibonacciWidth;++f){
+        const auto h4Edges=FrozenDevelopmentBinEdges(rows,f,false);
+        const auto h6Edges=FrozenDevelopmentBinEdges(rows,f,true);
+        for(const Partition partition:{Partition::Development,Partition::Validation,Partition::Pre2025LockTest})for(const bool h6:{false,true}){const auto& edges=h6?h6Edges:h4Edges;if(edges.empty()){out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<",,0,0,0,0,,,insufficient_distinct_development_values_after_tied_edge_collapse\n";continue;}std::vector<StateAccumulator> bins(edges.size());for(const auto&r:rows)if(r.partition==partition){const auto&t=h6?r.h6:r.h4;if(!t.eligible)continue;const double value=r.fibonacci[f];const auto bin=FrozenBinIndex(edges,value);bins[bin].Add(t);}for(std::size_t b=0;b<bins.size();++b){const auto&v=bins[b];double mean=0;for(double x:v.returns)mean+=x;if(!v.returns.empty())mean/=v.returns.size();out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<','<<b<<','<<Number(edges[b])<<','<<v.rows<<','<<v.classes[0]<<','<<v.classes[1]<<','<<v.classes[2]<<','<<Number(mean)<<','<<Number(Median(v.returns))<<",\n";}}
     }
 }
 
@@ -269,19 +319,35 @@ inline void WriteEqualSymbolSummary(std::ofstream& out,const std::vector<Conditi
 inline std::vector<MonthlyDelta> Monthly(const std::vector<ParsedRow>& rows,const std::vector<std::size_t>& selected,const std::vector<double>& deltas)
 {std::vector<std::int64_t> timestamps;timestamps.reserve(selected.size());for(auto i:selected)timestamps.push_back(rows[i].timestamp);return MonthlyDependenceAwareDeltas(timestamps,deltas);}
 
+inline void WriteLbfgsDiagnostic(std::ostream& out,const LbfgsResult& diagnostic)
+{
+    out<<"termination_reason="<<LbfgsTerminationReasonName(diagnostic.terminationReason)<<",iterations="<<diagnostic.iterations<<",initial_objective="<<Number(diagnostic.initialObjective)<<",final_objective="<<Number(diagnostic.finalObjective)<<",final_gradient_infinity_norm="<<Number(diagnostic.finalGradientInfinityNorm)<<",final_relative_objective_change="<<Number(diagnostic.finalRelativeObjectiveChange)<<",final_accepted_step_size="<<Number(diagnostic.finalAcceptedStepSize)<<",terminating_line_search_attempts="<<diagnostic.terminatingLineSearchAttempts;
+}
+
+inline void RunAudcadH4BaselineMultinomialDiagnostic(const std::filesystem::path& artifactDirectory,std::ostream& out)
+{
+    if(artifactDirectory.empty())throw std::invalid_argument("fibonacci_pre2025_diagnostic_required_artifact_directory");
+    VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");VerifyArtifactDirectory(artifactDirectory);
+    const auto grouped=LoadPre2025Rows(artifactDirectory);const auto& rows=grouped.at("audcadrmp");const auto transform=FitDevelopmentInputTransform(rows);const auto development=EligibleRows(rows,Partition::Development,[](const auto& row)->const ParsedTarget&{return row.h4;});const auto model=FitMultiRows(rows,development,transform.baseline,[](const auto& row)->const ParsedTarget&{return row.h4;});
+    out<<"FIBONACCI_INCREMENTAL_MULTINOMIAL_DIAGNOSTIC symbol=audcadrmp,horizon=H4,feature_set=baseline,development_rows="<<development.size()<<",model_available="<<model.available<<",model_unavailable_reason="<<model.unavailableReason;
+    if(model.optimizer){out<<',';WriteLbfgsDiagnostic(out,*model.optimizer);}else out<<",termination_reason=optimizer_not_run";
+    out<<",confirmation_2025=sealed\n";
+}
+
 inline void Run(const Options& options)
 {
     if(options.artifactDirectory.empty()||options.outputDirectory.empty()||options.codeCommit.empty())throw std::invalid_argument("fibonacci_pre2025_analysis_required_argument_missing");
     VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md"); VerifyArtifactDirectory(options.artifactDirectory);
     if(std::filesystem::exists(options.outputDirectory))throw std::invalid_argument("fibonacci_pre2025_analysis_refuses_existing_output_directory");std::filesystem::create_directories(options.outputDirectory);
-    std::ofstream structural(options.outputDirectory/"structural_ledgers.csv"), fibonacciLedger(options.outputDirectory/"fibonacci_ledgers.csv"), reconstruction(options.outputDirectory/"reconstruction.csv"), conditional(options.outputDirectory/"conditional_incremental.csv"), monthly(options.outputDirectory/"monthly_deltas.csv"), association(options.outputDirectory/"associations.csv"), crossSymbol(options.outputDirectory/"cross_symbol_equal_summary.csv");
-    if(!structural||!fibonacciLedger||!reconstruction||!conditional||!monthly||!association||!crossSymbol)throw std::runtime_error("fibonacci_pre2025_result_open_failed");
+    std::ofstream structural(options.outputDirectory/"structural_ledgers.csv"), fibonacciLedger(options.outputDirectory/"fibonacci_ledgers.csv"), reconstruction(options.outputDirectory/"reconstruction.csv"), conditional(options.outputDirectory/"conditional_incremental.csv"), monthly(options.outputDirectory/"monthly_deltas.csv"), association(options.outputDirectory/"associations.csv"), coverageDegeneracy(options.outputDirectory/"coverage_degeneracy.csv"), crossSymbol(options.outputDirectory/"cross_symbol_equal_summary.csv");
+    if(!structural||!fibonacciLedger||!reconstruction||!conditional||!monthly||!association||!coverageDegeneracy||!crossSymbol)throw std::runtime_error("fibonacci_pre2025_result_open_failed");
     structural<<"symbol,partition,horizon,structural_state,rows,down,neutral,up,mean_terminal_log_return,median_terminal_log_return\n";
     fibonacciLedger<<"symbol,partition,horizon,fibonacci_column,bin,upper_edge,rows,down,neutral,up,mean_terminal_log_return,median_terminal_log_return,unavailable_reason\n";
     reconstruction<<"symbol,partition,fibonacci_column,diagnostic,available,unavailable_reason,rmse,r_squared,log_loss,brier\n";
     conditional<<"symbol,partition,horizon,subset,rows,baseline_log_loss,augmented_log_loss,delta_log_loss,baseline_brier,augmented_brier,delta_brier,baseline_accuracy,augmented_accuracy,delta_accuracy,available,unavailable_reason\n";
     monthly<<"symbol,partition,horizon,metric,calendar_month,rows,mean_delta,median_delta,p10_delta,p90_delta\n";
     association<<"symbol,partition,fibonacci_column,baseline_column,association_type,value,nearest_baseline_proxy\n";
+    coverageDegeneracy<<"symbol,partition,fibonacci_column,scale_valid_numerator,scale_valid_denominator,scale_valid_prevalence,nonzero_count_numerator,nonzero_count_denominator,nonzero_count_prevalence,finite_value_count,finite_value_denominator,target_variance,reconstruction_unavailable_reason\n";
     std::vector<ConditionalRecord> conditionalRecords;
     StreamPre2025Symbols(options.artifactDirectory,[&](const std::string& symbol,const std::vector<ParsedRow>& rows){
         std::cerr << "FIBONACCI_PRE2025_SYMBOL_START symbol=" << symbol << ",rows=" << rows.size() << '\n';
@@ -291,6 +357,7 @@ inline void Run(const Options& options)
         std::array<RidgeModel,kFibonacciWidth-1> ridgeModels{};
         for(std::size_t f=1;f<kFibonacciWidth;++f)ridgeModels[f-1]=FitRidge(rows,dev,transform.baseline,f);
         std::cerr << "FIBONACCI_PRE2025_RECONSTRUCTION_RIDGE_COMPLETE symbol=" << symbol << '\n';
+        WriteCoverageDegeneracyRows(coverageDegeneracy,symbol,rows,binary,ridgeModels);
         for(const Partition partition:{Partition::Development,Partition::Validation,Partition::Pre2025LockTest}){
             std::vector<std::size_t> selected;for(std::size_t i=0;i<rows.size();++i)if(rows[i].partition==partition)selected.push_back(i);
             const auto binaryMetric=EvaluateBinaryRows(binary,rows,selected,transform.baseline);reconstruction<<symbol<<','<<PartitionName(partition)<<",0,scale_validity_logistic,"<<binaryMetric.available<<','<<Csv(binaryMetric.unavailableReason)<<",,,"<<Number(binaryMetric.logLoss)<<','<<Number(binaryMetric.brier)<<'\n';
@@ -307,8 +374,8 @@ inline void Run(const Options& options)
             for(const Partition partition:{Partition::Development,Partition::Validation,Partition::Pre2025LockTest}){const auto selected=EligibleRows(rows,partition,label);const auto bm=EvaluateMultiRows(base,rows,selected,transform.baseline,label);const auto am=EvaluateMultiRows(augmented,rows,selected,transform.augmented,label);const bool available=bm.available&&am.available&&bm.rowLoss.size()==am.rowLoss.size();const std::string reason=available?"":(!bm.available?bm.unavailableReason:am.unavailableReason);double dl=std::numeric_limits<double>::quiet_NaN(),db=dl,da=dl;if(available){dl=bm.logLoss-am.logLoss;db=bm.brier-am.brier;da=bm.accuracy-am.accuracy;}conditional<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<",all,"<<selected.size()<<','<<Number(bm.logLoss)<<','<<Number(am.logLoss)<<','<<Number(dl)<<','<<Number(bm.brier)<<','<<Number(am.brier)<<','<<Number(db)<<','<<Number(bm.accuracy)<<','<<Number(am.accuracy)<<','<<Number(da)<<','<<available<<','<<Csv(reason)<<'\n';conditionalRecords.push_back({symbol,partition,h6,dl,db,available});const auto eventSelected=[&](){std::vector<std::size_t> r;for(auto i:selected)if(EventState(rows[i]))r.push_back(i);return r;}();const auto eb=EvaluateMultiRows(base,rows,eventSelected,transform.baseline,label);const auto ea=EvaluateMultiRows(augmented,rows,eventSelected,transform.augmented,label);const bool eventAvailable=eb.available&&ea.available&&eb.rowLoss.size()==ea.rowLoss.size();conditional<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<",event_state,"<<eventSelected.size()<<','<<Number(eb.logLoss)<<','<<Number(ea.logLoss)<<','<<Number(eventAvailable?eb.logLoss-ea.logLoss:std::numeric_limits<double>::quiet_NaN())<<','<<Number(eb.brier)<<','<<Number(ea.brier)<<','<<Number(eventAvailable?eb.brier-ea.brier:std::numeric_limits<double>::quiet_NaN())<<','<<Number(eb.accuracy)<<','<<Number(ea.accuracy)<<','<<Number(eventAvailable?eb.accuracy-ea.accuracy:std::numeric_limits<double>::quiet_NaN())<<','<<eventAvailable<<','<<Csv(eventAvailable?"":(!eb.available?eb.unavailableReason:ea.unavailableReason))<<'\n';if(available&&(partition==Partition::Validation||partition==Partition::Pre2025LockTest)){std::vector<double> loss,brier;loss.reserve(bm.rowLoss.size());brier.reserve(bm.rowBrier.size());for(std::size_t i=0;i<bm.rowLoss.size();++i){loss.push_back(bm.rowLoss[i]-am.rowLoss[i]);brier.push_back(bm.rowBrier[i]-am.rowBrier[i]);}for(const auto&[metric,values]:std::array<std::pair<const char*,std::vector<double>>,2>{{{"log_loss",loss},{"brier",brier}}})for(const auto&block:Monthly(rows,selected,values))monthly<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<metric<<','<<block.calendarMonth<<','<<block.rows<<','<<Number(block.mean)<<','<<Number(block.median)<<','<<Number(block.p10)<<','<<Number(block.p90)<<'\n';}}}
         std::cerr << "FIBONACCI_PRE2025_SYMBOL_COMPLETE symbol=" << symbol << '\n';
     });
-    WriteEqualSymbolSummary(crossSymbol,conditionalRecords);structural.close();fibonacciLedger.close();reconstruction.close();conditional.close();monthly.close();association.close();crossSymbol.close();
+    WriteEqualSymbolSummary(crossSymbol,conditionalRecords);structural.close();fibonacciLedger.close();reconstruction.close();conditional.close();monthly.close();association.close();coverageDegeneracy.close();crossSymbol.close();
     const auto manifestPath=options.outputDirectory/"manifest.json";std::ofstream manifest(manifestPath);manifest<<"{\n\"runner_identity\":\""<<kRunnerIdentity<<"\",\n\"protocol_id\":\""<<kProtocolId<<"\",\n\"protocol_sha256\":\""<<kProtocolSha256<<"\",\n\"input_manifest_sha256\":\""<<FileSha256(options.artifactDirectory/"manifest.json")<<"\",\n\"input_rows_sha256\":\""<<FileSha256(options.artifactDirectory/"rows.csv")<<"\",\n\"code_commit\":\""<<options.codeCommit<<"\",\n\"confirmation_2025\":\"sealed_and_discarded_before_parsing\",\n\"lambda\":1.0,\n\"lbfgs_max_iterations\":250,\n\"lbfgs_gradient_infinity_tolerance\":1e-8,\n\"lbfgs_relative_objective_tolerance\":1e-12\n}\n";manifest.close();
-    std::ofstream sums(options.outputDirectory/"sha256sums.txt");for(const char* name:{"structural_ledgers.csv","fibonacci_ledgers.csv","reconstruction.csv","conditional_incremental.csv","monthly_deltas.csv","associations.csv","cross_symbol_equal_summary.csv","manifest.json"})sums<<FileSha256(options.outputDirectory/name)<<"  "<<name<<'\n';
+    std::ofstream sums(options.outputDirectory/"sha256sums.txt");for(const char* name:{"structural_ledgers.csv","fibonacci_ledgers.csv","reconstruction.csv","conditional_incremental.csv","monthly_deltas.csv","associations.csv","coverage_degeneracy.csv","cross_symbol_equal_summary.csv","manifest.json"})sums<<FileSha256(options.outputDirectory/name)<<"  "<<name<<'\n';
 }
 } // namespace EA::CausalFibonacciIncrementalInformation::Analysis
