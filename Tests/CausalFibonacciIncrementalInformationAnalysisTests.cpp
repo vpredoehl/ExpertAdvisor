@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 namespace A = EA::CausalFibonacciIncrementalInformation::Analysis;
@@ -58,13 +59,16 @@ int main()
             [](const std::vector<double>& x) {
                 return std::pair<double, std::vector<double>>{
                     (x[0] - 3.0) * (x[0] - 3.0), {2.0 * (x[0] - 3.0)}};
-            }, {1, 1e-8, 1e-12});
+            }, {1, 1e-8, 1e-12, true});
         assert(!maximum.converged);
         assert(maximum.terminationReason == F::LbfgsTerminationReason::MaximumIterations);
         assert(maximum.iterations == 1);
         assert(maximum.finalObjective == 0.0 && maximum.finalGradientInfinityNorm == 0.0);
         assert(maximum.finalAcceptedStepSize == 0.5);
         assert(maximum.terminatingLineSearchAttempts == 2);
+        assert(maximum.trajectory.size() == 2);
+        assert(maximum.trajectory[0].iterations == 0 && maximum.trajectory[1].iterations == 1);
+        assert(maximum.trajectory[1].objective == 0.0 && maximum.trajectory[1].historySize == 1);
 
         const auto lineSearch = F::OptimizeLbfgs(std::vector<double>{0.0},
             [](const std::vector<double>& x) {
@@ -89,6 +93,74 @@ int main()
         assert(nonFinite.finalGradientInfinityNorm == 1.0);
         assert(!std::isfinite(nonFinite.finalAcceptedStepSize));
         assert(nonFinite.terminatingLineSearchAttempts > 0);
+    }
+
+    // The exact FitMultiRows objective has the expected three-class gradient,
+    // regularizes coefficients but not class intercepts, and is invariant to
+    // a common intercept shift.
+    {
+        std::vector<A::ParsedRow> rows(6);
+        const std::array<double, 6> values{{-2.0, -1.0, 0.5, 1.5, 2.0, 3.0}};
+        const std::array<int, 6> classes{{0, 1, 2, 0, 1, 2}};
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            rows[i].baseline[0] = static_cast<float>(values[i]);
+            rows[i].h4.assignedClass = classes[i];
+            rows[i].h4.eligible = true;
+        }
+        const std::vector<std::size_t> selected{0, 1, 2, 3, 4, 5};
+        const std::vector<A::FeatureRef> features{{false, 0, 0.0, 1.0, false}};
+        const auto label = [](const A::ParsedRow& row) -> const A::ParsedTarget& { return row.h4; };
+        const std::vector<double> beta{0.25, -0.4, -0.35, 0.3, 0.1, 0.2};
+        const auto evaluated = A::MultiRowsObjective(rows, selected, features, label, beta);
+
+        double maximumDiscrepancy = 0.0;
+        constexpr double epsilon = 1e-6;
+        for (std::size_t i = 0; i < beta.size(); ++i) {
+            auto plus = beta, minus = beta;
+            plus[i] += epsilon;
+            minus[i] -= epsilon;
+            const double finiteDifference =
+                (A::MultiRowsObjective(rows, selected, features, label, plus).first -
+                 A::MultiRowsObjective(rows, selected, features, label, minus).first) /
+                (2.0 * epsilon);
+            maximumDiscrepancy = std::max(maximumDiscrepancy, std::abs(finiteDifference - evaluated.second[i]));
+        }
+        assert(maximumDiscrepancy < 1e-6);
+        std::cout << "FitMultiRows finite-difference maximum discrepancy=" << maximumDiscrepancy << '\n';
+
+        double dataLoss = 0.0;
+        std::vector<double> dataGradient(beta.size());
+        for (const auto index : selected) {
+            std::array<double, 3> probability{};
+            double maximum = -std::numeric_limits<double>::infinity();
+            for (std::size_t c = 0; c < 3; ++c) {
+                probability[c] = beta[c * 2] + beta[c * 2 + 1] * values[index];
+                maximum = std::max(maximum, probability[c]);
+            }
+            double sum = 0.0;
+            for (auto& value : probability) { value = std::exp(value - maximum); sum += value; }
+            for (auto& value : probability) value /= sum;
+            dataLoss -= std::log(probability[classes[index]]);
+            for (std::size_t c = 0; c < 3; ++c) {
+                const double error = probability[c] - (classes[index] == static_cast<int>(c));
+                dataGradient[c * 2] += error;
+                dataGradient[c * 2 + 1] += error * values[index];
+            }
+        }
+        double expectedLoss = dataLoss;
+        for (std::size_t c = 0; c < 3; ++c) {
+            expectedLoss += beta[c * 2 + 1] * beta[c * 2 + 1];
+            dataGradient[c * 2 + 1] += 2.0 * beta[c * 2 + 1];
+        }
+        assert(std::abs(evaluated.first - expectedLoss) < 1e-12);
+        for (std::size_t i = 0; i < beta.size(); ++i)
+            assert(std::abs(evaluated.second[i] - dataGradient[i]) < 1e-12);
+        assert(std::abs(evaluated.second[0] + evaluated.second[2] + evaluated.second[4]) < 1e-12);
+
+        auto shifted = beta;
+        shifted[0] += 7.0; shifted[2] += 7.0; shifted[4] += 7.0;
+        const auto shiftedObjective = A::MultiRowsObjective(rows, selected, features, label, shifted);
+        assert(std::abs(shiftedObjective.first - evaluated.first) < 1e-12);
     }
 
     // Numeric Fibonacci bin edges use only eligible development targets for
@@ -200,6 +272,7 @@ int main()
     A::RunAudcadH4BaselineMultinomialDiagnostic(artifact, diagnostic);
     const std::string diagnosticContents = diagnostic.str();
     assert(diagnosticContents.find("symbol=audcadrmp,horizon=H4,feature_set=baseline") != std::string::npos);
+    assert(diagnosticContents.find("feature_count=") != std::string::npos);
     assert(diagnosticContents.find("termination_reason=") != std::string::npos);
     assert(diagnosticContents.find("iterations=") != std::string::npos);
     assert(diagnosticContents.find("initial_objective=") != std::string::npos);
@@ -208,6 +281,8 @@ int main()
     assert(diagnosticContents.find("final_relative_objective_change=") != std::string::npos);
     assert(diagnosticContents.find("final_accepted_step_size=") != std::string::npos);
     assert(diagnosticContents.find("terminating_line_search_attempts=") != std::string::npos);
+    assert(diagnosticContents.find("FIBONACCI_INCREMENTAL_MULTINOMIAL_CONDITIONING") != std::string::npos);
+    assert(diagnosticContents.find("FIBONACCI_INCREMENTAL_MULTINOMIAL_TRAJECTORY symbol=audcadrmp,horizon=H4,feature_set=baseline,iterations=0,") != std::string::npos);
     assert(diagnosticContents.find("confirmation_2025=sealed") != std::string::npos);
     A::Run({artifact, output, "fixture-analysis"});
     std::ifstream conditional(output / "conditional_incremental.csv");
