@@ -192,6 +192,18 @@ void ExpectParseFailure(std::string_view text)
     }
 }
 
+void ExpectFamilyParseFailure(std::string_view text)
+{
+    try
+    {
+        (void)Replication::ParseExperimentIdPairFamilies(text);
+        assert(false);
+    }
+    catch (const std::invalid_argument&)
+    {
+    }
+}
+
 Replication::Result CompatibleTwoPairResult(unsigned int secondSeed = 43)
 {
     auto a1 = Arm(101, "", 42, 0.60, 0.10);
@@ -215,6 +227,16 @@ int main()
              "0:2,3:4", "-1:2,3:4", "1:1,3:4", "1:2,1:2",
              "1:2,2:3", "1:2,3:1", "1:2,3:3"})
         ExpectParseFailure(malformed);
+
+    const std::vector<std::vector<std::pair<long long, long long>>>
+        parsedFamilies {{{101, 102}, {103, 104}}, {{105, 106}, {107, 108}}};
+    assert(Replication::ParseExperimentIdPairFamilies(
+               "101:102,103:104;105:106,107:108") == parsedFamilies);
+    for (std::string_view malformed : {
+             "", "101:102,103:104", ";101:102,103:104",
+             "101:102,103:104;", "101:102;103:104,105:106",
+             "101:102,103:104;103:104,105:106"})
+        ExpectFamilyParseFailure(malformed);
 
     // Complete compatible replications preserve pair order, arm order, B-A,
     // and the declared different-seed dimension.
@@ -374,6 +396,51 @@ int main()
     assert(rendered.find("pair_deltas=0.09999999999999998|-0.050000000000000044") !=
            std::string::npos);
 
+    // Two symbol families are intentionally evaluated side by side. The
+    // family report never constructs a cross-symbol aggregate, and an
+    // execution-provenance mismatch in one family does not erase the other
+    // family's valid descriptive evidence.
+    auto cadA1 = Arm(301, "", 43, 0.60, 0.10);
+    auto cadB1 = Arm(302, std::string{kMask}, 43, 0.70, 0.20);
+    auto cadA2 = Arm(303, "", 44, 0.65, 0.30);
+    auto cadB2 = Arm(304, std::string{kMask}, 44, 0.60, 0.20);
+    for (auto* arm : {&cadA1, &cadB1, &cadA2, &cadB2})
+    {
+        arm->authoritative.configuration.symbol = "cadchfrmp";
+        arm->authoritative.configuration.persistedTrainingSymbol = "cadchfrmp";
+        arm->authoritative.classification->symbol = "cadchfrmp";
+    }
+    auto audA1 = Arm(305, "", 43, 0.60, 0.10);
+    auto audB1 = Arm(306, std::string{kMask}, 43, 0.70, 0.20);
+    auto audA2 = Arm(307, "", 44, 0.65, 0.30);
+    auto audB2 = Arm(308, std::string{kMask}, 44, 0.60, 0.20);
+    audB1.authoritative.trainingExecution->executableSha256 =
+        "different_train_sha256";
+    const auto familyReport = Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(audA1, audB1), PairResult(audA2, audB2)}});
+    assert(familyReport.families.size() == 2);
+    assert(familyReport.distinctHomogeneousSymbolCount == 2);
+    assert(familyReport.families[0].homogeneousSymbol == "cadchfrmp");
+    assert(familyReport.families[0].replication.compatibility ==
+           Replication::Compatibility::Compatible);
+    assert(familyReport.families[1].homogeneousSymbol == "audchfrmp");
+    assert(familyReport.families[1].replication.compatibility ==
+           Replication::Compatibility::Incompatible);
+    assert(!familyReport.families[0].replication.metrics.empty());
+    assert(familyReport.families[1].replication.metrics.empty());
+    const std::string familyRendered =
+        Replication::RenderFamilyReport(familyReport);
+    assert(familyRendered == Replication::RenderFamilyReport(familyReport));
+    assert(familyRendered.find("cross_family_aggregation=not_performed") !=
+           std::string::npos);
+    assert(familyRendered.find("raw_pair_pooling=false") != std::string::npos);
+    assert(familyRendered.find("symbol=cadchfrmp") != std::string::npos);
+    assert(familyRendered.find("symbol=audchfrmp") != std::string::npos);
+    assert(familyRendered.find("heterogeneity=preserved_by_separate_family_results") !=
+           std::string::npos);
+    assert(familyRendered.find("subjective_winner=NONE") != std::string::npos);
+
     FixtureSource source;
     source.evidence.emplace(101, Arm(101, "", 42, 0.60, 0.10));
     source.evidence.emplace(102, Arm(102, std::string{kMask}, 42, 0.70, 0.20));
@@ -387,6 +454,26 @@ int main()
     assert(source.loads == std::vector<long long>({101, 102, 103, 104}));
     assert(source.writes == 0);
     assert(output.str() == rendered);
+
+    FixtureSource familySource;
+    familySource.evidence.emplace(301, cadA1);
+    familySource.evidence.emplace(302, cadB1);
+    familySource.evidence.emplace(303, cadA2);
+    familySource.evidence.emplace(304, cadB2);
+    familySource.evidence.emplace(305, audA1);
+    familySource.evidence.emplace(306, audB1);
+    familySource.evidence.emplace(307, audA2);
+    familySource.evidence.emplace(308, audB2);
+    std::ostringstream familyOutput;
+    std::ostringstream familyErrors;
+    assert(Replication::RunFamilyComparisonCommand(
+               {{{{301, 302}, {303, 304}}, {{305, 306}, {307, 308}}}},
+               familySource, familyOutput, familyErrors) == 0);
+    assert(familyErrors.str().empty());
+    assert(familyOutput.str() == familyRendered);
+    assert(familySource.loads ==
+           std::vector<long long>({301, 302, 303, 304, 305, 306, 307, 308}));
+    assert(familySource.writes == 0);
 
     FixtureSource missingSource;
     missingSource.evidence = source.evidence;

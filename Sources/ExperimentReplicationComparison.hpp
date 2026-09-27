@@ -59,8 +59,27 @@ struct Result
     std::vector<MetricAggregate> metrics;
 };
 
+// Several replication families may be rendered together, but each family is
+// evaluated independently. This deliberately has no cross-family metric
+// aggregate: a caller must not pool symbol-specific paired runs as one
+// homogeneous population.
+struct FamilyResult
+{
+    Result replication;
+    std::optional<std::string> homogeneousSymbol;
+};
+
+struct FamilyReport
+{
+    std::vector<FamilyResult> families;
+    std::size_t distinctHomogeneousSymbolCount = 0;
+};
+
 Result Compare(std::vector<Pair::ComparisonResult> pairs);
+FamilyReport CompareFamilies(
+    std::vector<std::vector<Pair::ComparisonResult>> families);
 std::string Render(const Result& result);
+std::string RenderFamilyReport(const FamilyReport& report);
 std::string CompatibilityText(Compatibility value);
 std::string SeedReplicationModeText(SeedReplicationMode value);
 

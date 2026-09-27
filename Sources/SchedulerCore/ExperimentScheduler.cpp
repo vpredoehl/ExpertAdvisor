@@ -491,6 +491,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--compare-experiment-pair=", 0) == 0 ||
             arg == "--compare-experiment-replications" ||
             arg.rfind("--compare-experiment-replications=", 0) == 0 ||
+            arg == "--compare-experiment-replication-families" ||
+            arg.rfind("--compare-experiment-replication-families=", 0) == 0 ||
             arg == "--plan-experiment-replications" ||
             arg.rfind("--plan-experiment-replications=", 0) == 0 ||
             arg == "--materialize-experiment-replications" ||
@@ -1550,6 +1552,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--compare-experiment-replications")
             options.compareExperimentReplications =
                 EA::ExperimentReplicationComparison::ParseExperimentIdPairs(
+                    RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-experiment-replication-families")
+            options.compareExperimentReplicationFamilies =
+                EA::ExperimentReplicationComparison::ParseExperimentIdPairFamilies(
                     RequireNextArg(argc, argv, i, arg));
         else if (arg == "--plan-experiment-replications")
         {
@@ -3410,6 +3416,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 EA::ExperimentReplicationComparison::ParseExperimentIdPairs(
                     value);
         else if (SplitOptionWithValue(
+                     arg, "--compare-experiment-replication-families", value))
+            options.compareExperimentReplicationFamilies =
+                EA::ExperimentReplicationComparison::ParseExperimentIdPairFamilies(
+                    value);
+        else if (SplitOptionWithValue(
                      arg, "--plan-experiment-replications", value))
         {
             if (options.planExperimentReplications)
@@ -3791,6 +3802,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareFeatureAblationPair.has_value() ? 1 : 0) +
         (options.compareExperimentPair.has_value() ? 1 : 0) +
         (options.compareExperimentReplications.has_value() ? 1 : 0) +
+        (options.compareExperimentReplicationFamilies.has_value() ? 1 : 0) +
         (options.planExperimentReplications.has_value() ? 1 : 0) +
         (options.materializeExperimentReplications.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
@@ -13018,6 +13030,16 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "evidence remains NULL; no winner, ranking, recommendation, or "
         << "database write is produced.\n"
         << "Usage: " << exe
+        << " --compare-experiment-replication-families="
+           "A_ID:B_ID,C_ID:D_ID;E_ID:F_ID,G_ID:H_ID\n"
+        << "Composes two or more independently evaluated replication families "
+        << "in one repeatable-read transaction. Each family retains the exact "
+        << "existing pair and replication compatibility rules and is rendered "
+        << "separately with its homogeneous symbol when available. It never "
+        << "pools raw pair deltas or aggregates across families; disagreements "
+        << "and incomplete or incompatible family evidence remain explicit. "
+        << "No winner, ranking, recommendation, or database write is produced.\n"
+        << "Usage: " << exe
         << " --plan-experiment-replications=SOURCE_A_ID:SOURCE_B_ID "
            "--replication-seeds=SEED[,SEED...]\n"
         << "Plans an ordered, read-only replication wave by copying the exact "
@@ -14473,6 +14495,13 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             command.experimentPairs =
                 *options.compareExperimentReplications;
             return EA::ExperimentReplicationComparison::RunComparisonCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.compareExperimentReplicationFamilies)
+        {
+            EA::ExperimentReplicationComparison::FamilyComparisonCommand command;
+            command.families = *options.compareExperimentReplicationFamilies;
+            return EA::ExperimentReplicationComparison::RunFamilyComparisonCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.planExperimentReplications)

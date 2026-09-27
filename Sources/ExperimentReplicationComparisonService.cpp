@@ -45,6 +45,44 @@ void ValidatePairs(
     }
 }
 
+void ValidateFamilies(
+    const std::vector<std::vector<std::pair<long long, long long>>>& families)
+{
+    if (families.size() < 2)
+        throw std::invalid_argument(
+            "--compare-experiment-replication-families requires at least two ';'-separated families");
+    std::set<long long> experimentIds;
+    for (const auto& family : families)
+    {
+        ValidatePairs(family);
+        for (const auto& [armA, armB] : family)
+            if (!experimentIds.insert(armA).second ||
+                !experimentIds.insert(armB).second)
+                throw std::invalid_argument(
+                    "experiment-replication family IDs must be globally unique");
+    }
+}
+
+std::vector<ExperimentPairComparison::ComparisonResult> ComparePairs(
+    const std::vector<std::pair<long long, long long>>& pairs,
+    const ExperimentPairComparison::EvidenceSource& source)
+{
+    std::vector<ExperimentPairComparison::ComparisonResult> result;
+    result.reserve(pairs.size());
+    for (const auto& [armAId, armBId] : pairs)
+    {
+        const auto armAEvidence = source.Load(armAId);
+        const auto armBEvidence = source.Load(armBId);
+        const auto request = ExperimentPairComparison::MakeComparisonRequest(
+            armAEvidence, armBEvidence);
+        result.push_back(ExperimentPairComparison::Compare(
+            ExperimentPairComparison::MakeArmResultSet(armAEvidence),
+            ExperimentPairComparison::MakeArmResultSet(armBEvidence),
+            request));
+    }
+    return result;
+}
+
 } // namespace
 
 std::vector<std::pair<long long, long long>> ParseExperimentIdPairs(
@@ -73,6 +111,31 @@ std::vector<std::pair<long long, long long>> ParseExperimentIdPairs(
     return result;
 }
 
+std::vector<std::vector<std::pair<long long, long long>>>
+ParseExperimentIdPairFamilies(std::string_view text)
+{
+    if (text.empty())
+        throw std::invalid_argument(
+            "--compare-experiment-replication-families requires ';'-separated families");
+    std::vector<std::vector<std::pair<long long, long long>>> result;
+    std::size_t start = 0;
+    while (start <= text.size())
+    {
+        const std::size_t end = text.find(';', start);
+        const std::string_view token = text.substr(
+            start, end == std::string_view::npos
+                ? std::string_view::npos : end - start);
+        if (token.empty())
+            throw std::invalid_argument(
+                "experiment-replication family membership contains an empty family");
+        result.push_back(ParseExperimentIdPairs(token));
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    ValidateFamilies(result);
+    return result;
+}
+
 int RunComparisonCommand(
     const ComparisonCommand& command,
     const ExperimentPairComparison::EvidenceSource& source,
@@ -82,20 +145,7 @@ int RunComparisonCommand(
     try
     {
         ValidatePairs(command.experimentPairs);
-        std::vector<ExperimentPairComparison::ComparisonResult> pairs;
-        pairs.reserve(command.experimentPairs.size());
-        for (const auto& [armAId, armBId] : command.experimentPairs)
-        {
-            const auto armAEvidence = source.Load(armAId);
-            const auto armBEvidence = source.Load(armBId);
-            const auto request = ExperimentPairComparison::MakeComparisonRequest(
-                armAEvidence, armBEvidence);
-            pairs.push_back(ExperimentPairComparison::Compare(
-                ExperimentPairComparison::MakeArmResultSet(armAEvidence),
-                ExperimentPairComparison::MakeArmResultSet(armBEvidence),
-                request));
-        }
-        output << Render(Compare(std::move(pairs)));
+        output << Render(Compare(ComparePairs(command.experimentPairs, source)));
         return 0;
     }
     catch (const ExperimentPairComparison::EvidenceUnavailableError& error)
@@ -108,6 +158,39 @@ int RunComparisonCommand(
     catch (const std::invalid_argument& error)
     {
         errors << "EXPERIMENT_REPLICATION_COMPARISON_LOAD_FAILED"
+               << ",reason=" << MachineText(error.what())
+               << ",exit_code=3,read_only=true\n";
+        return 3;
+    }
+}
+
+int RunFamilyComparisonCommand(
+    const FamilyComparisonCommand& command,
+    const ExperimentPairComparison::EvidenceSource& source,
+    std::ostream& output,
+    std::ostream& errors)
+{
+    try
+    {
+        ValidateFamilies(command.families);
+        std::vector<std::vector<ExperimentPairComparison::ComparisonResult>>
+            families;
+        families.reserve(command.families.size());
+        for (const auto& family : command.families)
+            families.push_back(ComparePairs(family, source));
+        output << RenderFamilyReport(CompareFamilies(std::move(families)));
+        return 0;
+    }
+    catch (const ExperimentPairComparison::EvidenceUnavailableError& error)
+    {
+        errors << "EXPERIMENT_REPLICATION_FAMILY_REPORT_LOAD_FAILED"
+               << ",reason=" << MachineText(error.reason())
+               << ",exit_code=3,read_only=true\n";
+        return 3;
+    }
+    catch (const std::invalid_argument& error)
+    {
+        errors << "EXPERIMENT_REPLICATION_FAMILY_REPORT_LOAD_FAILED"
                << ",reason=" << MachineText(error.what())
                << ",exit_code=3,read_only=true\n";
         return 3;

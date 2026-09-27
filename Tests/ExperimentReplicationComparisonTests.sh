@@ -28,9 +28,14 @@ if rg -n '\b(pqxx::work|INSERT|UPDATE|DELETE|Persist)\b' "${command_source}"; th
 fi
 rg -q -- '--compare-experiment-replications=A_ID:B_ID,C_ID:D_ID' \
     "${scheduler_source}"
+rg -q -- '--compare-experiment-replication-families=' "${scheduler_source}"
 rg -q 'ExperimentReplicationComparison::ParseExperimentIdPairs' \
     "${scheduler_source}"
+rg -q 'ExperimentReplicationComparison::ParseExperimentIdPairFamilies' \
+    "${scheduler_source}"
 rg -q 'ExperimentReplicationComparison::RunComparisonCommand' \
+    "${scheduler_source}"
+rg -q 'ExperimentReplicationComparison::RunFamilyComparisonCommand' \
     "${scheduler_source}"
 
 printf '%s\n' 'Experiment replication comparison CLI contract tests passed'

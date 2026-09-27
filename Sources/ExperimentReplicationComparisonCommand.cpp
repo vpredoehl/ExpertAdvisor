@@ -52,4 +52,16 @@ int RunComparisonCommand(const std::string& connectionString,
     return RunComparisonCommand(command, source, output, errors);
 }
 
+int RunFamilyComparisonCommand(const std::string& connectionString,
+                               const FamilyComparisonCommand& command,
+                               std::ostream& output,
+                               std::ostream& errors)
+{
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    const PostgresEvidenceSource source{transaction};
+    return RunFamilyComparisonCommand(command, source, output, errors);
+}
+
 } // namespace EA::ExperimentReplicationComparison

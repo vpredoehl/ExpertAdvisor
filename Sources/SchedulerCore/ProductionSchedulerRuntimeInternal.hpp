@@ -135,6 +135,8 @@ struct SchedulerOptions
     bool compareExperimentPairSummary = false;
     std::optional<std::vector<std::pair<long long, long long>>>
         compareExperimentReplications;
+    std::optional<std::vector<std::vector<std::pair<long long, long long>>>>
+        compareExperimentReplicationFamilies;
     std::optional<std::pair<long long, long long>>
         planExperimentReplications;
     std::optional<std::pair<long long, long long>>

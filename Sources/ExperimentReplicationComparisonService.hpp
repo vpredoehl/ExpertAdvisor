@@ -17,8 +17,18 @@ struct ComparisonCommand
     std::vector<std::pair<long long, long long>> experimentPairs;
 };
 
+struct FamilyComparisonCommand
+{
+    // Families are separated by ';'; pairs within each family use the
+    // established A_ID:B_ID,C_ID:D_ID syntax. They remain independent
+    // reporting groups and are never pooled.
+    std::vector<std::vector<std::pair<long long, long long>>> families;
+};
+
 std::vector<std::pair<long long, long long>> ParseExperimentIdPairs(
     std::string_view text);
+std::vector<std::vector<std::pair<long long, long long>>>
+ParseExperimentIdPairFamilies(std::string_view text);
 
 // Fixture-friendly read-only service seam. A successful report is exit 0,
 // including incomplete, incompatible, and undetermined reports. Authoritative
@@ -29,11 +39,22 @@ int RunComparisonCommand(
     std::ostream& output,
     std::ostream& errors);
 
+int RunFamilyComparisonCommand(
+    const FamilyComparisonCommand& command,
+    const ExperimentPairComparison::EvidenceSource& source,
+    std::ostream& output,
+    std::ostream& errors);
+
 // PostgreSQL adapter used by the CLI. All members are loaded through the
 // existing authoritative selector inside one repeatable-read transaction.
 int RunComparisonCommand(const std::string& connectionString,
                          const ComparisonCommand& command,
-                         std::ostream& output,
-                         std::ostream& errors);
+    std::ostream& output,
+    std::ostream& errors);
+
+int RunFamilyComparisonCommand(const std::string& connectionString,
+                               const FamilyComparisonCommand& command,
+                               std::ostream& output,
+                               std::ostream& errors);
 
 } // namespace EA::ExperimentReplicationComparison

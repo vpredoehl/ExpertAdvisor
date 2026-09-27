@@ -245,6 +245,26 @@ std::optional<std::string> Seed(const IdentityMap& identity)
     return found->second;
 }
 
+std::optional<std::string> HomogeneousSymbol(const Result& result)
+{
+    std::optional<std::string> expected;
+    for (const Pair::ComparisonResult& pair : result.pairs)
+        for (const auto* identity : {&pair.armAScientificIdentity,
+                                     &pair.armBScientificIdentity})
+        {
+            const auto found = std::find_if(
+                identity->begin(), identity->end(),
+                [](const Pair::IdentityField& field)
+                {
+                    return field.name == "symbol";
+                });
+            if (found == identity->end() || !found->value) return std::nullopt;
+            if (!expected) expected = *found->value;
+            else if (*expected != *found->value) return std::nullopt;
+        }
+    return expected;
+}
+
 MetricAggregate AggregateMetric(
     const std::vector<Pair::ComparisonResult>& pairs,
     const Pair::MetricDefinition& definition)
@@ -374,6 +394,36 @@ Result Compare(std::vector<Pair::ComparisonResult> pairs)
     return result;
 }
 
+FamilyReport CompareFamilies(
+    std::vector<std::vector<Pair::ComparisonResult>> families)
+{
+    if (families.size() < 2)
+        throw std::invalid_argument(
+            "experiment replication family report requires at least two families");
+
+    FamilyReport report;
+    std::set<long long> experimentIds;
+    std::set<std::string> symbols;
+    report.families.reserve(families.size());
+    for (auto& family : families)
+    {
+        Result replication = Compare(std::move(family));
+        for (const Pair::ComparisonResult& pair : replication.pairs)
+            if (!experimentIds.insert(pair.experimentAId).second ||
+                !experimentIds.insert(pair.experimentBId).second)
+                throw std::invalid_argument(
+                    "replication family report experiment IDs must be globally unique");
+
+        FamilyResult result;
+        result.homogeneousSymbol = HomogeneousSymbol(replication);
+        if (result.homogeneousSymbol) symbols.insert(*result.homogeneousSymbol);
+        result.replication = std::move(replication);
+        report.families.push_back(std::move(result));
+    }
+    report.distinctHomogeneousSymbolCount = symbols.size();
+    return report;
+}
+
 std::string Render(const Result& result)
 {
     std::ostringstream output;
@@ -432,6 +482,44 @@ std::string Render(const Result& result)
                << ",reason=replication_compatibility_not_established\n";
     output << "EXPERIMENT_REPLICATION_RESULT"
            << ",compatibility=" << CompatibilityText(result.compatibility)
+           << ",subjective_winner=NONE"
+           << ",read_only=true\n";
+    return output.str();
+}
+
+std::string RenderFamilyReport(const FamilyReport& report)
+{
+    std::ostringstream output;
+    output << "EXPERIMENT_REPLICATION_FAMILY_REPORT"
+           << ",version=1"
+           << ",family_count=" << report.families.size()
+           << ",cross_family_aggregation=not_performed"
+           << ",raw_pair_pooling=false"
+           << ",statistical_independence=not_inferred"
+           << ",read_only=true\n";
+    for (std::size_t index = 0; index < report.families.size(); ++index)
+    {
+        const FamilyResult& family = report.families[index];
+        output << "EXPERIMENT_REPLICATION_FAMILY_BEGIN"
+               << ",ordinal=" << index + 1
+               << ",symbol="
+               << (family.homogeneousSymbol
+                       ? MachineText(*family.homogeneousSymbol)
+                       : "UNAVAILABLE_OR_MIXED")
+               << ",symbol_homogeneous="
+               << (family.homogeneousSymbol ? "true" : "false")
+               << ",pair_count=" << family.replication.pairs.size()
+               << '\n';
+        output << Render(family.replication);
+        output << "EXPERIMENT_REPLICATION_FAMILY_END"
+               << ",ordinal=" << index + 1 << '\n';
+    }
+    output << "EXPERIMENT_REPLICATION_FAMILY_CROSS_GROUP"
+           << ",family_count=" << report.families.size()
+           << ",distinct_homogeneous_symbol_count="
+           << report.distinctHomogeneousSymbolCount
+           << ",cross_family_aggregation=not_performed"
+           << ",heterogeneity=preserved_by_separate_family_results"
            << ",subjective_winner=NONE"
            << ",read_only=true\n";
     return output.str();
