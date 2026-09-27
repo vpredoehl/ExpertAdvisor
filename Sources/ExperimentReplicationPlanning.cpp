@@ -57,6 +57,17 @@ IdentityMap Identities(const Pair::ArmResultSet& arm,
 
 Pair::ArmResultSet ConfigurationOnly(Pair::ArmResultSet arm)
 {
+    // A producing executable identifies a completed execution.  It is not an
+    // experiment-construction input and is deliberately absent from a future
+    // replication: scheduler routing selects that worker later from the
+    // persisted configuration and the semantic-worker registry.  Preserve
+    // the full identity catalog for completed-result comparison, but remove
+    // execution evidence from this planning/materialization projection.
+    std::erase_if(arm.scientificIdentity, [](const Pair::IdentityField& field)
+    {
+        return field.name == "training_execution_identity" ||
+            field.name == "inference_execution_identity";
+    });
     arm.finalInferenceAvailable = false;
     arm.finalAnalysisAvailable = false;
     arm.profitabilityObservationAvailable = false;

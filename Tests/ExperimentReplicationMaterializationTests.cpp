@@ -201,6 +201,15 @@ int main()
            std::optional<std::string>{""});
     assert(Identity(inserter.specifications[1], "feature_ablation_mask").value ==
            std::optional<std::string>{std::string{kMask}});
+    for (const auto& specification : inserter.specifications)
+        assert(std::none_of(
+            specification.scientificIdentity.begin(),
+            specification.scientificIdentity.end(),
+            [](const Pair::IdentityField& field)
+            {
+                return field.name == "training_execution_identity" ||
+                    field.name == "inference_execution_identity";
+            }));
     assert(output.find("arm_a_experiment_id=1000,arm_b_experiment_id=1001") !=
            std::string::npos);
     assert(output.find("state=materialized,pair_count=1,experiment_count=2") !=

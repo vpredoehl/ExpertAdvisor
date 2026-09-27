@@ -205,6 +205,44 @@ int main()
 
     const auto sourceA = Arm(101, "", 42);
     const auto sourceB = Arm(102, std::string{kMask}, 42);
+
+    // Completed-result comparison retains producing-executable provenance.
+    // The controlled-replication projection must not mistake that completed
+    // execution evidence for a configured input that a future experiment can
+    // inherit.  This models a treatment-specific TRAIN worker selected for a
+    // nonempty feature-ablation mask.
+    auto capabilityCoupledWorkerB = sourceB;
+    capabilityCoupledWorkerB.authoritative.trainingExecution
+        ->executableSha256 = "treatment_train_sha256";
+    const auto completedComparison = Pair::Compare(
+        Pair::MakeArmResultSet(sourceA),
+        Pair::MakeArmResultSet(capabilityCoupledWorkerB),
+        Pair::MakeComparisonRequest(sourceA, capabilityCoupledWorkerB));
+    assert(completedComparison.unexpectedDifferences.size() == 1);
+    assert(completedComparison.unexpectedDifferences[0].field ==
+           "training_execution_identity");
+
+    const auto capabilityCoupledPlan = PlanFor(
+        sourceA, capabilityCoupledWorkerB, {44});
+    assert(capabilityCoupledPlan.state == Planning::PlanState::Valid);
+    for (const auto* arm : {&capabilityCoupledPlan.sourceArmA,
+                            &capabilityCoupledPlan.sourceArmB,
+                            static_cast<const Pair::ArmResultSet*>(
+                                &capabilityCoupledPlan.pairs[0].armA.proposed),
+                            static_cast<const Pair::ArmResultSet*>(
+                                &capabilityCoupledPlan.pairs[0].armB.proposed)})
+    {
+        assert(std::none_of(arm->scientificIdentity.begin(),
+                            arm->scientificIdentity.end(),
+                            [](const Pair::IdentityField& field)
+                            {
+                                return field.name ==
+                                           "training_execution_identity" ||
+                                    field.name ==
+                                           "inference_execution_identity";
+                            }));
+    }
+
     auto plan = PlanFor(sourceA, sourceB, {44, 45, 46});
     assert(plan.state == Planning::PlanState::Valid);
     assert(plan.requestedSeeds == std::vector<unsigned int>({44, 45, 46}));
