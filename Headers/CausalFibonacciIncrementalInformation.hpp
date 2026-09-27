@@ -306,6 +306,8 @@ struct LbfgsResult {
     double finalRelativeObjectiveChange = std::numeric_limits<double>::quiet_NaN();
     double finalAcceptedStepSize = std::numeric_limits<double>::quiet_NaN();
     std::size_t terminatingLineSearchAttempts = 0;
+    std::size_t finalHistorySize = 0;
+    double finalDirectionalDerivative = std::numeric_limits<double>::quiet_NaN();
     struct TrajectoryPoint {
         std::size_t iterations = 0;
         double objective = std::numeric_limits<double>::quiet_NaN();
@@ -331,7 +333,8 @@ inline double LbfgsInfinityNorm(const std::vector<double>& values)
 inline bool LbfgsTrajectoryCadence(std::size_t iterations) noexcept
 {
     switch (iterations) {
-        case 0: case 1: case 2: case 5: case 10: case 25: case 50: case 100: case 150: case 200: case 250: return true;
+        case 0: case 1: case 2: case 5: case 10: case 25: case 50: case 100: case 150: case 200: case 250:
+        case 300: case 400: case 500: case 750: case 1000: case 1500: case 2000: case 3000: case 4000: case 5000: return true;
         default: return false;
     }
 }
@@ -343,21 +346,23 @@ inline LbfgsResult OptimizeLbfgs(std::vector<double> parameters, Objective objec
     // caller-supplied initialization.  No random state or row reordering.
     constexpr std::size_t historyLimit = 8;
     std::vector<std::vector<double>> steps, gradients;
+    double lastDirectionalDerivative = std::numeric_limits<double>::quiet_NaN();
     auto dot=[](const auto& a,const auto& b){ double r=0; for(std::size_t i=0;i<a.size();++i) r+=a[i]*b[i]; return r; };
     auto [value, gradient] = objective(parameters);
     LbfgsResult result;
     result.initialObjective = value;
     const auto record = [&](std::size_t iterations, double currentValue, const std::vector<double>& currentGradient,
                             double relativeObjectiveChange, double acceptedStepSize, std::size_t lineSearchAttempts,
-                            std::size_t historySize, double directionalDerivative) {
-        if (!options.captureTrajectory || !LbfgsTrajectoryCadence(iterations)) return;
+                            std::size_t historySize, double directionalDerivative, bool force = false) {
+        if (!options.captureTrajectory || (!force && !LbfgsTrajectoryCadence(iterations))) return;
         LbfgsResult::TrajectoryPoint point{iterations,currentValue,LbfgsInfinityNorm(currentGradient),relativeObjectiveChange,acceptedStepSize,lineSearchAttempts,historySize,directionalDerivative};
         if (!result.trajectory.empty() && result.trajectory.back().iterations == iterations) result.trajectory.back() = point;
         else result.trajectory.push_back(point);
     };
     const auto finish = [&](std::vector<double> finalParameters, bool converged, LbfgsTerminationReason reason,
                             std::size_t iterations, double finalValue, const std::vector<double>& finalGradient,
-                            std::size_t terminatingLineSearchAttempts) {
+                            std::size_t terminatingLineSearchAttempts, std::size_t finalHistorySize,
+                            double finalDirectionalDerivative) {
         result.parameters = std::move(finalParameters);
         result.converged = converged;
         result.terminationReason = reason;
@@ -365,17 +370,24 @@ inline LbfgsResult OptimizeLbfgs(std::vector<double> parameters, Objective objec
         result.finalObjective = finalValue;
         result.finalGradientInfinityNorm = LbfgsInfinityNorm(finalGradient);
         result.terminatingLineSearchAttempts = terminatingLineSearchAttempts;
+        result.finalHistorySize = finalHistorySize;
+        result.finalDirectionalDerivative = finalDirectionalDerivative;
         return result;
     };
     record(0, value, gradient, result.finalRelativeObjectiveChange, result.finalAcceptedStepSize, 0, 0, std::numeric_limits<double>::quiet_NaN());
     if (!std::isfinite(value) || !LbfgsFinite(gradient))
         return finish(std::move(parameters), false, LbfgsTerminationReason::NonFiniteObjectiveOrGradient,
-                      0, value, gradient, 0);
+                      0, value, gradient, 0, 0, std::numeric_limits<double>::quiet_NaN());
     for (std::size_t iteration=0; iteration<options.maxIterations; ++iteration) {
         const double infinity = LbfgsInfinityNorm(gradient);
-        if (infinity <= options.gradientInfinityTolerance)
+        if (infinity <= options.gradientInfinityTolerance) {
+            record(iteration, value, gradient, result.finalRelativeObjectiveChange, result.finalAcceptedStepSize,
+                   result.terminatingLineSearchAttempts, steps.size(),
+                   lastDirectionalDerivative, true);
             return finish(std::move(parameters), true, LbfgsTerminationReason::GradientInfinityTolerance,
-                          iteration, value, gradient, 0);
+                          iteration, value, gradient, 0, steps.size(),
+                          lastDirectionalDerivative);
+        }
         std::vector<double> q=gradient, alpha(steps.size()), rho(steps.size());
         for(std::size_t n=steps.size(); n-- > 0;) { rho[n]=1.0/dot(gradients[n],steps[n]); alpha[n]=rho[n]*dot(steps[n],q); for(std::size_t i=0;i<q.size();++i) q[i]-=alpha[n]*gradients[n][i]; }
         double gamma=1.0; if(!steps.empty()) gamma=dot(steps.back(),gradients.back())/dot(gradients.back(),gradients.back());
@@ -383,13 +395,14 @@ inline LbfgsResult OptimizeLbfgs(std::vector<double> parameters, Objective objec
         for(std::size_t n=0;n<steps.size();++n) { const double beta=rho[n]*dot(gradients[n],q); for(std::size_t i=0;i<q.size();++i) q[i]+=steps[n][i]*(alpha[n]-beta); }
         for(double& x:q) x=-x;
         const double directional=dot(gradient,q);
+        lastDirectionalDerivative = directional;
         if (!LbfgsFinite(q) || !std::isfinite(directional))
             return finish(std::move(parameters), false, LbfgsTerminationReason::NonFiniteObjectiveOrGradient,
-                          iteration, value, gradient, 0);
+                          iteration, value, gradient, 0, steps.size(), directional);
         double rate=1.0; std::vector<double> candidate(parameters.size()), nextGradient; double nextValue=value;
         std::size_t lineSearchAttempts=0; bool nonFiniteCandidate=false;
         while(rate > 1e-12) { ++lineSearchAttempts; for(std::size_t i=0;i<parameters.size();++i) candidate[i]=parameters[i]+rate*q[i]; auto evaluated=objective(candidate); nextValue=evaluated.first; nextGradient=std::move(evaluated.second); if(!std::isfinite(nextValue)||!LbfgsFinite(nextGradient)){nonFiniteCandidate=true;rate*=.5;continue;}if(nextValue <= value + 1e-4*rate*directional) break; rate*=.5; }
-        if(rate <= 1e-12) { record(iteration, value, gradient, result.finalRelativeObjectiveChange, result.finalAcceptedStepSize, lineSearchAttempts, steps.size(), directional); return finish(std::move(parameters), false, nonFiniteCandidate ? LbfgsTerminationReason::NonFiniteObjectiveOrGradient : LbfgsTerminationReason::ArmijoLineSearchFailure, iteration, value, gradient, lineSearchAttempts); }
+        if(rate <= 1e-12) { record(iteration, value, gradient, result.finalRelativeObjectiveChange, result.finalAcceptedStepSize, lineSearchAttempts, steps.size(), directional, true); return finish(std::move(parameters), false, nonFiniteCandidate ? LbfgsTerminationReason::NonFiniteObjectiveOrGradient : LbfgsTerminationReason::ArmijoLineSearchFailure, iteration, value, gradient, lineSearchAttempts, steps.size(), directional); }
         std::vector<double> s(parameters.size()), y(parameters.size()); for(std::size_t i=0;i<parameters.size();++i){s[i]=candidate[i]-parameters[i];y[i]=nextGradient[i]-gradient[i];}
         if(dot(s,y)>1e-14){ if(steps.size()==historyLimit){steps.erase(steps.begin());gradients.erase(gradients.begin());} steps.push_back(std::move(s));gradients.push_back(std::move(y)); }
         const double relativeObjectiveChange=std::abs(value-nextValue)/std::max(1.0,std::abs(value));
@@ -397,11 +410,14 @@ inline LbfgsResult OptimizeLbfgs(std::vector<double> parameters, Objective objec
         result.finalAcceptedStepSize=rate;
         result.terminatingLineSearchAttempts=lineSearchAttempts;
         record(iteration+1, nextValue, nextGradient, relativeObjectiveChange, rate, lineSearchAttempts, steps.size(), directional);
-        if(std::abs(value-nextValue) <= options.relativeObjectiveTolerance*std::max(1.0,std::abs(value))) return finish(std::move(candidate), true, LbfgsTerminationReason::RelativeObjectiveTolerance, iteration+1, nextValue, nextGradient, lineSearchAttempts);
+        if(std::abs(value-nextValue) <= options.relativeObjectiveTolerance*std::max(1.0,std::abs(value))) { record(iteration+1, nextValue, nextGradient, relativeObjectiveChange, rate, lineSearchAttempts, steps.size(), directional, true); return finish(std::move(candidate), true, LbfgsTerminationReason::RelativeObjectiveTolerance, iteration+1, nextValue, nextGradient, lineSearchAttempts, steps.size(), directional); }
         parameters=std::move(candidate); gradient=std::move(nextGradient); value=nextValue;
     }
+    record(options.maxIterations, value, gradient, result.finalRelativeObjectiveChange, result.finalAcceptedStepSize,
+           result.terminatingLineSearchAttempts, steps.size(), lastDirectionalDerivative, true);
     return finish(std::move(parameters), false, LbfgsTerminationReason::MaximumIterations,
-                  options.maxIterations, value, gradient, result.terminatingLineSearchAttempts);
+                  options.maxIterations, value, gradient, result.terminatingLineSearchAttempts, steps.size(),
+                  lastDirectionalDerivative);
 }
 
 inline std::vector<double> SolveLinearSystem(std::vector<std::vector<double>> a,

@@ -223,12 +223,20 @@ inline std::pair<double,std::vector<double>> MultiRowsObjective(const std::vecto
 {
     const std::size_t p=features.size();double loss=0;std::vector<double> g(b.size());for(auto index:selected){const auto& row=rows[index];const int y=label(row).assignedClass;std::array<double,3> z{};double maximum=-std::numeric_limits<double>::infinity();for(std::size_t c=0;c<3;++c){z[c]=b[c*(p+1)];for(std::size_t j=0;j<p;++j)z[c]+=b[c*(p+1)+j+1]*InputValue(row,features[j]);maximum=std::max(maximum,z[c]);}double sum=0;for(auto&v:z){v=std::exp(v-maximum);sum+=v;}for(auto&v:z)v/=sum;loss-=std::log(std::max(z[y],1e-300));for(std::size_t c=0;c<3;++c){const double e=z[c]-(y==static_cast<int>(c));g[c*(p+1)]+=e;for(std::size_t j=0;j<p;++j)g[c*(p+1)+j+1]+=e*InputValue(row,features[j]);}}for(std::size_t c=0;c<3;++c)for(std::size_t j=1;j<=p;++j){const std::size_t n=c*(p+1)+j;loss+=b[n]*b[n];g[n]+=2*b[n];}return {loss,std::move(g)};
 }
+// This is intentionally separate from FitMultiRows: only diagnostics may
+// provide non-default optimizer options.  The scientific path always calls
+// FitMultiRows below, which constructs untouched frozen defaults.
 template <typename Label>
-inline MultiRowsModel FitMultiRows(const std::vector<ParsedRow>& rows,const std::vector<std::size_t>& selected,const std::vector<FeatureRef>& features,Label label,bool captureOptimizerTrajectory=false)
+inline MultiRowsModel FitMultiRowsDiagnostic(const std::vector<ParsedRow>& rows,const std::vector<std::size_t>& selected,const std::vector<FeatureRef>& features,Label label,LbfgsOptions options)
 {
     MultiRowsModel result;if(selected.empty()){result.unavailableReason="no_development_target_rows";return result;}std::array<bool,3> present{};for(auto i:selected){const int y=label(rows[i]).assignedClass;if(y<0||y>2){result.unavailableReason="invalid_directional_target";return result;}present[y]=true;}if(!present[0]||!present[1]||!present[2]){result.unavailableReason="development_missing_directional_class";return result;}const std::size_t p=features.size();
-    LbfgsOptions options;options.captureTrajectory=captureOptimizerTrajectory;const auto optimized=OptimizeLbfgs(std::vector<double>(3*(p+1)),[&](const std::vector<double>& b){return MultiRowsObjective(rows,selected,features,label,b);},options);
+    const auto optimized=OptimizeLbfgs(std::vector<double>(3*(p+1)),[&](const std::vector<double>& b){return MultiRowsObjective(rows,selected,features,label,b);},options);
     result.optimizer=optimized;if(!optimized.converged){result.unavailableReason="multinomial_lbfgs_not_converged";return result;}result.available=true;result.featureCount=p;result.parameters=optimized.parameters;return result;
+}
+template <typename Label>
+inline MultiRowsModel FitMultiRows(const std::vector<ParsedRow>& rows,const std::vector<std::size_t>& selected,const std::vector<FeatureRef>& features,Label label)
+{
+    return FitMultiRowsDiagnostic(rows,selected,features,label,LbfgsOptions{});
 }
 
 struct MultiRowsMetrics { bool available=false;std::string unavailableReason;double logLoss=std::numeric_limits<double>::quiet_NaN(),brier=std::numeric_limits<double>::quiet_NaN(),accuracy=std::numeric_limits<double>::quiet_NaN();std::vector<double> rowLoss,rowBrier; };
@@ -341,7 +349,8 @@ inline std::vector<MonthlyDelta> Monthly(const std::vector<ParsedRow>& rows,cons
 
 inline void WriteLbfgsDiagnostic(std::ostream& out,const LbfgsResult& diagnostic)
 {
-    out<<"termination_reason="<<LbfgsTerminationReasonName(diagnostic.terminationReason)<<",iterations="<<diagnostic.iterations<<",initial_objective="<<Number(diagnostic.initialObjective)<<",final_objective="<<Number(diagnostic.finalObjective)<<",final_gradient_infinity_norm="<<Number(diagnostic.finalGradientInfinityNorm)<<",final_relative_objective_change="<<Number(diagnostic.finalRelativeObjectiveChange)<<",final_accepted_step_size="<<Number(diagnostic.finalAcceptedStepSize)<<",terminating_line_search_attempts="<<diagnostic.terminatingLineSearchAttempts;
+    const std::string_view criterion=diagnostic.terminationReason==LbfgsTerminationReason::GradientInfinityTolerance?"gradient_infinity_tolerance":diagnostic.terminationReason==LbfgsTerminationReason::RelativeObjectiveTolerance?"relative_objective_tolerance":"none";
+    out<<"termination_reason="<<LbfgsTerminationReasonName(diagnostic.terminationReason)<<",iterations="<<diagnostic.iterations<<",initial_objective="<<Number(diagnostic.initialObjective)<<",final_objective="<<Number(diagnostic.finalObjective)<<",final_gradient_infinity_norm="<<Number(diagnostic.finalGradientInfinityNorm)<<",final_relative_objective_change="<<Number(diagnostic.finalRelativeObjectiveChange)<<",final_accepted_step_size="<<Number(diagnostic.finalAcceptedStepSize)<<",terminating_line_search_attempts="<<diagnostic.terminatingLineSearchAttempts<<",final_history_size="<<diagnostic.finalHistorySize<<",final_directional_derivative="<<Number(diagnostic.finalDirectionalDerivative)<<",convergence_criterion="<<criterion;
 }
 inline void WriteLbfgsTrajectory(std::ostream& out,const LbfgsResult& diagnostic)
 {
@@ -352,13 +361,30 @@ inline void WriteBaselineConditioningDiagnostic(std::ostream& out,const Baseline
     out<<"FIBONACCI_INCREMENTAL_MULTINOMIAL_CONDITIONING symbol=audcadrmp,horizon=H4,feature_set=baseline,retained_baseline_features="<<diagnostic.retainedFeatures<<",categorical_features="<<diagnostic.categoricalFeatures<<",standardized_continuous_features="<<diagnostic.standardizedContinuousFeatures<<",zero_variance_omitted_features="<<diagnostic.zeroVarianceOmittedFeatures<<",minimum_development_standard_deviation="<<Number(diagnostic.minimumDevelopmentStandardDeviation)<<",median_development_standard_deviation="<<Number(diagnostic.medianDevelopmentStandardDeviation)<<",maximum_development_standard_deviation="<<Number(diagnostic.maximumDevelopmentStandardDeviation)<<",maximum_absolute_standardized_predictor="<<Number(diagnostic.maximumAbsoluteStandardizedPredictor)<<",non_finite_transformed_values="<<diagnostic.nonFiniteTransformedValues<<'\n';
 }
 
-inline void RunAudcadH4BaselineMultinomialDiagnostic(const std::filesystem::path& artifactDirectory,std::ostream& out)
+enum class AudcadH4BaselineMultinomialDiagnosticMode { Frozen250, Continuation5000 };
+inline constexpr std::size_t kAudcadH4BaselineMultinomialContinuationIterations = 5000;
+inline LbfgsOptions AudcadH4BaselineMultinomialDiagnosticOptions(AudcadH4BaselineMultinomialDiagnosticMode mode)
+{
+    LbfgsOptions options;
+    options.captureTrajectory=true;
+    if(mode==AudcadH4BaselineMultinomialDiagnosticMode::Continuation5000)
+        options.maxIterations=kAudcadH4BaselineMultinomialContinuationIterations;
+    return options;
+}
+inline std::optional<double> TrajectoryObjectiveAt(const LbfgsResult& diagnostic,std::size_t iterations)
+{
+    for(const auto& point:diagnostic.trajectory)if(point.iterations==iterations)return point.objective;
+    return std::nullopt;
+}
+
+inline void RunAudcadH4BaselineMultinomialDiagnostic(const std::filesystem::path& artifactDirectory,std::ostream& out,AudcadH4BaselineMultinomialDiagnosticMode mode=AudcadH4BaselineMultinomialDiagnosticMode::Frozen250)
 {
     if(artifactDirectory.empty())throw std::invalid_argument("fibonacci_pre2025_diagnostic_required_artifact_directory");
     VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");VerifyArtifactDirectory(artifactDirectory);
-    const auto grouped=LoadPre2025Rows(artifactDirectory);const auto& rows=grouped.at("audcadrmp");const auto transform=FitDevelopmentInputTransform(rows);const auto conditioning=BaselineConditioning(rows,transform);const auto development=EligibleRows(rows,Partition::Development,[](const auto& row)->const ParsedTarget&{return row.h4;});const auto model=FitMultiRows(rows,development,transform.baseline,[](const auto& row)->const ParsedTarget&{return row.h4;},true);
-    out<<"FIBONACCI_INCREMENTAL_MULTINOMIAL_DIAGNOSTIC symbol=audcadrmp,horizon=H4,feature_set=baseline,development_rows="<<development.size()<<",feature_count="<<transform.baseline.size()<<",model_available="<<model.available<<",model_unavailable_reason="<<model.unavailableReason;
+    const auto grouped=LoadPre2025Rows(artifactDirectory);const auto& rows=grouped.at("audcadrmp");const auto transform=FitDevelopmentInputTransform(rows);const auto conditioning=BaselineConditioning(rows,transform);const auto development=EligibleRows(rows,Partition::Development,[](const auto& row)->const ParsedTarget&{return row.h4;});const auto optimizerOptions=AudcadH4BaselineMultinomialDiagnosticOptions(mode);const auto model=FitMultiRowsDiagnostic(rows,development,transform.baseline,[](const auto& row)->const ParsedTarget&{return row.h4;},optimizerOptions);
+    out<<"FIBONACCI_INCREMENTAL_MULTINOMIAL_DIAGNOSTIC symbol=audcadrmp,horizon=H4,feature_set=baseline,diagnostic_iteration_ceiling="<<optimizerOptions.maxIterations<<",development_rows="<<development.size()<<",feature_count="<<transform.baseline.size()<<",model_available="<<model.available<<",model_unavailable_reason="<<model.unavailableReason;
     if(model.optimizer){out<<',';WriteLbfgsDiagnostic(out,*model.optimizer);}else out<<",termination_reason=optimizer_not_run";
+    if(mode==AudcadH4BaselineMultinomialDiagnosticMode::Continuation5000&&model.optimizer){const auto at250=TrajectoryObjectiveAt(*model.optimizer,250);out<<",objective_at_iteration_250="<<Number(at250.value_or(std::numeric_limits<double>::quiet_NaN()))<<",objective_improvement_from_iteration_250="<<Number(at250?*at250-model.optimizer->finalObjective:std::numeric_limits<double>::quiet_NaN());}
     out<<",confirmation_2025=sealed\n";
     WriteBaselineConditioningDiagnostic(out,conditioning);if(model.optimizer)WriteLbfgsTrajectory(out,*model.optimizer);
 }

@@ -51,9 +51,11 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
             return 0;
         }
         if (command == "--fibonacci-incremental-information-diagnose-pre2025-multinomial") {
-            if (argc != 4 || std::string_view(argv[2]) != "--artifact-dir")
-                throw std::invalid_argument("usage: --fibonacci-incremental-information-diagnose-pre2025-multinomial --artifact-dir ARTIFACT_DIRECTORY");
-            Analysis::RunAudcadH4BaselineMultinomialDiagnostic(std::filesystem::path(argv[3]), std::cerr);
+            if ((argc != 4 && argc != 5) || std::string_view(argv[2]) != "--artifact-dir" ||
+                (argc == 5 && std::string_view(argv[4]) != "--continuation-5000"))
+                throw std::invalid_argument("usage: --fibonacci-incremental-information-diagnose-pre2025-multinomial --artifact-dir ARTIFACT_DIRECTORY [--continuation-5000]");
+            const auto mode=argc==5?Analysis::AudcadH4BaselineMultinomialDiagnosticMode::Continuation5000:Analysis::AudcadH4BaselineMultinomialDiagnosticMode::Frozen250;
+            Analysis::RunAudcadH4BaselineMultinomialDiagnostic(std::filesystem::path(argv[3]), std::cerr, mode);
             return 0;
         }
         if (command == "--fibonacci-incremental-information-analyze-pre2025") {

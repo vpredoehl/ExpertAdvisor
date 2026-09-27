@@ -93,6 +93,30 @@ int main()
         assert(nonFinite.finalGradientInfinityNorm == 1.0);
         assert(!std::isfinite(nonFinite.finalAcceptedStepSize));
         assert(nonFinite.terminatingLineSearchAttempts > 0);
+
+        // Continuation trajectory capture is diagnostic-only and extends at
+        // deterministic sparse points without changing optimizer decisions.
+        assert(F::LbfgsTrajectoryCadence(300));
+        assert(F::LbfgsTrajectoryCadence(400));
+        assert(F::LbfgsTrajectoryCadence(500));
+        assert(F::LbfgsTrajectoryCadence(750));
+        assert(F::LbfgsTrajectoryCadence(1000));
+        assert(F::LbfgsTrajectoryCadence(5000));
+        const auto continuation = F::OptimizeLbfgs(std::vector<double>{0.0},
+            [](const std::vector<double>& x) {
+                return std::pair<double, std::vector<double>>{1e6 - x[0], {-1.0}};
+            }, {500, 1e-8, 1e-12, true});
+        assert(!continuation.converged);
+        assert(continuation.terminationReason == F::LbfgsTerminationReason::MaximumIterations);
+        assert(continuation.iterations == 500);
+        assert(continuation.finalHistorySize == 0);
+        assert(continuation.finalDirectionalDerivative == -1.0);
+        assert(std::any_of(continuation.trajectory.begin(), continuation.trajectory.end(),
+                           [](const auto& point) { return point.iterations == 300; }));
+        assert(std::any_of(continuation.trajectory.begin(), continuation.trajectory.end(),
+                           [](const auto& point) { return point.iterations == 400; }));
+        assert(std::any_of(continuation.trajectory.begin(), continuation.trajectory.end(),
+                           [](const auto& point) { return point.iterations == 500; }));
     }
 
     // The exact FitMultiRows objective has the expected three-class gradient,
@@ -268,10 +292,45 @@ int main()
     }
     EA::CausalFibonacciIncrementalInformation::WriteArtifact(artifact,
         EA::CausalFibonacciIncrementalInformation::FixtureArtifactProvenance(), rows);
+
+    // The only 5,000-iteration ceiling is an explicit AUDCAD diagnostic
+    // option.  Scientific FitMultiRows continues to use frozen defaults.
+    const auto frozenOptions = A::AudcadH4BaselineMultinomialDiagnosticOptions(
+        A::AudcadH4BaselineMultinomialDiagnosticMode::Frozen250);
+    const auto continuationOptions = A::AudcadH4BaselineMultinomialDiagnosticOptions(
+        A::AudcadH4BaselineMultinomialDiagnosticMode::Continuation5000);
+    assert(F::LbfgsOptions{}.maxIterations == 250);
+    assert(frozenOptions.maxIterations == 250);
+    assert(continuationOptions.maxIterations == 5000);
+    assert(frozenOptions.gradientInfinityTolerance == continuationOptions.gradientInfinityTolerance);
+    assert(frozenOptions.relativeObjectiveTolerance == continuationOptions.relativeObjectiveTolerance);
+    assert(frozenOptions.captureTrajectory && continuationOptions.captureTrajectory);
+
+    const auto grouped = A::LoadPre2025Rows(artifact);
+    const auto& audcadRows = grouped.at("audcadrmp");
+    const auto transform = A::FitDevelopmentInputTransform(audcadRows);
+    const auto developmentRows = A::EligibleRows(audcadRows,
+        EA::CausalFibonacciIncrementalInformation::Partition::Development,
+        [](const auto& row) -> const A::ParsedTarget& { return row.h4; });
+    const auto label = [](const A::ParsedRow& row) -> const A::ParsedTarget& { return row.h4; };
+    const auto scientificModel = A::FitMultiRows(audcadRows, developmentRows, transform.baseline, label);
+    const auto frozenDiagnosticModel = A::FitMultiRowsDiagnostic(
+        audcadRows, developmentRows, transform.baseline, label, frozenOptions);
+    assert(scientificModel.optimizer && frozenDiagnosticModel.optimizer);
+    assert(scientificModel.optimizer->iterations <= 250);
+    assert(scientificModel.optimizer->terminationReason == frozenDiagnosticModel.optimizer->terminationReason);
+    assert(scientificModel.optimizer->iterations == frozenDiagnosticModel.optimizer->iterations);
+    assert(scientificModel.optimizer->initialObjective == frozenDiagnosticModel.optimizer->initialObjective);
+    assert(scientificModel.optimizer->finalObjective == frozenDiagnosticModel.optimizer->finalObjective);
+    assert(scientificModel.optimizer->finalGradientInfinityNorm == frozenDiagnosticModel.optimizer->finalGradientInfinityNorm);
+    assert(scientificModel.available == frozenDiagnosticModel.available);
+    assert(scientificModel.unavailableReason == frozenDiagnosticModel.unavailableReason);
+
     std::ostringstream diagnostic;
     A::RunAudcadH4BaselineMultinomialDiagnostic(artifact, diagnostic);
     const std::string diagnosticContents = diagnostic.str();
     assert(diagnosticContents.find("symbol=audcadrmp,horizon=H4,feature_set=baseline") != std::string::npos);
+    assert(diagnosticContents.find("diagnostic_iteration_ceiling=250") != std::string::npos);
     assert(diagnosticContents.find("feature_count=") != std::string::npos);
     assert(diagnosticContents.find("termination_reason=") != std::string::npos);
     assert(diagnosticContents.find("iterations=") != std::string::npos);
@@ -284,6 +343,18 @@ int main()
     assert(diagnosticContents.find("FIBONACCI_INCREMENTAL_MULTINOMIAL_CONDITIONING") != std::string::npos);
     assert(diagnosticContents.find("FIBONACCI_INCREMENTAL_MULTINOMIAL_TRAJECTORY symbol=audcadrmp,horizon=H4,feature_set=baseline,iterations=0,") != std::string::npos);
     assert(diagnosticContents.find("confirmation_2025=sealed") != std::string::npos);
+    std::ostringstream continuationDiagnostic;
+    A::RunAudcadH4BaselineMultinomialDiagnostic(
+        artifact, continuationDiagnostic,
+        A::AudcadH4BaselineMultinomialDiagnosticMode::Continuation5000);
+    const std::string continuationContents = continuationDiagnostic.str();
+    assert(continuationContents.find("diagnostic_iteration_ceiling=5000") != std::string::npos);
+    assert(continuationContents.find("final_history_size=") != std::string::npos);
+    assert(continuationContents.find("final_directional_derivative=") != std::string::npos);
+    assert(continuationContents.find("convergence_criterion=") != std::string::npos);
+    assert(continuationContents.find("objective_at_iteration_250=") != std::string::npos);
+    assert(continuationContents.find("objective_improvement_from_iteration_250=") != std::string::npos);
+    assert(continuationContents.find("confirmation_2025=sealed") != std::string::npos);
     A::Run({artifact, output, "fixture-analysis"});
     std::ifstream conditional(output / "conditional_incremental.csv");
     const std::string contents((std::istreambuf_iterator<char>(conditional)), {});
