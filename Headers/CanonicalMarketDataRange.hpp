@@ -108,4 +108,30 @@ std::string CanonicalHalfOpenCandlestickQuery(
         transaction, symbol, range, candlePeriod, candleUnit) +
         "SELECT dt,open,close,high,low,vol FROM bounded ORDER BY dt;";
 }
+
+// Stateful feature producers require their complete available predecessor
+// history.  This is the canonical companion to the finite half-open query:
+// it retains the same 15-minute candlestick source and absolute end boundary,
+// while deliberately leaving the lower source bound open.  Consumers still
+// receive only completed canonical bars and never synthesize source gaps.
+template <typename Transaction>
+std::string CanonicalFullHistoryThroughCandlestickCte(
+    Transaction& transaction,
+    const std::string& symbol,
+    PriceTP end,
+    int candlePeriod = kCanonicalCandlePeriodMinutes,
+    const std::string& candleUnit = "minute")
+{
+    if (symbol.empty() || candlePeriod != kCanonicalCandlePeriodMinutes ||
+        candleUnit != "minute")
+        throw std::invalid_argument(
+            "canonical market-data API supports only 15-minute candles");
+    const std::string quotedEnd = transaction.quote(FormatAbsoluteUtc(end));
+    return "WITH canonical_bars AS (SELECT dt,open,close,high,low,vol FROM candlestick(" +
+        transaction.quote(symbol) + "::text," + transaction.quote(candlePeriod) +
+        "::integer," + transaction.quote(candleUnit) +
+        "::text,'-infinity'::timestamp,(" + quotedEnd +
+        "::timestamptz AT TIME ZONE 'America/New_York'))),bounded AS (SELECT * FROM canonical_bars WHERE "
+        "(dt AT TIME ZONE 'America/New_York') < " + quotedEnd + "::timestamptz) ";
+}
 } // namespace EA::CanonicalMarketData

@@ -1,13 +1,12 @@
 #pragma once
 
-// Deliberately narrow operational boundary for the frozen research harness.
-// It never extracts prices, opens PostgreSQL, starts a worker, or computes a
-// historical result.  Extraction and confirmation remain separately
-// authorized, read-only operations to be added only after their artifacts are
-// independently qualified.
+// Operational boundary for the frozen research harness.  Extraction is a
+// separate, explicit read-only command; it only generates a source artifact.
 
 #include "CausalFibonacciIncrementalInformation.hpp"
+#include "CausalFibonacciIncrementalInformationExtraction.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -15,18 +14,58 @@
 #include <string_view>
 
 namespace EA::CausalFibonacciIncrementalInformation::Cli {
+inline std::string DefaultForexConnection()
+{
+    const char* host = std::getenv("FOREX_DB_HOST");
+    const char* database = std::getenv("FOREX_DB_NAME");
+    return "hostaddr=" + std::string(host && *host ? host : "127.0.0.1") +
+        " gssencmode=disable user=pqxx dbname=" +
+        std::string(database && *database ? database : "forex");
+}
+
+inline std::string DefaultLstmConnection()
+{
+    const char* host = std::getenv("LSTM_DB_HOST");
+    const char* database = std::getenv("LSTM_DB_NAME");
+    return "hostaddr=" + std::string(host && *host ? host : "127.0.0.1") +
+        " gssencmode=disable user=pqxx dbname=" +
+        std::string(database && *database ? database : "LSTM");
+}
+
 inline std::optional<int> TryRun(int argc, const char* const argv[])
 {
-    if (argc < 2 || std::string_view(argv[1]) != "--fibonacci-incremental-information-verify-artifact")
+    if (argc < 2) return std::nullopt;
+    const std::string_view command(argv[1]);
+    if (command != "--fibonacci-incremental-information-verify-artifact" &&
+        command != "--fibonacci-incremental-information-extract")
         return std::nullopt;
     try {
-        if (argc != 3) throw std::invalid_argument("usage: --fibonacci-incremental-information-verify-artifact ARTIFACT_DIRECTORY");
         VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");
-        VerifyArtifactDirectory(std::filesystem::path(argv[2]));
-        std::cout << "FIBONACCI_INCREMENTAL_ARTIFACT_VERIFIED protocol=" << kProtocolId << '\n';
+        if (command == "--fibonacci-incremental-information-verify-artifact") {
+            if (argc != 3) throw std::invalid_argument("usage: --fibonacci-incremental-information-verify-artifact ARTIFACT_DIRECTORY");
+            VerifyArtifactDirectory(std::filesystem::path(argv[2]));
+            std::cout << "FIBONACCI_INCREMENTAL_ARTIFACT_VERIFIED protocol=" << kProtocolId << '\n';
+            return 0;
+        }
+        Extraction::Options options;
+        options.forexConnectionString = DefaultForexConnection();
+        options.lstmConnectionString = DefaultLstmConnection();
+        for (int index = 2; index < argc; ++index) {
+            const std::string_view option(argv[index]);
+            if (option == "--output-dir" && index + 1 < argc) options.outputDirectory = argv[++index];
+            else if (option == "--code-commit" && index + 1 < argc) options.codeCommit = argv[++index];
+            else if (option == "--economic-calendar-snapshot-id" && index + 1 < argc) options.calendarSnapshot.snapshotId = std::stoll(argv[++index]);
+            else if (option == "--economic-calendar-snapshot-sha256" && index + 1 < argc) options.calendarSnapshot.contentHash = argv[++index];
+            else if (option == "--forex-connection" && index + 1 < argc) options.forexConnectionString = argv[++index];
+            else if (option == "--lstm-connection" && index + 1 < argc) options.lstmConnectionString = argv[++index];
+            else throw std::invalid_argument("unknown or incomplete Fibonacci extraction option: " + std::string(option));
+        }
+        Extraction::Extract(options);
+        std::cout << "FIBONACCI_INCREMENTAL_EXTRACTION_COMPLETE protocol=" << kProtocolId
+                  << ",read_only=true,diagnostics_run=false,confirmation_2025_evaluated=false\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "FIBONACCI_INCREMENTAL_ARTIFACT_VERIFICATION_ERROR " << error.what() << '\n';
+        std::cerr << "FIBONACCI_INCREMENTAL_ARTIFACT_ERROR " << error.what() << '\n';
         return 1;
     }
 }

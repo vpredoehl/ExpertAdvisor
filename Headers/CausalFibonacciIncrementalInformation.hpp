@@ -186,6 +186,12 @@ struct ArtifactProvenance {
     std::string sourceAdapterIdentity;
     std::string sourceQueryIdentity;
     std::string sourcePriceDomain;
+    std::string layoutIdentity;
+    std::string baselineSchemaIdentity;
+    std::string fibonacciSchemaIdentity;
+    std::string targetIdentity;
+    std::string symbolRangeIdentity;
+    std::string warmupIdentity;
 };
 
 inline void ValidateArtifactProvenance(const ArtifactProvenance& value)
@@ -196,6 +202,20 @@ inline void ValidateArtifactProvenance(const ArtifactProvenance& value)
         throw std::invalid_argument("fibonacci_artifact_missing_economic_calendar_snapshot_identity");
     if (value.sourceAdapterIdentity.empty() || value.sourceQueryIdentity.empty() || value.sourcePriceDomain.empty())
         throw std::invalid_argument("fibonacci_artifact_missing_market_source_provenance");
+    if (value.layoutIdentity.empty() || value.baselineSchemaIdentity.empty() ||
+        value.fibonacciSchemaIdentity.empty() || value.targetIdentity.empty() ||
+        value.symbolRangeIdentity.empty() || value.warmupIdentity.empty())
+        throw std::invalid_argument("fibonacci_artifact_missing_frozen_execution_identity");
+}
+
+inline ArtifactProvenance FixtureArtifactProvenance()
+{
+    return {std::string(kProtocolId), std::string(kProtocolSha256), "fixture",
+            "snapshot", "digest", "fixture-adapter", "fixture-query", "ask_ohlc",
+            "model-input-semantic-layout-v9", "layout8-baseline[80]",
+            "layout9-fibonacci-tensor[76..98]",
+            "BuildLookaheadClassInfo:window=1:threshold=0.0008:H4,H6",
+            "fixture-symbol-range", "full_history_warmup"};
 }
 
 struct Scale {
@@ -352,55 +372,130 @@ inline StructuralState StateFor(const Row& row) noexcept {
                                      StructuralState::ScaleValidNoRecentEvent;
 }
 
+struct Exclusion
+{
+    std::string symbol;
+    std::int64_t decisionTimestamp = 0;
+    std::uint64_t sourceRowOrdinal = 0;
+    std::string reason;
+};
+
+// The production extractor appends in canonical order.  This keeps the
+// roughly multi-million-row population out of a duplicate in-memory vector
+// while retaining the exact artifact layout used by fixture qualification.
+class ArtifactWriter
+{
+public:
+    ArtifactWriter(const std::filesystem::path& directory,
+                   const ArtifactProvenance& provenance)
+        : directory_(directory), provenance_(provenance)
+    {
+        ValidateArtifactProvenance(provenance_);
+        std::filesystem::create_directories(directory_);
+        const FeatureSchema schema = FrozenFeatureSchema();
+        schema_.open(directory_ / "feature_schema.csv");
+        rows_.open(directory_ / "rows.csv");
+        exclusions_.open(directory_ / "exclusions.csv");
+        if (!schema_ || !rows_ || !exclusions_)
+            throw std::runtime_error("fibonacci_artifact_stream_open_failed");
+        schema_ << "logical_family,logical_column,physical_model_input_column,name,categorical\n";
+        for (std::size_t i = 0; i < schema.baseline.size(); ++i)
+            schema_ << "baseline," << i << ',' << schema.baseline[i].modelInputColumn << ',' << schema.baseline[i].name << ',' << schema.baseline[i].categorical << '\n';
+        for (std::size_t i = 0; i < schema.fibonacci.size(); ++i)
+            schema_ << "fibonacci," << i << ',' << schema.fibonacci[i].modelInputColumn << ',' << schema.fibonacci[i].name << ',' << schema.fibonacci[i].categorical << '\n';
+        rows_ << std::setprecision(9) << "row_identity,symbol,decision_timestamp,source_row_ordinal,partition,h4_class,h4_selected_target_timestamp,h4_terminal_timestamp,h4_terminal_log_return,h4_eligible,h4_exclusion_reason,h6_class,h6_selected_target_timestamp,h6_terminal_timestamp,h6_terminal_log_return,h6_eligible,h6_exclusion_reason";
+        for (std::size_t i = 0; i < kBaselineWidth; ++i) rows_ << ",baseline_" << i;
+        for (std::size_t i = 0; i < kFibonacciWidth; ++i) rows_ << ",fibonacci_" << i;
+        rows_ << '\n';
+        exclusions_ << "row_identity,symbol,decision_timestamp,source_row_ordinal,reason\n";
+    }
+
+    void Append(const Row& row)
+    {
+        if (completed_) throw std::logic_error("fibonacci_artifact_append_after_complete");
+        ValidateRows({row});
+        const std::string key = row.symbol + "|" + std::to_string(row.decisionTimestamp);
+        if (!previousKey_.empty() && key <= previousKey_)
+            throw std::invalid_argument("fibonacci_rows_not_strictly_sorted_or_duplicate:" + key);
+        previousKey_ = key;
+        rows_ << Csv(row.Identity()) << ',' << Csv(row.symbol) << ',' << row.decisionTimestamp << ',' << row.sourceRowOrdinal << ',' << PartitionName(*PartitionFor(row.decisionTimestamp))
+              << ',' << row.h4.assignedClass << ',' << row.h4.selectedTargetTimestamp << ',' << row.h4.terminalTimestamp << ',' << row.h4.terminalLogReturn << ',' << row.h4.eligible << ',' << Csv(row.h4.exclusionReason)
+              << ',' << row.h6.assignedClass << ',' << row.h6.selectedTargetTimestamp << ',' << row.h6.terminalTimestamp << ',' << row.h6.terminalLogReturn << ',' << row.h6.eligible << ',' << Csv(row.h6.exclusionReason);
+        for (float value : row.baseline) rows_ << ',' << value;
+        for (float value : row.fibonacci) rows_ << ',' << value;
+        rows_ << '\n';
+    }
+
+    void Exclude(const Exclusion& exclusion)
+    {
+        if (completed_) throw std::logic_error("fibonacci_artifact_exclude_after_complete");
+        exclusions_ << Csv(exclusion.symbol + "|" + std::to_string(exclusion.decisionTimestamp) + "|" + std::to_string(exclusion.sourceRowOrdinal)) << ',' << Csv(exclusion.symbol) << ',' << exclusion.decisionTimestamp << ',' << exclusion.sourceRowOrdinal << ',' << Csv(exclusion.reason) << '\n';
+    }
+
+    void Complete()
+    {
+        if (completed_) throw std::logic_error("fibonacci_artifact_complete_twice");
+        schema_.close(); rows_.close(); exclusions_.close();
+        if (!schema_ || !rows_ || !exclusions_)
+            throw std::runtime_error("fibonacci_artifact_stream_write_failed");
+        const std::string schemaHash = FileSha256(directory_ / "feature_schema.csv");
+        const std::string rowsHash = FileSha256(directory_ / "rows.csv");
+        const std::string exclusionsHash = FileSha256(directory_ / "exclusions.csv");
+        const auto manifestPath = directory_ / "manifest.json";
+        std::ofstream manifest(manifestPath);
+        if (!manifest) throw std::runtime_error("fibonacci_artifact_manifest_open_failed");
+        manifest << "{\n\"protocol_id\":\"" << provenance_.protocolId << "\",\n\"protocol_sha256\":\"" << provenance_.protocolSha256
+                 << "\",\n\"code_commit\":\"" << provenance_.codeCommit << "\",\n\"economic_calendar_snapshot_id\":\"" << provenance_.economicCalendarSnapshotId
+                 << "\",\n\"economic_calendar_snapshot_sha256\":\"" << provenance_.economicCalendarSnapshotSha256
+                 << "\",\n\"source_adapter_identity\":\"" << provenance_.sourceAdapterIdentity
+                 << "\",\n\"source_query_identity\":\"" << provenance_.sourceQueryIdentity
+                 << "\",\n\"source_price_domain\":\"" << provenance_.sourcePriceDomain
+                 << "\",\n\"layout_identity\":\"" << provenance_.layoutIdentity
+                 << "\",\n\"baseline_schema_identity\":\"" << provenance_.baselineSchemaIdentity
+                 << "\",\n\"fibonacci_schema_identity\":\"" << provenance_.fibonacciSchemaIdentity
+                 << "\",\n\"target_identity\":\"" << provenance_.targetIdentity
+                 << "\",\n\"symbol_range_identity\":\"" << provenance_.symbolRangeIdentity
+                 << "\",\n\"warmup_identity\":\"" << provenance_.warmupIdentity
+                 << "\",\n\"feature_configuration\":\"causal-fibonacci-layout9-symmetric-structural-v1\",\n\"layout_tensor_width\":99,\n\"baseline_width\":80,\n\"fibonacci_width\":23,\n\"feature_schema_sha256\":\"" << schemaHash
+                 << "\",\n\"rows_sha256\":\"" << rowsHash << "\",\n\"exclusions_sha256\":\"" << exclusionsHash << "\"\n}\n";
+        manifest.close();
+        std::ofstream sums(directory_ / "sha256sums.txt");
+        if (!sums) throw std::runtime_error("fibonacci_artifact_sums_open_failed");
+        sums << schemaHash << "  feature_schema.csv\n" << rowsHash << "  rows.csv\n" << exclusionsHash << "  exclusions.csv\n" << FileSha256(manifestPath) << "  manifest.json\n";
+        completed_ = true;
+    }
+
+private:
+    static std::string Csv(const std::string& value)
+    {
+        if (value.find_first_of(",\"\r\n") == std::string::npos) return value;
+        std::string escaped = "\"";
+        for (char character : value) escaped += character == '\"' ? "\"\"" : std::string(1, character);
+        return escaped + "\"";
+    }
+    std::filesystem::path directory_;
+    ArtifactProvenance provenance_;
+    std::ofstream schema_, rows_, exclusions_;
+    std::string previousKey_;
+    bool completed_ = false;
+};
+
+inline void WriteArtifact(const std::filesystem::path& directory,
+                          const ArtifactProvenance& provenance,
+                          const std::vector<Row>& rows,
+                          const std::vector<Exclusion>& exclusions = {})
+{
+    ArtifactWriter writer(directory, provenance);
+    for (const Row& row : rows) writer.Append(row);
+    for (const Exclusion& exclusion : exclusions) writer.Exclude(exclusion);
+    writer.Complete();
+}
+
 inline void WriteFixtureArtifact(const std::filesystem::path& directory,
                                  const ArtifactProvenance& provenance,
                                  const std::vector<Row>& rows)
 {
-    ValidateArtifactProvenance(provenance);
-    ValidateRows(rows);
-    std::filesystem::create_directories(directory);
-    const FeatureSchema schema = FrozenFeatureSchema();
-    const auto schemaPath = directory / "feature_schema.csv";
-    const auto rowsPath = directory / "rows.csv";
-    const auto exclusionsPath = directory / "exclusions.csv";
-    const auto csv = [](const std::string& value) { if (value.find_first_of(",\"\r\n") == std::string::npos) return value; std::string escaped = "\""; for (char ch : value) { if (ch == '\"') escaped += "\"\""; else escaped += ch; } return escaped + "\""; };
-    {
-        std::ofstream out(schemaPath); if (!out) throw std::runtime_error("fibonacci_artifact_schema_open_failed");
-        out << "logical_family,logical_column,physical_model_input_column,name,categorical\n";
-        for (std::size_t i = 0; i < schema.baseline.size(); ++i)
-            out << "baseline," << i << ',' << schema.baseline[i].modelInputColumn << ',' << schema.baseline[i].name << ',' << schema.baseline[i].categorical << '\n';
-        for (std::size_t i = 0; i < schema.fibonacci.size(); ++i)
-            out << "fibonacci," << i << ',' << schema.fibonacci[i].modelInputColumn << ',' << schema.fibonacci[i].name << ',' << schema.fibonacci[i].categorical << '\n';
-    }
-    {
-        std::ofstream out(rowsPath); if (!out) throw std::runtime_error("fibonacci_artifact_rows_open_failed");
-        out << std::setprecision(9) << "symbol,decision_timestamp,source_row_ordinal,partition,h4_class,h4_selected_target_timestamp,h4_terminal_timestamp,h4_terminal_log_return,h4_eligible,h4_exclusion_reason,h6_class,h6_selected_target_timestamp,h6_terminal_timestamp,h6_terminal_log_return,h6_eligible,h6_exclusion_reason";
-        for (std::size_t i = 0; i < kBaselineWidth; ++i) out << ",baseline_" << i;
-        for (std::size_t i = 0; i < kFibonacciWidth; ++i) out << ",fibonacci_" << i;
-        out << '\n';
-        for (const Row& row : rows) {
-            out << csv(row.symbol) << ',' << row.decisionTimestamp << ',' << row.sourceRowOrdinal << ',' << PartitionName(*PartitionFor(row.decisionTimestamp))
-                << ',' << row.h4.assignedClass << ',' << row.h4.selectedTargetTimestamp << ',' << row.h4.terminalTimestamp << ',' << row.h4.terminalLogReturn << ',' << row.h4.eligible << ',' << csv(row.h4.exclusionReason)
-                << ',' << row.h6.assignedClass << ',' << row.h6.selectedTargetTimestamp << ',' << row.h6.terminalTimestamp << ',' << row.h6.terminalLogReturn << ',' << row.h6.eligible << ',' << csv(row.h6.exclusionReason);
-            for (float value : row.baseline) out << ',' << value;
-            for (float value : row.fibonacci) out << ',' << value;
-            out << '\n';
-        }
-    }
-    { std::ofstream out(exclusionsPath); if (!out) throw std::runtime_error("fibonacci_artifact_exclusions_open_failed"); out << "symbol,decision_timestamp,reason\n"; }
-    const std::string schemaHash = FileSha256(schemaPath), rowsHash = FileSha256(rowsPath), exclusionsHash = FileSha256(exclusionsPath);
-    const auto manifestPath = directory / "manifest.json";
-    { std::ofstream out(manifestPath); if (!out) throw std::runtime_error("fibonacci_artifact_manifest_open_failed");
-      out << "{\n\"protocol_id\":\"" << provenance.protocolId << "\",\n\"protocol_sha256\":\"" << provenance.protocolSha256
-          << "\",\n\"code_commit\":\"" << provenance.codeCommit << "\",\n\"economic_calendar_snapshot_id\":\"" << provenance.economicCalendarSnapshotId
-          << "\",\n\"economic_calendar_snapshot_sha256\":\"" << provenance.economicCalendarSnapshotSha256
-          << "\",\n\"source_adapter_identity\":\"" << provenance.sourceAdapterIdentity
-          << "\",\n\"source_query_identity\":\"" << provenance.sourceQueryIdentity
-          << "\",\n\"source_price_domain\":\"" << provenance.sourcePriceDomain
-          << "\",\n\"feature_configuration\":\"causal-fibonacci-layout9-symmetric-structural-v1\",\n\"layout_tensor_width\":99,\n\"baseline_width\":80,\n\"fibonacci_width\":23,\n\"target_identity\":\"BuildLookaheadClassInfo:window=1:threshold=0.0008:H4,H6\",\n\"feature_schema_sha256\":\"" << schemaHash
-          << "\",\n\"rows_sha256\":\"" << rowsHash << "\",\n\"exclusions_sha256\":\"" << exclusionsHash << "\"\n}\n"; }
-    std::ofstream sums(directory / "sha256sums.txt"); if (!sums) throw std::runtime_error("fibonacci_artifact_sums_open_failed");
-    sums << schemaHash << "  feature_schema.csv\n" << rowsHash << "  rows.csv\n" << exclusionsHash << "  exclusions.csv\n" << FileSha256(manifestPath) << "  manifest.json\n";
+    WriteArtifact(directory, provenance, rows);
 }
 
 // Map the current authoritative physical layout-9 model input to the frozen
@@ -611,7 +706,7 @@ inline std::string JsonStringField(const std::string& contents, std::string_view
 inline void VerifyArtifactDirectory(const std::filesystem::path& directory)
 {
     const auto manifestPath=directory/"manifest.json"; std::ifstream in(manifestPath); if(!in) throw std::invalid_argument("fibonacci_artifact_manifest_unreadable"); const std::string manifest((std::istreambuf_iterator<char>(in)),{});
-    ArtifactProvenance p; p.protocolId=JsonStringField(manifest,"protocol_id");p.protocolSha256=JsonStringField(manifest,"protocol_sha256");p.codeCommit=JsonStringField(manifest,"code_commit");p.economicCalendarSnapshotId=JsonStringField(manifest,"economic_calendar_snapshot_id");p.economicCalendarSnapshotSha256=JsonStringField(manifest,"economic_calendar_snapshot_sha256");p.sourceAdapterIdentity=JsonStringField(manifest,"source_adapter_identity");p.sourceQueryIdentity=JsonStringField(manifest,"source_query_identity");p.sourcePriceDomain=JsonStringField(manifest,"source_price_domain");ValidateArtifactProvenance(p);
+    ArtifactProvenance p; p.protocolId=JsonStringField(manifest,"protocol_id");p.protocolSha256=JsonStringField(manifest,"protocol_sha256");p.codeCommit=JsonStringField(manifest,"code_commit");p.economicCalendarSnapshotId=JsonStringField(manifest,"economic_calendar_snapshot_id");p.economicCalendarSnapshotSha256=JsonStringField(manifest,"economic_calendar_snapshot_sha256");p.sourceAdapterIdentity=JsonStringField(manifest,"source_adapter_identity");p.sourceQueryIdentity=JsonStringField(manifest,"source_query_identity");p.sourcePriceDomain=JsonStringField(manifest,"source_price_domain");p.layoutIdentity=JsonStringField(manifest,"layout_identity");p.baselineSchemaIdentity=JsonStringField(manifest,"baseline_schema_identity");p.fibonacciSchemaIdentity=JsonStringField(manifest,"fibonacci_schema_identity");p.targetIdentity=JsonStringField(manifest,"target_identity");p.symbolRangeIdentity=JsonStringField(manifest,"symbol_range_identity");p.warmupIdentity=JsonStringField(manifest,"warmup_identity");ValidateArtifactProvenance(p);
     for(const auto& [field,file]:std::array<std::pair<const char*,const char*>,3>{{{"feature_schema_sha256","feature_schema.csv"},{"rows_sha256","rows.csv"},{"exclusions_sha256","exclusions.csv"}}})if(JsonStringField(manifest,field)!=FileSha256(directory/file))throw std::invalid_argument("fibonacci_artifact_file_hash_mismatch:"+std::string(file));
     std::ifstream sums(directory / "sha256sums.txt"); if (!sums) throw std::invalid_argument("fibonacci_artifact_sums_unreadable"); std::string digest, filename; std::size_t entries = 0; while (sums >> digest >> filename) { if (digest != FileSha256(directory / filename)) throw std::invalid_argument("fibonacci_artifact_sums_hash_mismatch:" + filename); ++entries; } if (entries != 4) throw std::invalid_argument("fibonacci_artifact_sums_incomplete");
 }

@@ -1,10 +1,17 @@
 #include "CausalFibonacciIncrementalInformation.hpp"
-#include "../Sources/CausalFibonacciIncrementalInformationCli.hpp"
+#include "CanonicalMarketDataRange.hpp"
 
 #include <cassert>
 #include <iostream>
 
 namespace F = EA::CausalFibonacciIncrementalInformation;
+
+namespace {
+struct SqlQuoter {
+    std::string quote(const std::string& value) const { return "'" + value + "'"; }
+    std::string quote(int value) const { return std::to_string(value); }
+};
+}
 
 F::Row MakeRow(std::int64_t timestamp, std::uint64_t ordinal)
 {
@@ -22,9 +29,12 @@ F::Row MakeRow(std::int64_t timestamp, std::uint64_t ordinal)
 
 int main()
 {
-    const char* noCommand[] = {"fixture"};
-    assert(!EA::CausalFibonacciIncrementalInformation::Cli::TryRun(1, noCommand).has_value());
     F::VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");
+    SqlQuoter quoter;
+    const auto fullHistory = EA::CanonicalMarketData::CanonicalFullHistoryThroughCandlestickCte(
+        quoter, "audcadrmp", PriceTP{std::chrono::seconds{F::kProtocolEnd}});
+    assert(fullHistory.find("'-infinity'::timestamp") != std::string::npos);
+    assert(fullHistory.find("2026-01-01 00:00:00+00") != std::string::npos);
     bool mismatch = false;
     try { F::VerifyFrozenProtocolDocument("Tests/CausalFibonacciIncrementalInformationTests.cpp"); }
     catch (const std::runtime_error& error) { mismatch = std::string(error.what()).find("expected=") != std::string::npos; }
@@ -52,8 +62,7 @@ int main()
     try { F::ValidateRows({edge}); } catch (const std::invalid_argument&) { crossingTarget = true; }
     assert(crossingTarget);
 
-    F::ArtifactProvenance provenance{std::string(F::kProtocolId), std::string(F::kProtocolSha256),
-        "fixture", "snapshot", "digest", "fixture-adapter", "fixture-query", "ask_ohlc"};
+    F::ArtifactProvenance provenance = F::FixtureArtifactProvenance();
     F::ValidateArtifactProvenance(provenance);
     provenance.economicCalendarSnapshotId.clear();
     bool missingCalendar = false;
