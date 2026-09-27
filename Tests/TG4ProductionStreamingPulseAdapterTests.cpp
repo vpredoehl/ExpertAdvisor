@@ -105,11 +105,32 @@ void TestProductionReplayAndCausalInvariants()
     assert(synchronization.calls == bars.size());
     assert(synchronization.pendingObservationsVisited <=
            synchronization.retainedObservationsExamined);
+    assert(synchronization.terminalObservationsSkipped +
+           synchronization.pendingObservationsVisited ==
+           synchronization.retainedObservationsExamined);
+    assert(synchronization.behaviorLookupsAttempted ==
+           synchronization.pendingObservationsVisited);
+    assert(synchronization.observationsStateChanged <=
+           synchronization.pendingObservationsVisited);
+    assert(synchronization.activeToTerminalTransitions <=
+           synchronization.observationsStateChanged);
+    assert(synchronization.terminalObservationsRevisited <=
+           synchronization.terminalObservationsSkipped);
     std::cout << "TG3_PRODUCTION_REPLAY_SYNC calls=" << synchronization.calls
               << ",retained_examined="
               << synchronization.retainedObservationsExamined
               << ",pending_visited="
               << synchronization.pendingObservationsVisited
+              << ",terminal_skipped="
+              << synchronization.terminalObservationsSkipped
+              << ",terminal_revisited="
+              << synchronization.terminalObservationsRevisited
+              << ",lookup_attempted="
+              << synchronization.behaviorLookupsAttempted
+              << ",state_changed="
+              << synchronization.observationsStateChanged
+              << ",active_to_terminal="
+              << synchronization.activeToTerminalTransitions
               << ",tg2_comparisons="
               << synchronization.behaviorObservationsCompared
               << ",behavior_available="

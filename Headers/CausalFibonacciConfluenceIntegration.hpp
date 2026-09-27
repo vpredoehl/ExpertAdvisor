@@ -18,6 +18,9 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+#include <unordered_set>
+#endif
 
 namespace EA::TG3
 {
@@ -197,14 +200,39 @@ struct Summary
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
 struct SynchronizationWork
 {
+    // A call is one invocation of SynchronizeOutcomes.
     std::size_t calls = 0;
+    // Test-only accounting for O(1) ActiveObservationCount calls.
     std::size_t activeObservationCountCalls = 0;
     std::size_t activeObservationCountObservationsExamined = 0;
+    // Every retained TG3 record reached by SynchronizeOutcomes' outer loop.
     std::size_t retainedObservationsExamined = 0;
+    // A visited record skipped immediately because all three synchronized
+    // outcomes were terminal at the start of this call.
+    std::size_t terminalObservationsSkipped = 0;
+    // A terminal skip whose record was reached by an earlier
+    // SynchronizeOutcomes call. This excludes a terminal record's first
+    // synchronization visit.
+    std::size_t terminalObservationsRevisited = 0;
+    // A visited record with at least one pending synchronized outcome.
     std::size_t pendingObservationsVisited = 0;
+    // A pending record for which lower-bound lookup in TG2 observations was
+    // attempted. One attempt is made for every pending visit, even if TG2's
+    // retained deque is empty.
+    std::size_t behaviorLookupsAttempted = 0;
+    // Individual lower-bound probes and equality checks, not lookup attempts.
     std::size_t behaviorObservationsCompared = 0;
+    // A pending record whose one or more OutcomeResolution::state values
+    // changed during this synchronization call.
+    std::size_t observationsStateChanged = 0;
+    // A state-changing active record whose final pending outcome became
+    // terminal during this synchronization call.
+    std::size_t activeToTerminalTransitions = 0;
     std::size_t behaviorObservationsAvailable = 0;
+    // observations_ is not structurally modified by SynchronizeOutcomes, so
+    // this is exactly the maximum retained observations examined in one call.
     std::size_t maxRetainedObservations = 0;
+    // Maximum pending observations encountered in one call.
     std::size_t maxPendingObservations = 0;
     std::size_t maxBehaviorObservations = 0;
 };
@@ -391,13 +419,26 @@ public:
             if (!IsPending(observation.retest) &&
                 !IsPending(observation.outerTarget) &&
                 !IsPending(observation.outerTargetAfterRetest))
+            {
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+                ++synchronizationWork_.terminalObservationsSkipped;
+                if (!synchronizedObservationSequences_.insert(
+                        observation.breakEventSequence).second)
+                    ++synchronizationWork_.terminalObservationsRevisited;
+#endif
                 continue;
+            }
 
             const bool wasActive = ObservationActive(observation);
-
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+            const TG2::ResolutionState retestState = observation.retest.state;
+            const TG2::ResolutionState outerTargetState =
+                observation.outerTarget.state;
+            const TG2::ResolutionState outerTargetAfterRetestState =
+                observation.outerTargetAfterRetest.state;
             ++synchronizationWork_.pendingObservationsVisited;
             ++pendingThisCall;
+            ++synchronizationWork_.behaviorLookupsAttempted;
 #endif
 
             // TG2 assigns strictly increasing event sequences and retains
@@ -449,9 +490,21 @@ public:
             }
             if (wasActive && !ObservationActive(observation))
             {
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+                ++synchronizationWork_.activeToTerminalTransitions;
+#endif
                 assert(activeObservationCount_ != 0);
                 --activeObservationCount_;
             }
+#if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
+            if (observation.retest.state != retestState ||
+                observation.outerTarget.state != outerTargetState ||
+                observation.outerTargetAfterRetest.state !=
+                    outerTargetAfterRetestState)
+                ++synchronizationWork_.observationsStateChanged;
+            synchronizedObservationSequences_.insert(
+                observation.breakEventSequence);
+#endif
         }
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
         synchronizationWork_.maxPendingObservations = std::max(
@@ -702,6 +755,7 @@ private:
     std::size_t abAgeExpirations_ = 0;
 #if defined(EA_TG3_SYNCHRONIZATION_WORK_INSTRUMENTATION)
     mutable SynchronizationWork synchronizationWork_;
+    std::unordered_set<std::uint64_t> synchronizedObservationSequences_;
 #endif
 
     using ABKey = std::tuple<std::size_t, std::size_t, int,

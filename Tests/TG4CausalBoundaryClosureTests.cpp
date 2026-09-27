@@ -322,6 +322,22 @@ void TestOutcomeSynchronizationMatchesFullRescanAndCensoring()
     assert(censored->retest.state == ResolutionState::Censored);
     assert(censored->retest.censorReason ==
            EA::TG2::CensorReason::CapacityEviction);
+    AssertActiveObservationCountMatches(tracker);
+    assert(tracker.ActiveObservationCount() == 0);
+    assert(tracker.AggregateSummary().innerBreakObservations == 2);
+
+    const auto& work = tracker.OutcomeSynchronizationWork();
+    assert(work.calls == 3);
+    assert(work.retainedObservationsExamined == 4);
+    assert(work.terminalObservationsSkipped == 2);
+    assert(work.pendingObservationsVisited == 2);
+    assert(work.behaviorLookupsAttempted == 2);
+    assert(work.behaviorObservationsCompared == 2);
+    assert(work.observationsStateChanged == 2);
+    assert(work.activeToTerminalTransitions == 2);
+    assert(work.terminalObservationsRevisited == 2);
+    assert(work.maxRetainedObservations == 2);
+    assert(work.maxPendingObservations == 1);
 }
 
 void TestOutcomeSynchronizationDoesNotRescanTerminalHistory()
@@ -357,13 +373,124 @@ void TestOutcomeSynchronizationDoesNotRescanTerminalHistory()
     assert(work.retainedObservationsExamined ==
            synchronizationCalls * observationCount);
     assert(work.pendingObservationsVisited == 0);
+    assert(work.behaviorLookupsAttempted == 0);
     assert(work.behaviorObservationsCompared == 0);
+    assert(work.terminalObservationsSkipped ==
+           synchronizationCalls * observationCount);
+    assert(work.terminalObservationsRevisited ==
+           (synchronizationCalls - 1) * observationCount);
+    assert(work.observationsStateChanged == 0);
+    assert(work.activeToTerminalTransitions == 0);
+    assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxPendingObservations == 0);
 
     // The former implementation performed this deterministic full-rescan
     // work even though every retained snapshot was already terminal.
     const std::size_t formerComparisons = synchronizationCalls *
         observationCount * (observationCount + 1) / 2;
     assert(formerComparisons == 1'052'672);
+}
+
+void TestTerminalHistoryWithSmallPendingTail()
+{
+    constexpr std::size_t observationCount = 64;
+    constexpr std::size_t terminalCount = 56;
+    constexpr std::size_t synchronizationCalls = 5;
+    EA::TG3::Configuration configuration = FibonacciConfiguration();
+    configuration.maxActiveConfluenceObservations = observationCount;
+    configuration.maxRetainedConfluenceObservations = observationCount;
+    EA::TG3::FibonacciConfluenceTracker tracker(configuration);
+    std::deque<BreakObservation> behavior;
+
+    for (std::size_t index = 0; index < observationCount; ++index)
+    {
+        const std::size_t bar = index + 1;
+        tracker.Advance(bar, Timestamp(bar));
+        BreakObservation observation = InnerBreak(index + 1, bar);
+        if (index < terminalCount)
+        {
+            observation.retest.state = ResolutionState::Succeeded;
+            observation.retest.resolutionBar = bar;
+            observation.retest.resolutionTimestamp = Timestamp(bar);
+            observation.retest.latencyBars = 0;
+        }
+        behavior.push_back(observation);
+        assert(tracker.ObserveInnerBreak(observation).has_value());
+    }
+    AssertActiveObservationCountMatches(tracker);
+    assert(tracker.ActiveObservationCount() == observationCount - terminalCount);
+
+    for (std::size_t index = 0; index < synchronizationCalls; ++index)
+    {
+        const std::size_t bar = observationCount + index + 1;
+        tracker.SynchronizeOutcomes(behavior, bar, Timestamp(bar));
+        AssertActiveObservationCountMatches(tracker);
+    }
+    const auto& work = tracker.OutcomeSynchronizationWork();
+    assert(work.calls == synchronizationCalls);
+    assert(work.retainedObservationsExamined ==
+           synchronizationCalls * observationCount);
+    assert(work.terminalObservationsSkipped ==
+           synchronizationCalls * terminalCount);
+    assert(work.pendingObservationsVisited ==
+           synchronizationCalls * (observationCount - terminalCount));
+    assert(work.behaviorLookupsAttempted == work.pendingObservationsVisited);
+    assert(work.terminalObservationsRevisited ==
+           (synchronizationCalls - 1) * terminalCount);
+    assert(work.observationsStateChanged == 0);
+    assert(work.activeToTerminalTransitions == 0);
+    assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxPendingObservations == observationCount - terminalCount);
+}
+
+void TestTerminalAndPendingObservationsCanInterleave()
+{
+    constexpr std::size_t observationCount = 6;
+    EA::TG3::Configuration configuration = FibonacciConfiguration();
+    configuration.maxActiveConfluenceObservations = observationCount;
+    configuration.maxRetainedConfluenceObservations = observationCount;
+    EA::TG3::FibonacciConfluenceTracker tracker(configuration);
+    std::deque<BreakObservation> behavior;
+
+    for (std::size_t index = 0; index < observationCount; ++index)
+    {
+        const std::size_t bar = index + 1;
+        tracker.Advance(bar, Timestamp(bar));
+        const BreakObservation observation = InnerBreak(index + 1, bar);
+        behavior.push_back(observation);
+        assert(tracker.ObserveInnerBreak(observation).has_value());
+    }
+    for (std::size_t index = 0; index < observationCount; index += 2)
+    {
+        behavior[index].retest.state = ResolutionState::Succeeded;
+        behavior[index].retest.resolutionBar = observationCount + 1;
+        behavior[index].retest.resolutionTimestamp =
+            Timestamp(observationCount + 1);
+        behavior[index].retest.latencyBars = observationCount - index;
+    }
+
+    tracker.SynchronizeOutcomes(behavior, observationCount + 1,
+                                Timestamp(observationCount + 1));
+    for (std::size_t index = 0; index < observationCount; ++index)
+        assert(Pending(tracker.Observations()[index].retest) ==
+               (index % 2 == 1));
+    AssertActiveObservationCountMatches(tracker);
+    assert(tracker.ActiveObservationCount() == observationCount / 2);
+
+    tracker.SynchronizeOutcomes(behavior, observationCount + 2,
+                                Timestamp(observationCount + 2));
+    const auto& work = tracker.OutcomeSynchronizationWork();
+    assert(work.calls == 2);
+    assert(work.retainedObservationsExamined == 2 * observationCount);
+    assert(work.terminalObservationsSkipped == observationCount / 2);
+    assert(work.pendingObservationsVisited ==
+           observationCount + observationCount / 2);
+    assert(work.behaviorLookupsAttempted == work.pendingObservationsVisited);
+    assert(work.observationsStateChanged == observationCount / 2);
+    assert(work.activeToTerminalTransitions == observationCount / 2);
+    assert(work.terminalObservationsRevisited == observationCount / 2);
+    assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxPendingObservations == observationCount);
 }
 
 void TestActiveObservationCountBookkeepingAndO1Access()
@@ -481,7 +608,14 @@ void TestOutcomeSynchronizationUsesLogarithmicPendingLookup()
     const auto& work = tracker.OutcomeSynchronizationWork();
     assert(work.calls == 1);
     assert(work.retainedObservationsExamined == observationCount);
+    assert(work.terminalObservationsSkipped == 0);
     assert(work.pendingObservationsVisited == observationCount);
+    assert(work.behaviorLookupsAttempted == observationCount);
+    assert(work.observationsStateChanged == 0);
+    assert(work.activeToTerminalTransitions == 0);
+    assert(work.terminalObservationsRevisited == 0);
+    assert(work.maxRetainedObservations == observationCount);
+    assert(work.maxPendingObservations == observationCount);
     // Each successful lower-bound lookup needs at most log2(256) probes plus
     // one equality check, rather than the old triangular full-rescan count.
     assert(work.behaviorObservationsCompared <= observationCount * 10);
@@ -490,6 +624,12 @@ void TestOutcomeSynchronizationUsesLogarithmicPendingLookup()
     assert(work.behaviorObservationsCompared < formerComparisons / 10);
     std::cout << "TG3_SYNC_WORK retained=" << work.retainedObservationsExamined
               << ",pending=" << work.pendingObservationsVisited
+              << ",terminal_skipped=" << work.terminalObservationsSkipped
+              << ",terminal_revisited="
+              << work.terminalObservationsRevisited
+              << ",lookup_attempted=" << work.behaviorLookupsAttempted
+              << ",state_changed=" << work.observationsStateChanged
+              << ",active_to_terminal=" << work.activeToTerminalTransitions
               << ",tg2_comparisons=" << work.behaviorObservationsCompared
               << ",former_tg2_comparisons=" << formerComparisons << '\n';
 }
@@ -560,6 +700,8 @@ int main()
     TestOutcomeCapacityCannotRewriteAlreadyEmittedPulse();
     TestOutcomeSynchronizationMatchesFullRescanAndCensoring();
     TestOutcomeSynchronizationDoesNotRescanTerminalHistory();
+    TestTerminalHistoryWithSmallPendingTail();
+    TestTerminalAndPendingObservationsCanInterleave();
     TestOutcomeSynchronizationUsesLogarithmicPendingLookup();
     TestActiveObservationCountBookkeepingAndO1Access();
     std::cout << "TG4CausalBoundaryClosureTests passed\n";
