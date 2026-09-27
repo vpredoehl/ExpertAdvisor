@@ -200,6 +200,22 @@ int main()
     assert(!incompatible.inferenceAccuracy.armBMinusArmA);
     assert(!incompatible.aggregateReturn.armBMinusArmA);
 
+    // The generic completed-result comparator stays strict: an execution
+    // producer mismatch is still an unexpected identity difference and does
+    // not produce a generic pair delta.
+    auto executionMismatch = ablation;
+    for (auto& field : executionMismatch.scientificIdentity)
+        if (field.name == "training_execution_identity")
+            field.value = "train|8|80|different_train_sha256|train_runtime_identity";
+    const auto strictExecutionMismatch = Comparison::Compare(
+        control, executionMismatch, request);
+    assert(strictExecutionMismatch.status ==
+           Comparison::Status::IncompatibleScientificIdentity);
+    assert(strictExecutionMismatch.unexpectedDifferences.size() == 1);
+    assert(strictExecutionMismatch.unexpectedDifferences[0].field ==
+           "training_execution_identity");
+    assert(!strictExecutionMismatch.aggregateReturn.armBMinusArmA);
+
     auto missingAnalysis = ablation;
     missingAnalysis.finalAnalysisAvailable = false;
     missingAnalysis.metrics.inferenceAccuracy.reset();

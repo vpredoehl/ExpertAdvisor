@@ -124,6 +124,12 @@ bool IsMaterializationField(std::string_view field)
     return fields.contains(field);
 }
 
+bool IsExecutionIdentityField(std::string_view field)
+{
+    return field == "training_execution_identity" ||
+        field == "inference_execution_identity";
+}
+
 std::optional<std::string> RequiredConfiguredValue(
     const IdentityMap& identity,
     std::string_view field)
@@ -245,6 +251,96 @@ std::optional<std::string> Seed(const IdentityMap& identity)
     return found->second;
 }
 
+std::optional<std::string> IdentityValue(
+    const std::vector<Pair::IdentityField>& fields,
+    std::string_view name)
+{
+    const auto found = std::find_if(
+        fields.begin(), fields.end(), [name](const Pair::IdentityField& field)
+        {
+            return field.name == name;
+        });
+    if (found == fields.end()) return std::nullopt;
+    return found->value;
+}
+
+Pair::ComparisonResult ConfigurationOnly(Pair::ComparisonResult pair)
+{
+    std::erase_if(pair.armAScientificIdentity, [](const Pair::IdentityField& field)
+    {
+        return IsExecutionIdentityField(field.name);
+    });
+    std::erase_if(pair.armBScientificIdentity, [](const Pair::IdentityField& field)
+    {
+        return IsExecutionIdentityField(field.name);
+    });
+    std::erase_if(pair.unexpectedDifferences,
+                  [](const Pair::IdentityDifference& difference)
+    {
+        return IsExecutionIdentityField(difference.field);
+    });
+    if (pair.status == Pair::Status::IncompatibleScientificIdentity &&
+        pair.unexpectedDifferences.empty())
+        pair.status = pair.incompleteReasons.empty()
+            ? Pair::Status::ComparableComplete
+            : Pair::Status::ComparableIncomplete;
+    return pair;
+}
+
+EvidenceCompatibility ConfiguredPairCompatibility(
+    const Pair::ComparisonResult& pair,
+    std::vector<std::string>& reasons)
+{
+    if (!pair.invalidReasons.empty())
+    {
+        reasons = pair.invalidReasons;
+        return EvidenceCompatibility::InvalidEvidence;
+    }
+    for (const auto& difference : pair.unexpectedDifferences)
+        if (!IsExecutionIdentityField(difference.field))
+            reasons.push_back("unexpected_difference:" + difference.field);
+    return reasons.empty() ? EvidenceCompatibility::Compatible
+                           : EvidenceCompatibility::Incompatible;
+}
+
+EvidenceCompatibility ExecutionPairCompatibility(
+    const Pair::ComparisonResult& pair,
+    std::vector<std::string>& reasons)
+{
+    for (const std::string_view field : {"training_execution_identity",
+                                         "inference_execution_identity"})
+    {
+        const auto armA = IdentityValue(pair.armAScientificIdentity, field);
+        const auto armB = IdentityValue(pair.armBScientificIdentity, field);
+        if (!armA || !armB)
+        {
+            reasons.push_back(std::string(field) + "_unavailable");
+            continue;
+        }
+        if (*armA != *armB)
+            reasons.push_back(std::string(field) + "_mismatch");
+    }
+    if (std::any_of(reasons.begin(), reasons.end(), [](const std::string& reason)
+        {
+            return reason.ends_with("_mismatch");
+        }))
+        return EvidenceCompatibility::Incompatible;
+    return reasons.empty() ? EvidenceCompatibility::Compatible
+                           : EvidenceCompatibility::UndeterminedDueToMissingEvidence;
+}
+
+EvidenceCompatibility EvidenceCompatibilityFrom(Compatibility compatibility)
+{
+    switch (compatibility)
+    {
+        case Compatibility::Compatible: return EvidenceCompatibility::Compatible;
+        case Compatibility::Incompatible: return EvidenceCompatibility::Incompatible;
+        case Compatibility::UndeterminedDueToMissingEvidence:
+            return EvidenceCompatibility::UndeterminedDueToMissingEvidence;
+    }
+    throw std::invalid_argument("unknown replication compatibility");
+}
+
 std::optional<std::string> HomogeneousSymbol(const Result& result)
 {
     std::optional<std::string> expected;
@@ -314,9 +410,35 @@ std::string OptionalText(const std::optional<std::string>& value)
     return value ? MachineText(*value) : "NULL";
 }
 
-} // namespace
+void RenderAggregateMetrics(std::ostringstream& output,
+                            std::string_view record,
+                            const std::vector<MetricAggregate>& metrics)
+{
+    for (const auto& metric : metrics)
+        output << record
+               << ",metric=" << metric.name
+               << ",n_pairs=" << metric.pairCount
+               << ",n_available=" << metric.availableCount
+               << ",pair_deltas=" << Deltas(metric.pairDeltas)
+               << ",descriptive_mean="
+               << OptionalNumber(metric.descriptiveMean)
+               << ",minimum=" << OptionalNumber(metric.minimum)
+               << ",maximum=" << OptionalNumber(metric.maximum)
+               << ",count_positive=" << metric.positiveCount
+               << ",count_zero=" << metric.zeroCount
+               << ",count_negative=" << metric.negativeCount
+               << '\n';
+}
 
-Result Compare(std::vector<Pair::ComparisonResult> pairs)
+std::optional<double> ConfiguredObservationDelta(const Pair::MetricDelta& metric)
+{
+    if (!metric.armA || !metric.armB || !std::isfinite(*metric.armA) ||
+        !std::isfinite(*metric.armB))
+        return std::nullopt;
+    return *metric.armB - *metric.armA;
+}
+
+Result CompareCore(std::vector<Pair::ComparisonResult> pairs)
 {
     if (pairs.size() < 2)
         throw std::invalid_argument(
@@ -351,10 +473,8 @@ Result Compare(std::vector<Pair::ComparisonResult> pairs)
         }
         if (index != 0)
             CompareIntervention(result.pairs.front(), pair, ordinal, result);
-        armAIdentities.push_back(MakeIdentityMap(
-            pair.armAScientificIdentity));
-        armBIdentities.push_back(MakeIdentityMap(
-            pair.armBScientificIdentity));
+        armAIdentities.push_back(MakeIdentityMap(pair.armAScientificIdentity));
+        armBIdentities.push_back(MakeIdentityMap(pair.armBScientificIdentity));
     }
 
     CompareRoleIdentities("arm_a", armAIdentities, result);
@@ -394,6 +514,88 @@ Result Compare(std::vector<Pair::ComparisonResult> pairs)
     return result;
 }
 
+} // namespace
+
+Result Compare(std::vector<Pair::ComparisonResult> pairs)
+{
+    Result result = CompareCore(std::move(pairs));
+
+    std::vector<Pair::ComparisonResult> configuredPairs;
+    configuredPairs.reserve(result.pairs.size());
+    result.pairCompatibility.reserve(result.pairs.size());
+    std::vector<Pair::ComparisonResult> strictPairs;
+    for (std::size_t index = 0; index < result.pairs.size(); ++index)
+    {
+        const Pair::ComparisonResult& pair = result.pairs[index];
+        PairCompatibilityAssessment assessment;
+        assessment.configuredScientificIdentity = ConfiguredPairCompatibility(
+            pair, assessment.configuredScientificIdentityReasons);
+        assessment.executionProvenance = ExecutionPairCompatibility(
+            pair, assessment.executionProvenanceReasons);
+        assessment.strictCompletedCompatible =
+            assessment.configuredScientificIdentity ==
+                EvidenceCompatibility::Compatible &&
+            assessment.executionProvenance == EvidenceCompatibility::Compatible &&
+            pair.status == Pair::Status::ComparableComplete;
+        configuredPairs.push_back(ConfigurationOnly(pair));
+        if (assessment.configuredScientificIdentity ==
+            EvidenceCompatibility::Compatible)
+            ++result.strictCompletedSubset.totalConfiguredPairCount;
+        if (assessment.strictCompletedCompatible)
+        {
+            ++result.strictCompletedSubset.strictCompletedCompatiblePairCount;
+            strictPairs.push_back(pair);
+        }
+        else
+        {
+            StrictSubsetExclusion exclusion;
+            exclusion.pairOrdinal = index + 1;
+            exclusion.experimentAId = pair.experimentAId;
+            exclusion.experimentBId = pair.experimentBId;
+            exclusion.armASeed = Seed(MakeIdentityMap(pair.armAScientificIdentity));
+            exclusion.armBSeed = Seed(MakeIdentityMap(pair.armBScientificIdentity));
+            if (assessment.configuredScientificIdentity !=
+                EvidenceCompatibility::Compatible)
+                exclusion.reasons.push_back(
+                    "configured_scientific_identity_" +
+                    EvidenceCompatibilityText(
+                        assessment.configuredScientificIdentity));
+            if (assessment.executionProvenance !=
+                EvidenceCompatibility::Compatible)
+                exclusion.reasons.push_back(
+                    "execution_provenance_" + EvidenceCompatibilityText(
+                        assessment.executionProvenance));
+            if (pair.status != Pair::Status::ComparableComplete)
+                exclusion.reasons.push_back("completed_result_" +
+                                            Pair::StatusText(pair.status));
+            result.strictCompletedSubset.exclusions.push_back(std::move(exclusion));
+        }
+        result.pairCompatibility.push_back(std::move(assessment));
+    }
+
+    const Result configured = CompareCore(std::move(configuredPairs));
+    result.configuredScientificIdentity =
+        EvidenceCompatibilityFrom(configured.compatibility);
+    result.configuredScientificIdentityReasons = configured.compatibilityReasons;
+
+    if (strictPairs.size() < 2)
+    {
+        result.strictCompletedSubset.aggregateCompatibility =
+            Compatibility::UndeterminedDueToMissingEvidence;
+        result.strictCompletedSubset.aggregateReasons.push_back(
+            "fewer_than_two_strict_completed_compatible_pairs");
+    }
+    else
+    {
+        const Result strict = CompareCore(std::move(strictPairs));
+        result.strictCompletedSubset.aggregateCompatibility = strict.compatibility;
+        result.strictCompletedSubset.aggregateReasons = strict.compatibilityReasons;
+        if (strict.compatibility == Compatibility::Compatible)
+            result.strictCompletedSubset.metrics = strict.metrics;
+    }
+    return result;
+}
+
 FamilyReport CompareFamilies(
     std::vector<std::vector<Pair::ComparisonResult>> families)
 {
@@ -428,7 +630,7 @@ std::string Render(const Result& result)
 {
     std::ostringstream output;
     output << "EXPERIMENT_REPLICATION_COMPARISON"
-           << ",version=1"
+           << ",version=2"
            << ",pair_count=" << result.pairs.size()
            << ",pair_order=argument_order"
            << ",arm_order=argument_order"
@@ -444,6 +646,40 @@ std::string Render(const Result& result)
                << ",status=" << Pair::StatusText(result.pairs[index].status)
                << '\n';
         output << Pair::RenderSummary(result.pairs[index]);
+        const PairCompatibilityAssessment& assessment =
+            result.pairCompatibility[index];
+        output << "EXPERIMENT_REPLICATION_PAIR_COMPATIBILITY"
+               << ",ordinal=" << index + 1
+               << ",configured_scientific_identity="
+               << EvidenceCompatibilityText(
+                      assessment.configuredScientificIdentity)
+               << ",configured_reasons="
+               << Reasons(assessment.configuredScientificIdentityReasons)
+               << ",execution_provenance="
+               << EvidenceCompatibilityText(assessment.executionProvenance)
+               << ",execution_reasons="
+               << Reasons(assessment.executionProvenanceReasons)
+               << ",strict_completed_compatible="
+               << (assessment.strictCompletedCompatible ? "true" : "false")
+               << '\n';
+        if (assessment.configuredScientificIdentity ==
+            EvidenceCompatibility::Compatible)
+            for (const auto& definition : Pair::MetricDefinitions())
+            {
+                const Pair::MetricDelta& metric =
+                    result.pairs[index].*definition.member;
+                output << "EXPERIMENT_REPLICATION_CONFIGURED_PAIR_METRIC"
+                       << ",pair_ordinal=" << index + 1
+                       << ",metric=" << definition.name
+                       << ",arm_a=" << OptionalNumber(metric.armA)
+                       << ",arm_b=" << OptionalNumber(metric.armB)
+                       << ",arm_b_minus_arm_a="
+                       << OptionalNumber(ConfiguredObservationDelta(metric))
+                       << ",execution_provenance="
+                       << EvidenceCompatibilityText(
+                              assessment.executionProvenance)
+                       << '\n';
+            }
     }
     for (const auto& dimension : result.replicationDimensions)
         output << "EXPERIMENT_REPLICATION_DIMENSION"
@@ -459,27 +695,48 @@ std::string Render(const Result& result)
            << SeedReplicationModeText(result.seedReplicationMode)
            << ",statistical_independence=not_inferred"
            << '\n';
+    output << "EXPERIMENT_REPLICATION_CONFIGURED_FAMILY_COMPATIBILITY"
+           << ",state="
+           << EvidenceCompatibilityText(result.configuredScientificIdentity)
+           << ",reasons=" << Reasons(result.configuredScientificIdentityReasons)
+           << ",aggregate=not_performed"
+           << ",configuration_does_not_establish_execution_equivalence=true"
+           << '\n';
     if (result.compatibility == Compatibility::Compatible)
     {
-        for (const auto& metric : result.metrics)
-            output << "EXPERIMENT_REPLICATION_METRIC"
-                   << ",metric=" << metric.name
-                   << ",n_pairs=" << metric.pairCount
-                   << ",n_available=" << metric.availableCount
-                   << ",pair_deltas=" << Deltas(metric.pairDeltas)
-                   << ",descriptive_mean="
-                   << OptionalNumber(metric.descriptiveMean)
-                   << ",minimum=" << OptionalNumber(metric.minimum)
-                   << ",maximum=" << OptionalNumber(metric.maximum)
-                   << ",count_positive=" << metric.positiveCount
-                   << ",count_zero=" << metric.zeroCount
-                   << ",count_negative=" << metric.negativeCount
-                   << '\n';
+        RenderAggregateMetrics(output, "EXPERIMENT_REPLICATION_METRIC",
+                               result.metrics);
     }
     else
         output << "EXPERIMENT_REPLICATION_AGGREGATE"
                << ",suppressed=true"
                << ",reason=replication_compatibility_not_established\n";
+    output << "EXPERIMENT_REPLICATION_STRICT_COMPLETED_SUBSET"
+           << ",total_configured_pairs="
+           << result.strictCompletedSubset.totalConfiguredPairCount
+           << ",strict_completed_compatible_pairs="
+           << result.strictCompletedSubset.strictCompletedCompatiblePairCount
+           << ",excluded_or_caveated_pairs="
+           << result.strictCompletedSubset.exclusions.size()
+           << ",aggregate_state="
+           << CompatibilityText(result.strictCompletedSubset.aggregateCompatibility)
+           << ",aggregate_reasons="
+           << Reasons(result.strictCompletedSubset.aggregateReasons)
+           << ",aggregation=unweighted_descriptive_paired_deltas"
+           << ",statistical_independence=not_inferred\n";
+    for (const auto& exclusion : result.strictCompletedSubset.exclusions)
+        output << "EXPERIMENT_REPLICATION_STRICT_COMPLETED_EXCLUSION"
+               << ",pair_ordinal=" << exclusion.pairOrdinal
+               << ",experiment_a_id=" << exclusion.experimentAId
+               << ",experiment_b_id=" << exclusion.experimentBId
+               << ",arm_a_seed=" << OptionalText(exclusion.armASeed)
+               << ",arm_b_seed=" << OptionalText(exclusion.armBSeed)
+               << ",reasons=" << Reasons(exclusion.reasons) << '\n';
+    if (result.strictCompletedSubset.aggregateCompatibility ==
+        Compatibility::Compatible)
+        RenderAggregateMetrics(output,
+                               "EXPERIMENT_REPLICATION_STRICT_COMPLETED_METRIC",
+                               result.strictCompletedSubset.metrics);
     output << "EXPERIMENT_REPLICATION_RESULT"
            << ",compatibility=" << CompatibilityText(result.compatibility)
            << ",subjective_winner=NONE"
@@ -535,6 +792,19 @@ std::string CompatibilityText(Compatibility value)
             return "undetermined_due_to_missing_evidence";
     }
     throw std::invalid_argument("unknown replication compatibility");
+}
+
+std::string EvidenceCompatibilityText(EvidenceCompatibility value)
+{
+    switch (value)
+    {
+        case EvidenceCompatibility::Compatible: return "compatible";
+        case EvidenceCompatibility::Incompatible: return "incompatible";
+        case EvidenceCompatibility::UndeterminedDueToMissingEvidence:
+            return "undetermined_due_to_missing_evidence";
+        case EvidenceCompatibility::InvalidEvidence: return "invalid_evidence";
+    }
+    throw std::invalid_argument("unknown evidence compatibility");
 }
 
 std::string SeedReplicationModeText(SeedReplicationMode value)

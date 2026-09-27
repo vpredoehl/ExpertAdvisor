@@ -152,13 +152,24 @@ Pair::ComparisonResult PairResult(const Feature::ArmEvidence& armA,
 }
 
 const Replication::MetricAggregate& Metric(
+    const std::vector<Replication::MetricAggregate>& metrics,
+    std::string_view name);
+
+const Replication::MetricAggregate& Metric(
     const Replication::Result& result,
     std::string_view name)
 {
+    return Metric(result.metrics, name);
+}
+
+const Replication::MetricAggregate& Metric(
+    const std::vector<Replication::MetricAggregate>& metrics,
+    std::string_view name)
+{
     const auto found = std::find_if(
-        result.metrics.begin(), result.metrics.end(),
+        metrics.begin(), metrics.end(),
         [name](const auto& metric) { return metric.name == name; });
-    assert(found != result.metrics.end());
+    assert(found != metrics.end());
     return *found;
 }
 
@@ -281,6 +292,12 @@ int main()
     assert(incompleteAccuracy.pairDeltas[0]);
     assert(!incompleteAccuracy.pairDeltas[1]);
     assert(std::fabs(*incompleteAccuracy.descriptiveMean - 0.10) < 1.0e-15);
+    assert(incomplete.strictCompletedSubset.totalConfiguredPairCount == 2);
+    assert(incomplete.strictCompletedSubset.strictCompletedCompatiblePairCount ==
+           1);
+    assert(incomplete.strictCompletedSubset.aggregateCompatibility ==
+           Replication::Compatibility::UndeterminedDueToMissingEvidence);
+    assert(incomplete.strictCompletedSubset.exclusions.size() == 1);
 
     // One absent metric has the same missing-data behavior even when the rest
     // of that pair's evidence exists.
@@ -293,6 +310,10 @@ int main()
     assert(acceptAccuracy.availableCount == 1);
     assert(!acceptAccuracy.pairDeltas[1]);
     assert(acceptAccuracy.descriptiveMean == 0.0);
+    assert(missingMetric.strictCompletedSubset.strictCompletedCompatiblePairCount ==
+           1);
+    assert(missingMetric.strictCompletedSubset.aggregateCompatibility ==
+           Replication::Compatibility::UndeterminedDueToMissingEvidence);
 
     // Positive, zero, and negative counts are exact and use unrounded deltas.
     auto a3 = Arm(205, "", 44, 0.50, 0.40);
@@ -303,6 +324,77 @@ int main()
     assert(threeAccuracy.positiveCount == 1);
     assert(threeAccuracy.zeroCount == 1);
     assert(threeAccuracy.negativeCount == 1);
+
+    // Configuration membership and completed-result execution provenance are
+    // independent observations. The historical caveated pair remains visible
+    // but cannot join the strict homogeneous two-seed aggregate.
+    auto caveatedA = Arm(211, "", 43, 0.60, 0.10);
+    auto caveatedB = Arm(212, std::string{kMask}, 43, 0.70, 0.20);
+    caveatedB.authoritative.trainingExecution->executableSha256 =
+        "different_train_sha256";
+    auto strictA1 = Arm(213, "", 44, 0.65, 0.30);
+    auto strictB1 = Arm(214, std::string{kMask}, 44, 0.60, 0.20);
+    auto strictA2 = Arm(215, "", 45, 0.50, 0.40);
+    auto strictB2 = Arm(216, std::string{kMask}, 45, 0.55, 0.50);
+    const auto provenanceCaveat = Replication::Compare({
+        PairResult(caveatedA, caveatedB), PairResult(strictA1, strictB1),
+        PairResult(strictA2, strictB2)});
+    assert(provenanceCaveat.compatibility ==
+           Replication::Compatibility::Incompatible);
+    assert(provenanceCaveat.configuredScientificIdentity ==
+           Replication::EvidenceCompatibility::Compatible);
+    assert(provenanceCaveat.pairCompatibility[0].configuredScientificIdentity ==
+           Replication::EvidenceCompatibility::Compatible);
+    assert(provenanceCaveat.pairCompatibility[0].executionProvenance ==
+           Replication::EvidenceCompatibility::Incompatible);
+    assert(!provenanceCaveat.pairCompatibility[0].strictCompletedCompatible);
+    assert(provenanceCaveat.strictCompletedSubset.totalConfiguredPairCount == 3);
+    assert(provenanceCaveat.strictCompletedSubset.
+               strictCompletedCompatiblePairCount == 2);
+    assert(provenanceCaveat.strictCompletedSubset.exclusions.size() == 1);
+    assert(provenanceCaveat.strictCompletedSubset.exclusions[0].pairOrdinal == 1);
+    assert(provenanceCaveat.strictCompletedSubset.exclusions[0].armASeed == "43");
+    assert(provenanceCaveat.strictCompletedSubset.aggregateCompatibility ==
+           Replication::Compatibility::Compatible);
+    assert(Metric(provenanceCaveat.strictCompletedSubset.metrics,
+                  "inference_accuracy").pairCount == 2);
+    const std::string provenanceCaveatRendered =
+        Replication::Render(provenanceCaveat);
+    assert(provenanceCaveatRendered.find(
+               "configured_scientific_identity=compatible") !=
+           std::string::npos);
+    assert(provenanceCaveatRendered.find(
+               "execution_provenance=incompatible") != std::string::npos);
+    assert(provenanceCaveatRendered.find(
+               "EXPERIMENT_REPLICATION_CONFIGURED_PAIR_METRIC,pair_ordinal=1,") !=
+           std::string::npos);
+    assert(provenanceCaveatRendered.find(
+               "EXPERIMENT_REPLICATION_STRICT_COMPLETED_EXCLUSION,pair_ordinal=1,") !=
+           std::string::npos);
+    assert(provenanceCaveatRendered.find(
+               "EXPERIMENT_REPLICATION_STRICT_COMPLETED_METRIC") !=
+           std::string::npos);
+
+    // Zero strict pairs has no fabricated zero aggregate, and one strict pair
+    // is not represented as a multi-seed replication aggregate.
+    auto caveatedA2 = Arm(217, "", 44, 0.60, 0.10);
+    auto caveatedB2 = Arm(218, std::string{kMask}, 44, 0.70, 0.20);
+    caveatedB2.authoritative.trainingExecution->executableSha256 =
+        "another_train_sha256";
+    const auto zeroStrict = Replication::Compare(
+        {PairResult(caveatedA, caveatedB), PairResult(caveatedA2, caveatedB2)});
+    assert(zeroStrict.strictCompletedSubset.strictCompletedCompatiblePairCount ==
+           0);
+    assert(zeroStrict.strictCompletedSubset.aggregateCompatibility ==
+           Replication::Compatibility::UndeterminedDueToMissingEvidence);
+    assert(zeroStrict.strictCompletedSubset.metrics.empty());
+    const auto oneStrict = Replication::Compare(
+        {PairResult(caveatedA, caveatedB), PairResult(strictA1, strictB1)});
+    assert(oneStrict.strictCompletedSubset.strictCompletedCompatiblePairCount ==
+           1);
+    assert(oneStrict.strictCompletedSubset.aggregateCompatibility ==
+           Replication::Compatibility::UndeterminedDueToMissingEvidence);
+    assert(oneStrict.strictCompletedSubset.metrics.empty());
 
     // Same feature-ablation intervention is accepted; known changes to its
     // exact mask are incompatible even when each pair is internally valid.
