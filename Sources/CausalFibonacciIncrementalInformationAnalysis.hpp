@@ -180,7 +180,7 @@ inline std::vector<std::size_t> EligibleRows(const std::vector<ParsedRow>& rows,
     std::vector<std::size_t> out; for (std::size_t i = 0; i < rows.size(); ++i) if (rows[i].partition == partition && label(rows[i]).eligible) out.push_back(i); return out;
 }
 
-struct RidgeModel { bool available = false; std::string unavailableReason; std::vector<double> beta; double targetMean = 0.0, targetStandardDeviation = 1.0; };
+struct RidgeModel { bool available = false; std::string unavailableReason; std::vector<double> beta; double targetMean = 0.0, targetStandardDeviation = 0.0; };
 inline RidgeModel FitRidge(const std::vector<ParsedRow>& rows, const std::vector<std::size_t>& selected, const std::vector<FeatureRef>& features, std::size_t fibonacciColumn)
 {
     RidgeModel result; if (selected.empty()) { result.unavailableReason = "no_development_target_rows"; return result; }
@@ -243,10 +243,19 @@ inline void WriteStructuralRows(std::ofstream& out,const std::string& symbol,con
 }
 
 inline bool EventState(const ParsedRow& row) noexcept { return row.fibonacci[0] > .5f && (row.fibonacci[1] > 0.0f || row.fibonacci[12] > 0.0f); }
+inline std::size_t FrozenBinIndex(const std::vector<double>& edges, double value)
+{
+    if (edges.empty()) throw std::invalid_argument("fibonacci_frozen_bin_edges_empty");
+    const auto it = std::lower_bound(edges.begin(), edges.end(), value);
+    return it == edges.end()
+        ? edges.size() - 1
+        : static_cast<std::size_t>(it - edges.begin());
+}
+
 inline void WriteFibonacciLedgers(std::ofstream& out,const std::string& symbol,const std::vector<ParsedRow>& rows)
 {
     for(std::size_t f=0;f<kFibonacciWidth;++f){std::vector<double> edges;if(f==0)edges={0.0,1.0};else{std::vector<double> values;for(const auto&r:rows)if(r.partition==Partition::Development)values.push_back(r.fibonacci[f]);std::sort(values.begin(),values.end());for(std::size_t q=1;q<=5&&!values.empty();++q)edges.push_back(values[(q*values.size()+4)/5-1]);edges.erase(std::unique(edges.begin(),edges.end()),edges.end());if(edges.size()<2)edges.clear();}
-        for(const Partition partition:{Partition::Development,Partition::Validation,Partition::Pre2025LockTest})for(const bool h6:{false,true}){if(edges.empty()){out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<",,0,0,0,0,,,insufficient_distinct_development_values_after_tied_edge_collapse\n";continue;}std::vector<StateAccumulator> bins(edges.size());for(const auto&r:rows)if(r.partition==partition){const auto&t=h6?r.h6:r.h4;if(!t.eligible)continue;const double value=r.fibonacci[f];const auto bin=static_cast<std::size_t>(std::lower_bound(edges.begin(),edges.end(),value)-edges.begin());bins[bin].Add(t);}for(std::size_t b=0;b<bins.size();++b){const auto&v=bins[b];double mean=0;for(double x:v.returns)mean+=x;if(!v.returns.empty())mean/=v.returns.size();out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<','<<b<<','<<Number(edges[b])<<','<<v.rows<<','<<v.classes[0]<<','<<v.classes[1]<<','<<v.classes[2]<<','<<Number(mean)<<','<<Number(Median(v.returns))<<",\n";}}
+        for(const Partition partition:{Partition::Development,Partition::Validation,Partition::Pre2025LockTest})for(const bool h6:{false,true}){if(edges.empty()){out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<",,0,0,0,0,,,insufficient_distinct_development_values_after_tied_edge_collapse\n";continue;}std::vector<StateAccumulator> bins(edges.size());for(const auto&r:rows)if(r.partition==partition){const auto&t=h6?r.h6:r.h4;if(!t.eligible)continue;const double value=r.fibonacci[f];const auto bin=FrozenBinIndex(edges,value);bins[bin].Add(t);}for(std::size_t b=0;b<bins.size();++b){const auto&v=bins[b];double mean=0;for(double x:v.returns)mean+=x;if(!v.returns.empty())mean/=v.returns.size();out<<symbol<<','<<PartitionName(partition)<<','<<(h6?"H6":"H4")<<','<<f<<','<<b<<','<<Number(edges[b])<<','<<v.rows<<','<<v.classes[0]<<','<<v.classes[1]<<','<<v.classes[2]<<','<<Number(mean)<<','<<Number(Median(v.returns))<<",\n";}}
     }
 }
 

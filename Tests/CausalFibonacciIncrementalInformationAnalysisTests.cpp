@@ -7,6 +7,41 @@ namespace A = EA::CausalFibonacciIncrementalInformation::Analysis;
 
 int main()
 {
+    // Frozen development-bin boundaries remain fixed for later partitions.
+    {
+        const std::vector<double> edges{1.0, 2.0, 3.0};
+
+        assert(A::FrozenBinIndex(edges, -100.0) == 0);
+        assert(A::FrozenBinIndex(edges, 1.0) == 0);
+        assert(A::FrozenBinIndex(edges, 2.0) == 1);
+        assert(A::FrozenBinIndex(edges, 3.0) == 2);
+        assert(A::FrozenBinIndex(edges, 100.0) == 2);
+
+        bool emptyRejected = false;
+        try { (void)A::FrozenBinIndex({}, 1.0); }
+        catch (const std::invalid_argument&) { emptyRejected = true; }
+        assert(emptyRejected);
+    }
+
+    // Ridge target standardization uses the exact development population SD.
+    {
+        std::vector<A::ParsedRow> rows(3);
+        rows[0].fibonacci[1] = 1.0f;
+        rows[1].fibonacci[1] = 2.0f;
+        rows[2].fibonacci[1] = 3.0f;
+
+        const std::vector<std::size_t> selected{0, 1, 2};
+        const std::vector<A::FeatureRef> noFeatures;
+
+        const auto model = A::FitRidge(rows, selected, noFeatures, 1);
+
+        assert(model.available);
+        assert(std::abs(model.targetMean - 2.0) < 1e-12);
+        assert(std::abs(
+            model.targetStandardDeviation - std::sqrt(2.0 / 3.0)
+        ) < 1e-12);
+    }
+
     const std::string confirmation =
         "ignored,audcadrmp,1735689600,1,confirmation_2025,99,0,0,nan,0,,99,0,0,nan,0,";
     assert(!A::ParsePre2025Row(confirmation).has_value());
