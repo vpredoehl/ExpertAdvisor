@@ -13,6 +13,7 @@ xcuserdata/
 .derived-data-log*
 # Generated analysis output
 *.csv
+ResearchArtifacts/
 !EconomicCalendar/raw/myfxbook/derived/
 !EconomicCalendar/raw/myfxbook/derived/*.csv
 *_results.csv

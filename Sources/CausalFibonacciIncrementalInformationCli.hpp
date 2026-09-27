@@ -5,6 +5,7 @@
 
 #include "CausalFibonacciIncrementalInformation.hpp"
 #include "CausalFibonacciIncrementalInformationExtraction.hpp"
+#include "CausalFibonacciIncrementalInformationAnalysis.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -37,7 +38,8 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
     if (argc < 2) return std::nullopt;
     const std::string_view command(argv[1]);
     if (command != "--fibonacci-incremental-information-verify-artifact" &&
-        command != "--fibonacci-incremental-information-extract")
+        command != "--fibonacci-incremental-information-extract" &&
+        command != "--fibonacci-incremental-information-analyze-pre2025")
         return std::nullopt;
     try {
         VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");
@@ -45,6 +47,20 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
             if (argc != 3) throw std::invalid_argument("usage: --fibonacci-incremental-information-verify-artifact ARTIFACT_DIRECTORY");
             VerifyArtifactDirectory(std::filesystem::path(argv[2]));
             std::cout << "FIBONACCI_INCREMENTAL_ARTIFACT_VERIFIED protocol=" << kProtocolId << '\n';
+            return 0;
+        }
+        if (command == "--fibonacci-incremental-information-analyze-pre2025") {
+            Analysis::Options options;
+            for (int index = 2; index < argc; ++index) {
+                const std::string_view option(argv[index]);
+                if (option == "--artifact-dir" && index + 1 < argc) options.artifactDirectory = argv[++index];
+                else if (option == "--output-dir" && index + 1 < argc) options.outputDirectory = argv[++index];
+                else if (option == "--code-commit" && index + 1 < argc) options.codeCommit = argv[++index];
+                else throw std::invalid_argument("unknown or incomplete Fibonacci pre-2025 analysis option: " + std::string(option));
+            }
+            Analysis::Run(options);
+            std::cout << "FIBONACCI_INCREMENTAL_PRE2025_ANALYSIS_COMPLETE protocol=" << kProtocolId
+                      << ",confirmation_2025=sealed\n";
             return 0;
         }
         Extraction::Options options;
