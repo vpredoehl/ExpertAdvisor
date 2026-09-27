@@ -40,7 +40,8 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
     if (command != "--fibonacci-incremental-information-verify-artifact" &&
         command != "--fibonacci-incremental-information-extract" &&
         command != "--fibonacci-incremental-information-analyze-pre2025" &&
-        command != "--fibonacci-incremental-information-diagnose-pre2025-multinomial")
+        command != "--fibonacci-incremental-information-diagnose-pre2025-multinomial" &&
+        command != "--fibonacci-incremental-information-qualify-solver-budget")
         return std::nullopt;
     try {
         VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");
@@ -56,6 +57,12 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
                 throw std::invalid_argument("usage: --fibonacci-incremental-information-diagnose-pre2025-multinomial --artifact-dir ARTIFACT_DIRECTORY [--continuation-5000]");
             const auto mode=argc==5?Analysis::AudcadH4BaselineMultinomialDiagnosticMode::Continuation5000:Analysis::AudcadH4BaselineMultinomialDiagnosticMode::Frozen250;
             Analysis::RunAudcadH4BaselineMultinomialDiagnostic(std::filesystem::path(argv[3]), std::cerr, mode);
+            return 0;
+        }
+        if (command == "--fibonacci-incremental-information-qualify-solver-budget") {
+            if (argc != 4 || std::string_view(argv[2]) != "--artifact-dir")
+                throw std::invalid_argument("usage: --fibonacci-incremental-information-qualify-solver-budget --artifact-dir ARTIFACT_DIRECTORY");
+            Analysis::RunSolverBudgetQualification(std::filesystem::path(argv[3]), std::cerr);
             return 0;
         }
         if (command == "--fibonacci-incremental-information-analyze-pre2025") {

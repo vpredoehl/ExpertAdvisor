@@ -94,6 +94,18 @@ inline std::optional<ParsedRow> ParsePre2025Row(std::string_view line)
     return row;
 }
 
+// Solver-budget qualification is development-only.  It reads the partition
+// field first, then discards every non-development row before target or
+// predictor parsing.  In particular, confirmation remains sealed.
+inline std::optional<ParsedRow> ParseDevelopmentOnlyRow(std::string_view line)
+{
+    constexpr std::size_t kPartitionField = 4;
+    const auto partition = ParsedPartition(FieldAt(line, kPartitionField));
+    if (!partition) throw std::invalid_argument("fibonacci_artifact_unknown_partition");
+    if (*partition != Partition::Development) return std::nullopt;
+    return ParsePre2025Row(line);
+}
+
 inline void ValidateRowsHeader(const std::string& header)
 {
     if (FieldAt(header, 0) != "row_identity" || FieldAt(header, 1) != "symbol" ||
@@ -119,6 +131,25 @@ inline std::map<std::string, std::vector<ParsedRow>> LoadPre2025Rows(const std::
     const std::array<std::string, 6> expected{{"audcadrmp","audusdrmp","eurusdrmp","gbpusdrmp","usdcadrmp","usdjpyrmp"}};
     if (grouped.size() != expected.size()) throw std::invalid_argument("fibonacci_artifact_pre2025_symbol_universe_mismatch");
     for (const auto& symbol : expected) if (!grouped.contains(symbol)) throw std::invalid_argument("fibonacci_artifact_pre2025_symbol_missing:" + symbol);
+    return grouped;
+}
+
+inline std::map<std::string, std::vector<ParsedRow>> LoadDevelopmentOnlyRows(const std::filesystem::path& artifact)
+{
+    std::ifstream input(artifact / "rows.csv"); if (!input) throw std::runtime_error("fibonacci_artifact_rows_unreadable");
+    std::string line; if (!std::getline(input, line)) throw std::runtime_error("fibonacci_artifact_rows_header_missing"); ValidateRowsHeader(line);
+    std::map<std::string, std::vector<ParsedRow>> grouped;
+    std::string previousSymbol; std::int64_t previousTimestamp = std::numeric_limits<std::int64_t>::min();
+    while (std::getline(input, line)) {
+        const auto parsed = ParseDevelopmentOnlyRow(line);
+        if (!parsed) continue;
+        if (parsed->symbol != previousSymbol) { if (!previousSymbol.empty() && parsed->symbol < previousSymbol) throw std::invalid_argument("fibonacci_artifact_development_sort_order_invalid"); previousSymbol = parsed->symbol; previousTimestamp = std::numeric_limits<std::int64_t>::min(); }
+        if (parsed->timestamp <= previousTimestamp) throw std::invalid_argument("fibonacci_artifact_development_duplicate_or_unordered_timestamp");
+        previousTimestamp = parsed->timestamp; grouped[parsed->symbol].push_back(std::move(*parsed));
+    }
+    const std::array<std::string, 6> expected{{"audcadrmp","audusdrmp","eurusdrmp","gbpusdrmp","usdcadrmp","usdjpyrmp"}};
+    if (grouped.size() != expected.size()) throw std::invalid_argument("fibonacci_artifact_development_symbol_universe_mismatch");
+    for (const auto& symbol : expected) if (!grouped.contains(symbol)) throw std::invalid_argument("fibonacci_artifact_development_symbol_missing:" + symbol);
     return grouped;
 }
 
@@ -375,6 +406,108 @@ inline std::optional<double> TrajectoryObjectiveAt(const LbfgsResult& diagnostic
 {
     for(const auto& point:diagnostic.trajectory)if(point.iterations==iterations)return point.objective;
     return std::nullopt;
+}
+
+inline constexpr std::size_t kSolverBudgetQualificationIterations = 5000;
+
+inline LbfgsOptions SolverBudgetQualificationOptions()
+{
+    LbfgsOptions options;
+    options.maxIterations = kSolverBudgetQualificationIterations;
+    options.captureTrajectory = true;
+    return options;
+}
+
+struct SolverBudgetQualificationFit {
+    std::string symbol;
+    bool h6 = false;
+    bool augmented = false;
+    std::size_t developmentRows = 0;
+    std::size_t retainedFeatureCount = 0;
+    std::optional<LbfgsResult> optimizer;
+};
+
+inline void WriteSolverBudgetQualificationFit(
+    std::ostream& out, const SolverBudgetQualificationFit& fit)
+{
+    const auto unavailable = [] {
+        return std::numeric_limits<double>::quiet_NaN();
+    };
+    const LbfgsResult* optimizer = fit.optimizer ? &*fit.optimizer : nullptr;
+    const auto at250 = optimizer ? TrajectoryObjectiveAt(*optimizer, 250) : std::nullopt;
+    out << "FIBONACCI_INCREMENTAL_SOLVER_BUDGET_FIT symbol=" << fit.symbol
+        << ",horizon=" << (fit.h6 ? "H6" : "H4")
+        << ",feature_set=" << (fit.augmented ? "augmented" : "baseline")
+        << ",development_row_count=" << fit.developmentRows
+        << ",retained_feature_count=" << fit.retainedFeatureCount
+        << ",converged=" << (optimizer && optimizer->converged ? "yes" : "no")
+        << ",termination_reason=" << (optimizer ? LbfgsTerminationReasonName(optimizer->terminationReason) : "optimizer_not_run")
+        << ",iteration_count=" << (optimizer ? std::to_string(optimizer->iterations) : "")
+        << ",initial_objective=" << Number(optimizer ? optimizer->initialObjective : unavailable())
+        << ",final_objective=" << Number(optimizer ? optimizer->finalObjective : unavailable())
+        << ",final_gradient_infinity_norm=" << Number(optimizer ? optimizer->finalGradientInfinityNorm : unavailable())
+        << ",final_relative_objective_change=" << Number(optimizer ? optimizer->finalRelativeObjectiveChange : unavailable())
+        << ",final_accepted_step=" << Number(optimizer ? optimizer->finalAcceptedStepSize : unavailable())
+        << ",terminating_line_search_attempts=" << (optimizer ? std::to_string(optimizer->terminatingLineSearchAttempts) : "")
+        << ",history_size=" << (optimizer ? std::to_string(optimizer->finalHistorySize) : "")
+        << ",final_directional_derivative=" << Number(optimizer ? optimizer->finalDirectionalDerivative : unavailable())
+        << ",objective_at_iteration_250=" << Number(at250.value_or(unavailable()))
+        << ",objective_improvement_after_iteration_250=" << Number(at250 && optimizer ? *at250 - optimizer->finalObjective : unavailable())
+        << '\n';
+}
+
+inline void RunSolverBudgetQualification(const std::filesystem::path& artifactDirectory, std::ostream& out)
+{
+    if (artifactDirectory.empty()) throw std::invalid_argument("fibonacci_solver_budget_qualification_required_artifact_directory");
+    VerifyFrozenProtocolDocument("docs/phases/target-generation/FibonacciExtensions/FIBONACCI_LAYOUT9_INCREMENTAL_INFORMATION_PROTOCOL.md");
+    VerifyArtifactDirectory(artifactDirectory);
+    const auto grouped = LoadDevelopmentOnlyRows(artifactDirectory);
+    const auto optimizerOptions = SolverBudgetQualificationOptions();
+    std::vector<SolverBudgetQualificationFit> fits;
+    fits.reserve(24);
+    for (const auto& [symbol, rows] : grouped) {
+        const auto transform = FitDevelopmentInputTransform(rows);
+        for (const bool h6 : {false, true}) {
+            const auto label = [h6](const ParsedRow& row) -> const ParsedTarget& { return h6 ? row.h6 : row.h4; };
+            const auto development = EligibleRows(rows, Partition::Development, label);
+            for (const bool augmented : {false, true}) {
+                const auto& features = augmented ? transform.augmented : transform.baseline;
+                const auto model = FitMultiRowsDiagnostic(rows, development, features, label, optimizerOptions);
+                fits.push_back({symbol, h6, augmented, development.size(), features.size(), model.optimizer});
+            }
+        }
+    }
+    if (fits.size() != 24) throw std::logic_error("fibonacci_solver_budget_qualification_population_mismatch");
+
+    std::map<std::string, std::size_t> terminationReasons;
+    std::vector<double> convergenceIterations;
+    std::size_t reachedCeiling = 0;
+    const SolverBudgetQualificationFit* maximumIterationFit = nullptr;
+    std::size_t maximumIterations = 0;
+    for (const auto& fit : fits) {
+        WriteSolverBudgetQualificationFit(out, fit);
+        const auto* optimizer = fit.optimizer ? &*fit.optimizer : nullptr;
+        const std::string reason = optimizer ? std::string(LbfgsTerminationReasonName(optimizer->terminationReason)) : "optimizer_not_run";
+        ++terminationReasons[reason];
+        if (optimizer && optimizer->converged) convergenceIterations.push_back(static_cast<double>(optimizer->iterations));
+        if (optimizer && optimizer->iterations == optimizerOptions.maxIterations) ++reachedCeiling;
+        if (optimizer && (!maximumIterationFit || optimizer->iterations > maximumIterations)) {
+            maximumIterationFit = &fit;
+            maximumIterations = optimizer->iterations;
+        }
+    }
+    std::sort(convergenceIterations.begin(), convergenceIterations.end());
+    out << "FIBONACCI_INCREMENTAL_SOLVER_BUDGET_SUMMARY converged=" << convergenceIterations.size() << "/24"
+        << ",reaching_5000=" << reachedCeiling
+        << ",min_convergence_iterations=" << Number(convergenceIterations.empty() ? std::numeric_limits<double>::quiet_NaN() : convergenceIterations.front())
+        << ",median_convergence_iterations=" << Number(Median(convergenceIterations))
+        << ",max_convergence_iterations=" << Number(convergenceIterations.empty() ? std::numeric_limits<double>::quiet_NaN() : convergenceIterations.back())
+        << ",maximum_iteration_fit=";
+    if (maximumIterationFit) out << maximumIterationFit->symbol << ':' << (maximumIterationFit->h6 ? "H6" : "H4") << ':' << (maximumIterationFit->augmented ? "augmented" : "baseline");
+    out << ",termination_reason_counts=";
+    bool first = true;
+    for (const auto& [reason, count] : terminationReasons) { if (!first) out << ';'; out << reason << ':' << count; first = false; }
+    out << '\n';
 }
 
 inline void RunAudcadH4BaselineMultinomialDiagnostic(const std::filesystem::path& artifactDirectory,std::ostream& out,AudcadH4BaselineMultinomialDiagnosticMode mode=AudcadH4BaselineMultinomialDiagnosticMode::Frozen250)

@@ -256,6 +256,11 @@ int main()
     const std::string confirmation =
         "ignored,audcadrmp,1735689600,1,confirmation_2025,99,0,0,nan,0,,99,0,0,nan,0,";
     assert(!A::ParsePre2025Row(confirmation).has_value());
+    assert(!A::ParseDevelopmentOnlyRow(confirmation).has_value());
+
+    const std::string validation =
+        "ignored,audcadrmp,1546301700,1,validation,99,0,0,nan,0,,99,0,0,nan,0,";
+    assert(!A::ParseDevelopmentOnlyRow(validation).has_value());
 
     const std::string development =
         "id,audcadrmp,1262304900,1,development,2,1262305800,1262308500,0.01,1,,1,1262305800,1262310300,0,1,";
@@ -293,8 +298,8 @@ int main()
     EA::CausalFibonacciIncrementalInformation::WriteArtifact(artifact,
         EA::CausalFibonacciIncrementalInformation::FixtureArtifactProvenance(), rows);
 
-    // The only 5,000-iteration ceiling is an explicit AUDCAD diagnostic
-    // option.  Scientific FitMultiRows continues to use frozen defaults.
+    // Scientific FitMultiRows continues to use frozen defaults.  The
+    // qualification-only options are the separate 5,000-iteration path.
     const auto frozenOptions = A::AudcadH4BaselineMultinomialDiagnosticOptions(
         A::AudcadH4BaselineMultinomialDiagnosticMode::Frozen250);
     const auto continuationOptions = A::AudcadH4BaselineMultinomialDiagnosticOptions(
@@ -302,6 +307,11 @@ int main()
     assert(F::LbfgsOptions{}.maxIterations == 250);
     assert(frozenOptions.maxIterations == 250);
     assert(continuationOptions.maxIterations == 5000);
+    const auto qualificationOptions = A::SolverBudgetQualificationOptions();
+    assert(qualificationOptions.maxIterations == 5000);
+    assert(qualificationOptions.gradientInfinityTolerance == 1e-8);
+    assert(qualificationOptions.relativeObjectiveTolerance == 1e-12);
+    assert(qualificationOptions.captureTrajectory);
     assert(frozenOptions.gradientInfinityTolerance == continuationOptions.gradientInfinityTolerance);
     assert(frozenOptions.relativeObjectiveTolerance == continuationOptions.relativeObjectiveTolerance);
     assert(frozenOptions.captureTrajectory && continuationOptions.captureTrajectory);
@@ -355,6 +365,53 @@ int main()
     assert(continuationContents.find("objective_at_iteration_250=") != std::string::npos);
     assert(continuationContents.find("objective_improvement_from_iteration_250=") != std::string::npos);
     assert(continuationContents.find("confirmation_2025=sealed") != std::string::npos);
+
+    // Qualification is exactly the canonical 6 x 2 x 2 development-only
+    // population. It emits only deterministic solver diagnostics and no
+    // predictive partitions, metrics, deltas, or confirmation content.
+    const auto developmentOnly = A::LoadDevelopmentOnlyRows(artifact);
+    assert(developmentOnly.size() == 6);
+    for (const auto& [symbol, developmentRowsOnly] : developmentOnly) {
+        assert(std::find(symbols.begin(), symbols.end(), symbol) != symbols.end());
+        assert(developmentRowsOnly.size() == 6);
+        for (const auto& row : developmentRowsOnly)
+            assert(row.partition == F::Partition::Development);
+    }
+    std::ostringstream qualification, repeatedQualification;
+    A::RunSolverBudgetQualification(artifact, qualification);
+    A::RunSolverBudgetQualification(artifact, repeatedQualification);
+    const std::string qualificationContents = qualification.str();
+    assert(qualificationContents == repeatedQualification.str());
+    constexpr std::string_view fitPrefix = "FIBONACCI_INCREMENTAL_SOLVER_BUDGET_FIT ";
+    std::size_t fitCount = 0, offset = 0;
+    while ((offset = qualificationContents.find(fitPrefix, offset)) != std::string::npos) {
+        ++fitCount;
+        offset += fitPrefix.size();
+    }
+    assert(fitCount == 24);
+    for (const auto& symbol : symbols)
+        for (const std::string_view horizon : {"H4", "H6"})
+            for (const std::string_view featureSet : {"baseline", "augmented"})
+                assert(qualificationContents.find(
+                    "symbol=" + symbol + ",horizon=" + std::string(horizon) +
+                    ",feature_set=" + std::string(featureSet) +
+                    ",development_row_count=6,") != std::string::npos);
+    for (const std::string_view field : {
+             "retained_feature_count=", "converged=", "termination_reason=",
+             "iteration_count=", "initial_objective=", "final_objective=",
+             "final_gradient_infinity_norm=", "final_relative_objective_change=",
+             "final_accepted_step=", "terminating_line_search_attempts=",
+             "history_size=", "final_directional_derivative=",
+             "objective_at_iteration_250=",
+             "objective_improvement_after_iteration_250="})
+        assert(qualificationContents.find(field) != std::string::npos);
+    assert(qualificationContents.find("FIBONACCI_INCREMENTAL_SOLVER_BUDGET_SUMMARY converged=") != std::string::npos);
+    assert(qualificationContents.find("reaching_5000=") != std::string::npos);
+    assert(qualificationContents.find("termination_reason_counts=") != std::string::npos);
+    for (const std::string_view forbidden : {
+             "validation", "pre2025_lock_test", "confirmation_2025", "log_loss",
+             "brier", "accuracy", "monthly", "cross_symbol", "delta"})
+        assert(qualificationContents.find(forbidden) == std::string::npos);
     A::Run({artifact, output, "fixture-analysis"});
     std::ifstream conditional(output / "conditional_incremental.csv");
     const std::string contents((std::istreambuf_iterator<char>(conditional)), {});
