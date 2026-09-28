@@ -14,6 +14,7 @@
 
 #include <pqxx/pqxx>
 
+#include "DatabaseTestIsolation.hpp"
 #include "PgModelIO.hpp"
 #include "PricePoint.hpp"
 #include "Tensor.hpp"
@@ -22,12 +23,6 @@ extern "C" bool LstmRuntimeDiagnosticLoggingEnabled() { return false; }
 
 namespace
 {
-
-std::string EnvironmentOr(const char* name, const char* fallback)
-{
-    const char* value = std::getenv(name);
-    return value && *value ? value : fallback;
-}
 
 template <typename Matrix>
 void Fill(Matrix& matrix, float base)
@@ -202,10 +197,13 @@ int main()
     assert(DBIO::flattenRowMajor(auxiliaryGradientPath.param) !=
            DBIO::flattenRowMajor(legacyGradientPath.param));
 
+    const EA::Test::DisposablePostgresTarget target =
+        EA::Test::RequireDisposablePostgresTarget();
     const std::string connectionString =
-        "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
-        " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
+        "hostaddr=" + target.host + " port=" + target.port + " user=" +
+        target.runtimeUser + " dbname=" + target.database;
     pqxx::connection connection{connectionString};
+    EA::Test::RequireConnectedDisposablePostgresTarget(connection, target);
 
     constexpr const char* kCalendarSnapshotHash = "fnv1a64:2222222222222222";
     long long calendarSnapshotId = -1;

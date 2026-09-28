@@ -5,10 +5,12 @@ set -euo pipefail
 # pre-Phase-H LOGIN. The target must be a disposable fixture with an admitted
 # campaign, effective authorization, active budget, and no request yet.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${repo_root}/Tests/DatabaseTestIsolation.sh"
+require_disposable_test_database
 binary="${1:-$repo_root/DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release}"
-database="${LSTM_DB_NAME:-LSTM}"
-host="${LSTM_DB_HOST:-127.0.0.1}"
-port="${LSTM_DB_PORT:-5432}"
+database="${LSTM_TEST_DB_NAME}"
+host="${LSTM_TEST_DB_HOST:-127.0.0.1}"
+port="${LSTM_TEST_DB_PORT:-5432}"
 campaign_id="${CAMPAIGN_OPERATIONS_PRE_PHASE_H_REQUEST_TEST_CAMPAIGN_ID:?CAMPAIGN_OPERATIONS_PRE_PHASE_H_REQUEST_TEST_CAMPAIGN_ID is required}"
 actor="${CAMPAIGN_OPERATIONS_PRE_PHASE_H_REQUEST_TEST_ACTOR:-pre-phase-h-request-test}"
 reason="${CAMPAIGN_OPERATIONS_PRE_PHASE_H_REQUEST_TEST_REASON:-Exercise the pre-Phase-H request acceptor helper path}"

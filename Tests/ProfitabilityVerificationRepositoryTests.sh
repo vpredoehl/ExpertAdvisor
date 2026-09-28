@@ -2,10 +2,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${repo_root}/Tests/DatabaseTestIsolation.sh"
+maintenance_db="${LSTM_TEST_DB_MAINTENANCE_DB:-}"
+require_non_production_maintenance_database "${maintenance_db}"
 db_host="${LSTM_DB_HOST:-127.0.0.1}"
 admin_user="${LSTM_DB_ADMIN_USER:-${USER}}"
 test_user="${LSTM_DB_USER:-pqxx}"
-maintenance_db="${LSTM_DB_NAME:-LSTM}"
 db_name="lstm_profitability_phase8_${$}_$(date +%s)"
 build_dir="${repo_root}/DerivedData/Development/ProfitabilityPhase8/RepositoryTests"
 binary="${build_dir}/ProfitabilityVerificationRepositoryTests"

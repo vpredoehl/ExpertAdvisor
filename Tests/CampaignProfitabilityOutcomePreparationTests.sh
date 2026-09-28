@@ -2,10 +2,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${repo_root}/Tests/DatabaseTestIsolation.sh"
+require_disposable_test_database
 binary="${1:-${repo_root}/DerivedData/Release/ProfitabilityPhase12Validation/Build/Products/Debug/LSTM_Release}"
 cohort="fnv1a64:fe7aee4a1aed8a5e"
-db_host="${LSTM_DB_HOST:-127.0.0.1}"
-db_name="${LSTM_DB_NAME:-LSTM}"
+db_host="${LSTM_TEST_DB_HOST:-127.0.0.1}"
+db_name="${LSTM_TEST_DB_NAME}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
@@ -23,8 +25,10 @@ SQL
 }
 
 before="$(fingerprint)"
+LSTM_DB_HOST="${db_host}" LSTM_DB_NAME="${db_name}" \
 "${binary}" --prepare-campaign-profitability-outcome-jobs="${cohort}" \
     >"${tmp_dir}/first.txt"
+LSTM_DB_HOST="${db_host}" LSTM_DB_NAME="${db_name}" \
 "${binary}" --prepare-campaign-profitability-outcome-jobs="${cohort}" \
     >"${tmp_dir}/second.txt"
 cmp "${tmp_dir}/first.txt" "${tmp_dir}/second.txt"
@@ -39,7 +43,8 @@ grep -q 'proof_future_outcome_not_executed=true' "${tmp_dir}/first.txt"
 grep -q 'training_started=false' "${tmp_dir}/first.txt"
 grep -q 'scheduler_modified=false' "${tmp_dir}/first.txt"
 
-if "${binary}" --prepare-campaign-profitability-outcome-jobs=fnv1a64:0000000000000000 \
+if LSTM_DB_HOST="${db_host}" LSTM_DB_NAME="${db_name}" \
+    "${binary}" --prepare-campaign-profitability-outcome-jobs=fnv1a64:0000000000000000 \
     >"${tmp_dir}/bad-cohort.out" 2>"${tmp_dir}/bad-cohort.err"; then
     echo "expected cohort hash mismatch rejection" >&2
     exit 1
@@ -56,7 +61,8 @@ model_id="$(field source_model_id)"
 job_hash="$(field job_hash)"
 execution_option="--run-frozen-model-outcome-inference=${cohort},${experiment_id},${model_id},2026-08-31,2026-09-30,${job_hash}"
 
-if "${binary}" "${execution_option}" \
+if LSTM_DB_HOST="${db_host}" LSTM_DB_NAME="${db_name}" \
+    "${binary}" "${execution_option}" \
     >"${tmp_dir}/early.out" 2>"${tmp_dir}/early.err"; then
     echo "expected incomplete future-window rejection" >&2
     exit 1
@@ -65,7 +71,8 @@ grep -q 'phase12_execution_waiting_for_outcome_data' "${tmp_dir}/early.err"
 test "$(grep -c 'CAMPAIGN_PROFITABILITY_OUTCOME_EXECUTION_START' \
     "${tmp_dir}/early.out" || true)" = "0"
 
-if "${binary}" "${execution_option}" --epochs=1 \
+if LSTM_DB_HOST="${db_host}" LSTM_DB_NAME="${db_name}" \
+    "${binary}" "${execution_option}" --epochs=1 \
     >"${tmp_dir}/override.out" 2>"${tmp_dir}/override.err"; then
     echo "expected training override rejection" >&2
     exit 1

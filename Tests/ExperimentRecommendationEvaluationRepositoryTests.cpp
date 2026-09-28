@@ -13,6 +13,7 @@
 
 #include <pqxx/pqxx>
 
+#include "DatabaseTestIsolation.hpp"
 #include "../Sources/ExperimentRecommendation.hpp"
 #include "../Sources/ExperimentRecommendationEvaluationRepository.hpp"
 #include "../Sources/ExperimentRecommendationEvaluationService.hpp"
@@ -21,12 +22,6 @@ using namespace EA::ExperimentRecommendation;
 
 namespace
 {
-
-std::string EnvironmentOr(const char* name, const char* fallback)
-{
-    const char* value = std::getenv(name);
-    return value && *value ? value : fallback;
-}
 
 std::string ReadFile(const std::string& path)
 {
@@ -107,17 +102,18 @@ std::string Snapshot(pqxx::connection& connection, const std::string& schema)
 
 int main()
 {
-    const std::string database = EnvironmentOr("LSTM_DB_NAME", "LSTM");
-    const std::string host = EnvironmentOr("LSTM_DB_HOST", "127.0.0.1");
-    const std::string owner = EnvironmentOr(
-        "LSTM_DB_ADMIN_USER", EnvironmentOr("USER", "vjp").c_str());
+    const EA::Test::DisposablePostgresTarget target =
+        EA::Test::RequireDisposablePostgresTarget();
     const std::string schema = "phase4b_eval_" + std::to_string(getpid());
     const std::string ownerConnectionString =
-        "hostaddr=" + host + " user=" + owner + " dbname=" + database;
+        "hostaddr=" + target.host + " port=" + target.port + " user=" +
+        target.adminUser + " dbname=" + target.database;
     const std::string runtimeConnectionString =
-        "hostaddr=" + host + " user=pqxx dbname=" + database +
+        "hostaddr=" + target.host + " port=" + target.port + " user=" +
+        target.runtimeUser + " dbname=" + target.database +
         " options='-c search_path=" + schema + "'";
     pqxx::connection ownerConnection{ownerConnectionString};
+    EA::Test::RequireConnectedDisposablePostgresTarget(ownerConnection, target);
 
     {
         pqxx::work setup{ownerConnection};

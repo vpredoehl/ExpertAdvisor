@@ -4,6 +4,7 @@
 
 #include <pqxx/pqxx>
 
+#include "DatabaseTestIsolation.hpp"
 #include "../Sources/InferenceProfitabilityRepository.hpp"
 
 using namespace EA::InferenceProfitability;
@@ -39,16 +40,17 @@ ObservationRequest Request(long long inferenceResultId,
 
 int main()
 {
+    const EA::Test::DisposablePostgresTarget target =
+        EA::Test::RequireDisposablePostgresTarget();
     const std::string connectionString =
-        "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
-        " port=" + EnvironmentOr("LSTM_DB_PORT", "5432") +
-        " user=" + EnvironmentOr("LSTM_DB_USER", "pqxx") +
-        " dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
+        "hostaddr=" + target.host + " port=" + target.port + " user=" +
+        target.runtimeUser + " dbname=" + target.database;
     const std::string schema =
         EnvironmentOr("LSTM_PROFITABILITY_TEST_SCHEMA", "");
     assert(!schema.empty());
 
     pqxx::connection connection{connectionString};
+    EA::Test::RequireConnectedDisposablePostgresTarget(connection, target);
     pqxx::work transaction{connection};
     transaction.exec("SET LOCAL search_path TO " +
                      transaction.quote_name(schema) + ", public;");

@@ -5,18 +5,13 @@
 
 #include <pqxx/pqxx>
 
+#include "DatabaseTestIsolation.hpp"
 #include "../Sources/ExperimentRecommendationRepository.hpp"
 
 using namespace EA::ExperimentRecommendation;
 
 namespace
 {
-
-std::string EnvironmentOr(const char* name, const char* fallback)
-{
-    const char* value = std::getenv(name);
-    return value && *value ? value : fallback;
-}
 
 long long InsertExperiment(pqxx::transaction_base& transaction,
                            const std::string& symbol,
@@ -110,10 +105,13 @@ long long InsertRecommendation(
 
 int main()
 {
+    const EA::Test::DisposablePostgresTarget target =
+        EA::Test::RequireDisposablePostgresTarget();
     const std::string connectionString =
-        "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
-        " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
+        "hostaddr=" + target.host + " port=" + target.port + " user=" +
+        target.runtimeUser + " dbname=" + target.database;
     pqxx::connection connection{connectionString};
+    EA::Test::RequireConnectedDisposablePostgresTarget(connection, target);
     assert(RecommendationSchemaExists(connection));
 
     pqxx::work transaction{connection};

@@ -7,10 +7,12 @@ set -euo pipefail
 # edits experiment fixtures and refuses to run if the campaign already exists.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${repo_root}/Tests/DatabaseTestIsolation.sh"
+require_disposable_test_database
 binary="${1:-$repo_root/DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release}"
-database="${LSTM_DB_NAME:-LSTM}"
-host="${LSTM_DB_HOST:-127.0.0.1}"
-port="${LSTM_DB_PORT:-5432}"
+database="${LSTM_TEST_DB_NAME}"
+host="${LSTM_TEST_DB_HOST:-127.0.0.1}"
+port="${LSTM_TEST_DB_PORT:-5432}"
 materialization_id="${CAMPAIGN_OPERATIONS_ADMISSION_TEST_MATERIALIZATION_ID:-2}"
 actor="${CAMPAIGN_OPERATIONS_ADMISSION_TEST_ACTOR:-vjp}"
 reason="${CAMPAIGN_OPERATIONS_ADMISSION_TEST_REASON:-Admit approved CADCHF H4 Donchian-20 enabled versus zero-ablation materialization 2 into Campaign Operations}"

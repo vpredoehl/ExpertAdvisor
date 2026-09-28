@@ -12,6 +12,7 @@
 
 #include <pqxx/pqxx>
 
+#include "DatabaseTestIsolation.hpp"
 #include "../Sources/ExperimentRecommendationRepository.hpp"
 #include "../Sources/ExperimentRecommendationService.hpp"
 
@@ -19,12 +20,6 @@ using namespace EA::ExperimentRecommendation;
 
 namespace
 {
-
-std::string EnvironmentOr(const char* name, const char* fallback)
-{
-    const char* value = std::getenv(name);
-    return value && *value ? value : fallback;
-}
 
 long long InsertRecommendation(pqxx::work& tx, long long scanId,
                                long long experimentId, long long analysisId,
@@ -160,18 +155,18 @@ void Cleanup(pqxx::connection& ownerConnection,
 
 int main()
 {
+    const EA::Test::DisposablePostgresTarget target =
+        EA::Test::RequireDisposablePostgresTarget();
     const std::string connectionString =
-        "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
-        " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
-    const std::string defaultOwnerUser = EnvironmentOr("USER", "vjp");
-    const std::string ownerUser = EnvironmentOr(
-        "LSTM_DB_ADMIN_USER", defaultOwnerUser.c_str());
+        "hostaddr=" + target.host + " port=" + target.port + " user=" +
+        target.runtimeUser + " dbname=" + target.database;
     const std::string ownerConnectionString =
-        "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
-        " user=" + ownerUser +
-        " dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
+        "hostaddr=" + target.host + " port=" + target.port + " user=" +
+        target.adminUser + " dbname=" + target.database;
     pqxx::connection connection{connectionString};
     pqxx::connection ownerConnection{ownerConnectionString};
+    EA::Test::RequireConnectedDisposablePostgresTarget(connection, target);
+    EA::Test::RequireConnectedDisposablePostgresTarget(ownerConnection, target);
     assert(RecommendationReviewSchemaExists(connection));
 
     const auto rejectsInvalidArgument = [](auto&& operation,
