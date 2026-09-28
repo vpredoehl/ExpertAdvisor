@@ -471,6 +471,7 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
         if (!options.featureAblationMaskSpecified)
         {
             options.featureAblationMask = meta.featureAblationMask;
+            options.requestedFeatureAblationMask = meta.featureAblationMask;
         }
         else
         {
@@ -1427,13 +1428,58 @@ QueuedModelInputIdentity ResolveQueuedModelInputIdentity(
     return identity;
 }
 
-long long InsertExperimentRecord(pqxx::work& w,
-                                        const SchedulerOptions& options,
-                                        const std::string& canonicalSymbol,
-                                        long long duplicateNonce)
+void ResolveQueuedFeatureAblationMask(
+    pqxx::work& w, SchedulerOptions& options)
 {
     const QueuedModelInputIdentity inputIdentity =
         ResolveQueuedModelInputIdentity(w, options);
+    const std::string& requested =
+        options.requestedFeatureAblationMask.empty()
+            ? options.featureAblationMask
+            : options.requestedFeatureAblationMask;
+    const EA::FeatureAblationResolution resolution =
+        EA::FeatureAblationMask::Resolve(
+            requested, inputIdentity.semanticLayoutVersion);
+    options.requestedFeatureAblationMask = resolution.requestedCanonicalText;
+    options.featureAblationMask = resolution.resolvedMask.CanonicalText();
+}
+
+long long InsertExperimentRecord(pqxx::work& w,
+                                        SchedulerOptions& options,
+                                        const std::string& canonicalSymbol,
+                                        long long duplicateNonce)
+{
+    ResolveQueuedFeatureAblationMask(w, options);
+    const QueuedModelInputIdentity inputIdentity =
+        ResolveQueuedModelInputIdentity(w, options);
+    const EA::FeatureAblationMask resolvedAblation =
+        EA::FeatureAblationMask::ParseForSemanticLayout(
+            options.featureAblationMask, inputIdentity.semanticLayoutVersion);
+    if (resolvedAblation.CanonicalText() != options.featureAblationMask)
+        throw std::runtime_error("feature ablation mask is not canonical");
+    const auto families =
+        EA::MarketStructure::RegisteredFamilyIdsForSemanticLayout(
+            inputIdentity.semanticLayoutVersion);
+    std::ostringstream registeredFamilies;
+    bool firstRegisteredFamily = true;
+    for (const std::string_view family : families)
+    {
+        if (!firstRegisteredFamily) registeredFamilies << '|';
+        registeredFamilies << family;
+        firstRegisteredFamily = false;
+    }
+    std::cout << "MARKET_STRUCTURE_REGISTRY_ACTIVE"
+              << ",semantic_layout=" << inputIdentity.semanticLayoutVersion
+              << ",input_width=" << inputIdentity.width
+              << ",registered_families=" << registeredFamilies.str()
+              << ",requested_ablation="
+              << (options.requestedFeatureAblationMask.empty()
+                      ? options.featureAblationMask
+                      : options.requestedFeatureAblationMask)
+              << ",resolved_ablation=" << resolvedAblation.CanonicalText()
+              << ",disabled_channel_count="
+              << resolvedAblation.tensorColumns().size()
+              << std::endl;
     const bool includeRunMetadata = EA::RunMetadata::ExperimentRunMetadataColumnsExist(w);
     const bool hasDonchian20Mode = ColumnExists(w, "experiment", "donchian20_mode");
     if (!hasDonchian20Mode)
@@ -6831,6 +6877,7 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
                 throw std::runtime_error("continuation_source_feature_ablation_mask_missing");
             child.featureAblationMask = EA::FeatureAblationMask::Parse(
                 sourceMask[0][0].as<std::string>()).CanonicalText();
+            child.requestedFeatureAblationMask = child.featureAblationMask;
         }
         MergeResumeMetaIntoQueueOptions(child, resumeMeta);
         ResolveEconomicCalendarSnapshotForQueue(

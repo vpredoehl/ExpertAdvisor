@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "FeatureLayout.hpp"
+#include "MarketStructureRegistry.hpp"
 
 namespace EA
 {
@@ -155,6 +156,11 @@ inline const AblatableFeature* FindAblatableFeature(std::string_view name)
         if (feature.name == name) return &feature;
     if (kDirectionalEfficiencyFeature.name == name) return &kDirectionalEfficiencyFeature;
     if (kDirectionalAdverseExcursionFeature.name == name) return &kDirectionalAdverseExcursionFeature;
+    if (const auto* channel = MarketStructure::FindChannel(name))
+    {
+        for (const auto& feature : kAblatableFeatures)
+            if (feature.tensorColumn == channel->tensorColumn) return &feature;
+    }
     return nullptr;
 }
 
@@ -163,34 +169,26 @@ inline std::size_t AblatableFeatureRegistryOrder(const AblatableFeature& feature
     return feature.tensorColumn;
 }
 
+struct FeatureAblationResolution;
+
 class FeatureAblationMask
 {
 public:
     FeatureAblationMask() = default;
 
-    static FeatureAblationMask Parse(const std::string& persistedText)
-    {
-        FeatureAblationMask result;
-        if (persistedText.empty()) return result;
-        std::size_t start = 0;
-        while (start <= persistedText.size())
-        {
-            const std::size_t end = persistedText.find(',', start);
-            const std::string token = TrimFeatureAblationToken(
-                persistedText.substr(start, end == std::string::npos ? std::string::npos : end - start));
-            if (token.empty())
-                throw std::invalid_argument("FEATURE_ABLATION_MASK_INVALID: empty feature name");
-            const AblatableFeature* feature = FindAblatableFeature(token);
-            if (feature == nullptr)
-                throw std::invalid_argument("FEATURE_ABLATION_MASK_UNKNOWN_FEATURE:" + token);
-            if (std::find(result.columns_.begin(), result.columns_.end(), feature->tensorColumn) == result.columns_.end())
-                result.columns_.push_back(feature->tensorColumn);
-            if (end == std::string::npos) break;
-            start = end + 1;
-        }
-        std::sort(result.columns_.begin(), result.columns_.end());
-        return result;
-    }
+    // Parse accepts the historical flat identities and the new hierarchical
+    // identities.  Wildcards are immediately resolved into concrete columns;
+    // CanonicalText is therefore safe to persist as immutable experiment
+    // identity without giving a later registry addition new meaning.
+    static FeatureAblationMask Parse(const std::string& text);
+    // Queue parsing uses this syntax-only step. In particular, it preserves a
+    // wildcard until the experiment's persisted semantic layout is known.
+    static std::string CanonicalizeRequestedExpression(
+        const std::string& text);
+    static FeatureAblationMask ParseForSemanticLayout(
+        const std::string& text, int semanticLayoutVersion);
+    static FeatureAblationResolution Resolve(
+        const std::string& requestedText, int semanticLayoutVersion = 9);
 
     bool empty() const { return columns_.empty(); }
     const std::vector<std::size_t>& tensorColumns() const { return columns_; }
@@ -229,8 +227,161 @@ public:
     }
 
 private:
+    static FeatureAblationMask FromTensorColumns(std::vector<std::size_t> columns)
+    {
+        std::sort(columns.begin(), columns.end());
+        columns.erase(std::unique(columns.begin(), columns.end()), columns.end());
+        FeatureAblationMask result;
+        result.columns_ = std::move(columns);
+        return result;
+    }
+
     std::vector<std::size_t> columns_;
+
+    friend struct FeatureAblationResolution;
 };
+
+// Requested text is an input-side diagnostic.  ResolvedMask::CanonicalText()
+// is the persisted representation and the only identity used by historical
+// model loading, duplicate detection, continuation, and inference.
+struct FeatureAblationResolution
+{
+    std::string requestedCanonicalText;
+    FeatureAblationMask resolvedMask;
+};
+
+inline std::vector<std::string> ParseFeatureAblationTokens(
+    const std::string& requestedText)
+{
+    std::vector<std::string> result;
+    if (requestedText.empty()) return result;
+    std::size_t start = 0;
+    while (start <= requestedText.size())
+    {
+        const std::size_t end = requestedText.find(',', start);
+        std::string token = TrimFeatureAblationToken(
+            requestedText.substr(start, end == std::string::npos
+                                           ? std::string::npos : end - start));
+        if (token.empty())
+            throw std::invalid_argument(
+                "FEATURE_ABLATION_MASK_INVALID: empty feature name");
+        result.push_back(std::move(token));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return result;
+}
+
+inline std::string CanonicalRequestedFeatureAblationText(
+    std::vector<std::string> tokens)
+{
+    std::sort(tokens.begin(), tokens.end());
+    tokens.erase(std::unique(tokens.begin(), tokens.end()), tokens.end());
+    std::string result;
+    for (const std::string& token : tokens)
+    {
+        if (!result.empty()) result += ',';
+        result += token;
+    }
+    return result;
+}
+
+inline std::string FeatureAblationMask::CanonicalizeRequestedExpression(
+    const std::string& requestedText)
+{
+    const std::vector<std::string> tokens =
+        ParseFeatureAblationTokens(requestedText);
+    for (const std::string& token : tokens)
+    {
+        const std::size_t wildcard = token.find('*');
+        if (wildcard != std::string::npos)
+        {
+            if (wildcard != token.size() - 1 || wildcard == 0 ||
+                token[wildcard - 1] != '.' ||
+                token.find('*', wildcard + 1) != std::string::npos)
+            {
+                throw std::invalid_argument(
+                    "FEATURE_ABLATION_MASK_INVALID_WILDCARD:" + token);
+            }
+            const std::string_view prefix{token.data(), token.size() - 2};
+            const std::size_t separator = prefix.find('.');
+            const std::string_view family = prefix.substr(
+                0, separator == std::string_view::npos ? prefix.size()
+                                                        : separator);
+            if (MarketStructure::FindFamily(family) == nullptr)
+                throw std::invalid_argument(
+                    "FEATURE_ABLATION_MASK_UNKNOWN_FAMILY_OR_SUBFAMILY:" +
+                    token);
+            continue;
+        }
+        if (FindAblatableFeature(token) == nullptr)
+            throw std::invalid_argument(
+                "FEATURE_ABLATION_MASK_UNKNOWN_FEATURE:" + token);
+    }
+    return CanonicalRequestedFeatureAblationText(tokens);
+}
+
+inline FeatureAblationResolution FeatureAblationMask::Resolve(
+    const std::string& requestedText, int semanticLayoutVersion)
+{
+    const std::string canonicalRequestedText =
+        CanonicalizeRequestedExpression(requestedText);
+    const std::vector<std::string> tokens =
+        ParseFeatureAblationTokens(canonicalRequestedText);
+    std::vector<std::size_t> columns;
+    for (const std::string& token : tokens)
+    {
+        const std::size_t wildcard = token.find('*');
+        if (wildcard != std::string::npos)
+        {
+            if (wildcard != token.size() - 1 || wildcard == 0 ||
+                token[wildcard - 1] != '.' ||
+                token.find('*', wildcard + 1) != std::string::npos)
+            {
+                throw std::invalid_argument(
+                    "FEATURE_ABLATION_MASK_INVALID_WILDCARD:" + token);
+            }
+            const std::string_view prefix{token.data(), token.size() - 2};
+            const auto matches = MarketStructure::ResolvePrefix(
+                prefix, semanticLayoutVersion);
+            if (matches.empty())
+                throw std::invalid_argument(
+                    "FEATURE_ABLATION_MASK_UNKNOWN_FAMILY_OR_SUBFAMILY:" +
+                    token);
+            for (const MarketStructure::Channel* channel : matches)
+                columns.push_back(channel->tensorColumn);
+            continue;
+        }
+
+        const AblatableFeature* feature = FindAblatableFeature(token);
+        if (feature == nullptr)
+            throw std::invalid_argument(
+                "FEATURE_ABLATION_MASK_UNKNOWN_FEATURE:" + token);
+        if (const auto* channel = MarketStructure::FindChannel(token);
+            channel != nullptr &&
+            !MarketStructure::ChannelAvailableForSemanticLayout(
+                *channel, semanticLayoutVersion))
+        {
+            throw std::invalid_argument(
+                "FEATURE_ABLATION_MASK_FEATURE_UNAVAILABLE_IN_SEMANTIC_LAYOUT:" +
+                token);
+        }
+        columns.push_back(feature->tensorColumn);
+    }
+    return {canonicalRequestedText,
+            FromTensorColumns(std::move(columns))};
+}
+
+inline FeatureAblationMask FeatureAblationMask::Parse(const std::string& text)
+{
+    return Resolve(text).resolvedMask;
+}
+
+inline FeatureAblationMask FeatureAblationMask::ParseForSemanticLayout(
+    const std::string& text, int semanticLayoutVersion)
+{
+    return Resolve(text, semanticLayoutVersion).resolvedMask;
+}
 
 } // namespace EA
 

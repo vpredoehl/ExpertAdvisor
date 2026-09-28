@@ -2674,8 +2674,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         }
         else if (arg == "--ablate-features")
         {
-            options.featureAblationMask = EA::FeatureAblationMask::Parse(
-                RequireNextArg(argc, argv, i, arg)).CanonicalText();
+            options.requestedFeatureAblationMask =
+                EA::FeatureAblationMask::CanonicalizeRequestedExpression(
+                    RequireNextArg(argc, argv, i, arg));
+            options.featureAblationMask.clear();
             options.featureAblationMaskSpecified = true;
         }
         else if (arg == "--fresh-initialization-seed")
@@ -2770,7 +2772,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         }
         else if (SplitOptionWithValue(arg, "--ablate-features", value))
         {
-            options.featureAblationMask = EA::FeatureAblationMask::Parse(value).CanonicalText();
+            options.requestedFeatureAblationMask =
+                EA::FeatureAblationMask::CanonicalizeRequestedExpression(value);
+            options.featureAblationMask.clear();
             options.featureAblationMaskSpecified = true;
         }
         else if (SplitOptionWithValue(arg, "--fresh-initialization-seed", value))
@@ -5533,9 +5537,12 @@ int EnqueueExperiment(const SchedulerOptions& rawOptions)
             w, *options.resumeModelId);
         (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
             w, *options.resumeModelId);
+        if (options.featureAblationMaskSpecified)
+            ResolveQueuedFeatureAblationMask(w, options);
         MergeResumeMetaIntoQueueOptions(options, meta);
     }
 
+    ResolveQueuedFeatureAblationMask(w, options);
     const std::string canonicalSymbol = ResolveExperimentCanonicalSymbol(w, options);
     ResolveEconomicCalendarSnapshotForQueue(
         w, options, "enqueue_experiment");
@@ -5620,6 +5627,10 @@ void PrintQueueConfig(const char* marker,
                   options.donchian20Mode.value_or(kDefaultDonchian20Mode))
               << ",feature_warmup_scope=" << EA::FeatureWarmupScopeText(options.featureWarmupScope)
               << ",donchian_lookback=" << options.donchianLookback
+              << ",requested_feature_ablation="
+              << (options.requestedFeatureAblationMask.empty()
+                      ? options.featureAblationMask
+                      : options.requestedFeatureAblationMask)
               << ",feature_ablation_mask=" << options.featureAblationMask
               << ",fresh_initialization_seed=" << options.freshInitializationSeed
               << ",training_objective_id="
@@ -5666,9 +5677,10 @@ std::optional<long long> FindQueueDuplicate(pqxx::work& w,
 }
 
 bool QueueOneExperiment(pqxx::work& w,
-                               const SchedulerOptions& options,
+                               SchedulerOptions& options,
                                const std::string& canonicalSymbol)
 {
+    ResolveQueuedFeatureAblationMask(w, options);
     const std::optional<long long> duplicateExperimentId =
         FindQueueDuplicate(w, options, canonicalSymbol);
     if (duplicateExperimentId.has_value())
@@ -5736,11 +5748,16 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
         if (options.resumeExpandInputWidth)
             DBIO::PgModelIO::validateModelInputSemanticsForExpansion(
                 w, *options.resumeModelId);
+        if (options.featureAblationMaskSpecified)
+            ResolveQueuedFeatureAblationMask(w, options);
         MergeResumeMetaIntoQueueOptions(options, meta);
     }
 
     options = ApplyQueueDefaults(options);
     EnsureRequiredQueueOptions(options);
+
+    if (!options.dryRun)
+        ResolveQueuedFeatureAblationMask(w, options);
 
     if (options.dryRun)
     {
@@ -5827,6 +5844,7 @@ SchedulerOptions CorrectedReplicationQueueOptions(
     options.donchianLookback =
         static_cast<std::size_t>(configured.donchianLookback);
     options.featureAblationMask = arm.featureAblationMask;
+    options.requestedFeatureAblationMask = arm.featureAblationMask;
     options.featureAblationMaskSpecified = true;
     options.trainingObjective =
         EA::TrainingObjective::ParseSupportedCanonicalText(
@@ -6013,9 +6031,9 @@ int RunCorrectedReplicationMaterializationAttempt(
     }
     const auto& pair = assessment.plan.pairs.at(
         *assessment.gate.nextPlanPairOrdinal - 1);
-    const SchedulerOptions control = CorrectedReplicationQueueOptions(
+    SchedulerOptions control = CorrectedReplicationQueueOptions(
         options, assessment.plan, pair, pair.control);
-    const SchedulerOptions treatment = CorrectedReplicationQueueOptions(
+    SchedulerOptions treatment = CorrectedReplicationQueueOptions(
         options, assessment.plan, pair, pair.treatment);
 
     if (options.dryRun)

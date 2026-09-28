@@ -360,6 +360,7 @@ struct SchedulerOptions
     std::size_t donchianLookback = kDefaultDonchianLookback;
     bool donchianLookbackSpecified = false;
     std::string featureAblationMask;
+    std::string requestedFeatureAblationMask;
     bool featureAblationMaskSpecified = false;
     unsigned int freshInitializationSeed = 42U;
     bool freshInitializationSeedSpecified = false;
@@ -648,8 +649,14 @@ void ResolveEconomicCalendarSnapshotForQueue(
 QueuedModelInputIdentity ResolveQueuedModelInputIdentity(
     pqxx::work& w, const SchedulerOptions& options);
 
+// Resolves a queue request only after ResolveQueuedModelInputIdentity has
+// selected its authoritative semantic layout. It mutates the transient queue
+// options; experiment persistence remains the concrete resolved mask only.
+void ResolveQueuedFeatureAblationMask(
+    pqxx::work& w, SchedulerOptions& options);
+
 long long InsertExperimentRecord(pqxx::work& w,
-                                        const SchedulerOptions& options,
+                                        SchedulerOptions& options,
                                         const std::string& canonicalSymbol,
                                         long long duplicateNonce);
 
