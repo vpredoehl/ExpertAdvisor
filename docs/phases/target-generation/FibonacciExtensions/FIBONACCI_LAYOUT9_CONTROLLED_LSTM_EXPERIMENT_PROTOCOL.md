@@ -156,25 +156,72 @@ same equality. The ordinary empty-mask control must not silently route to a
 different binary merely because it does not itself request the ablation
 capability.
 
-## 6. Required immutable calendar provenance — blocking item
+The 2026-09-28 provenance-only qualification established that this condition
+is **not currently met**. The checked operational registry
+`Builds/SemanticWorkers/registry.json` (SHA-256
+`2d874267cd24cb1da0f9c32ab7357cfe676cb9336337ac30ca2729c92cf86ac3`)
+contains exactly one layout-9/103 TRAIN candidate:
+
+| Field | Registered value |
+| --- | --- |
+| source commit | `273059036f0c1432082b32cfddbb6d9dc2285d16` (`Add causal Fibonacci feature ablation support`) |
+| executable SHA-256 | `4657767524a8effc9e2610ae8fd2bd8cf7ad0b3281015d890731ccd566f15495` |
+| runtime identity | `6c8d208a0aae281f3fbb1a2a38fe2c7d6deb92811b4a41d3615fac67defee34e` |
+| capabilities | `train`, `infer`, `analyze` |
+| required but absent capability | `train_feature_ablation_v1` |
+
+The executable file's SHA-256 was independently recomputed and matches the
+manifest. This does **not** qualify it for treatment execution: the scheduler
+contract deliberately never infers feature-ablation capability from a source
+commit, layout, or executable name. Consequently the complete arm resolves
+to this candidate, while the nonempty exact-23 mask is rejected before worker
+reservation with `semantic_worker_capability_incompatible`.
+
+The existing selector has a useful general property once a common qualified
+candidate is published: a capability-qualified TRAIN candidate with no
+unrelated excess capabilities is selected for an otherwise-identical
+empty-mask control as well as for the masked treatment. The disposable
+semantic-worker-registry regression proves that rule and also proves
+fail-closed rejection when the capability is absent. It is not a substitute
+for an actual registered layout-9 qualified candidate. No registry entry,
+binary, or historical worker artifact was changed in this qualification.
+
+## 6. Required immutable calendar provenance — resolved
 
 Both arms of every pair must bind the same non-null
 `economic_calendar_snapshot_id` and matching immutable
 `economic_calendar_snapshot_hash`. The snapshot must cover the proposed
 train/inference ranges and be recorded before either arm is materialized.
 
-No concrete existing snapshot ID/hash, or source experiment containing the
-required 103-wide layout-9 configuration and its snapshot identity, is
-identified in checked-in documentation. The normal scheduler path creates or
-reuses a snapshot at queue time, which is not an acceptable post-freeze choice
-for this protocol. This documentation-only run must neither query or mutate
-the live operational state nor queue an experiment to cause that resolution.
+Every arm is frozen to this exact immutable economic-calendar identity:
 
-Accordingly this protocol cannot honestly be marked frozen. The exact
-snapshot ID/hash must be selected and independently verified by a future
-authorized, outcome-blind provenance step, then inserted verbatim into a new
-frozen protocol revision (or a deliberately documented freeze amendment)
-before any experiment materialization.
+| Field | Frozen value |
+| --- | --- |
+| `economic_calendar_snapshot_id` | `1` |
+| `economic_calendar_snapshot_hash` | `fnv1a64:67610f94f5c8e7cc` |
+| state / hash contract | `finalized` / `1` |
+| canonical event / consensus counts | `2601` / `1521` |
+| release-actual / first-release rows | `1230` / `2601` |
+| first-release provenance states | `1230` `proven_first_release`; `1371` `provenance_unavailable`; `0` `ambiguous` |
+| event timestamp range | 2010-01-07 through 2026-08-20 UTC-offset timestamps |
+| proven first-release availability range | 2010-01-08 through 2026-08-14 UTC-offset timestamps |
+
+This identity was verified by a read-only query against the authoritative
+database. The persisted child-table counts equal the finalized header counts;
+the range covers both this protocol's `[2010-01-01, 2022-01-01)` training
+range and `[2022-01-01, 2025-01-01)` final-inference range. The schema's
+snapshot trigger makes finalized header rows immutable; child content is
+immutable; and the experiment/model binding triggers require the exact
+finalized ID/hash pair. `EconomicEventRepository::InspectEconomicCalendarSnapshot`
+also recomputes and requires the stored canonical report/hash before runtime
+use. The snapshot contains the model-facing point-in-time economic-event,
+consensus, actual-release, and first-release-provenance semantics used by
+layout 9, rather than a live calendar lookup.
+
+Materialization, when separately authorized and only after section 5's worker
+blocker is resolved, must persist this exact non-null ID/hash on every arm.
+No queue-time snapshot creation or reuse decision is authorized for this
+protocol.
 
 ## 7. Evaluation endpoints
 
@@ -254,8 +301,10 @@ or a trading strategy.
   there is no result-driven continuation, extension, replacement, or arm
   substitution.
 - **Worker-routing confounding:** the existing comparator fails a mismatch,
-  and future registry preflight must prove identical selected bytes/runtime
-  before materialization.
+  and the present registry fails closed for treatment because no layout-9
+  candidate declares `train_feature_ablation_v1`. Identical selected
+  bytes/runtime remain a pre-materialization requirement; this unresolved
+  condition keeps the protocol blocked.
 - **Failure handling:** incomplete or failed pairs are explicit invalid or
   incomplete evidence, never silently omitted.
 - **Metric discretion:** all predictive, behavioral, and profitability fields
@@ -266,14 +315,18 @@ or a trading strategy.
 
 ## 10. Blockers and required next action
 
-This design is **BLOCKED** and must not be materialized because the
-economic-calendar snapshot identity required by section 6 is absent. The
-operational layout-9/103 worker registry and artifact identities are also not
-checked into this repository, so the mandatory same-binary routing preflight
-cannot be completed here.
+This design is **BLOCKED** and must not be materialized. The
+economic-calendar blocker is resolved by the exact section 6 snapshot
+identity. The remaining blocker is operational worker qualification: no
+registered layout-9/103 TRAIN artifact declares
+`train_feature_ablation_v1`, so the masked treatment cannot be admitted and
+no same-byte complete/treatment pair can be proven.
 
-No scientist or operator may resolve either blocker by looking at outcomes.
-Once an authorized provenance-only step identifies the exact snapshot and
-proves the same-binary capability routing, a new frozen revision must bind
-those identities before the 96-arm matrix can be materialized. Until then,
+No scientist or operator may resolve this blocker by looking at outcomes. A
+future authorized operational qualification must publish a new immutable
+layout-9/103 TRAIN registry entry that explicitly declares
+`train_feature_ablation_v1`, verify that both masks deterministically select
+the same executable SHA-256 and runtime identity, and bind that identity here
+before the 96-arm matrix can be materialized. It must not mutate the historical
+artifact above or infer the missing capability retrospectively. Until then,
 this document is a design and blocker record, not execution authority.
