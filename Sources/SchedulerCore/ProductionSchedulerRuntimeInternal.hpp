@@ -374,6 +374,7 @@ struct SchedulerOptions
     std::optional<long long> resumeModelId;
     bool resumeExpandInputWidth = false;
     bool allowDuplicateExperiment = false;
+    bool allowExistingEquivalent = false;
     EA::TrainingObjective::Configuration trainingObjective =
         EA::TrainingObjective::Legacy();
     bool trainingObjectiveSpecified = false;

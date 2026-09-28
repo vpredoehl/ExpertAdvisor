@@ -4,12 +4,19 @@
 
 ```text
 LSTM_Debug --materialize-experiment-replications=SOURCE_A_ID:SOURCE_B_ID \
-  --replication-seeds=SEED[,SEED...]
+  --replication-seeds=SEED[,SEED...] [--allow-existing-equivalent]
 ```
 
 Attached and separated option/value forms are accepted. Requested seed order is
 preserved. The command is mutually exclusive with every other scheduler CLI
 command through the existing single-command dispatcher.
+
+By default, any exact configured/scientific equivalent or ambiguous equivalent
+aborts the complete wave. `--allow-existing-equivalent` is valid only with
+this materialization command and permits an exact equivalent resolved to one
+experiment ID to be materialized again as a fresh execution replication.
+Ambiguous equivalence remains fail-closed. The option does not alter
+scientific identity, equivalence lookup, or execution provenance.
 
 ## Contract
 
@@ -39,16 +46,17 @@ LOCK TABLE experiment IN SHARE ROW EXCLUSIVE MODE;
 
 The transaction then reloads authoritative evidence, rebuilds and revalidates
 the plan, rechecks every proposed arm for equivalence, inserts every row, and
-retrieves every new ID before committing. Any non-valid preflight, found or
-ambiguous equivalent, missing evidence, or insertion error rolls back the whole
-wave.
+retrieves every new ID before committing. Any non-valid preflight,
+unauthorized or ambiguous equivalent, missing evidence, or insertion error
+rolls back the whole wave.
 
 The legacy production unique index does not contain
 `fresh_initialization_seed`. While the table lock is held, each inserted row is
 therefore assigned the next administrative `duplicate_nonce` so distinct seed
 replications do not collide with their source or one another. The nonce is not
-part of scientific equivalence; an existing equivalent seed still aborts the
-whole wave before insertion.
+part of scientific equivalence. With the explicit override, an exact
+equivalent seed is still not reused or modified; it is only an audit reference
+for the newly inserted paused/train execution replication.
 
 This PostgreSQL table lock conflicts with the `ROW EXCLUSIVE` lock acquired by
 every `INSERT`, `UPDATE`, and `DELETE` on `experiment`. It therefore serializes
@@ -81,8 +89,10 @@ the first insert. Every arm reports exactly one of:
 - `equivalent_experiment_found=<experiment_id>`
 - `equivalent_experiment_ambiguous=<ids/reason>`
 
-Only the first state is insertable. Any other state aborts the complete wave.
-A second identical command and a partially pre-existing wave therefore create
+Only the first state is insertable by default. With
+`--allow-existing-equivalent`, `equivalent_experiment_found` is also
+insertable, while ambiguity always aborts the complete wave. Without the
+override, a second identical command and a partially pre-existing wave create
 zero rows. A newly created paused experiment does not yet have materialized
 model evidence, so the current authoritative equivalence loader reports it as
 ambiguous/missing candidate identity evidence rather than pretending model

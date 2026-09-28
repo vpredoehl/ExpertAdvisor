@@ -497,6 +497,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--plan-experiment-replications=", 0) == 0 ||
             arg == "--materialize-experiment-replications" ||
             arg.rfind("--materialize-experiment-replications=", 0) == 0 ||
+            arg == "--allow-existing-equivalent" ||
             arg == "--replication-seeds" ||
             arg.rfind("--replication-seeds=", 0) == 0)
             return true;
@@ -1536,6 +1537,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         }
         else if (arg == "--allow-duplicate-experiment")
             options.allowDuplicateExperiment = true;
+        else if (arg == "--allow-existing-equivalent")
+            options.allowExistingEquivalent = true;
         else if (arg == "--analyze-experiment")
             options.analyzeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--compare-training-objective-pair")
@@ -3942,6 +3945,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "replication planning/materialization and --replication-seeds "
             "must be specified together");
+    if (options.allowExistingEquivalent &&
+        !options.materializeExperimentReplications)
+        throw std::invalid_argument(
+            "--allow-existing-equivalent requires "
+            "--materialize-experiment-replications");
     if (options.expectedFeatureAblationMask &&
         !options.compareFeatureAblationPair &&
         !options.compareFeatureAblationReplications)
@@ -13073,11 +13081,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "them. Statistical independence is never inferred.\n"
         << "Usage: " << exe
         << " --materialize-experiment-replications=SOURCE_A_ID:SOURCE_B_ID "
-           "--replication-seeds=SEED[,SEED...]\n"
+           "--replication-seeds=SEED[,SEED...] "
+           "[--allow-existing-equivalent]\n"
         << "Re-loads and revalidates the controlled replication wave under one "
-        << "serialized PostgreSQL write transaction, aborts the whole wave for "
-        << "any equivalent or ambiguous arm, and creates paused fresh experiment "
-        << "records only. It never queues, starts, schedules, or signals work.\n"
+        << "serialized PostgreSQL write transaction. By default it aborts the "
+        << "whole wave for any equivalent or ambiguous arm; the explicit "
+        << "--allow-existing-equivalent opt-in permits only resolved exact "
+        << "equivalents as fresh execution replications. Ambiguity still fails "
+        << "closed. It creates paused/train records only and never queues, "
+        << "starts, schedules, or signals work.\n"
         << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:ABLATION_ID "
         << "--expected-ablation-mask=FEATURE[,FEATURE...]\n"
@@ -14542,6 +14554,7 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             command.sourceExperimentIds =
                 *options.materializeExperimentReplications;
             command.requestedSeeds = *options.replicationSeeds;
+            command.allowExistingEquivalent = options.allowExistingEquivalent;
             return EA::ExperimentReplicationMaterialization::
                 RunMaterializationCommand(
                     LstmDbConnectionString(), command, std::cout, std::cerr);

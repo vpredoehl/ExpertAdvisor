@@ -10,9 +10,12 @@ namespace EA::ExperimentReplicationMaterialization
 
 namespace Planning = ExperimentReplicationPlanning;
 
-inline constexpr int kMaterializerVersion = 1;
+inline constexpr int kMaterializerVersion = 2;
 
-using MaterializationCommand = Planning::PlanningCommand;
+struct MaterializationCommand : Planning::PlanningCommand
+{
+    bool allowExistingEquivalent = false;
+};
 
 class ExperimentInserter
 {

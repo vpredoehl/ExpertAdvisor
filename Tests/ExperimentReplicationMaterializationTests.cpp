@@ -165,13 +165,15 @@ int Run(const std::vector<unsigned int>& seeds,
         Equivalents& equivalents,
         Inserter& inserter,
         std::string& output,
-        std::string& errors)
+        std::string& errors,
+        bool allowExistingEquivalent = false)
 {
     std::ostringstream out;
     std::ostringstream err;
     Materialization::MaterializationCommand command;
     command.sourceExperimentIds = {101, 102};
     command.requestedSeeds = seeds;
+    command.allowExistingEquivalent = allowExistingEquivalent;
     const int result = Materialization::RunMaterializationInTransaction(
         command, evidence, equivalents, inserter, out, err);
     output = out.str();
@@ -248,6 +250,31 @@ int main()
     assert(inserter.specifications.empty());
     assert(output.find("reason=equivalence_conflict") != std::string::npos);
 
+    // An exact configured/scientific equivalent may be deliberately repeated
+    // only with the materialization-specific authorization. Existing rows are
+    // neither reused nor modified; fresh proposals are still inserted.
+    equivalents.values[{44, std::string{kMask}}] = {
+        Planning::EquivalentExperimentState::EquivalentExperimentFound,
+        {701}, ""};
+    inserter = {};
+    assert(Run({44}, evidence, equivalents, inserter, output, errors, true) == 0);
+    assert(inserter.specifications.size() == 2);
+    assert(output.find("allow_existing_equivalent=true") != std::string::npos);
+    assert(output.find("existing_equivalent_authorization=authorized") !=
+           std::string::npos);
+    assert(output.find("existing_equivalent_arm_a_ids=700") !=
+           std::string::npos);
+    assert(output.find("existing_equivalent_arm_b_ids=701") !=
+           std::string::npos);
+    assert(output.find("materialization_kind=fresh_execution_replication") !=
+           std::string::npos);
+    assert(output.find("configured_identity_repeat=true") != std::string::npos);
+    assert(output.find("existing_equivalent_reused=false") != std::string::npos);
+    assert(output.find("old_equivalent_modified=false") != std::string::npos);
+    assert(output.find("materialized_status=paused,materialized_phase=train") !=
+           std::string::npos);
+    equivalents.values.clear();
+
     equivalents.values.clear();
     equivalents.values[{44, std::string{kMask}}] = {
         Planning::EquivalentExperimentState::EquivalentExperimentAmbiguous,
@@ -259,11 +286,36 @@ int main()
     assert(output.find("equivalent_experiment_ambiguous=701|702") !=
            std::string::npos);
 
+    // Ambiguity remains fail-closed even when the explicit override is set.
+    inserter = {};
+    assert(Run({44}, evidence, equivalents, inserter, output, errors, true) == 3);
+    assert(inserter.specifications.empty());
+    assert(output.find(
+               "existing_equivalent_authorization=ambiguous_not_authorized") !=
+           std::string::npos);
+    assert(output.find("reason=equivalence_ambiguous_not_authorized") !=
+           std::string::npos);
+
+    equivalents.values.clear();
+    equivalents.values[{44, ""}] = {
+        Planning::EquivalentExperimentState::EquivalentExperimentFound,
+        {700}, ""};
+    equivalents.values[{44, std::string{kMask}}] = {
+        Planning::EquivalentExperimentState::EquivalentExperimentFound,
+        {701}, ""};
+    inserter = {};
+    assert(Run({44, 45}, evidence, equivalents, inserter, output, errors, true) ==
+           0);
+    assert(inserter.specifications.size() == 4);
+    assert(output.find("requested_seed=45") != std::string::npos);
+    assert(output.find("existing_equivalent_arm_a_ids=700") !=
+           std::string::npos);
+
     equivalents.values.clear();
     evidence.arms[102].extended.freshInitializationSeed = 42;
     inserter = {};
     assert(Run({44}, evidence, equivalents, inserter,
-               output, errors) == 3);
+               output, errors, true) == 3);
     assert(inserter.specifications.empty());
     assert(output.find("scientific_preflight_invalid") != std::string::npos);
     evidence.arms[102].extended.freshInitializationSeed = 43;

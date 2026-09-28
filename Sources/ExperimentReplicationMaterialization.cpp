@@ -60,6 +60,36 @@ std::string Reasons(const std::vector<std::string>& reasons)
     return output.str();
 }
 
+bool HasEquivalentFound(const Planning::Plan& plan)
+{
+    for (const auto& pair : plan.pairs)
+        for (const Planning::ArmPlan* arm : {&pair.armA, &pair.armB})
+            if (arm->equivalent.state ==
+                Planning::EquivalentExperimentState::EquivalentExperimentFound)
+                return true;
+    return false;
+}
+
+bool HasEquivalentAmbiguous(const Planning::Plan& plan)
+{
+    for (const auto& pair : plan.pairs)
+        for (const Planning::ArmPlan* arm : {&pair.armA, &pair.armB})
+            if (arm->equivalent.state ==
+                Planning::EquivalentExperimentState::EquivalentExperimentAmbiguous)
+                return true;
+    return false;
+}
+
+std::string ExistingEquivalentAuthorization(
+    const MaterializationCommand& command, const Planning::Plan& plan)
+{
+    if (HasEquivalentAmbiguous(plan)) return "ambiguous_not_authorized";
+    if (!HasEquivalentFound(plan))
+        return command.allowExistingEquivalent
+            ? "authorized_no_equivalent" : "not_applicable";
+    return command.allowExistingEquivalent ? "authorized" : "not_requested";
+}
+
 void Validate(const MaterializationCommand& command)
 {
     if (command.sourceExperimentIds.first <= 0 ||
@@ -89,6 +119,12 @@ void RenderHeader(std::ostream& output,
     else output << "UNAVAILABLE";
     output << ",requested_seeds=" << Seeds(command.requestedSeeds)
            << ",replication_dimension=fresh_initialization_seed"
+           << ",allow_existing_equivalent="
+           << (command.allowExistingEquivalent ? "true" : "false")
+           << ",existing_equivalent_authorization="
+           << (plan ? ExistingEquivalentAuthorization(command, *plan)
+                    : (command.allowExistingEquivalent
+                           ? "requested_but_not_verified" : "not_requested"))
            << ",statistical_independence=not_inferred"
            << ",transaction=single_postgresql_write_transaction"
            << ",atomicity=all_or_nothing"
@@ -146,14 +182,22 @@ void RenderPlanEvidence(std::ostream& output, const Planning::Plan& plan)
     }
 }
 
-bool HasEquivalenceConflict(const Planning::Plan& plan)
+bool HasEquivalenceConflict(const Planning::Plan& plan,
+                           bool allowExistingEquivalent)
 {
     for (const Planning::PlannedPair& pair : plan.pairs)
+    {
         for (const Planning::ArmPlan* arm : {&pair.armA, &pair.armB})
-            if (arm->equivalent.state !=
-                Planning::EquivalentExperimentState::
-                    NoEquivalentExperimentFound)
+        {
+            if (arm->equivalent.state ==
+                Planning::EquivalentExperimentState::EquivalentExperimentAmbiguous)
                 return true;
+            if (arm->equivalent.state ==
+                    Planning::EquivalentExperimentState::EquivalentExperimentFound &&
+                !allowExistingEquivalent)
+                return true;
+        }
+    }
     return false;
 }
 
@@ -194,11 +238,14 @@ int RunMaterializationInTransaction(
                    << ",exit_code=3\n";
             return 3;
         }
-        if (HasEquivalenceConflict(plan))
+        if (HasEquivalenceConflict(plan, command.allowExistingEquivalent))
         {
             output << "CONTROLLED_REPLICATION_WAVE_MATERIALIZATION_RESULT"
                    << ",state=not_materialized"
-                   << ",reason=equivalence_conflict"
+                   << ",reason="
+                   << (HasEquivalentAmbiguous(plan)
+                           ? "equivalence_ambiguous_not_authorized"
+                           : "equivalence_conflict")
                    << ",pair_count=0,experiment_count=0"
                    << ",transaction=rolled_back,queued=false,started=false"
                    << ",exit_code=3\n";
@@ -238,6 +285,25 @@ int RunMaterializationInTransaction(
                    << command.sourceExperimentIds.first
                    << ",source_experiment_b_id="
                    << command.sourceExperimentIds.second;
+            output << ",existing_equivalent_arm_a_ids="
+                   << Ids(value.pair->armA.equivalent.experimentIds)
+                   << ",existing_equivalent_arm_b_ids="
+                   << Ids(value.pair->armB.equivalent.experimentIds)
+                   << ",existing_equivalent_authorization="
+                   << (command.allowExistingEquivalent &&
+                               (value.pair->armA.equivalent.state ==
+                                    Planning::EquivalentExperimentState::
+                                        EquivalentExperimentFound ||
+                                value.pair->armB.equivalent.state ==
+                                    Planning::EquivalentExperimentState::
+                                        EquivalentExperimentFound)
+                           ? "authorized" : "not_applicable")
+                   << ",materialization_kind=fresh_execution_replication"
+                   << ",configured_identity_repeat=true"
+                   << ",existing_equivalent_reused=false"
+                   << ",old_equivalent_modified=false"
+                   << ",materialized_status=paused"
+                   << ",materialized_phase=train";
             if (value.pair->intentionalDifferences.empty())
                 output << ",intentional_intervention=UNAVAILABLE";
             else
