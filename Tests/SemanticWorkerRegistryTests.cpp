@@ -703,9 +703,10 @@ int main()
     AssertTrainingCommandAblationIdentity(
         combinedHistorical, combinedCurrent);
 
-    // Synthetic minimal-capability V5 fixture: a control sees the narrower
-    // historical worker; an ablation experiment sees only the explicitly
-    // qualified candidate. The production-faithful fixture follows below.
+    // An exact layout/width with an explicitly ablation-qualified candidate
+    // places empty-mask controls in that same capability selection domain.
+    // Thus a later narrow plain-TRAIN candidate cannot split a controlled
+    // control/treatment pair onto different executable identities.
     Fixture dualCandidateTraining;
     dualCandidateTraining.writeHistoricalTrainingRegistry(false, true);
     const auto dualRegistry = EA::Scheduler::SemanticWorkerRegistry::Load({
@@ -717,12 +718,12 @@ int main()
         {{80}, {8}, true}, dualRegistry, ablationRequired);
     assert(dualControl.selected && dualAblation.selected);
     assert(dualControl.canonicalExecutablePath ==
-           fs::canonical(dualCandidateTraining.artifact(8, kCommit6, kHash6) /
+           fs::canonical(dualCandidateTraining.artifact(8, kCommit7, kHash7) /
                          "LSTM_Release"));
     assert(dualAblation.canonicalExecutablePath ==
            fs::canonical(dualCandidateTraining.artifact(8, kCommit7, kHash7) /
                          "LSTM_Release"));
-    assert(dualControl.canonicalExecutablePath != dualAblation.canonicalExecutablePath);
+    assert(dualControl.canonicalExecutablePath == dualAblation.canonicalExecutablePath);
     const auto* trainCandidates = dualRegistry.findCandidates(
         8, EA::Scheduler::SemanticWorkerRole::Train);
     assert(trainCandidates != nullptr && trainCandidates->size() == 2U);
@@ -812,7 +813,7 @@ int main()
         std::nullopt, 9, 103});
     assert(EA::Scheduler::SelectTrainingWorker(
                {{80}, {8}, true}, reorderedDualRegistry).canonicalExecutablePath ==
-           fs::canonical(reorderedDualCandidateTraining.artifact(8, kCommit6, kHash6) /
+           fs::canonical(reorderedDualCandidateTraining.artifact(8, kCommit7, kHash7) /
                          "LSTM_Release"));
     assert(EA::Scheduler::SelectTrainingWorker(
                {{80}, {8}, true}, reorderedDualRegistry, ablationRequired)

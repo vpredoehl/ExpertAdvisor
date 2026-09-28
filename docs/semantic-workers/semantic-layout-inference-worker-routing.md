@@ -88,6 +88,13 @@ control with an empty mask, while an ablated TRAIN is rejected before capacity
 reservation or spawn with a capability-incompatible diagnostic. The scheduler
 does not remove the ablation option or substitute another semantic layout.
 
+If an exact layout/width group has an explicitly ablation-qualified TRAIN
+candidate, an empty-mask TRAIN request is selected from that same qualified
+capability domain. This is a general control/treatment identity rule: a
+no-mask control and a nonempty-mask treatment use identical deterministic
+candidate filtering, including append-only priority ordering. Groups without
+an ablation-qualified candidate preserve the legacy empty-mask behavior.
+
 A truly fresh legacy experiment with both identity columns null retains the
 established behavior of selecting the registry's current published training
 artifact without inventing or persisting an identity during selection. An

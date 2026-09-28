@@ -1127,8 +1127,39 @@ SemanticWorkerSelection SemanticWorkerRegistry::selectTrainingReferenceWorker(
                 worker.modelInputWidth,
                 "current_published_semantic_worker"};
     }
+    // A control whose persisted mask is empty has no capability requirement of
+    // its own. Once an exact layout/width TRAIN candidate has explicitly
+    // qualified the canonical ablation implementation, route that control
+    // through the same capability-qualified selection domain as a paired
+    // ablation arm. This is deliberately a general superset rule, not a
+    // study-specific preference: it prevents a no-mask control and a masked
+    // treatment from silently separating when a later, narrower plain-TRAIN
+    // artifact is appended to the registry. The normal deterministic
+    // capability/priority selection below still chooses the one artifact.
+    // Layouts with no ablation-qualified candidate retain their historical
+    // empty-mask routing behavior.
+    SemanticWorkerCapabilities effectiveCapabilities = requiredCapabilities;
+    if (effectiveCapabilities.empty() && persisted.inputWidth &&
+        persisted.layoutVersion)
+    {
+        if (const auto* candidates = findCandidates(
+                *persisted.layoutVersion, SemanticWorkerRole::Train))
+        {
+            const bool ablationCapableCandidate = std::any_of(
+                candidates->begin(), candidates->end(),
+                [&](const SemanticWorkerArtifact& candidate)
+                {
+                    return candidate.modelInputWidth == *persisted.inputWidth &&
+                        candidate.capabilities.contains("train") &&
+                        candidate.capabilities.contains(
+                            kTrainFeatureAblationCapability);
+                });
+            if (ablationCapableCandidate)
+                effectiveCapabilities.insert(kTrainFeatureAblationCapability);
+        }
+    }
     return SelectWorkerForRole(
-        *this, persisted, SemanticWorkerRole::Train, requiredCapabilities);
+        *this, persisted, SemanticWorkerRole::Train, effectiveCapabilities);
 }
 
 } // namespace EA::Scheduler
