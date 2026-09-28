@@ -6,6 +6,7 @@
 #include "CausalFibonacciIncrementalInformation.hpp"
 #include "CausalFibonacciIncrementalInformationExtraction.hpp"
 #include "CausalFibonacciIncrementalInformationAnalysis.hpp"
+#include "CausalFibonacciIncrementalInformationConfirmation.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -40,6 +41,7 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
     if (command != "--fibonacci-incremental-information-verify-artifact" &&
         command != "--fibonacci-incremental-information-extract" &&
         command != "--fibonacci-incremental-information-analyze-pre2025" &&
+        command != "--fibonacci-incremental-information-confirm-2025" &&
         command != "--fibonacci-incremental-information-diagnose-pre2025-multinomial" &&
         command != "--fibonacci-incremental-information-qualify-solver-budget")
         return std::nullopt;
@@ -77,6 +79,23 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
             Analysis::Run(options);
             std::cout << "FIBONACCI_INCREMENTAL_PRE2025_ANALYSIS_COMPLETE protocol=" << kProtocolId
                       << ",confirmation_2025=sealed\n";
+            return 0;
+        }
+        if (command == "--fibonacci-incremental-information-confirm-2025") {
+            Confirmation::Options options;
+            for (int index = 2; index < argc; ++index) {
+                const std::string_view option(argv[index]);
+                if (option == "--artifact-dir" && index + 1 < argc) options.artifactDirectory = argv[++index];
+                else if (option == "--frozen-pre2025-result-dir" && index + 1 < argc) options.frozenPre2025ResultDirectory = argv[++index];
+                else if (option == "--output-dir" && index + 1 < argc) options.outputDirectory = argv[++index];
+                else if (option == "--code-commit" && index + 1 < argc) options.codeCommit = argv[++index];
+                else if (option == "--authorize-fibonacci-confirmation-2025") options.explicitlyAuthorized = true;
+                else if (option == "--enforce-no-refit") options.noRefit = true;
+                else throw std::invalid_argument("unknown or incomplete Fibonacci confirmation option: " + std::string(option));
+            }
+            Confirmation::Run(options);
+            std::cout << "FIBONACCI_INCREMENTAL_CONFIRMATION_2025_COMPLETE protocol=" << kProtocolId
+                      << ",confirmation_2025=evaluated_once_by_explicit_authorization\n";
             return 0;
         }
         Extraction::Options options;
