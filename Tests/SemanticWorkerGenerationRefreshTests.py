@@ -109,7 +109,7 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
                                check_embedded_commit=False,
                                runtime_resources=dict(self.runtime_resources), **kwargs)
 
-    def test_successful_layout8_refresh_replaces_complete_current_pair_only(self) -> None:
+    def test_successful_layout8_refresh_retains_outgoing_train_artifact(self) -> None:
         before = self.registry()
         old_current = [worker for worker in before["workers"] if worker["semantic_layout"] == 8]
         old_current_bytes = [self.immutable_bytes(worker) for worker in old_current]
@@ -118,7 +118,9 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         training, inference = self.publish()
         after = self.registry()
         self.assertEqual(after["current_layout"], 8)
-        current = [worker for worker in after["workers"] if worker["semantic_layout"] == 8]
+        current = [worker for worker in after["workers"]
+                   if worker["semantic_layout"] == 8 and
+                   worker["worker_rule"] == "current"]
         self.assertEqual({worker["worker_role"] for worker in current}, {"train", "infer"})
         self.assertTrue(all(worker["worker_rule"] == "current" for worker in current))
         self.assertTrue(all(worker["model_input_width"] == 80 for worker in current))
@@ -129,6 +131,13 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
                          rollover.TRAINING_CAPABILITIES)
         self.assertNotIn("train_feature_ablation_v1",
                          training_current["capabilities"])
+        outgoing_train = next(worker for worker in after["workers"]
+                              if worker["semantic_layout"] == 8 and
+                              worker["worker_role"] == "train" and
+                              worker["source_commit"] == self.old_commit8)
+        self.assertEqual(outgoing_train["worker_rule"], "historical")
+        self.assertEqual(outgoing_train["selection_priority"], 0)
+        self.assertEqual(training_current["selection_priority"], 1)
         self.assertEqual([worker for worker in after["workers"] if worker["semantic_layout"] in {6, 7}],
                          old_historical)
         self.assertEqual([self.immutable_bytes(worker) for worker in old_historical],
@@ -143,9 +152,10 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         registry = self.registry()
         training = next(worker for worker in registry["workers"]
                         if worker["semantic_layout"] == 8 and
-                        worker["worker_role"] == "train")
+                        worker["worker_role"] == "train" and
+                        worker["worker_rule"] == "current")
         self.assertEqual(training["capabilities"],
-                         rollover.training_capabilities(True))
+                         ["train", "train_feature_ablation_v1"])
         self.assertIn("train_feature_ablation_v1", training["capabilities"])
 
     def test_refresh_preserves_historical_train_candidate_at_current_layout(self) -> None:
@@ -195,7 +205,8 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         self.assertNotEqual(self.registry_bytes(), before)
         committed = publisher.load_registry(self.root / "registry.json")
         current = [worker for worker in committed["workers"]
-                   if worker["semantic_layout"] == committed["current_layout"]]
+                   if worker["semantic_layout"] == committed["current_layout"] and
+                   worker["worker_rule"] == "current"]
         self.assertEqual(committed["current_layout"], 8)
         self.assertEqual({worker["source_commit"] for worker in current}, {self.new_commit8})
 
@@ -224,7 +235,8 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         self.assertEqual(committed["current_layout"], 8)
         self.assertEqual(
             {worker["source_commit"] for worker in committed["workers"]
-             if worker["semantic_layout"] == 8},
+             if worker["semantic_layout"] == 8 and
+             worker["worker_rule"] == "current"},
             {self.new_commit8},
         )
 

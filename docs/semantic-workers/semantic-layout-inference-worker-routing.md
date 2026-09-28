@@ -250,10 +250,14 @@ them to equal the registry's current layout, and requires exactly the current
 same clean commit, including the training executable provenance and infer
 worker build identity/SHA; their runtime resources must match. It stages both
 immutable artifacts, validates the complete prospective registry, then makes
-one registry replacement that replaces only those two current bindings. All
-historical bindings and prior immutable artifacts remain untouched. As with a
-rollover, the `current` infer-worker convenience symlink changes only after the
-registry publication succeeds.
+one registry replacement. The outgoing current TRAIN binding is retained as a
+historical TRAIN candidate with its original artifact manifest, bytes, and
+priority; the outgoing INFER artifact remains immutable on disk but is removed
+from the registry's singleton INFER binding. The refreshed TRAIN artifact
+claims only `train` plus `train_feature_ablation_v1` when explicitly qualified,
+because INFER has its own role artifact and ANALYZE is scheduler-owned. As with
+a rollover, the `current` infer-worker convenience symlink changes only after
+the registry publication succeeds.
 
 If that non-authoritative symlink update or its directory fsync fails after
 the registry replacement, the command reports `semantic worker registry

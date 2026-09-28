@@ -25,6 +25,23 @@ _SPEC.loader.exec_module(rollover)
 publisher = rollover.publisher
 
 
+def _refreshed_training_capabilities(
+    feature_ablation_qualified: bool,
+) -> list[str]:
+    """Return the narrow immutable claim for a refreshed TRAIN artifact.
+
+    A current-layout refresh that explicitly qualifies ablation is commonly
+    used for controlled ablation work. Its artifact need only claim the TRAIN
+    implementation and that qualified superset capability; INFER has its
+    dedicated role artifact and ANALYZE is scheduler-owned. Keeping this claim
+    narrow also makes append-only priority a stable tie-breaker among future
+    ablation-qualified TRAIN candidates.
+    """
+    if feature_ablation_qualified:
+        return ["train", "train_feature_ablation_v1"]
+    return rollover.training_capabilities()
+
+
 def _validate_refresh_prestate(registry: dict, layout: int, width: int) -> None:
     if registry["schema_version"] != publisher.REGISTRY_SCHEMA_VERSION:
         raise publisher.PublishError("current semantic worker refresh requires registry schema 4")
@@ -80,7 +97,7 @@ def refresh(
     training_relative, training_manifest, training_worker = rollover._worker_value(
         layout, width, commit, training_digest, "train",
         publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
-        rollover.training_capabilities(feature_ablation_qualified), runtime_identity)
+        _refreshed_training_capabilities(feature_ablation_qualified), runtime_identity)
     inference_relative, inference_manifest, inference_worker = rollover._worker_value(
         layout, width, commit, inference_digest, "infer",
         publisher.WORKER_MANIFEST_SCHEMA_VERSION,
@@ -111,13 +128,27 @@ def refresh(
             artifact_root, inference, inference_relative, inference_manifest,
             inference_digest, runtime)
 
-        # Do not demote, rewrite, or remove historical bindings.  Only the
-        # complete current-layout pair is replaced in this prospective value.
+        # Retain the outgoing TRAIN artifact as an immutable historical
+        # candidate. The registry permits several TRAIN candidates, whereas
+        # INFER intentionally remains a singleton per layout; the outgoing
+        # infer artifact stays immutable on disk but is retired from its
+        # singleton binding. No executable or artifact manifest is rewritten.
+        for worker in registry["workers"]:
+            if (worker["semantic_layout"] == layout and
+                    worker["worker_rule"] == "current" and
+                    worker["worker_role"] == "train"):
+                worker["worker_rule"] = "historical"
         registry["workers"] = [
             worker for worker in registry["workers"]
             if not (worker["semantic_layout"] == layout and
-                    worker["worker_rule"] == "current")
+                    worker["worker_rule"] == "current" and
+                    worker["worker_role"] == "infer")
         ]
+        training_worker["selection_priority"] = 1 + max(
+            worker["selection_priority"] for worker in registry["workers"]
+            if worker["semantic_layout"] == layout and
+            worker["worker_role"] == "train" and
+            worker["model_input_width"] == width)
         registry["workers"].extend([training_worker, inference_worker])
         publisher.validate_existing_registry(artifact_root, registry)
         publisher.atomic_write_json(registry_path, registry)
