@@ -2,7 +2,7 @@
 
 **Protocol identifier:** `causal-fibonacci-layout9-controlled-lstm-v1`
 
-**Status:** **BLOCKED — NOT FROZEN BEFORE EXPERIMENT MATERIALIZATION**
+**Status:** **FROZEN BEFORE EXPERIMENT MATERIALIZATION**
 
 **Scope:** outcome-blind design for the next scientific stage following the
 completed `causal-fibonacci-layout9-incremental-information-v2` screen. This
@@ -77,7 +77,7 @@ that is absent from the persisted model-input layout.
 No individual Fibonacci column, subset, alias, ratio, or regime may be
 selected after results are known.
 
-## 4. Specified experimental matrix pending provenance freeze
+## 4. Frozen experimental matrix
 
 This is intentionally the full screening universe rather than a
 post-confirmation subset. The order is canonical lexical order, not an effect
@@ -156,35 +156,62 @@ same equality. The ordinary empty-mask control must not silently route to a
 different binary merely because it does not itself request the ablation
 capability.
 
-The 2026-09-28 provenance-only qualification established that this condition
-is **not currently met**. The checked operational registry
-`Builds/SemanticWorkers/registry.json` (SHA-256
-`2d874267cd24cb1da0f9c32ab7357cfe676cb9336337ac30ca2729c92cf86ac3`)
-contains exactly one layout-9/103 TRAIN candidate:
+The 2026-09-28 qualification published a new immutable current layout-9
+generation through `RefreshSemanticWorkerGeneration.py`. The checked
+operational registry is schema version 5, SHA-256
+`dc4f13e5cfa2bc0c63642f674e1ff438f4b6f98df2e421e3f0112ec6f269469c`.
+The Release product SHA equals the new immutable TRAIN artifact SHA exactly:
 
-| Field | Registered value |
+| Field | Frozen qualified value |
 | --- | --- |
-| source commit | `273059036f0c1432082b32cfddbb6d9dc2285d16` (`Add causal Fibonacci feature ablation support`) |
-| executable SHA-256 | `4657767524a8effc9e2610ae8fd2bd8cf7ad0b3281015d890731ccd566f15495` |
+| worker source commit | `e964fa9e335e9ae63918187a7ffee7aa77f32b4b` (`Retain refreshed TRAIN worker history`) |
+| Release product / TRAIN artifact SHA-256 | `f56342895009e19cc69751259590cd945d64e5bfb5ffcd330f6aefc8d3fd26e9` |
+| immutable TRAIN artifact | `Builds/SemanticWorkers/layout9/e964fa9e335e9ae63918187a7ffee7aa77f32b4b/f56342895009e19cc69751259590cd945d64e5bfb5ffcd330f6aefc8d3fd26e9/LSTM_Release` |
+| immutable TRAIN manifest SHA-256 | `7fec5e55b109c15c5d938d0db75002de1ee4eab8f5d5675ba4dcb83269285c90` |
 | runtime identity | `6c8d208a0aae281f3fbb1a2a38fe2c7d6deb92811b4a41d3615fac67defee34e` |
-| capabilities | `train`, `infer`, `analyze` |
-| required but absent capability | `train_feature_ablation_v1` |
+| semantic identity | layout `9`, width `103`, role `train` |
+| declared capabilities | `train`, `train_feature_ablation_v1` |
+| current final-inference worker SHA-256 | `dc3c10fecc1990a9eb4194265322820ac2d95a384639603c9070bdaf9e6ede8d` |
+| current final-inference worker source/runtime | `e964fa9e335e9ae63918187a7ffee7aa77f32b4b` / `6c8d208a0aae281f3fbb1a2a38fe2c7d6deb92811b4a41d3615fac67defee34e` |
 
-The executable file's SHA-256 was independently recomputed and matches the
-manifest. This does **not** qualify it for treatment execution: the scheduler
-contract deliberately never infers feature-ablation capability from a source
-commit, layout, or executable name. Consequently the complete arm resolves
-to this candidate, while the nonempty exact-23 mask is rejected before worker
-reservation with `semantic_worker_capability_incompatible`.
+The preceding layout-9 TRAIN artifact remains byte-identical and registered
+as a historical candidate: source commit
+`273059036f0c1432082b32cfddbb6d9dc2285d16`, executable SHA-256
+`4657767524a8effc9e2610ae8fd2bd8cf7ad0b3281015d890731ccd566f15495`,
+runtime identity
+`6c8d208a0aae281f3fbb1a2a38fe2c7d6deb92811b4a41d3615fac67defee34e`,
+and unchanged capabilities `train`, `infer`, `analyze`. It was neither
+modified nor given retrospective ablation capability.
 
-The existing selector has a useful general property once a common qualified
-candidate is published: a capability-qualified TRAIN candidate with no
-unrelated excess capabilities is selected for an otherwise-identical
-empty-mask control as well as for the masked treatment. The disposable
-semantic-worker-registry regression proves that rule and also proves
-fail-closed rejection when the capability is absent. It is not a substitute
-for an actual registered layout-9 qualified candidate. No registry entry,
-binary, or historical worker artifact was changed in this qualification.
+The TRAIN selector now has a general controlled-ablation invariant: if an
+exact layout/width group has an explicitly `train_feature_ablation_v1`-
+qualified candidate, an empty-mask control is selected from that same
+capability-required domain as a nonempty-mask treatment. Thus both frozen
+layout-9/103 arms require the capability and deterministically select the
+new artifact above: same source commit, executable SHA-256, runtime identity,
+layout, width, role, and implementation. Selection priority is append-only;
+the new narrow `[train, train_feature_ablation_v1]` artifact is priority 1
+after the historical priority-0 candidate, which is ineligible for both arms.
+A later plain-TRAIN publication cannot separate the arms, and a later
+ablation-qualified candidate has equal capability excess but a higher
+append-only priority.
+
+At future materialization, the authoritative scheduler preflight must verify
+both the empty control and exact-mask treatment resolve to the frozen TRAIN
+artifact above, and final inference must resolve identically for both arms to
+the recorded inference artifact. The complete arm must launch with **no**
+`--ablate-features` argument; the treatment must launch with precisely the
+section-3 canonical 23-name text. Scheduler restart, recovery, or canonical
+Release publication cannot substitute a different selected artifact without
+either failing this selector invariant/preflight or producing differing
+immutable attempt provenance.
+
+`experiment_scheduler_worker_attempt` persists the selected source commit,
+executable SHA-256, runtime identity, layout, width, role, and manifest path.
+The model and exact-final inference rows bind their producing attempt. The
+feature-ablation and replication comparators reject missing, malformed, or
+mismatched TRAIN or final-INFER provenance; such a matched pair is
+scientifically unavailable and must not contribute to paired analysis.
 
 ## 6. Required immutable calendar provenance — resolved
 
@@ -300,11 +327,13 @@ or a trading strategy.
 - **Seed and stopping leakage:** every cell has paired predeclared seeds;
   there is no result-driven continuation, extension, replacement, or arm
   substitution.
-- **Worker-routing confounding:** the existing comparator fails a mismatch,
-  and the present registry fails closed for treatment because no layout-9
-  candidate declares `train_feature_ablation_v1`. Identical selected
-  bytes/runtime remain a pre-materialization requirement; this unresolved
-  condition keeps the protocol blocked.
+- **Worker-routing confounding:** both arms are forced into the same explicit
+  ablation-qualified layout-9/103 TRAIN selection domain and resolve to the
+  frozen `f563428…26e9` artifact. The historical `465776…f15495` worker is
+  ineligible for both under that domain. The exact-final INFER selection is
+  likewise common. Scheduler reservation persists immutable source/SHA/runtime
+  provenance, and the pair/replication comparators reject any completed
+  provenance mismatch rather than interpreting it as treatment evidence.
 - **Failure handling:** incomplete or failed pairs are explicit invalid or
   incomplete evidence, never silently omitted.
 - **Metric discretion:** all predictive, behavioral, and profitability fields
@@ -315,18 +344,14 @@ or a trading strategy.
 
 ## 10. Blockers and required next action
 
-This design is **BLOCKED** and must not be materialized. The
-economic-calendar blocker is resolved by the exact section 6 snapshot
-identity. The remaining blocker is operational worker qualification: no
-registered layout-9/103 TRAIN artifact declares
-`train_feature_ablation_v1`, so the masked treatment cannot be admitted and
-no same-byte complete/treatment pair can be proven.
+This design is **FROZEN BEFORE EXPERIMENT MATERIALIZATION**. Both blockers are
+resolved by the exact section-6 calendar identity and the section-5 immutable
+worker qualification. The matrix, outcome definitions, and interpretation
+rules did not change.
 
-No scientist or operator may resolve this blocker by looking at outcomes. A
-future authorized operational qualification must publish a new immutable
-layout-9/103 TRAIN registry entry that explicitly declares
-`train_feature_ablation_v1`, verify that both masks deterministically select
-the same executable SHA-256 and runtime identity, and bind that identity here
-before the 96-arm matrix can be materialized. It must not mutate the historical
-artifact above or infer the missing capability retrospectively. Until then,
-this document is a design and blocker record, not execution authority.
+This freeze is not materialization authority. A separate explicit authorization
+is required before creating any of the 96 paused experiment rows. That later
+operation must re-run the section-5 two-mask TRAIN and final-INFER preflight,
+persist section 6's calendar ID/hash on every arm, retain the paired seeds,
+and refuse the entire wave if either routing equality is unavailable. It must
+not use outcomes, mutate the historical artifact, or rerun `confirmation_2025`.
