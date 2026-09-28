@@ -143,6 +143,16 @@ void ClearFinalEvidence(Feature::ArmEvidence& arm)
     arm.exactFinalInferenceResultId.reset();
 }
 
+void SetContext(Feature::ArmEvidence& arm, const std::string& symbol,
+                int horizon)
+{
+    arm.authoritative.configuration.symbol = symbol;
+    arm.authoritative.configuration.predictionHorizon = horizon;
+    arm.authoritative.configuration.persistedTrainingSymbol = symbol;
+    arm.authoritative.classification->symbol = symbol;
+    arm.authoritative.classification->predictionHorizon = horizon;
+}
+
 Pair::ComparisonResult PairResult(const Feature::ArmEvidence& armA,
                                   const Feature::ArmEvidence& armB)
 {
@@ -488,19 +498,15 @@ int main()
     assert(rendered.find("pair_deltas=0.09999999999999998|-0.050000000000000044") !=
            std::string::npos);
 
-    // Two symbol families are intentionally evaluated side by side. The
-    // family report never constructs a cross-symbol aggregate, and an
-    // execution-provenance mismatch in one family does not erase the other
-    // family's valid descriptive evidence.
+    // A failed context suppresses, rather than contaminates, cross-context
+    // aggregation while preserving every family report.
     auto cadA1 = Arm(301, "", 43, 0.60, 0.10);
     auto cadB1 = Arm(302, std::string{kMask}, 43, 0.70, 0.20);
     auto cadA2 = Arm(303, "", 44, 0.65, 0.30);
     auto cadB2 = Arm(304, std::string{kMask}, 44, 0.60, 0.20);
     for (auto* arm : {&cadA1, &cadB1, &cadA2, &cadB2})
     {
-        arm->authoritative.configuration.symbol = "cadchfrmp";
-        arm->authoritative.configuration.persistedTrainingSymbol = "cadchfrmp";
-        arm->authoritative.classification->symbol = "cadchfrmp";
+        SetContext(*arm, "cadchfrmp", 4);
     }
     auto audA1 = Arm(305, "", 43, 0.60, 0.10);
     auto audB1 = Arm(306, std::string{kMask}, 43, 0.70, 0.20);
@@ -524,12 +530,12 @@ int main()
     const std::string familyRendered =
         Replication::RenderFamilyReport(familyReport);
     assert(familyRendered == Replication::RenderFamilyReport(familyReport));
-    assert(familyRendered.find("cross_family_aggregation=not_performed") !=
+    assert(familyRendered.find("cross_context_aggregation=suppressed") !=
            std::string::npos);
     assert(familyRendered.find("raw_pair_pooling=false") != std::string::npos);
     assert(familyRendered.find("symbol=cadchfrmp") != std::string::npos);
     assert(familyRendered.find("symbol=audchfrmp") != std::string::npos);
-    assert(familyRendered.find("heterogeneity=preserved_by_separate_family_results") !=
+    assert(familyRendered.find("heterogeneity=preserved_by_context_family_boundaries") !=
            std::string::npos);
     assert(familyRendered.find("subjective_winner=NONE") != std::string::npos);
 
@@ -566,6 +572,164 @@ int main()
     assert(familySource.loads ==
            std::vector<long long>({301, 302, 303, 304, 305, 306, 307, 308}));
     assert(familySource.writes == 0);
+
+    // Contexts may differ in symbol and horizon, while their individual
+    // different-seed replication contracts and the common intervention remain
+    // exact. Pair counts intentionally differ; the final mean is unweighted
+    // over the two family means rather than five raw pairs.
+    auto audGoodA1 = Arm(401, "", 43, 0.60, 0.10);
+    auto audGoodB1 = Arm(402, std::string{kMask}, 43, 0.50, 0.20);
+    auto audGoodA2 = Arm(403, "", 44, 0.60, 0.10);
+    auto audGoodB2 = Arm(404, std::string{kMask}, 44, 0.70, 0.20);
+    auto audGoodA3 = Arm(405, "", 45, 0.60, 0.10);
+    auto audGoodB3 = Arm(406, std::string{kMask}, 45, 0.60, 0.20);
+    for (auto* arm : {&audGoodA1, &audGoodB1, &audGoodA2, &audGoodB2,
+                      &audGoodA3, &audGoodB3})
+        SetContext(*arm, "audcadrmp", 6);
+    const auto cross = Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(audGoodA1, audGoodB1), PairResult(audGoodA2, audGoodB2),
+         PairResult(audGoodA3, audGoodB3)}});
+    assert(cross.crossContextCompatibility == Replication::Compatibility::Compatible);
+    assert(cross.families[0].homogeneousPredictionHorizon == "4");
+    assert(cross.families[1].homogeneousPredictionHorizon == "6");
+    const auto crossAccuracy = std::find_if(cross.crossContextMetrics.begin(),
+        cross.crossContextMetrics.end(), [](const auto& metric) {
+            return metric.name == "inference_accuracy";
+        });
+    assert(crossAccuracy != cross.crossContextMetrics.end());
+    assert(crossAccuracy->compatibleContextFamilyCount == 2);
+    assert(crossAccuracy->familyDescriptiveMeans.size() == 2);
+    assert(std::fabs(*crossAccuracy->familyDescriptiveMeans[0] - 0.025) < 1e-15);
+    assert(std::fabs(*crossAccuracy->familyDescriptiveMeans[1]) < 1e-15);
+    assert(crossAccuracy->positiveFamilyMeanCount == 1);
+    assert(crossAccuracy->zeroFamilyMeanCount == 1);
+    assert(std::fabs(*crossAccuracy->unweightedDescriptiveMeanOfFamilyMeans -
+                     0.0125) < 1e-15);
+    const std::string crossRendered = Replication::RenderFamilyReport(cross);
+    assert(crossRendered.find("unweighted_descriptive_mean_of_family_means") !=
+           std::string::npos);
+    assert(crossRendered.find("subjective_winner=NONE") != std::string::npos);
+    assert(crossRendered.find("recommendation=") == std::string::npos);
+
+    // A third valid context remains an ordered family-level observation. Its
+    // negative B-minus-A mean is preserved rather than offset by pooling raw
+    // pairs from the first two contexts.
+    auto eurA1 = Arm(407, "", 44, 0.70, 0.30);
+    auto eurB1 = Arm(408, std::string{kMask}, 44, 0.60, 0.20);
+    auto eurA2 = Arm(409, "", 45, 0.70, 0.30);
+    auto eurB2 = Arm(410, std::string{kMask}, 45, 0.60, 0.20);
+    for (auto* arm : {&eurA1, &eurB1, &eurA2, &eurB2})
+        SetContext(*arm, "eurchfrmp", 8);
+    const auto threeContexts = Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(audGoodA1, audGoodB1), PairResult(audGoodA2, audGoodB2),
+         PairResult(audGoodA3, audGoodB3)},
+        {PairResult(eurA1, eurB1), PairResult(eurA2, eurB2)}});
+    assert(threeContexts.crossContextCompatibility ==
+           Replication::Compatibility::Compatible);
+    const auto threeContextAccuracy = std::find_if(
+        threeContexts.crossContextMetrics.begin(),
+        threeContexts.crossContextMetrics.end(), [](const auto& metric) {
+            return metric.name == "inference_accuracy";
+        });
+    assert(threeContextAccuracy != threeContexts.crossContextMetrics.end());
+    assert(threeContextAccuracy->familyDescriptiveMeans.size() == 3);
+    assert(std::fabs(*threeContextAccuracy->familyDescriptiveMeans[0] - 0.025) < 1e-15);
+    assert(std::fabs(*threeContextAccuracy->familyDescriptiveMeans[1]) < 1e-15);
+    assert(std::fabs(*threeContextAccuracy->familyDescriptiveMeans[2] + 0.10) < 1e-15);
+    assert(threeContextAccuracy->positiveFamilyMeanCount == 1);
+    assert(threeContextAccuracy->zeroFamilyMeanCount == 1);
+    assert(threeContextAccuracy->negativeFamilyMeanCount == 1);
+    assert(Replication::RenderFamilyReport(threeContexts).find(
+               "statistical_independence=not_inferred") != std::string::npos);
+
+    // Cross-context duplicate reuse is an invalid request even where each
+    // family would otherwise be independently valid.
+    try
+    {
+        (void)Replication::CompareFamilies({
+            {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+            {PairResult(cadA1, cadB1), PairResult(eurA1, eurB1)}});
+        assert(false);
+    }
+    catch (const std::invalid_argument&)
+    {
+    }
+
+    auto mismatchedMaskA1 = audGoodA1; auto mismatchedMaskB1 = audGoodB1;
+    auto mismatchedMaskA2 = audGoodA2; auto mismatchedMaskB2 = audGoodB2;
+    mismatchedMaskB1.authoritative.configuration.featureAblationMask =
+        "tg4_inner_break_any";
+    mismatchedMaskB2.authoritative.configuration.featureAblationMask =
+        "tg4_inner_break_any";
+    assert(Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(mismatchedMaskA1, mismatchedMaskB1),
+         PairResult(mismatchedMaskA2, mismatchedMaskB2)}})
+        .crossContextCompatibility == Replication::Compatibility::Incompatible);
+
+    // Reversing a complete context's control/ablation order cannot silently
+    // turn B-minus-A into a different scientific intervention.
+    assert(Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(audGoodB1, audGoodA1), PairResult(audGoodB2, audGoodA2)}})
+        .crossContextCompatibility == Replication::Compatibility::Incompatible);
+
+    auto badLayoutA1 = audGoodA1; auto badLayoutB1 = audGoodB1;
+    auto badLayoutA2 = audGoodA2; auto badLayoutB2 = audGoodB2;
+    for (auto* arm : {&badLayoutA1, &badLayoutB1, &badLayoutA2, &badLayoutB2}) {
+        arm->authoritative.configuration.modelInputLayoutVersion = 9;
+        arm->extended.configuredModelInputLayoutVersion = 9;
+        arm->authoritative.trainingExecution->semanticLayoutVersion = 9;
+        arm->authoritative.inferenceExecution->semanticLayoutVersion = 9;
+    }
+    assert(Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(badLayoutA1, badLayoutB1), PairResult(badLayoutA2, badLayoutB2)}})
+        .crossContextCompatibility == Replication::Compatibility::Incompatible);
+
+    auto badCalendarA1 = audGoodA1; auto badCalendarB1 = audGoodB1;
+    auto badCalendarA2 = audGoodA2; auto badCalendarB2 = audGoodB2;
+    for (auto* arm : {&badCalendarA1, &badCalendarB1, &badCalendarA2,
+                      &badCalendarB2})
+    {
+        arm->extended.economicCalendarSnapshotId = 51;
+        arm->extended.economicCalendarSnapshotHash = "fnv1a64:0000000000000051";
+    }
+    assert(Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(badCalendarA1, badCalendarB1),
+         PairResult(badCalendarA2, badCalendarB2)}})
+        .crossContextCompatibility == Replication::Compatibility::Incompatible);
+
+    auto badExecutionA1 = audGoodA1; auto badExecutionB1 = audGoodB1;
+    auto badExecutionA2 = audGoodA2; auto badExecutionB2 = audGoodB2;
+    for (auto* arm : {&badExecutionA1, &badExecutionB1, &badExecutionA2,
+                      &badExecutionB2})
+        arm->authoritative.trainingExecution->executableSha256 =
+            "other_train_sha256";
+    assert(Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(badExecutionA1, badExecutionB1),
+         PairResult(badExecutionA2, badExecutionB2)}})
+        .crossContextCompatibility == Replication::Compatibility::Incompatible);
+
+    auto badWindowA1 = audGoodA1; auto badWindowB1 = audGoodB1;
+    auto badWindowA2 = audGoodA2; auto badWindowB2 = audGoodB2;
+    for (auto* arm : {&badWindowA1, &badWindowB1, &badWindowA2, &badWindowB2})
+        arm->authoritative.configuration.inferenceEnd = "2026-02-01";
+    assert(Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(badWindowA1, badWindowB1), PairResult(badWindowA2, badWindowB2)}})
+        .crossContextCompatibility == Replication::Compatibility::Incompatible);
+
+    auto incompleteA1 = audGoodA1; auto incompleteB1 = audGoodB1;
+    ClearFinalEvidence(incompleteA1); ClearFinalEvidence(incompleteB1);
+    assert(Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(incompleteA1, incompleteB1), PairResult(audGoodA2, audGoodB2)}})
+        .crossContextCompatibility != Replication::Compatibility::Compatible);
 
     FixtureSource missingSource;
     missingSource.evidence = source.evidence;

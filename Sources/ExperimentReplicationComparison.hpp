@@ -112,20 +112,37 @@ struct Result
     std::vector<MetricAggregate> metrics;
 };
 
-// Several replication families may be rendered together, but each family is
-// evaluated independently. This deliberately has no cross-family metric
-// aggregate: a caller must not pool symbol-specific paired runs as one
-// homogeneous population.
+// Several replication families may be rendered together. Each family is
+// evaluated independently before the optional cross-context summary can use
+// its qualified descriptive mean; raw paired runs are never pooled.
 struct FamilyResult
 {
     Result replication;
     std::optional<std::string> homogeneousSymbol;
+    std::optional<std::string> homogeneousPredictionHorizon;
+};
+
+// Cross-context summaries preserve family boundaries: each value is one
+// context family's already-qualified descriptive mean, never a raw-pair pool.
+struct CrossContextMetricAggregate
+{
+    std::string name;
+    std::size_t compatibleContextFamilyCount = 0;
+    std::vector<std::optional<double>> familyDescriptiveMeans;
+    std::size_t positiveFamilyMeanCount = 0;
+    std::size_t zeroFamilyMeanCount = 0;
+    std::size_t negativeFamilyMeanCount = 0;
+    std::optional<double> unweightedDescriptiveMeanOfFamilyMeans;
 };
 
 struct FamilyReport
 {
     std::vector<FamilyResult> families;
     std::size_t distinctHomogeneousSymbolCount = 0;
+    Compatibility crossContextCompatibility =
+        Compatibility::UndeterminedDueToMissingEvidence;
+    std::vector<std::string> crossContextReasons;
+    std::vector<CrossContextMetricAggregate> crossContextMetrics;
 };
 
 Result Compare(std::vector<Pair::ComparisonResult> pairs);

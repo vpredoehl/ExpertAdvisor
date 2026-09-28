@@ -361,6 +361,115 @@ std::optional<std::string> HomogeneousSymbol(const Result& result)
     return expected;
 }
 
+std::optional<std::string> HomogeneousIdentity(
+    const Result& result, std::string_view name)
+{
+    std::optional<std::string> expected;
+    for (const Pair::ComparisonResult& pair : result.pairs)
+        for (const auto* identity : {&pair.armAScientificIdentity,
+                                     &pair.armBScientificIdentity})
+        {
+            const auto found = std::find_if(
+                identity->begin(), identity->end(),
+                [name](const Pair::IdentityField& field)
+                {
+                    return field.name == name;
+                });
+            if (found == identity->end() || !found->value) return std::nullopt;
+            if (!expected) expected = *found->value;
+            else if (*expected != *found->value) return std::nullopt;
+        }
+    return expected;
+}
+
+void CompareCrossContextRoleIdentities(
+    std::string_view role, const std::vector<IdentityMap>& identities,
+    FamilyReport& report)
+{
+    static const std::set<std::string, std::less<>> allowedContextDimensions{
+        "symbol", "prediction_horizon", "persisted_training_symbol",
+        "fresh_initialization_seed"};
+    std::set<std::string, std::less<>> names;
+    for (const auto& identity : identities)
+        for (const auto& [name, unused] : identity)
+        {
+            (void)unused;
+            if (!allowedContextDimensions.contains(name)) names.insert(name);
+        }
+    for (const auto& name : names)
+    {
+        std::optional<std::string> expected;
+        for (const auto& identity : identities)
+        {
+            const auto found = identity.find(name);
+            if (found == identity.end() || !found->second)
+            {
+                AddReason(report.crossContextReasons,
+                          "cross_context_" + std::string(role) +
+                              "_identity_unavailable:" + name);
+                if (report.crossContextCompatibility != Compatibility::Incompatible)
+                    report.crossContextCompatibility =
+                        Compatibility::UndeterminedDueToMissingEvidence;
+                continue;
+            }
+            if (!expected) expected = *found->second;
+            else if (*expected != *found->second)
+            {
+                AddReason(report.crossContextReasons,
+                          "cross_context_" + std::string(role) +
+                              "_identity_mismatch:" + name);
+                report.crossContextCompatibility = Compatibility::Incompatible;
+            }
+        }
+    }
+}
+
+void AddCrossContextMetrics(FamilyReport& report)
+{
+    for (const auto& definition : Pair::MetricDefinitions())
+    {
+        CrossContextMetricAggregate aggregate;
+        aggregate.name = definition.name;
+        long double sum = 0.0L;
+        for (const auto& family : report.families)
+        {
+            const auto found = std::find_if(
+                family.replication.strictCompletedSubset.metrics.begin(),
+                family.replication.strictCompletedSubset.metrics.end(),
+                [&](const MetricAggregate& metric) {
+                    return metric.name == definition.name;
+                });
+            if (found == family.replication.strictCompletedSubset.metrics.end() ||
+                !found->descriptiveMean || !std::isfinite(*found->descriptiveMean))
+                throw std::invalid_argument(
+                    std::string{"cross_context_family_metric_unavailable:"} +
+                        std::string{definition.name});
+            const double value = *found->descriptiveMean;
+            aggregate.familyDescriptiveMeans.push_back(value);
+            ++aggregate.compatibleContextFamilyCount;
+            sum += static_cast<long double>(value);
+            if (value > 0.0) ++aggregate.positiveFamilyMeanCount;
+            else if (value < 0.0) ++aggregate.negativeFamilyMeanCount;
+            else ++aggregate.zeroFamilyMeanCount;
+        }
+        if (aggregate.compatibleContextFamilyCount != report.families.size() ||
+            !std::isfinite(sum))
+            throw std::invalid_argument("cross_context_family_metric_count_invalid");
+        aggregate.unweightedDescriptiveMeanOfFamilyMeans = static_cast<double>(
+            sum / static_cast<long double>(aggregate.compatibleContextFamilyCount));
+        report.crossContextMetrics.push_back(std::move(aggregate));
+    }
+}
+
+bool IsUnambiguousControlAblation(
+    const Pair::ComparisonResult& pair)
+{
+    return pair.intentionalDifferences.size() == 1 &&
+        pair.intentionalDifferences.front().field == "feature_ablation_mask" &&
+        pair.intentionalDifferences.front().armA.empty() &&
+        !pair.intentionalDifferences.front().armB.empty();
+}
+
 MetricAggregate AggregateMetric(
     const std::vector<Pair::ComparisonResult>& pairs,
     const Pair::MetricDefinition& definition)
@@ -428,6 +537,39 @@ void RenderAggregateMetrics(std::ostringstream& output,
                << ",count_zero=" << metric.zeroCount
                << ",count_negative=" << metric.negativeCount
                << '\n';
+}
+
+std::string SeedSet(const Result& result)
+{
+    std::string rendered;
+    for (const auto& dimension : result.replicationDimensions)
+    {
+        if (!dimension.armASeed) return "UNAVAILABLE";
+        if (!rendered.empty()) rendered.push_back(':');
+        rendered += *dimension.armASeed;
+    }
+    return rendered.empty() ? "UNAVAILABLE" : rendered;
+}
+
+void RenderCrossContextMetrics(std::ostringstream& output,
+                               const std::vector<CrossContextMetricAggregate>& metrics)
+{
+    for (const auto& metric : metrics)
+        output << "EXPERIMENT_REPLICATION_CROSS_CONTEXT_METRIC"
+               << ",metric=" << metric.name
+               << ",compatible_context_family_count="
+               << metric.compatibleContextFamilyCount
+               << ",family_descriptive_means="
+               << Deltas(metric.familyDescriptiveMeans)
+               << ",count_positive_family_mean="
+               << metric.positiveFamilyMeanCount
+               << ",count_zero_family_mean=" << metric.zeroFamilyMeanCount
+               << ",count_negative_family_mean="
+               << metric.negativeFamilyMeanCount
+               << ",unweighted_descriptive_mean_of_family_means="
+               << OptionalNumber(metric.unweightedDescriptiveMeanOfFamilyMeans)
+               << ",raw_pair_pooling=false"
+               << ",statistical_independence=not_inferred\n";
 }
 
 std::optional<double> ConfiguredObservationDelta(const Pair::MetricDelta& metric)
@@ -618,11 +760,62 @@ FamilyReport CompareFamilies(
 
         FamilyResult result;
         result.homogeneousSymbol = HomogeneousSymbol(replication);
+        result.homogeneousPredictionHorizon = HomogeneousIdentity(
+            replication, "prediction_horizon");
         if (result.homogeneousSymbol) symbols.insert(*result.homogeneousSymbol);
         result.replication = std::move(replication);
         report.families.push_back(std::move(result));
     }
     report.distinctHomogeneousSymbolCount = symbols.size();
+    report.crossContextCompatibility = Compatibility::Compatible;
+    std::vector<IdentityMap> armAContexts;
+    std::vector<IdentityMap> armBContexts;
+    for (std::size_t index = 0; index < report.families.size(); ++index)
+    {
+        const Result& family = report.families[index].replication;
+        const std::string prefix = "context_" + std::to_string(index + 1) + "_";
+        if (!report.families[index].homogeneousSymbol ||
+            !report.families[index].homogeneousPredictionHorizon)
+        {
+            AddReason(report.crossContextReasons, prefix + "context_identity_unavailable");
+            if (report.crossContextCompatibility != Compatibility::Incompatible)
+                report.crossContextCompatibility =
+                    Compatibility::UndeterminedDueToMissingEvidence;
+        }
+        if (family.compatibility != Compatibility::Compatible ||
+            family.configuredScientificIdentity != EvidenceCompatibility::Compatible ||
+            family.strictCompletedSubset.aggregateCompatibility != Compatibility::Compatible ||
+            family.strictCompletedSubset.strictCompletedCompatiblePairCount !=
+                family.pairs.size() ||
+            family.seedReplicationMode != SeedReplicationMode::DifferentSeeds)
+        {
+            AddReason(report.crossContextReasons, prefix +
+                "within_context_replication_contract_not_satisfied");
+            report.crossContextCompatibility = Compatibility::Incompatible;
+        }
+        if (!IsUnambiguousControlAblation(family.pairs.front()))
+        {
+            AddReason(report.crossContextReasons, prefix +
+                "control_ablation_arm_semantics_ambiguous");
+            report.crossContextCompatibility = Compatibility::Incompatible;
+        }
+        if (index != 0 &&
+            family.pairs.front().intentionalDifferences !=
+                report.families.front().replication.pairs.front().intentionalDifferences)
+        {
+            AddReason(report.crossContextReasons,
+                      prefix + "intentional_intervention_mismatch");
+            report.crossContextCompatibility = Compatibility::Incompatible;
+        }
+        armAContexts.push_back(MakeIdentityMap(
+            family.pairs.front().armAScientificIdentity));
+        armBContexts.push_back(MakeIdentityMap(
+            family.pairs.front().armBScientificIdentity));
+    }
+    CompareCrossContextRoleIdentities("arm_a", armAContexts, report);
+    CompareCrossContextRoleIdentities("arm_b", armBContexts, report);
+    if (report.crossContextCompatibility == Compatibility::Compatible)
+        AddCrossContextMetrics(report);
     return report;
 }
 
@@ -748,9 +941,11 @@ std::string RenderFamilyReport(const FamilyReport& report)
 {
     std::ostringstream output;
     output << "EXPERIMENT_REPLICATION_FAMILY_REPORT"
-           << ",version=1"
+           << ",version=2"
            << ",family_count=" << report.families.size()
-           << ",cross_family_aggregation=not_performed"
+           << ",cross_context_aggregation="
+           << (report.crossContextCompatibility == Compatibility::Compatible
+                   ? "unweighted_descriptive_family_means" : "suppressed")
            << ",raw_pair_pooling=false"
            << ",statistical_independence=not_inferred"
            << ",read_only=true\n";
@@ -765,7 +960,17 @@ std::string RenderFamilyReport(const FamilyReport& report)
                        : "UNAVAILABLE_OR_MIXED")
                << ",symbol_homogeneous="
                << (family.homogeneousSymbol ? "true" : "false")
+               << ",prediction_horizon="
+               << (family.homogeneousPredictionHorizon
+                       ? *family.homogeneousPredictionHorizon
+                       : "UNAVAILABLE_OR_MIXED")
+               << ",prediction_horizon_homogeneous="
+               << (family.homogeneousPredictionHorizon ? "true" : "false")
                << ",pair_count=" << family.replication.pairs.size()
+               << ",seed_set=" << SeedSet(family.replication)
+               << ",replication_dimension=fresh_initialization_seed"
+               << ",compatibility="
+               << CompatibilityText(family.replication.compatibility)
                << '\n';
         output << Render(family.replication);
         output << "EXPERIMENT_REPLICATION_FAMILY_END"
@@ -775,10 +980,17 @@ std::string RenderFamilyReport(const FamilyReport& report)
            << ",family_count=" << report.families.size()
            << ",distinct_homogeneous_symbol_count="
            << report.distinctHomogeneousSymbolCount
-           << ",cross_family_aggregation=not_performed"
-           << ",heterogeneity=preserved_by_separate_family_results"
+           << ",cross_context_compatibility="
+           << CompatibilityText(report.crossContextCompatibility)
+           << ",cross_context_reasons=" << Reasons(report.crossContextReasons)
+           << ",cross_context_aggregation="
+           << (report.crossContextCompatibility == Compatibility::Compatible
+                   ? "unweighted_descriptive_family_means" : "suppressed")
+           << ",heterogeneity=preserved_by_context_family_boundaries"
            << ",subjective_winner=NONE"
            << ",read_only=true\n";
+    if (report.crossContextCompatibility == Compatibility::Compatible)
+        RenderCrossContextMetrics(output, report.crossContextMetrics);
     return output.str();
 }
 

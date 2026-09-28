@@ -1,10 +1,12 @@
 # Experiment Replication Family Report
 
 `--compare-experiment-replication-families` composes two or more existing
-generic replication reports without creating a cross-family aggregate.
+generic replication reports and, when each context passes its own strict
+contract, emits a descriptive cross-context summary without pooling raw
+pairs.
 
 ```text
-LSTM_Release --compare-experiment-replication-families='658:659,660:661,662:663,664:665;668:669,670:671,672:673,674:675'
+LSTM_Release --compare-experiment-replication-families='660:661,662:663,664:665;670:671,672:673,674:675'
 ```
 
 Each semicolon-separated family is evaluated through the existing
@@ -15,8 +17,8 @@ for a control-first invocation, deltas are ablation minus control.
 The report emits each family independently, including every existing pair
 summary, exact configured identity and completed-execution provenance,
 missing-evidence state, and the existing unweighted per-family descriptive
-metrics. It prints a homogeneous symbol only when every arm in that family has
-the same persisted symbol.
+metrics. It prints homogeneous symbol and prediction horizon only when every
+arm in that family has the same value.
 
 Version 2 adds two deliberately independent evidence records for every pair:
 
@@ -45,10 +47,17 @@ strict compatible completed pairs yields an unavailable aggregate rather than
 a zero or a purported multi-seed result. The strict subset does not silently
 drop a caveated pair.
 
-There is deliberately no cross-family metric, pooled mean, winner, ranking,
-recommendation, significance claim, or independence claim. The final
-cross-group record says `cross_family_aggregation=not_performed` and
-`raw_pair_pooling=false`; callers compare family summaries side by side.
+When all requested families are strict completed different-seed replications
+with the same control-first feature-ablation intervention, the final
+cross-context records preserve family order and report each family mean,
+positive/zero/negative family-mean counts, and an explicitly unweighted
+descriptive mean of those family means. Symbol and prediction horizon are the
+declared context dimensions; every other scientific identity and execution
+provenance field must match. Any failed family or mismatch suppresses this
+summary while retaining the individual family reports. There is no pooled raw
+pair estimate, winner, ranking, recommendation, significance claim, or
+independence claim; reports continue to emit
+`statistical_independence=not_inferred` and `raw_pair_pooling=false`.
 
 Completed-result compatibility is unchanged. In particular, a TRAIN or final
 INFER producing-executable mismatch within a pair makes that pair and the
