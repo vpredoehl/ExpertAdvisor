@@ -18,6 +18,31 @@ experiment ID to be materialized again as a fresh execution replication.
 Ambiguous equivalence remains fail-closed. The option does not alter
 scientific identity, equivalence lookup, or execution provenance.
 
+## Prospective TRAIN-worker routing evidence
+
+Planning and materialization also load the configured semantic-worker registry
+and invoke the same `selectTrainingReferenceWorker()` path used by scheduler
+admission. Output records the proposed arm and seed, layout, width, effective
+TRAIN capabilities, selected role/rule/priority, source commit, executable
+SHA-256, runtime identity, canonical executable/manifest paths, and registry
+schema/path. An empty-mask control therefore shows the same
+`train_feature_ablation_v1` capability-qualified routing as its TG4-ablation
+partner when the registry requires that domain.
+
+Wave evidence uses `train_worker_routing_state`,
+`pair_train_execution_identity_homogeneous`, and
+`wave_train_execution_identity_homogeneous`, including distinct selected TRAIN
+execution identities. A heterogeneous wave is visible but is not silently
+treated as one producer. These fields are deterministic routing evidence only:
+they are not proof of statistical independence, efficacy, or completed
+execution provenance.
+
+Routing is necessarily a statement about the registry loaded at planning or
+materialization time. The registry schema version and canonical path are
+reported. The completed experiment's actual worker-attempt provenance remains
+authoritative and may differ if the registry or runtime changes before
+execution.
+
 ## Contract
 
 `ProposedExperimentSpecification` is the sole proposed-experiment object. It
@@ -45,10 +70,11 @@ LOCK TABLE experiment IN SHARE ROW EXCLUSIVE MODE;
 ```
 
 The transaction then reloads authoritative evidence, rebuilds and revalidates
-the plan, rechecks every proposed arm for equivalence, inserts every row, and
-retrieves every new ID before committing. Any non-valid preflight,
-unauthorized or ambiguous equivalent, missing evidence, or insertion error
-rolls back the whole wave.
+the plan, performs the same TRAIN-worker routing preflight, rechecks every
+proposed arm for equivalence, inserts every row, and retrieves every new ID
+before committing. Any non-valid preflight,
+unavailable/ambiguous/incompatible TRAIN routing, unauthorized or ambiguous
+equivalent, missing evidence, or insertion error rolls back the whole wave.
 
 The legacy production unique index does not contain
 `fresh_initialization_seed`. While the table lock is held, each inserted row is

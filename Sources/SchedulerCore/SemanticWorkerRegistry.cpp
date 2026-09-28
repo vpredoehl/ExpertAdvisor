@@ -714,6 +714,7 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
 
     SemanticWorkerRegistry registry;
     registry.canonicalRegistryPath_ = registryPath.string();
+    registry.schemaVersion_ = registrySchemaVersion;
     registry.currentLayoutVersion_ = PositiveInt(
         Required(object, "current_layout"), "current_layout");
     for (const auto& item : Array(Required(object, "runtimes"), "runtimes"))
@@ -827,6 +828,11 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
 const std::string& SemanticWorkerRegistry::canonicalRegistryPath() const noexcept
 {
     return canonicalRegistryPath_;
+}
+
+int SemanticWorkerRegistry::schemaVersion() const noexcept
+{
+    return schemaVersion_;
 }
 
 const SemanticWorkerArtifact& SemanticWorkerRegistry::currentWorker() const
@@ -1138,6 +1144,16 @@ SemanticWorkerSelection SemanticWorkerRegistry::selectTrainingReferenceWorker(
     // capability/priority selection below still chooses the one artifact.
     // Layouts with no ablation-qualified candidate retain their historical
     // empty-mask routing behavior.
+    return SelectWorkerForRole(
+        *this, persisted, SemanticWorkerRole::Train,
+        effectiveTrainingWorkerCapabilities(persisted, requiredCapabilities));
+}
+
+SemanticWorkerCapabilities
+SemanticWorkerRegistry::effectiveTrainingWorkerCapabilities(
+    const PersistedWorkerSemanticIdentity& persisted,
+    const SemanticWorkerCapabilities& requiredCapabilities) const
+{
     SemanticWorkerCapabilities effectiveCapabilities = requiredCapabilities;
     if (effectiveCapabilities.empty() && persisted.inputWidth &&
         persisted.layoutVersion)
@@ -1158,8 +1174,7 @@ SemanticWorkerSelection SemanticWorkerRegistry::selectTrainingReferenceWorker(
                 effectiveCapabilities.insert(kTrainFeatureAblationCapability);
         }
     }
-    return SelectWorkerForRole(
-        *this, persisted, SemanticWorkerRole::Train, effectiveCapabilities);
+    return effectiveCapabilities;
 }
 
 } // namespace EA::Scheduler

@@ -1,5 +1,7 @@
 #include "ExperimentReplicationPlanning.hpp"
 
+#include "SchedulerCore/TrainingWorkerSelection.hpp"
+
 #include <algorithm>
 #include <charconv>
 #include <iomanip>
@@ -219,6 +221,62 @@ std::string Reasons(const std::vector<std::string>& reasons)
     return output.str();
 }
 
+std::string RoutingIdentity(const Scheduler::SemanticWorkerArtifact& worker)
+{
+    return "executable_sha256=" + worker.sha256 +
+        ";runtime_identity=" + worker.runtimeIdentity;
+}
+
+TrainWorkerRoutingState RoutingState(const Scheduler::SemanticWorkerSelection& selection)
+{
+    if (selection.selected) return TrainWorkerRoutingState::Selected;
+    if (selection.diagnostic.find("ambiguous") != std::string::npos)
+        return TrainWorkerRoutingState::Ambiguous;
+    if (selection.diagnostic.find("incompatible") != std::string::npos ||
+        selection.diagnostic.find("capability") != std::string::npos)
+        return TrainWorkerRoutingState::Incompatible;
+    return TrainWorkerRoutingState::Unavailable;
+}
+
+std::optional<std::size_t> PositiveSize(
+    const IdentityMap& identity, const std::string& name)
+{
+    const auto found = identity.find(name);
+    if (found == identity.end() || !found->second ||
+        *found->second == "NULL")
+        return std::nullopt;
+    unsigned long long parsed = 0;
+    const std::string& value = *found->second;
+    const auto [end, error] = std::from_chars(
+        value.data(), value.data() + value.size(), parsed);
+    if (error != std::errc{} || end != value.data() + value.size() ||
+        parsed == 0 || parsed > std::numeric_limits<std::size_t>::max())
+        return std::nullopt;
+    return static_cast<std::size_t>(parsed);
+}
+
+std::optional<int> PositiveInt(const IdentityMap& identity,
+                               const std::string& name)
+{
+    const auto value = PositiveSize(identity, name);
+    if (!value || *value > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        return std::nullopt;
+    return static_cast<int>(*value);
+}
+
+std::string RoutingCapabilities(
+    const std::vector<std::string>& capabilities)
+{
+    if (capabilities.empty()) return "NONE";
+    std::ostringstream output;
+    for (std::size_t index = 0; index < capabilities.size(); ++index)
+    {
+        if (index) output << '|';
+        output << MachineText(capabilities[index]);
+    }
+    return output.str();
+}
+
 std::string Ids(const std::vector<long long>& ids)
 {
     if (ids.empty()) return "NONE";
@@ -325,6 +383,135 @@ Plan MakePlan(const Pair::ArmResultSet& sourceArmA,
                 equivalents->FindEquivalent(pair.armB.proposed);
         }
     return plan;
+}
+
+void AttachTrainWorkerRouting(
+    Plan& plan, const EA::Scheduler::SemanticWorkerRegistry& registry)
+{
+    plan.trainWorkerRoutingEvaluated = true;
+    plan.trainWorkerRoutingState = TrainWorkerRoutingState::Selected;
+    plan.trainWorkerRegistryPath = registry.canonicalRegistryPath();
+    plan.trainWorkerRegistrySchemaVersion = registry.schemaVersion();
+    plan.everyProposedArmHasDeterministicTrainWorker = true;
+    plan.waveTrainExecutionIdentityHomogeneous = false;
+    plan.distinctSelectedTrainExecutionIdentities.clear();
+    std::set<std::string> distinct;
+
+    auto routeArm = [&](ArmPlan& arm, const PlannedPair& pair)
+    {
+        TrainWorkerRoutingEvidence evidence;
+        evidence.role = arm.role;
+        evidence.sourceExperimentId = arm.sourceExperimentId;
+        evidence.requestedSeed = pair.requestedSeed;
+        evidence.registryPath = registry.canonicalRegistryPath();
+        evidence.registrySchemaVersion = registry.schemaVersion();
+
+        const IdentityMap identity = Identities(arm.proposed);
+        const auto layout = PositiveInt(
+            identity, "configured_model_input_semantic_layout_version");
+        const auto width = PositiveSize(
+            identity, "configured_model_input_width");
+        const auto mask = identity.find("feature_ablation_mask");
+        evidence.semanticLayoutVersion = layout.value_or(0);
+        evidence.modelInputWidth = width.value_or(0);
+        if (layout && width && mask != identity.end() && mask->second)
+        {
+            const EA::Scheduler::PersistedWorkerSemanticIdentity persisted{
+                width, layout, false};
+            const auto required =
+                EA::Scheduler::RequiredTrainingWorkerCapabilities(*mask->second);
+            const auto effective = registry.effectiveTrainingWorkerCapabilities(
+                persisted, required);
+            evidence.effectiveRequiredCapabilities.assign(
+                effective.begin(), effective.end());
+            const auto selection = registry.selectTrainingReferenceWorker(
+                persisted, required);
+            evidence.state = RoutingState(selection);
+            evidence.selectedWorkerRule = selection.reason;
+            evidence.reason = selection.diagnostic;
+            if (selection.selected)
+            {
+                const auto* worker = registry.findByCanonicalExecutable(
+                    selection.canonicalExecutablePath);
+                if (worker == nullptr)
+                {
+                    evidence.state = TrainWorkerRoutingState::Unavailable;
+                    evidence.reason = "selected_worker_not_registered";
+                }
+                else
+                {
+                    evidence.selectionPriority = worker->selectionPriority;
+                    evidence.sourceCommit = worker->sourceCommit;
+                    evidence.executableSha256 = worker->sha256;
+                    evidence.runtimeIdentity = worker->runtimeIdentity;
+                    evidence.canonicalExecutablePath =
+                        worker->canonicalExecutablePath;
+                    evidence.canonicalManifestPath =
+                        worker->canonicalManifestPath;
+                    evidence.canonicalTrainExecutionIdentity =
+                        RoutingIdentity(*worker);
+                    distinct.insert(evidence.canonicalTrainExecutionIdentity);
+                }
+            }
+        }
+        else
+        {
+            evidence.state = TrainWorkerRoutingState::Unavailable;
+            evidence.reason = "routing_identity_unavailable";
+        }
+        arm.trainWorkerRouting = std::move(evidence);
+        if (arm.trainWorkerRouting.state !=
+            TrainWorkerRoutingState::Selected)
+        {
+            if (arm.trainWorkerRouting.state ==
+                TrainWorkerRoutingState::Ambiguous)
+                plan.trainWorkerRoutingState = TrainWorkerRoutingState::Ambiguous;
+            else if (arm.trainWorkerRouting.state ==
+                         TrainWorkerRoutingState::Incompatible &&
+                     plan.trainWorkerRoutingState !=
+                         TrainWorkerRoutingState::Ambiguous)
+                plan.trainWorkerRoutingState =
+                    TrainWorkerRoutingState::Incompatible;
+            else if (plan.trainWorkerRoutingState ==
+                     TrainWorkerRoutingState::Selected)
+                plan.trainWorkerRoutingState =
+                    TrainWorkerRoutingState::Unavailable;
+            plan.everyProposedArmHasDeterministicTrainWorker = false;
+            AddReason(plan.reasons,
+                      "pair_" + std::to_string(pair.ordinal) + ':' +
+                          arm.role + "_train_worker_routing_" +
+                          TrainWorkerRoutingStateText(
+                              arm.trainWorkerRouting.state) + ':' +
+                          arm.trainWorkerRouting.reason);
+        }
+    };
+
+    for (PlannedPair& pair : plan.pairs)
+    {
+        routeArm(pair.armA, pair);
+        routeArm(pair.armB, pair);
+        pair.pairTrainExecutionIdentityHomogeneous =
+            pair.armA.trainWorkerRouting.state ==
+                TrainWorkerRoutingState::Selected &&
+            pair.armB.trainWorkerRouting.state ==
+                TrainWorkerRoutingState::Selected &&
+            pair.armA.trainWorkerRouting.canonicalTrainExecutionIdentity ==
+                pair.armB.trainWorkerRouting.canonicalTrainExecutionIdentity;
+        if (!pair.pairTrainExecutionIdentityHomogeneous)
+            plan.everyProposedArmHasDeterministicTrainWorker =
+                plan.everyProposedArmHasDeterministicTrainWorker &&
+                pair.armA.trainWorkerRouting.state ==
+                    TrainWorkerRoutingState::Selected &&
+                pair.armB.trainWorkerRouting.state ==
+                    TrainWorkerRoutingState::Selected;
+    }
+    plan.distinctSelectedTrainExecutionIdentities.assign(
+        distinct.begin(), distinct.end());
+    plan.waveTrainExecutionIdentityHomogeneous =
+        plan.everyProposedArmHasDeterministicTrainWorker &&
+        distinct.size() == 1U;
+    if (!plan.everyProposedArmHasDeterministicTrainWorker)
+        plan.state = PlanState::Invalid;
 }
 
 void RecomputePreflight(Plan& plan)
@@ -511,6 +698,20 @@ std::string Render(const Plan& plan)
     }
     output << ",replication_dimension=fresh_initialization_seed"
            << ",equivalence_semantics=experiment_pair_configured_identity_v1"
+           << ",train_worker_routing_state="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? TrainWorkerRoutingStateText(plan.trainWorkerRoutingState)
+                   : "not_evaluated")
+           << ",wave_train_execution_identity_homogeneous="
+           << (plan.waveTrainExecutionIdentityHomogeneous ? "true" : "false")
+           << ",train_worker_registry_schema_version="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? std::to_string(plan.trainWorkerRegistrySchemaVersion)
+                   : "UNAVAILABLE")
+           << ",train_worker_registry_path="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? MachineText(plan.trainWorkerRegistryPath)
+                   : "UNAVAILABLE")
            << ",statistical_independence=not_inferred"
            << ",read_only=true"
            << ",state=" << PlanStateText(plan.state) << '\n';
@@ -584,6 +785,67 @@ std::string Render(const Plan& plan)
                    << (arm.equivalent.reason.empty()
                            ? "NONE" : MachineText(arm.equivalent.reason))
                    << '\n';
+            const auto& routing = arm.trainWorkerRouting;
+            output << "CONTROLLED_REPLICATION_TRAIN_WORKER_ROUTING"
+                   << ",pair_ordinal=" << pair.ordinal
+                   << ",requested_seed=" << pair.requestedSeed
+                   << ",role=" << arm.role
+                   << ",source_experiment_id=" << arm.sourceExperimentId
+                   << ",semantic_layout="
+                   << (routing.semanticLayoutVersion > 0
+                           ? std::to_string(routing.semanticLayoutVersion)
+                           : "UNAVAILABLE")
+                   << ",model_input_width="
+                   << (routing.modelInputWidth > 0
+                           ? std::to_string(routing.modelInputWidth)
+                           : "UNAVAILABLE")
+                   << ",effective_required_train_capabilities="
+                   << RoutingCapabilities(routing.effectiveRequiredCapabilities)
+                   << ",selected_worker_role="
+                   << (routing.selectedWorkerRole.empty()
+                           ? "UNAVAILABLE" : routing.selectedWorkerRole)
+                   << ",selected_worker_rule="
+                   << (routing.selectedWorkerRule.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.selectedWorkerRule))
+                   << ",selection_priority="
+                   << (routing.state == TrainWorkerRoutingState::Selected
+                           ? std::to_string(routing.selectionPriority)
+                           : "UNAVAILABLE")
+                   << ",source_commit="
+                   << (routing.sourceCommit.empty()
+                           ? "UNAVAILABLE" : routing.sourceCommit)
+                   << ",executable_sha256="
+                   << (routing.executableSha256.empty()
+                           ? "UNAVAILABLE" : routing.executableSha256)
+                   << ",runtime_identity="
+                   << (routing.runtimeIdentity.empty()
+                           ? "UNAVAILABLE" : routing.runtimeIdentity)
+                   << ",canonical_executable_path="
+                   << (routing.canonicalExecutablePath.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.canonicalExecutablePath))
+                   << ",canonical_manifest_path="
+                   << (routing.canonicalManifestPath.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.canonicalManifestPath))
+                   << ",canonical_train_execution_identity="
+                   << (routing.canonicalTrainExecutionIdentity.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.canonicalTrainExecutionIdentity))
+                   << ",selection_state="
+                   << TrainWorkerRoutingStateText(routing.state)
+                   << ",reason="
+                   << (routing.reason.empty() ? "NONE" :
+                       MachineText(routing.reason))
+                   << ",registry_schema_version="
+                   << (routing.registrySchemaVersion > 0
+                           ? std::to_string(routing.registrySchemaVersion)
+                           : "UNAVAILABLE")
+                   << ",registry_path="
+                   << (routing.registryPath.empty()
+                           ? "UNAVAILABLE" : MachineText(routing.registryPath))
+                   << ",statistical_independence=not_inferred\n";
         };
         renderArm(pair.armA);
         renderArm(pair.armB);
@@ -610,7 +872,48 @@ std::string Render(const Plan& plan)
                    << ",field=" << MachineText(difference.field)
                    << ",arm_a=" << std::quoted(difference.armA)
                    << ",arm_b=" << std::quoted(difference.armB) << '\n';
+        output << "CONTROLLED_REPLICATION_PAIR_TRAIN_WORKER_ROUTING"
+               << ",pair_ordinal=" << pair.ordinal
+               << ",requested_seed=" << pair.requestedSeed
+               << ",pair_train_execution_identity_homogeneous="
+               << (pair.pairTrainExecutionIdentityHomogeneous
+                       ? "true" : "false")
+               << ",statistical_independence=not_inferred\n";
     }
+
+    output << "CONTROLLED_REPLICATION_WAVE_TRAIN_WORKER_ROUTING"
+           << ",train_worker_routing_state="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? TrainWorkerRoutingStateText(plan.trainWorkerRoutingState)
+                   : "not_evaluated")
+           << ",every_proposed_arm_has_deterministic_train_worker="
+           << (plan.everyProposedArmHasDeterministicTrainWorker
+                   ? "true" : "false")
+           << ",distinct_selected_train_execution_identity_count="
+           << plan.distinctSelectedTrainExecutionIdentities.size()
+           << ",distinct_selected_train_execution_identities=";
+    if (plan.distinctSelectedTrainExecutionIdentities.empty())
+        output << "NONE";
+    else
+        for (std::size_t index = 0;
+             index < plan.distinctSelectedTrainExecutionIdentities.size();
+             ++index)
+        {
+            if (index) output << '|';
+            output << MachineText(
+                plan.distinctSelectedTrainExecutionIdentities[index]);
+        }
+    output << ",wave_train_execution_identity_homogeneous="
+           << (plan.waveTrainExecutionIdentityHomogeneous ? "true" : "false")
+           << ",registry_schema_version="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? std::to_string(plan.trainWorkerRegistrySchemaVersion)
+                   : "UNAVAILABLE")
+           << ",registry_path="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? MachineText(plan.trainWorkerRegistryPath)
+                   : "UNAVAILABLE")
+           << ",statistical_independence=not_inferred\n";
 
     output << "CONTROLLED_REPLICATION_WAVE_RESULT"
            << ",state=" << PlanStateText(plan.state)
@@ -645,6 +948,18 @@ std::string EquivalentExperimentStateText(EquivalentExperimentState state)
             return "equivalent_experiment_ambiguous";
     }
     throw std::invalid_argument("unknown_equivalent_experiment_state");
+}
+
+std::string TrainWorkerRoutingStateText(TrainWorkerRoutingState state)
+{
+    switch (state)
+    {
+        case TrainWorkerRoutingState::Selected: return "selected";
+        case TrainWorkerRoutingState::Unavailable: return "unavailable";
+        case TrainWorkerRoutingState::Ambiguous: return "ambiguous";
+        case TrainWorkerRoutingState::Incompatible: return "incompatible";
+    }
+    throw std::invalid_argument("unknown_train_worker_routing_state");
 }
 
 } // namespace EA::ExperimentReplicationPlanning

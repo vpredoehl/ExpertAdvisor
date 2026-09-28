@@ -14544,6 +14544,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             command.sourceExperimentIds =
                 *options.planExperimentReplications;
             command.requestedSeeds = *options.replicationSeeds;
+            command.semanticWorkerRegistryPath =
+                options.semanticWorkerRegistryPath;
             return EA::ExperimentReplicationPlanning::RunPlanningCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
         }
@@ -14555,6 +14557,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
                 *options.materializeExperimentReplications;
             command.requestedSeeds = *options.replicationSeeds;
             command.allowExistingEquivalent = options.allowExistingEquivalent;
+            command.semanticWorkerRegistryPath =
+                options.semanticWorkerRegistryPath;
             return EA::ExperimentReplicationMaterialization::
                 RunMaterializationCommand(
                     LstmDbConnectionString(), command, std::cout, std::cerr);

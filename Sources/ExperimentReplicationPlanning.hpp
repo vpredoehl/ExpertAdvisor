@@ -8,6 +8,11 @@
 #include <string_view>
 #include <vector>
 
+namespace EA::Scheduler
+{
+class SemanticWorkerRegistry;
+}
+
 namespace EA::ExperimentReplicationPlanning
 {
 
@@ -38,6 +43,37 @@ struct EquivalentExperimentResult
     bool operator==(const EquivalentExperimentResult&) const = default;
 };
 
+enum class TrainWorkerRoutingState
+{
+    Selected,
+    Unavailable,
+    Ambiguous,
+    Incompatible
+};
+
+struct TrainWorkerRoutingEvidence
+{
+    TrainWorkerRoutingState state = TrainWorkerRoutingState::Unavailable;
+    std::string role;
+    long long sourceExperimentId = 0;
+    unsigned int requestedSeed = 0;
+    int semanticLayoutVersion = 0;
+    std::size_t modelInputWidth = 0;
+    std::vector<std::string> effectiveRequiredCapabilities;
+    std::string selectedWorkerRole = "train";
+    std::string selectedWorkerRule;
+    int selectionPriority = 0;
+    std::string sourceCommit;
+    std::string executableSha256;
+    std::string runtimeIdentity;
+    std::string canonicalExecutablePath;
+    std::string canonicalManifestPath;
+    std::string canonicalTrainExecutionIdentity;
+    std::string registryPath;
+    int registrySchemaVersion = 0;
+    std::string reason;
+};
+
 // This is the single authoritative proposed-experiment representation shared
 // by planning, equivalence validation, rendering, and persistence.  The base
 // value is the exact configured scientific identity copied from the source;
@@ -65,6 +101,7 @@ struct ArmPlan
     ProposedExperimentSpecification proposed;
     std::vector<Pair::IdentityDifference> changedFromSource;
     EquivalentExperimentResult equivalent;
+    TrainWorkerRoutingEvidence trainWorkerRouting;
 };
 
 struct PlannedPair
@@ -79,6 +116,7 @@ struct PlannedPair
     std::vector<std::string> reasons;
     std::vector<Pair::IdentityDifference> intentionalDifferences;
     std::vector<Pair::IdentityDifference> unexpectedDifferences;
+    bool pairTrainExecutionIdentityHomogeneous = false;
 };
 
 struct Plan
@@ -97,6 +135,14 @@ struct Plan
     PlanState state = PlanState::UndeterminedDueToMissingEvidence;
     std::vector<std::string> reasons;
     std::vector<PlannedPair> pairs;
+    bool trainWorkerRoutingEvaluated = false;
+    TrainWorkerRoutingState trainWorkerRoutingState =
+        TrainWorkerRoutingState::Unavailable;
+    bool everyProposedArmHasDeterministicTrainWorker = false;
+    bool waveTrainExecutionIdentityHomogeneous = false;
+    std::vector<std::string> distinctSelectedTrainExecutionIdentities;
+    std::string trainWorkerRegistryPath;
+    int trainWorkerRegistrySchemaVersion = 0;
 };
 
 // Strict positive uint32 parsing. Input order is retained and duplicates are
@@ -113,8 +159,14 @@ Plan MakePlan(const Pair::ArmResultSet& sourceArmA,
 // materialization code can validate a transported plan before acting on it.
 void RecomputePreflight(Plan& plan);
 
+// Uses the scheduler's authoritative TRAIN selector and only annotates the
+// plan. It does not modify configured scientific identity or provenance.
+void AttachTrainWorkerRouting(
+    Plan& plan, const EA::Scheduler::SemanticWorkerRegistry& registry);
+
 std::string Render(const Plan& plan);
 std::string PlanStateText(PlanState state);
 std::string EquivalentExperimentStateText(EquivalentExperimentState state);
+std::string TrainWorkerRoutingStateText(TrainWorkerRoutingState state);
 
 } // namespace EA::ExperimentReplicationPlanning

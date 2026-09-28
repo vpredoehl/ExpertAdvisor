@@ -15,13 +15,17 @@ struct PlanningCommand
 {
     std::pair<long long, long long> sourceExperimentIds;
     std::vector<unsigned int> requestedSeeds;
+    std::string semanticWorkerRegistryPath =
+        "Builds/SemanticWorkers/registry.json";
 };
 
 int RunPlanningCommand(const PlanningCommand& command,
                        const ExperimentPairComparison::EvidenceSource& evidence,
                        const EquivalentExperimentSource& equivalents,
                        std::ostream& output,
-                       std::ostream& errors);
+                       std::ostream& errors,
+                       const EA::Scheduler::SemanticWorkerRegistry* registry =
+                           nullptr);
 
 // Source loading and every equivalence lookup share one repeatable-read,
 // read-only PostgreSQL snapshot. Database failures propagate to the existing

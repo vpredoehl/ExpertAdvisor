@@ -1,4 +1,5 @@
 #include "ExperimentReplicationMaterialization.hpp"
+#include "SchedulerCore/SemanticWorkerRegistry.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -160,13 +161,25 @@ public:
     }
 };
 
+const EA::Scheduler::SemanticWorkerRegistry& TestRegistry()
+{
+    static const auto registry = []
+    {
+        EA::Scheduler::SemanticWorkerRegistryLoadRequest request;
+        request.registryPath = "Builds/SemanticWorkers/registry.json";
+        return EA::Scheduler::SemanticWorkerRegistry::Load(request);
+    }();
+    return registry;
+}
+
 int Run(const std::vector<unsigned int>& seeds,
         Evidence& evidence,
         Equivalents& equivalents,
         Inserter& inserter,
         std::string& output,
         std::string& errors,
-        bool allowExistingEquivalent = false)
+        bool allowExistingEquivalent = false,
+        const EA::Scheduler::SemanticWorkerRegistry* registry = nullptr)
 {
     std::ostringstream out;
     std::ostringstream err;
@@ -174,8 +187,9 @@ int Run(const std::vector<unsigned int>& seeds,
     command.sourceExperimentIds = {101, 102};
     command.requestedSeeds = seeds;
     command.allowExistingEquivalent = allowExistingEquivalent;
+    if (registry == nullptr) registry = &TestRegistry();
     const int result = Materialization::RunMaterializationInTransaction(
-        command, evidence, equivalents, inserter, out, err);
+        command, evidence, equivalents, inserter, out, err, registry);
     output = out.str();
     errors = err.str();
     return result;
@@ -334,8 +348,24 @@ int main()
     assert(Run({44}, evidence, equivalents, inserter,
                output, errors) == 3);
     assert(inserter.specifications.empty());
-    assert(output.find("scientific_preflight_") != std::string::npos);
+    assert(output.find("scientific_preflight_") != std::string::npos ||
+           output.find("train_worker_routing_not_admissible") !=
+               std::string::npos);
     evidence.arms[102].extended.configuredModelInputWidth = 80;
+
+    // Routing is an independent fail-closed preflight. A scientifically
+    // coherent but unsupported layout must not reach the inserter.
+    evidence.arms[101].extended.configuredModelInputLayoutVersion = 999;
+    evidence.arms[102].extended.configuredModelInputLayoutVersion = 999;
+    inserter = {};
+    assert(Run({44}, evidence, equivalents, inserter, output, errors, false,
+               &TestRegistry()) == 3);
+    assert(inserter.specifications.empty());
+    assert(output.find("train_worker_routing_not_admissible") !=
+           std::string::npos);
+    assert(output.find("selection_state=unavailable") != std::string::npos);
+    evidence.arms[101].extended.configuredModelInputLayoutVersion = 8;
+    evidence.arms[102].extended.configuredModelInputLayoutVersion = 8;
 
     // A successful first wave followed by exact equivalents is idempotent:
     // the second attempt creates no rows and never reuses existing IDs.
@@ -367,7 +397,7 @@ int main()
     {
         (void)Materialization::RunMaterializationInTransaction(
             failedCommand, evidence, equivalents, inserter,
-            failedOutput, failedErrors);
+            failedOutput, failedErrors, &TestRegistry());
         assert(false);
     }
     catch (const std::runtime_error& error)

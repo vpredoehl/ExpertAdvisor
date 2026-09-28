@@ -103,6 +103,7 @@ public:
         const SemanticWorkerRegistryLoadRequest& request);
 
     const std::string& canonicalRegistryPath() const noexcept;
+    int schemaVersion() const noexcept;
     // Preserves the historical current-worker meaning: training/reference,
     // with an inference fallback only for legacy layout-only registries.
     const SemanticWorkerArtifact& currentWorker() const;
@@ -125,9 +126,16 @@ public:
     SemanticWorkerSelection selectTrainingReferenceWorker(
         const PersistedWorkerSemanticIdentity& persisted,
         const SemanticWorkerCapabilities& requiredCapabilities = {}) const;
+    // Exposes the exact capability-domain normalization used by TRAIN
+    // selection. In particular, an empty-mask control is routed through the
+    // ablation-qualified domain when an exact candidate exists.
+    SemanticWorkerCapabilities effectiveTrainingWorkerCapabilities(
+        const PersistedWorkerSemanticIdentity& persisted,
+        const SemanticWorkerCapabilities& requiredCapabilities = {}) const;
 
 private:
     std::string canonicalRegistryPath_;
+    int schemaVersion_ = 0;
     int currentLayoutVersion_ = 0;
     std::map<std::string, SemanticWorkerRuntimePackage> runtimes_;
     std::map<std::pair<int, SemanticWorkerRole>,

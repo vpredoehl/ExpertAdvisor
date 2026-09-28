@@ -34,7 +34,8 @@ int RunMaterializationInTransaction(
     const Planning::EquivalentExperimentSource& equivalents,
     ExperimentInserter& inserter,
     std::ostream& output,
-    std::ostream& errors);
+    std::ostream& errors,
+    const EA::Scheduler::SemanticWorkerRegistry* registry = nullptr);
 
 // Owns one PostgreSQL write transaction.  It takes a table lock before source
 // reload, preflight, equivalence checks, or inserts and commits only a complete

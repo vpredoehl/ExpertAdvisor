@@ -1,5 +1,7 @@
 #include "ExperimentReplicationPlanningService.hpp"
 
+#include "SchedulerCore/SemanticWorkerRegistry.hpp"
+
 #include <ostream>
 #include <stdexcept>
 
@@ -43,7 +45,8 @@ int RunPlanningCommand(const PlanningCommand& command,
                        const ExperimentPairComparison::EvidenceSource& evidence,
                        const EquivalentExperimentSource& equivalents,
                        std::ostream& output,
-                       std::ostream& errors)
+                       std::ostream& errors,
+                       const EA::Scheduler::SemanticWorkerRegistry* registry)
 {
     try
     {
@@ -54,10 +57,11 @@ int RunPlanningCommand(const PlanningCommand& command,
             command.sourceExperimentIds.second);
         const auto request = ExperimentPairComparison::MakeComparisonRequest(
             armAEvidence, armBEvidence);
-        const Plan plan = MakePlan(
+        Plan plan = MakePlan(
             ExperimentPairComparison::MakeArmResultSet(armAEvidence),
             ExperimentPairComparison::MakeArmResultSet(armBEvidence),
             request, command.requestedSeeds, &equivalents);
+        if (registry != nullptr) AttachTrainWorkerRouting(plan, *registry);
         output << Render(plan);
         return 0;
     }

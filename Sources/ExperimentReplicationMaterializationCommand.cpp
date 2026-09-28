@@ -1,6 +1,8 @@
 #include "ExperimentReplicationMaterialization.hpp"
 #include "ExperimentReplicationMaterializationRepository.hpp"
 
+#include "SchedulerCore/SemanticWorkerRegistry.hpp"
+
 #include "ExperimentReplicationPlanningPostgres.hpp"
 
 #include <pqxx/pqxx>
@@ -57,10 +59,16 @@ int RunMaterializationCommand(const std::string& connectionString,
         transaction.exec(
             "LOCK TABLE experiment IN SHARE ROW EXCLUSIVE MODE;");
 
+        EA::Scheduler::SemanticWorkerRegistryLoadRequest registryRequest;
+        registryRequest.registryPath = command.semanticWorkerRegistryPath;
+        const auto registry = EA::Scheduler::SemanticWorkerRegistry::Load(
+            registryRequest);
+
         const Planning::PostgresPlanningSource source{transaction};
         PostgresFreshExperimentInserter inserter{transaction};
         const int result = RunMaterializationInTransaction(
-            command, source, source, inserter, stagedOutput, stagedErrors);
+            command, source, source, inserter, stagedOutput, stagedErrors,
+            &registry);
         if (result == 0)
         {
             commitAttempted = true;

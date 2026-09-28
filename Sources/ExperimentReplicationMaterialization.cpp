@@ -1,5 +1,7 @@
 #include "ExperimentReplicationMaterialization.hpp"
 
+#include "SchedulerCore/SemanticWorkerRegistry.hpp"
+
 #include <algorithm>
 #include <iomanip>
 #include <ostream>
@@ -126,6 +128,14 @@ void RenderHeader(std::ostream& output,
                     : (command.allowExistingEquivalent
                            ? "requested_but_not_verified" : "not_requested"))
            << ",statistical_independence=not_inferred"
+           << ",train_worker_routing_state="
+           << (plan && plan->trainWorkerRoutingEvaluated
+                   ? Planning::TrainWorkerRoutingStateText(
+                         plan->trainWorkerRoutingState)
+                   : "not_evaluated")
+           << ",wave_train_execution_identity_homogeneous="
+           << (plan && plan->waveTrainExecutionIdentityHomogeneous
+                   ? "true" : "false")
            << ",transaction=single_postgresql_write_transaction"
            << ",atomicity=all_or_nothing"
            << ",serialization=experiment_table_share_row_exclusive_lock"
@@ -179,7 +189,106 @@ void RenderPlanEvidence(std::ostream& output, const Planning::Plan& plan)
     {
         renderArm(pair, pair.armA);
         renderArm(pair, pair.armB);
+        for (const Planning::ArmPlan* arm : {&pair.armA, &pair.armB})
+        {
+            const auto& routing = arm->trainWorkerRouting;
+            output << "CONTROLLED_REPLICATION_MATERIALIZATION_TRAIN_WORKER_ROUTING"
+                   << ",pair_ordinal=" << pair.ordinal
+                   << ",requested_seed=" << pair.requestedSeed
+                   << ",role=" << arm->role
+                   << ",source_experiment_id=" << arm->sourceExperimentId
+                   << ",semantic_layout="
+                   << (routing.semanticLayoutVersion > 0
+                           ? std::to_string(routing.semanticLayoutVersion)
+                           : "UNAVAILABLE")
+                   << ",model_input_width="
+                   << (routing.modelInputWidth > 0
+                           ? std::to_string(routing.modelInputWidth)
+                           : "UNAVAILABLE")
+                   << ",effective_required_train_capabilities=";
+            if (routing.effectiveRequiredCapabilities.empty()) output << "NONE";
+            else
+                for (std::size_t index = 0;
+                     index < routing.effectiveRequiredCapabilities.size(); ++index)
+                {
+                    if (index) output << '|';
+                    output << MachineText(
+                        routing.effectiveRequiredCapabilities[index]);
+                }
+            output << ",selected_worker_role=" << routing.selectedWorkerRole
+                   << ",selected_worker_rule="
+                   << (routing.selectedWorkerRule.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.selectedWorkerRule))
+                   << ",selection_priority="
+                   << (routing.state == Planning::TrainWorkerRoutingState::Selected
+                           ? std::to_string(routing.selectionPriority)
+                           : "UNAVAILABLE")
+                   << ",source_commit="
+                   << (routing.sourceCommit.empty()
+                           ? "UNAVAILABLE" : routing.sourceCommit)
+                   << ",executable_sha256="
+                   << (routing.executableSha256.empty()
+                           ? "UNAVAILABLE" : routing.executableSha256)
+                   << ",runtime_identity="
+                   << (routing.runtimeIdentity.empty()
+                           ? "UNAVAILABLE" : routing.runtimeIdentity)
+                   << ",canonical_executable_path="
+                   << (routing.canonicalExecutablePath.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.canonicalExecutablePath))
+                   << ",canonical_manifest_path="
+                   << (routing.canonicalManifestPath.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.canonicalManifestPath))
+                   << ",canonical_train_execution_identity="
+                   << (routing.canonicalTrainExecutionIdentity.empty()
+                           ? "UNAVAILABLE" :
+                              MachineText(routing.canonicalTrainExecutionIdentity))
+                   << ",selection_state="
+                   << Planning::TrainWorkerRoutingStateText(routing.state)
+                   << ",reason="
+                   << (routing.reason.empty() ? "NONE" :
+                       MachineText(routing.reason))
+                   << ",registry_schema_version="
+                   << (routing.registrySchemaVersion > 0
+                           ? std::to_string(routing.registrySchemaVersion)
+                           : "UNAVAILABLE")
+                   << ",registry_path="
+                   << (routing.registryPath.empty()
+                           ? "UNAVAILABLE" : MachineText(routing.registryPath))
+                   << ",statistical_independence=not_inferred\n";
+        }
+        output << "CONTROLLED_REPLICATION_MATERIALIZATION_PAIR_TRAIN_WORKER_ROUTING"
+               << ",pair_ordinal=" << pair.ordinal
+               << ",requested_seed=" << pair.requestedSeed
+               << ",pair_train_execution_identity_homogeneous="
+               << (pair.pairTrainExecutionIdentityHomogeneous
+                       ? "true" : "false")
+               << ",statistical_independence=not_inferred\n";
     }
+    output << "CONTROLLED_REPLICATION_MATERIALIZATION_WAVE_TRAIN_WORKER_ROUTING"
+           << ",train_worker_routing_state="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? Planning::TrainWorkerRoutingStateText(
+                         plan.trainWorkerRoutingState)
+                   : "not_evaluated")
+           << ",every_proposed_arm_has_deterministic_train_worker="
+           << (plan.everyProposedArmHasDeterministicTrainWorker
+                   ? "true" : "false")
+           << ",distinct_selected_train_execution_identity_count="
+           << plan.distinctSelectedTrainExecutionIdentities.size()
+           << ",wave_train_execution_identity_homogeneous="
+           << (plan.waveTrainExecutionIdentityHomogeneous ? "true" : "false")
+           << ",registry_schema_version="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? std::to_string(plan.trainWorkerRegistrySchemaVersion)
+                   : "UNAVAILABLE")
+           << ",registry_path="
+           << (plan.trainWorkerRoutingEvaluated
+                   ? MachineText(plan.trainWorkerRegistryPath)
+                   : "UNAVAILABLE")
+           << ",statistical_independence=not_inferred\n";
 }
 
 bool HasEquivalenceConflict(const Planning::Plan& plan,
@@ -209,21 +318,35 @@ int RunMaterializationInTransaction(
     const Planning::EquivalentExperimentSource& equivalents,
     ExperimentInserter& inserter,
     std::ostream& output,
-    std::ostream& errors)
+    std::ostream& errors,
+    const EA::Scheduler::SemanticWorkerRegistry* registry)
 {
     try
     {
         Validate(command);
+        if (registry == nullptr)
+        {
+            RenderHeader(output, command, nullptr);
+            output << "CONTROLLED_REPLICATION_WAVE_MATERIALIZATION_RESULT"
+                   << ",state=not_materialized"
+                   << ",reason=train_worker_routing_registry_unavailable"
+                   << ",pair_count=0,experiment_count=0"
+                   << ",transaction=rolled_back,queued=false,started=false"
+                   << ",exit_code=3\n";
+            return 3;
+        }
         const auto armAEvidence = evidence.Load(
             command.sourceExperimentIds.first);
         const auto armBEvidence = evidence.Load(
             command.sourceExperimentIds.second);
         const auto request = ExperimentPairComparison::MakeComparisonRequest(
             armAEvidence, armBEvidence);
-        const Planning::Plan plan = Planning::MakePlan(
+        Planning::Plan plan = Planning::MakePlan(
             ExperimentPairComparison::MakeArmResultSet(armAEvidence),
             ExperimentPairComparison::MakeArmResultSet(armBEvidence), request,
             command.requestedSeeds, &equivalents);
+        if (registry != nullptr)
+            Planning::AttachTrainWorkerRouting(plan, *registry);
 
         RenderHeader(output, command, &plan);
         RenderPlanEvidence(output, plan);
@@ -231,8 +354,12 @@ int RunMaterializationInTransaction(
         {
             output << "CONTROLLED_REPLICATION_WAVE_MATERIALIZATION_RESULT"
                    << ",state=not_materialized"
-                   << ",reason=scientific_preflight_"
-                   << Planning::PlanStateText(plan.state)
+                   << ",reason="
+                   << (plan.trainWorkerRoutingEvaluated &&
+                               !plan.everyProposedArmHasDeterministicTrainWorker
+                           ? "train_worker_routing_not_admissible"
+                           : "scientific_preflight_" +
+                                 Planning::PlanStateText(plan.state))
                    << ",pair_count=0,experiment_count=0"
                    << ",transaction=rolled_back,queued=false,started=false"
                    << ",exit_code=3\n";

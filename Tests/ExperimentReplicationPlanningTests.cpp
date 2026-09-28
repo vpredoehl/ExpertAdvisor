@@ -1,4 +1,5 @@
 #include "ExperimentReplicationPlanningService.hpp"
+#include "SchedulerCore/SemanticWorkerRegistry.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -346,6 +347,37 @@ int main()
     assert(rendered.find("recommendation") == std::string::npos);
     assert(rendered.find("queue_decision") == std::string::npos);
     assert(rendered.find("queued=") == std::string::npos);
+
+    EA::Scheduler::SemanticWorkerRegistryLoadRequest registryRequest;
+    registryRequest.registryPath = "Builds/SemanticWorkers/registry.json";
+    auto liveRegistry = EA::Scheduler::SemanticWorkerRegistry::Load(
+        registryRequest);
+    auto routedPlan = equivalentPlan;
+    Planning::AttachTrainWorkerRouting(routedPlan, liveRegistry);
+    assert(routedPlan.trainWorkerRoutingEvaluated);
+    assert(routedPlan.everyProposedArmHasDeterministicTrainWorker);
+    assert(routedPlan.waveTrainExecutionIdentityHomogeneous);
+    assert(routedPlan.distinctSelectedTrainExecutionIdentities.size() == 1);
+    assert(routedPlan.pairs.front().pairTrainExecutionIdentityHomogeneous);
+    assert(routedPlan.pairs.front().armA.trainWorkerRouting
+               .effectiveRequiredCapabilities ==
+           std::vector<std::string>{"train_feature_ablation_v1"});
+    assert(routedPlan.pairs.front().armA.trainWorkerRouting.sourceCommit ==
+           "59697166dfd2f097f605062515fec4f5ba54e282");
+    const std::string routedOutput = Planning::Render(routedPlan);
+    assert(routedOutput.find(
+               "train_worker_routing_state=selected") != std::string::npos);
+    assert(routedOutput.find(
+               "pair_train_execution_identity_homogeneous=true") !=
+           std::string::npos);
+    assert(routedOutput.find(
+               "wave_train_execution_identity_homogeneous=true") !=
+           std::string::npos);
+    assert(routedOutput.find(
+               "effective_required_train_capabilities=train_feature_ablation_v1") !=
+           std::string::npos);
+    assert(routedOutput.find(
+               "statistical_independence=not_inferred") != std::string::npos);
 
     FixtureEvidence evidence;
     evidence.arms.emplace(101, sourceA);

@@ -14,6 +14,7 @@ mkdir -p "${build_dir}"
     "${repo_root}/Sources/ExperimentReplicationComparison.cpp" \
     "${repo_root}/Sources/ExperimentPairComparisonService.cpp" \
     "${repo_root}/Sources/ExperimentPairComparison.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SemanticWorkerRegistry.cpp" \
     -o "${build_dir}/ExperimentReplicationMaterializationTests"
 
 "${build_dir}/ExperimentReplicationMaterializationTests"
@@ -39,6 +40,10 @@ rg -Fq 'arg == "--allow-existing-equivalent"' "${scheduler_source}"
 rg -q -- '--allow-existing-equivalent' "${scheduler_source}"
 rg -q 'allowExistingEquivalent &&' "${scheduler_source}"
 rg -Fq '"--allow-existing-equivalent requires "' "${scheduler_source}"
+rg -q 'AttachTrainWorkerRouting' \
+    "${repo_root}/Sources/ExperimentReplicationMaterialization.cpp"
+rg -q 'SemanticWorkerRegistry::Load' \
+    "${repo_root}/Sources/ExperimentReplicationMaterializationCommand.cpp"
 
 commit_line="$(rg -n 'transaction\.commit\(\)' "${command_source}" | cut -d: -f1)"
 abort_line="$(rg -n 'transaction\.abort\(\)' "${command_source}" | cut -d: -f1)"
@@ -51,7 +56,7 @@ rg -q 'state=materialization_outcome_unknown' "${command_source}"
 rg -q 'transaction=commit_outcome_unknown' "${command_source}"
 rg -q 'commitSucceeded = true' "${command_source}"
 
-if rg -n 'Queue|Schedule|Worker|kill\(|SIG[A-Z]+' \
+if rg -n 'QueueExperiment|ScheduleExperiment|StartWorker|kill\(|SIG[A-Z]+' \
     "${repo_root}/Sources/ExperimentReplicationMaterialization.cpp" \
     "${command_source}" "${repository_source}"; then
     printf '%s\n' 'materializer gained scheduler/worker action' >&2

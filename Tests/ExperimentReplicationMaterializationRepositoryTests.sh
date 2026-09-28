@@ -228,6 +228,7 @@ binary="${build_dir}/ExperimentReplicationMaterializationRepositoryTests"
     "${repo_root}/Sources/ExperimentReplicationComparison.cpp" \
     "${repo_root}/Sources/ExperimentPairComparison.cpp" \
     "${repo_root}/Sources/ExperimentPairComparisonService.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SemanticWorkerRegistry.cpp" \
     "${repo_root}/Sources/FeatureAblationPairEvaluation.cpp" \
     "${repo_root}/Sources/FeatureAblationPairEvaluationRepository.cpp" \
     "${repo_root}/Sources/PairedTrainingObjectiveEvaluation.cpp" \

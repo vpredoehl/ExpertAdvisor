@@ -13,6 +13,7 @@ mkdir -p "${build_dir}"
     "${repo_root}/Sources/ExperimentReplicationComparison.cpp" \
     "${repo_root}/Sources/ExperimentPairComparisonService.cpp" \
     "${repo_root}/Sources/ExperimentPairComparison.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SemanticWorkerRegistry.cpp" \
     -o "${build_dir}/ExperimentReplicationPlanningTests"
 
 "${build_dir}/ExperimentReplicationPlanningTests"
@@ -35,5 +36,8 @@ rg -q 'ExperimentReplicationPlanning::ParseReplicationSeeds' \
     "${scheduler_source}"
 rg -q 'ExperimentReplicationPlanning::RunPlanningCommand' \
     "${scheduler_source}"
+rg -q 'semanticWorkerRegistryPath' "${scheduler_source}"
+rg -q 'AttachTrainWorkerRouting' \
+    "${repo_root}/Sources/ExperimentReplicationPlanning.cpp"
 
 printf '%s\n' 'Experiment replication planner CLI contract tests passed'

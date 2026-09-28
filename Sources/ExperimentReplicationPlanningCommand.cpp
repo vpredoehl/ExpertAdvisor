@@ -1,4 +1,6 @@
 #include "ExperimentReplicationPlanningService.hpp"
+
+#include "SchedulerCore/SemanticWorkerRegistry.hpp"
 #include "ExperimentReplicationPlanningPostgres.hpp"
 
 #include "FeatureAblationPairEvaluationRepository.hpp"
@@ -172,7 +174,12 @@ int RunPlanningCommand(const std::string& connectionString,
     pqxx::read_transaction transaction{connection};
     transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
     const PostgresPlanningSource source{transaction};
-    return RunPlanningCommand(command, source, source, output, errors);
+    EA::Scheduler::SemanticWorkerRegistryLoadRequest registryRequest;
+    registryRequest.registryPath = command.semanticWorkerRegistryPath;
+    const auto registry = EA::Scheduler::SemanticWorkerRegistry::Load(
+        registryRequest);
+    return RunPlanningCommand(
+        command, source, source, output, errors, &registry);
 }
 
 } // namespace EA::ExperimentReplicationPlanning
