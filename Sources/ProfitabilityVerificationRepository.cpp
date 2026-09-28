@@ -5,7 +5,9 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <charconv>
 #include <fstream>
 #include <iomanip>
 #include <locale>
@@ -14,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
+#include <vector>
 
 namespace EA::ProfitabilityVerification
 {
@@ -57,81 +60,31 @@ std::string Sha256File(const std::string& path, std::string& content)
     return rendered.str();
 }
 
-void VerifyPhase12Artifact(const std::string& path,
-                           std::string& sha256,
-                           std::string& content)
+struct ArtifactRegistration
 {
-    sha256 = Sha256File(path, content);
-    if (sha256 != kPhase12ArtifactSha256)
-        throw std::runtime_error("phase12_committed_artifact_sha256_mismatch");
-    const std::string header =
-        std::string{"CAMPAIGN_PROFITABILITY_FORWARD_VALIDATION_PRECOMMIT,"}
-        + "protocol_version=1,validation_cohort_identity_hash=" +
-        kPhase12ValidationCohortIdentityHash + ",ranking_snapshot_id=5," +
-        "source_evaluation_run_id=6,";
-    if (!content.starts_with(header) ||
-        content.find(std::string{"expected_outcome_start="} +
-                     kPhase12OutcomeStart + ",expected_outcome_end=" +
-                     kPhase12OutcomeEnd) == std::string::npos ||
-        content.find(std::string{"control_ranking_hash="} +
-                     kPhase12ControlRankingHash + ",candidate_ranking_hash=" +
-                     kPhase12CandidateRankingHash + ",member_count=79") ==
-            std::string::npos)
-        throw std::runtime_error("phase12_committed_artifact_contract_mismatch");
-    std::size_t memberCount = 0;
-    std::size_t topNCount = 0;
-    std::istringstream lines{content};
-    for (std::string line; std::getline(lines, line);)
-    {
-        if (line.starts_with("CAMPAIGN_PROFITABILITY_ASOF_MEMBER,"))
-            ++memberCount;
-        if (line.starts_with("CAMPAIGN_PROFITABILITY_TEMPORAL_TOP_N,"))
-            ++topNCount;
-    }
-    if (memberCount != kPhase12MemberCount || topNCount != 3)
-        throw std::runtime_error("phase12_committed_artifact_record_count_mismatch");
-}
+    std::string path;
+    std::string sha256;
+    std::string phase11Sha256;
+    std::string preparationHash;
+};
 
-std::string VerifyPhase12PreparationArtifact(const std::string& path)
+bool IsIsoDate(const std::string& value)
 {
-    std::string content;
-    const std::string sha256 = Sha256File(path, content);
-    if (sha256 != kPhase12PreparationArtifactSha256)
-        throw std::runtime_error(
-            "phase13_phase12_preparation_artifact_sha256_mismatch");
-    const std::string expectedHeader =
-        std::string{"CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY,"}
-        + "validation_cohort_identity_hash=" +
-        kPhase12ValidationCohortIdentityHash +
-        ",ranking_snapshot_id=5,source_evaluation_run_id=6,";
-    if (!content.starts_with(expectedHeader) ||
-        content.find(std::string{"artifact_sha256="} +
-                     kPhase12ArtifactSha256) == std::string::npos ||
-        content.find(std::string{"preparation_hash="} +
-                     kPhase12PreparationIdentityHash) == std::string::npos ||
-        content.find(std::string{"outcome_start="} + kPhase12OutcomeStart +
-                     ",outcome_end=" + kPhase12OutcomeEnd) ==
-            std::string::npos ||
-        content.find(std::string{"metric_hash="} +
-                     InferenceProfitability::MetricDefinitionHash()) ==
-            std::string::npos)
-        throw std::runtime_error(
-            "phase13_phase12_preparation_artifact_contract_mismatch");
-    std::size_t jobCount = 0;
-    std::size_t selectionCount = 0;
-    std::istringstream lines{content};
-    for (std::string line; std::getline(lines, line);)
-    {
-        if (line.starts_with("CAMPAIGN_PROFITABILITY_OUTCOME_JOB,"))
-            ++jobCount;
-        if (line.starts_with(
-                "CAMPAIGN_PROFITABILITY_OUTCOME_SELECTION_MAPPING,"))
-            ++selectionCount;
-    }
-    if (jobCount != 23 || selectionCount != 3)
-        throw std::runtime_error(
-            "phase13_phase12_preparation_artifact_record_count_mismatch");
-    return sha256;
+    if (value.size() != 10 || value[4] != '-' || value[7] != '-' ||
+        !std::all_of(value.begin(), value.end(), [](unsigned char c) {
+            return c == '-' || (c >= '0' && c <= '9'); })) return false;
+    const auto number = [&](std::size_t offset, std::size_t count) {
+        int result = 0; const auto parsed = std::from_chars(
+            value.data() + offset, value.data() + offset + count, result);
+        return parsed.ec == std::errc{} && parsed.ptr == value.data() + offset + count
+            ? result : -1;
+    };
+    const int year = number(0, 4), month = number(5, 2), day = number(8, 2);
+    if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+    static constexpr std::array<int, 12> days{31,28,31,30,31,30,31,31,30,31,30,31};
+    const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    return day <= days[static_cast<std::size_t>(month - 1)] +
+        (month == 2 && leap ? 1 : 0);
 }
 
 bool TaggedHash(const std::string& value)
@@ -140,6 +93,235 @@ bool TaggedHash(const std::string& value)
     return std::all_of(value.begin() + 8, value.end(), [](unsigned char c) {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
     });
+}
+
+bool Sha256(const std::string& value)
+{
+    return value.size() == 64 && std::all_of(value.begin(), value.end(),
+        [](unsigned char c) { return std::isxdigit(c) != 0; });
+}
+
+ArtifactRegistration ResolveArtifactRegistration(const std::string& manifest,
+                                                 const std::string& cohort,
+                                                 bool preparation)
+{
+    std::ifstream input{manifest};
+    if (!input) throw std::runtime_error("profitability_artifact_registry_missing:" + manifest);
+    ArtifactRegistration result;
+    std::set<std::string> seen;
+    for (std::string line; std::getline(input, line);)
+    {
+        if (line.empty() || line.starts_with('#')) continue;
+        std::vector<std::string> fields;
+        std::size_t begin = 0;
+        while (begin <= line.size()) {
+            const auto end = line.find('\t', begin);
+            fields.push_back(line.substr(begin, end == std::string::npos ?
+                std::string::npos : end - begin));
+            if (end == std::string::npos) break;
+            begin = end + 1;
+        }
+        const std::size_t expected = preparation ? 5 : 4;
+        if (fields.size() != expected || fields[0] !=
+            (preparation ? "campaign_profitability_phase12_registry_v1" :
+                           "campaign_profitability_phase11_registry_v1") ||
+            !TaggedHash(fields[1]) || fields[2].empty() ||
+            fields[2].find("..") != std::string::npos || !Sha256(fields[3]) ||
+            (preparation && !Sha256(fields[4])))
+            throw std::runtime_error("profitability_artifact_registry_malformed");
+        if (!seen.insert(fields[1]).second)
+            throw std::runtime_error("profitability_artifact_registry_duplicate_cohort");
+        if (fields[1] == cohort) {
+            result.path = fields[2]; result.sha256 = fields[3];
+            if (preparation) result.phase11Sha256 = fields[4];
+        }
+    }
+    if (result.path.empty())
+        throw std::runtime_error("profitability_artifact_registry_cohort_unregistered");
+    return result;
+}
+
+std::map<std::string, std::string> Fields(const std::string& line,
+                                          const std::string& type)
+{
+    if (!line.starts_with(type + ","))
+        throw std::runtime_error("profitability_artifact_record_type_mismatch");
+    std::map<std::string, std::string> result;
+    std::size_t begin = type.size() + 1;
+    while (begin < line.size()) {
+        const auto end = line.find(',', begin);
+        const std::string token = line.substr(begin, end == std::string::npos ?
+            std::string::npos : end - begin);
+        const auto equals = token.find('=');
+        if (equals == std::string::npos || equals == 0 ||
+            !result.emplace(token.substr(0, equals), token.substr(equals + 1)).second)
+            throw std::runtime_error("profitability_artifact_record_malformed");
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    return result;
+}
+
+const std::string& Required(const std::map<std::string, std::string>& fields,
+                            const char* name)
+{
+    const auto found = fields.find(name);
+    if (found == fields.end() || found->second.empty())
+        throw std::runtime_error(std::string{"profitability_artifact_field_missing:"} + name);
+    return found->second;
+}
+
+long long PositiveId(const std::string& value)
+{
+    long long result = 0;
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
+    if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || result <= 0)
+        throw std::runtime_error("profitability_artifact_invalid_positive_id");
+    return result;
+}
+
+long long Integer(const std::string& value)
+{
+    long long result = 0;
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
+    if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+        throw std::runtime_error("profitability_artifact_invalid_integer");
+    return result;
+}
+
+std::vector<long long> Ids(const std::string& value)
+{
+    if (value == "NONE") return {};
+    std::vector<long long> result; std::set<long long> unique;
+    std::size_t begin = 0;
+    while (begin <= value.size()) {
+        const auto end = value.find(':', begin);
+        const auto id = PositiveId(value.substr(begin, end == std::string::npos ?
+            std::string::npos : end - begin));
+        if (!unique.insert(id).second) throw std::runtime_error("profitability_artifact_duplicate_recommendation");
+        result.push_back(id);
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    return result;
+}
+
+struct ParsedMember { long long memberId, recommendationId, evaluationId, experimentId, modelId; int controlRank, candidateRank, horizon; std::string symbol, hash, evidenceHash; };
+struct ParsedPhase11Artifact {
+    ArtifactRegistration registration; std::string cohort, decisionTimestamp, start, end, controlHash, candidateHash;
+    long long snapshotId, evaluationRunId; std::vector<ParsedMember> members;
+    std::vector<CampaignProfitabilityForwardValidationTopN> topN;
+};
+
+std::vector<long long> SortedIntersection(std::vector<long long> left, std::vector<long long> right)
+{
+    std::sort(left.begin(), left.end()); std::sort(right.begin(), right.end());
+    std::vector<long long> result; std::set_intersection(left.begin(), left.end(), right.begin(), right.end(), std::back_inserter(result)); return result;
+}
+std::vector<long long> SortedDifference(std::vector<long long> left, std::vector<long long> right)
+{
+    std::sort(left.begin(), left.end()); std::sort(right.begin(), right.end());
+    std::vector<long long> result; std::set_difference(left.begin(), left.end(), right.begin(), right.end(), std::back_inserter(result)); return result;
+}
+
+ParsedPhase11Artifact LoadPhase11Artifact(const std::string& cohort)
+{
+    ParsedPhase11Artifact artifact;
+    artifact.registration = ResolveArtifactRegistration(
+        "docs/archive/phase11/forward-validation/registry.tsv", cohort, false);
+    std::string content; const auto actual = Sha256File(artifact.registration.path, content);
+    if (actual != artifact.registration.sha256)
+        throw std::runtime_error("phase11_committed_artifact_sha256_mismatch");
+    std::istringstream input{content}; std::string line;
+    if (!std::getline(input, line)) throw std::runtime_error("phase11_committed_artifact_empty");
+    const auto header = Fields(line, "CAMPAIGN_PROFITABILITY_FORWARD_VALIDATION_PRECOMMIT");
+    if (Required(header, "protocol_version") != "1" || Required(header, "validation_cohort_identity_hash") != cohort ||
+        Required(header, "control_weight") != "0" || Required(header, "precommitted_candidate_weight") != "0.025" ||
+        Required(header, "weight_selected_from_future_outcome") != "false" || Required(header, "external_immutable_artifact_commit_required") != "true" ||
+        Required(header, "database_persistence") != "false")
+        throw std::runtime_error("phase11_committed_artifact_header_contract_mismatch");
+    artifact.cohort = cohort; artifact.snapshotId = PositiveId(Required(header, "ranking_snapshot_id"));
+    artifact.evaluationRunId = PositiveId(Required(header, "source_evaluation_run_id"));
+    artifact.decisionTimestamp = Required(header, "decision_timestamp"); artifact.start = Required(header, "expected_outcome_start"); artifact.end = Required(header, "expected_outcome_end");
+    artifact.controlHash = Required(header, "control_ranking_hash"); artifact.candidateHash = Required(header, "candidate_ranking_hash");
+    if (artifact.decisionTimestamp.size() < 11 || !IsIsoDate(artifact.decisionTimestamp.substr(0, 10)) || !IsIsoDate(artifact.start) || !IsIsoDate(artifact.end) || artifact.start <= artifact.decisionTimestamp.substr(0,10) || artifact.end <= artifact.start || !TaggedHash(artifact.controlHash) || !TaggedHash(artifact.candidateHash))
+        throw std::runtime_error("phase11_committed_artifact_identity_malformed");
+    const auto memberCount = PositiveId(Required(header, "member_count"));
+    std::set<long long> memberIds, recommendationIds, evaluationIds, controlRanks, candidateRanks;
+    for (; std::getline(input, line);) {
+        if (line.starts_with("CAMPAIGN_PROFITABILITY_ASOF_MEMBER,")) {
+            const auto f = Fields(line, "CAMPAIGN_PROFITABILITY_ASOF_MEMBER");
+            if (Required(f,"validation_cohort_identity_hash") != cohort || Required(f,"subsequent_outcome_start") != artifact.start || Required(f,"subsequent_outcome_end") != artifact.end || Required(f,"leakage_check") != "pending_future_strictly_subsequent_outcome") throw std::runtime_error("phase11_member_cohort_contract_mismatch");
+            ParsedMember m{PositiveId(Required(f,"ranking_member_id")), PositiveId(Required(f,"recommendation_id")), PositiveId(Required(f,"evaluation_result_id")), PositiveId(Required(f,"source_experiment_id")), PositiveId(Required(f,"source_model_id")), static_cast<int>(PositiveId(Required(f,"control_rank"))), static_cast<int>(PositiveId(Required(f,"candidate_rank"))), static_cast<int>(PositiveId(Required(f,"horizon"))), Required(f,"symbol"), Required(f,"member_hash"), Required(f,"ranking_time_profitability_observation_identity_hash")};
+            if (!TaggedHash(m.hash) || (m.evidenceHash != "NULL" && !TaggedHash(m.evidenceHash)) || !memberIds.insert(m.memberId).second || !recommendationIds.insert(m.recommendationId).second || !evaluationIds.insert(m.evaluationId).second || !controlRanks.insert(m.controlRank).second || !candidateRanks.insert(m.candidateRank).second || m.symbol.empty()) throw std::runtime_error("phase11_member_identity_ambiguous");
+            if (Integer(Required(f,"rank_delta")) != m.controlRank - m.candidateRank) throw std::runtime_error("phase11_member_rank_delta_mismatch");
+            if ((Required(f,"evidence_available_at_selection_time") == "true") != (m.evidenceHash != "NULL")) throw std::runtime_error("phase11_member_evidence_contract_mismatch");
+            artifact.members.push_back(std::move(m));
+        } else if (line.starts_with("CAMPAIGN_PROFITABILITY_TEMPORAL_TOP_N,")) {
+            const auto f = Fields(line, "CAMPAIGN_PROFITABILITY_TEMPORAL_TOP_N"); CampaignProfitabilityForwardValidationTopN t;
+            if (Required(f,"validation_cohort_identity_hash") != cohort || Required(f,"outcome_status") != "pending") throw std::runtime_error("phase11_top_n_cohort_contract_mismatch");
+            t.n = static_cast<int>(PositiveId(Required(f,"top_n"))); t.controlRecommendationIds=Ids(Required(f,"control_selected_ids")); t.candidateRecommendationIds=Ids(Required(f,"candidate_selected_ids")); t.retainedRecommendationIds=Ids(Required(f,"retained_ids")); t.candidateOnlyEntrants=Ids(Required(f,"candidate_only_entrants")); t.controlOnlyExits=Ids(Required(f,"control_only_exits")); t.hash=Required(f,"top_n_hash");
+            if ((t.n != 5 && t.n != 10 && t.n != 20) || t.controlRecommendationIds.size()!=static_cast<std::size_t>(t.n) || t.candidateRecommendationIds.size()!=static_cast<std::size_t>(t.n) || !TaggedHash(t.hash) || t.retainedRecommendationIds != SortedIntersection(t.controlRecommendationIds,t.candidateRecommendationIds) || t.candidateOnlyEntrants != SortedDifference(t.candidateRecommendationIds,t.controlRecommendationIds) || t.controlOnlyExits != SortedDifference(t.controlRecommendationIds,t.candidateRecommendationIds)) throw std::runtime_error("phase11_top_n_identity_mismatch");
+            artifact.topN.push_back(std::move(t));
+        } else if (!line.empty() && !line.starts_with("CAMPAIGN_PROFITABILITY_PHASE11_ASSESSMENT,")) throw std::runtime_error("phase11_committed_artifact_unexpected_record");
+    }
+    if (artifact.members.size()!=static_cast<std::size_t>(memberCount) || artifact.topN.size()!=3 || controlRanks.size()!=artifact.members.size() || candidateRanks.size()!=artifact.members.size()) throw std::runtime_error("phase11_committed_artifact_record_count_mismatch");
+    std::sort(artifact.topN.begin(), artifact.topN.end(), [](const auto&a,const auto&b){return a.n<b.n;});
+    if (artifact.topN[0].n!=5 || artifact.topN[1].n!=10 || artifact.topN[2].n!=20) throw std::runtime_error("phase11_top_n_duplicate_or_missing");
+    for (int rank=1; rank<=memberCount; ++rank) if (!controlRanks.contains(rank) || !candidateRanks.contains(rank)) throw std::runtime_error("phase11_member_ranks_noncontiguous");
+    std::map<int, long long> controlRecommendationByRank, candidateRecommendationByRank;
+    for (const auto& member : artifact.members) {
+        controlRecommendationByRank.emplace(member.controlRank, member.recommendationId);
+        candidateRecommendationByRank.emplace(member.candidateRank, member.recommendationId);
+    }
+    for (const auto& top : artifact.topN) {
+        std::vector<long long> expectedControl, expectedCandidate;
+        for (int rank = 1; rank <= top.n; ++rank) {
+            expectedControl.push_back(controlRecommendationByRank.at(rank));
+            expectedCandidate.push_back(candidateRecommendationByRank.at(rank));
+        }
+        if (top.controlRecommendationIds != expectedControl ||
+            top.candidateRecommendationIds != expectedCandidate)
+            throw std::runtime_error("phase11_top_n_ranked_selection_mismatch");
+    }
+    return artifact;
+}
+
+ArtifactRegistration LoadPhase12PreparationArtifact(
+    const ParsedPhase11Artifact& phase11)
+{
+    ArtifactRegistration registration = ResolveArtifactRegistration(
+        "docs/archive/phase12/prospective-outcome/registry.tsv",
+        phase11.cohort, true);
+    if (registration.phase11Sha256 != phase11.registration.sha256)
+        throw std::runtime_error("phase13_cross_cohort_phase11_artifact_pairing");
+    std::string content;
+    if (Sha256File(registration.path, content) != registration.sha256)
+        throw std::runtime_error("phase13_phase12_preparation_artifact_sha256_mismatch");
+    std::istringstream input{content}; std::string line;
+    if (!std::getline(input, line)) throw std::runtime_error("phase13_phase12_preparation_artifact_empty");
+    const auto header = Fields(line, "CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY");
+    if (Required(header,"validation_cohort_identity_hash") != phase11.cohort ||
+        PositiveId(Required(header,"ranking_snapshot_id")) != phase11.snapshotId ||
+        PositiveId(Required(header,"source_evaluation_run_id")) != phase11.evaluationRunId ||
+        Required(header,"artifact_sha256") != phase11.registration.sha256 ||
+        Required(header,"outcome_start") != phase11.start || Required(header,"outcome_end") != phase11.end ||
+        Required(header,"metric_hash") != InferenceProfitability::MetricDefinitionHash() ||
+        !TaggedHash(Required(header,"preparation_hash")))
+        throw std::runtime_error("phase13_phase12_preparation_artifact_contract_mismatch");
+    registration.preparationHash = Required(header,"preparation_hash");
+    std::set<std::string> jobs; std::set<int> topNs;
+    for (; std::getline(input,line);) {
+        if (line.starts_with("CAMPAIGN_PROFITABILITY_OUTCOME_JOB,")) {
+            const auto f=Fields(line,"CAMPAIGN_PROFITABILITY_OUTCOME_JOB");
+            if (Required(f,"validation_cohort_identity_hash") != phase11.cohort || PositiveId(Required(f,"ranking_snapshot_id")) != phase11.snapshotId || PositiveId(Required(f,"source_evaluation_run_id")) != phase11.evaluationRunId || Required(f,"outcome_start") != phase11.start || Required(f,"outcome_end") != phase11.end || Required(f,"metric_hash") != InferenceProfitability::MetricDefinitionHash() || !TaggedHash(Required(f,"job_hash")) || !jobs.insert(Required(f,"job_hash")).second) throw std::runtime_error("phase13_phase12_preparation_job_contract_mismatch");
+        } else if (line.starts_with("CAMPAIGN_PROFITABILITY_OUTCOME_SELECTION_MAPPING,")) {
+            const auto f=Fields(line,"CAMPAIGN_PROFITABILITY_OUTCOME_SELECTION_MAPPING"); const int n=static_cast<int>(PositiveId(Required(f,"top_n")));
+            if (Required(f,"validation_cohort_identity_hash") != phase11.cohort || Required(f,"outcome_start") != phase11.start || Required(f,"outcome_end") != phase11.end || !topNs.insert(n).second || (n!=5 && n!=10 && n!=20)) throw std::runtime_error("phase13_phase12_preparation_top_n_contract_mismatch");
+        }
+    }
+    if (jobs.empty() || topNs.size()!=3) throw std::runtime_error("phase13_phase12_preparation_record_count_mismatch");
+    return registration;
 }
 
 std::string IdList(const std::vector<long long>& values)
@@ -254,6 +436,19 @@ EvidenceResult StateOnly(long long experimentId,
 }
 
 } // namespace
+
+void VerifyCampaignProfitabilityPhase11Artifact(
+    const std::string& validationCohortIdentityHash)
+{
+    (void)LoadPhase11Artifact(validationCohortIdentityHash);
+}
+
+void VerifyCampaignProfitabilityPhase12PreparationArtifact(
+    const std::string& validationCohortIdentityHash)
+{
+    const auto phase11 = LoadPhase11Artifact(validationCohortIdentityHash);
+    (void)LoadPhase12PreparationArtifact(phase11);
+}
 
 EvidenceResult LoadAndVerifyExactFinalEvidence(
     pqxx::transaction_base& transaction,
@@ -1120,39 +1315,74 @@ CampaignProfitabilityOutcomePreparation
 LoadCampaignProfitabilityOutcomePreparation(
     pqxx::transaction_base& transaction,
     const std::string& currentDate,
-    const std::string& artifactPath)
+    const std::string& validationCohortIdentityHash)
 {
     if (currentDate.size() != 10)
         throw std::invalid_argument("phase12_current_date_invalid");
 
     CampaignProfitabilityOutcomePreparation preparation;
-    preparation.artifactPath = artifactPath;
     preparation.currentDate = currentDate;
-    std::string artifactContent;
-    VerifyPhase12Artifact(artifactPath, preparation.artifactSha256,
-                          artifactContent);
+    const ParsedPhase11Artifact artifact = LoadPhase11Artifact(
+        validationCohortIdentityHash);
+    preparation.artifactPath = artifact.registration.path;
+    preparation.artifactSha256 = artifact.registration.sha256;
+    preparation.validationCohortIdentityHash = artifact.cohort;
+    preparation.rankingSnapshotId = artifact.snapshotId;
+    preparation.sourceEvaluationRunId = artifact.evaluationRunId;
+    preparation.outcomeStart = artifact.start;
+    preparation.outcomeEnd = artifact.end;
     preparation.artifactIdentityVerified = true;
 
     const CampaignProfitabilityTemporalCohort temporal =
         LoadCampaignProfitabilityTemporalCohort(
-            transaction, kPhase12RankingSnapshotId);
+            transaction, artifact.snapshotId);
     if (!temporal.rankingPopulationReconstructable ||
         !temporal.exactControlReconstruction ||
         temporal.pointInTimeProvenanceViolationCount != 0 ||
-        temporal.sourceEvaluationRunId != kPhase12SourceEvaluationRunId)
-        throw std::runtime_error("phase12_snapshot5_reconstruction_mismatch");
+        temporal.sourceEvaluationRunId != artifact.evaluationRunId)
+        throw std::runtime_error("phase12_frozen_snapshot_reconstruction_mismatch");
     const CampaignProfitabilityShadowSource source =
         LoadCampaignProfitabilityShadowSource(
-            transaction, kPhase12RankingSnapshotId);
+            transaction, artifact.snapshotId);
     const auto precommit = BuildCampaignProfitabilityForwardValidationPrecommit(
-        source, temporal.asOfTimestamp, kPhase12OutcomeStart,
-        kPhase12OutcomeEnd);
-    if (precommit.hash != kPhase12ValidationCohortIdentityHash ||
-        precommit.controlRankingHash != kPhase12ControlRankingHash ||
-        precommit.candidateRankingHash != kPhase12CandidateRankingHash ||
-        precommit.sourceEvaluationRunId != kPhase12SourceEvaluationRunId ||
-        precommit.members.size() != kPhase12MemberCount)
+        source, artifact.decisionTimestamp, artifact.start, artifact.end);
+    if (precommit.hash != artifact.cohort ||
+        precommit.rankingSnapshotId != artifact.snapshotId ||
+        precommit.controlRankingHash != artifact.controlHash ||
+        precommit.candidateRankingHash != artifact.candidateHash ||
+        precommit.sourceEvaluationRunId != artifact.evaluationRunId ||
+        precommit.members.size() != artifact.members.size() ||
+        precommit.topN.size() != artifact.topN.size())
         throw std::runtime_error("phase12_frozen_cohort_identity_mismatch");
+    std::map<long long, const ParsedMember*> frozenByMember;
+    for (const auto& member : artifact.members)
+        frozenByMember.emplace(member.memberId, &member);
+    for (const auto& member : precommit.members)
+    {
+        const auto found = frozenByMember.find(member.source.rankingMemberId);
+        if (found == frozenByMember.end() ||
+            found->second->recommendationId != member.source.recommendationId ||
+            found->second->evaluationId != member.source.recommendationEvaluationResultId ||
+            found->second->experimentId != member.source.sourceExperimentId ||
+            !member.source.sourceModelId || found->second->modelId != *member.source.sourceModelId ||
+            found->second->symbol != member.source.symbol ||
+            found->second->horizon != member.source.horizon ||
+            found->second->controlRank != member.controlRank ||
+            found->second->candidateRank != member.candidateRank ||
+            found->second->hash != member.hash ||
+            (found->second->evidenceHash != "NULL" && found->second->evidenceHash != member.rankingTimeProfitabilityObservationIdentityHash))
+            throw std::runtime_error("phase12_frozen_member_identity_mismatch");
+    }
+    for (std::size_t index = 0; index < artifact.topN.size(); ++index)
+    {
+        const auto& expected = artifact.topN[index]; const auto& actual = precommit.topN[index];
+        if (expected.n != actual.n || expected.controlRecommendationIds != actual.controlRecommendationIds ||
+            expected.candidateRecommendationIds != actual.candidateRecommendationIds ||
+            expected.retainedRecommendationIds != actual.retainedRecommendationIds ||
+            expected.candidateOnlyEntrants != actual.candidateOnlyEntrants ||
+            expected.controlOnlyExits != actual.controlOnlyExits || expected.hash != actual.hash)
+            throw std::runtime_error("phase12_frozen_top_n_identity_mismatch");
+    }
     preparation.topN = precommit.topN;
 
     std::map<std::pair<long long, long long>, CampaignProfitabilityOutcomeJob>
@@ -1174,6 +1404,9 @@ LoadCampaignProfitabilityOutcomePreparation(
         job.outcomeStart = precommit.expectedOutcomeStart;
         job.outcomeEnd = precommit.expectedOutcomeEnd;
         job.recommendationIds.push_back(member.source.recommendationId);
+        if (!preparation.frozenSourceModelByRecommendation.emplace(
+                member.source.recommendationId, key.second).second)
+            throw std::runtime_error("phase12_duplicate_frozen_recommendation");
     }
 
     for (const auto& top : precommit.topN)
@@ -1385,7 +1618,7 @@ ORDER BY param_name COLLATE "C",row_idx,col_idx
               });
     preparation.canonical =
         "campaign_profitability_outcome_preparation_v1;cohort_hash=" +
-        std::string{kPhase12ValidationCohortIdentityHash} +
+        preparation.validationCohortIdentityHash +
         ";artifact_sha256=" + preparation.artifactSha256 + ";job_count=" +
         std::to_string(preparation.jobs.size()) + ";";
     for (std::size_t index = 0; index < preparation.jobs.size(); ++index)
@@ -1400,26 +1633,28 @@ CampaignProfitabilityProspectiveComparison
 LoadCampaignProfitabilityProspectiveComparison(
     pqxx::transaction_base& transaction,
     const std::string& currentDate,
-    const std::string& phase11ArtifactPath,
-    const std::string& phase12PreparationArtifactPath)
+    const std::string& validationCohortIdentityHash)
 {
-    const std::string phase12PreparationSha256 =
-        VerifyPhase12PreparationArtifact(phase12PreparationArtifactPath);
+    const ParsedPhase11Artifact phase11 = LoadPhase11Artifact(
+        validationCohortIdentityHash);
+    const ArtifactRegistration phase12 = LoadPhase12PreparationArtifact(phase11);
     CampaignProfitabilityProspectiveComparisonRequest request;
     request.validationCohortIdentityHash =
-        kPhase12ValidationCohortIdentityHash;
-    request.phase11ArtifactSha256 = kPhase12ArtifactSha256;
-    request.phase12PreparationArtifactSha256 = phase12PreparationSha256;
-    request.phase12PreparationIdentityHash =
-        kPhase12PreparationIdentityHash;
+        phase11.cohort;
+    request.phase11ArtifactSha256 = phase11.registration.sha256;
+    request.phase12PreparationArtifactSha256 = phase12.sha256;
+    request.phase12PreparationIdentityHash = phase12.preparationHash;
     request.metricDefinitionCanonical =
         InferenceProfitability::kMetricDefinitionCanonical;
     request.metricDefinitionHash = InferenceProfitability::MetricDefinitionHash();
-    request.outcomeStart = kPhase12OutcomeStart;
-    request.outcomeEnd = kPhase12OutcomeEnd;
+    request.outcomeStart = phase11.start;
+    request.outcomeEnd = phase11.end;
     request.currentDate = currentDate;
     request.preparation = LoadCampaignProfitabilityOutcomePreparation(
-        transaction, currentDate, phase11ArtifactPath);
+        transaction, currentDate, validationCohortIdentityHash);
+    request.preparation.preparationArtifactSha256 = phase12.sha256;
+    if (request.preparation.hash != phase12.preparationHash)
+        throw std::runtime_error("phase13_phase12_preparation_identity_mismatch");
 
     const bool outcomeTableExists = !transaction.exec(R"SQL(
 SELECT to_regclass('public.campaign_profitability_prospective_outcome_result')
@@ -1442,7 +1677,7 @@ FROM campaign_profitability_prospective_outcome_result
 WHERE validation_cohort_identity_hash=$1
 ORDER BY source_model_id,source_experiment_id,
          prospective_outcome_result_id
-)SQL", pqxx::params{kPhase12ValidationCohortIdentityHash}) : pqxx::result{};
+)SQL", pqxx::params{validationCohortIdentityHash}) : pqxx::result{};
     request.outcomes.reserve(rows.size());
     for (const pqxx::row& row : rows)
     {
@@ -1507,14 +1742,12 @@ CampaignProfitabilityOutcomeJob LoadCampaignProfitabilityOutcomeExecutionJob(
     const std::string& outcomeStart,
     const std::string& outcomeEnd,
     const std::string& jobHash,
-    const std::string& currentDate,
-    const std::string& artifactPath)
+    const std::string& currentDate)
 {
-    if (cohortHash != kPhase12ValidationCohortIdentityHash ||
-        outcomeStart != kPhase12OutcomeStart || outcomeEnd != kPhase12OutcomeEnd)
-        throw std::invalid_argument("phase12_execution_cohort_or_window_mismatch");
     const auto preparation = LoadCampaignProfitabilityOutcomePreparation(
-        transaction, currentDate, artifactPath);
+        transaction, currentDate, cohortHash);
+    if (outcomeStart != preparation.outcomeStart || outcomeEnd != preparation.outcomeEnd)
+        throw std::invalid_argument("phase12_execution_cohort_or_window_mismatch");
     const auto found = std::find_if(
         preparation.jobs.begin(), preparation.jobs.end(), [&](const auto& job) {
             return job.sourceExperimentId == sourceExperimentId &&

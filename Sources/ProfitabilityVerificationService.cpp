@@ -1387,25 +1387,22 @@ int RunCampaignProfitabilityOutcomePreparationCommand(
     const std::string& validationCohortIdentityHash,
     std::ostream& output,
     std::ostream& errors,
-    const std::string& artifactPath,
     const std::string& currentDateOverride)
 {
     (void)errors;
-    if (validationCohortIdentityHash !=
-        kPhase12ValidationCohortIdentityHash)
-        throw std::invalid_argument("phase12_validation_cohort_hash_mismatch");
     pqxx::connection connection{connectionString};
     pqxx::read_transaction transaction{connection};
     transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
     const auto preparation = LoadCampaignProfitabilityOutcomePreparation(
         transaction,
         currentDateOverride.empty() ? CurrentUtcDate() : currentDateOverride,
-        artifactPath);
+        validationCohortIdentityHash);
 
     const std::string common =
         std::string{",validation_cohort_identity_hash="} +
-        kPhase12ValidationCohortIdentityHash +
-        ",ranking_snapshot_id=5,source_evaluation_run_id=6";
+        preparation.validationCohortIdentityHash +
+        ",ranking_snapshot_id=" + std::to_string(preparation.rankingSnapshotId) +
+        ",source_evaluation_run_id=" + std::to_string(preparation.sourceEvaluationRunId);
     output << "CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY" << common
            << ",protocol_version=1,artifact_path="
            << MachineText(preparation.artifactPath)
@@ -1413,8 +1410,8 @@ int RunCampaignProfitabilityOutcomePreparationCommand(
            << ",artifact_identity_verified="
            << Boolean(preparation.artifactIdentityVerified)
            << ",unique_source_model_job_count=" << preparation.jobs.size()
-           << ",recommendation_count=79,outcome_start="
-           << kPhase12OutcomeStart << ",outcome_end=" << kPhase12OutcomeEnd
+           << ",recommendation_count=" << [&] { std::size_t n=0; for (const auto& j: preparation.jobs) n+=j.recommendationIds.size(); return n; }() << ",outcome_start="
+           << preparation.outcomeStart << ",outcome_end=" << preparation.outcomeEnd
            << ",metric_hash=" << InferenceProfitability::MetricDefinitionHash()
            << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
            << ",preparation_hash=" << preparation.hash
@@ -1524,8 +1521,8 @@ int RunCampaignProfitabilityOutcomePreparationCommand(
         output << "CAMPAIGN_PROFITABILITY_OUTCOME_SELECTION_MAPPING" << common
                << ",source_experiment_id=ALL,source_model_id=ALL"
                << ",symbol=MULTIPLE,horizon=MULTIPLE"
-               << ",outcome_start=" << kPhase12OutcomeStart
-               << ",outcome_end=" << kPhase12OutcomeEnd
+               << ",outcome_start=" << preparation.outcomeStart
+               << ",outcome_end=" << preparation.outcomeEnd
                << ",metric_hash=" << InferenceProfitability::MetricDefinitionHash()
                << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
                << ",top_n=" << top.n
@@ -1551,7 +1548,7 @@ int RunCampaignProfitabilityOutcomePreparationCommand(
     output << "CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY" << common
            << ",source_experiment_id=ALL,source_model_id=ALL"
            << ",symbol=MULTIPLE,horizon=MULTIPLE,outcome_start="
-           << kPhase12OutcomeStart << ",outcome_end=" << kPhase12OutcomeEnd
+           << preparation.outcomeStart << ",outcome_end=" << preparation.outcomeEnd
            << ",metric_hash=" << InferenceProfitability::MetricDefinitionHash()
            << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
            << ",unique_job_count=" << preparation.jobs.size()
@@ -1569,21 +1566,16 @@ int RunCampaignProfitabilityProspectiveComparisonCommand(
     const std::string& validationCohortIdentityHash,
     std::ostream& output,
     std::ostream& errors,
-    const std::string& phase11ArtifactPath,
-    const std::string& phase12PreparationArtifactPath,
     const std::string& currentDateOverride)
 {
     (void)errors;
-    if (validationCohortIdentityHash !=
-        kPhase12ValidationCohortIdentityHash)
-        throw std::invalid_argument("phase13_validation_cohort_hash_mismatch");
     pqxx::connection connection{connectionString};
     pqxx::read_transaction transaction{connection};
     transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
     const auto comparison = LoadCampaignProfitabilityProspectiveComparison(
         transaction,
         currentDateOverride.empty() ? CurrentUtcDate() : currentDateOverride,
-        phase11ArtifactPath, phase12PreparationArtifactPath);
+        validationCohortIdentityHash);
 
     const auto coverageFields = [](const CampaignProfitabilitySourceCoverage& c,
                                    const std::string& prefix) {
@@ -1616,7 +1608,8 @@ int RunCampaignProfitabilityProspectiveComparisonCommand(
     const std::string common =
         std::string{",validation_cohort_identity_hash="} +
         comparison.validationCohortIdentityHash +
-        ",ranking_snapshot_id=5,source_evaluation_run_id=6" +
+        ",ranking_snapshot_id=" + std::to_string(comparison.rankingSnapshotId) +
+        ",source_evaluation_run_id=" + std::to_string(comparison.sourceEvaluationRunId) +
         ",phase11_artifact_sha256=" + comparison.phase11ArtifactSha256 +
         ",phase12_preparation_artifact_sha256=" +
         comparison.phase12PreparationArtifactSha256 +
@@ -1637,9 +1630,7 @@ int RunCampaignProfitabilityProspectiveComparisonCommand(
     output << "CAMPAIGN_PROFITABILITY_PROSPECTIVE_FULL_COHORT_COVERAGE"
            << common << ',' << coverageFields(
                   comparison.fullFrozenCohortCoverage, "")
-           << ",coverage_scope=all_23_frozen_source_models"
-           << ",known_incompatible_source_model_id=499"
-           << ",known_incompatible_reason=model_lineage_ambiguous"
+           << ",coverage_scope=all_frozen_source_models"
            << OutcomeSafetyFields() << ",database_write=false\n";
 
     for (const auto& top : comparison.topN)

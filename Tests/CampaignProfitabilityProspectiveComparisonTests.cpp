@@ -72,7 +72,16 @@ Verification::CampaignProfitabilityOutcomePreparation Preparation()
 {
     Verification::CampaignProfitabilityOutcomePreparation preparation;
     preparation.artifactSha256 = Verification::kPhase12ArtifactSha256;
+    preparation.preparationArtifactSha256 =
+        Verification::kPhase12PreparationArtifactSha256;
     preparation.artifactIdentityVerified = true;
+    preparation.validationCohortIdentityHash =
+        Verification::kPhase12ValidationCohortIdentityHash;
+    preparation.rankingSnapshotId = Verification::kPhase12RankingSnapshotId;
+    preparation.sourceEvaluationRunId =
+        Verification::kPhase12SourceEvaluationRunId;
+    preparation.outcomeStart = Verification::kPhase12OutcomeStart;
+    preparation.outcomeEnd = Verification::kPhase12OutcomeEnd;
     preparation.hash = Verification::kPhase12PreparationIdentityHash;
     preparation.jobs = {
         Job(150, 499, {341, 340, 343, 342}, false),
@@ -116,6 +125,10 @@ Verification::CampaignProfitabilityOutcomePreparation Preparation()
             {359, 360, 361, 362, 368, 378, 379, 380, 404, 405,
              406, 407, 410, 411, 412, 416, 417, 418},
             {408, 409}, {369, 370})};
+    for (const auto& job : preparation.jobs)
+        for (const long long recommendationId : job.recommendationIds)
+            preparation.frozenSourceModelByRecommendation.emplace(
+                recommendationId, job.sourceModelId);
     return preparation;
 }
 

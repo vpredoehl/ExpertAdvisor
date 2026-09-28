@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <iomanip>
@@ -71,6 +72,12 @@ bool TaggedHash(const std::string& value)
     return std::all_of(value.begin() + 8, value.end(), [](unsigned char c) {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
     });
+}
+
+bool Sha256(const std::string& value)
+{
+    return value.size() == 64 && std::all_of(value.begin(), value.end(),
+        [](unsigned char c) { return std::isxdigit(c) != 0; });
 }
 
 bool NearlyEqual(double left, double right)
@@ -907,50 +914,24 @@ BuildCampaignProfitabilityProspectiveComparison(
         if (std::find(reasons.begin(), reasons.end(), reason) == reasons.end())
             reasons.push_back(reason);
     };
-    const auto exactTopN = [](const CampaignProfitabilityForwardValidationTopN&
-                                  top) {
-        if (top.n == 5)
-            return top.controlRecommendationIds ==
-                       std::vector<long long>{359, 404, 416, 361, 360} &&
-                top.candidateRecommendationIds ==
-                       std::vector<long long>{416, 404, 418, 417, 410} &&
-                top.retainedRecommendationIds ==
-                       std::vector<long long>{404, 416} &&
-                top.candidateOnlyEntrants ==
-                       std::vector<long long>{410, 417, 418} &&
-                top.controlOnlyExits ==
-                       std::vector<long long>{359, 360, 361};
-        if (top.n == 10)
-            return top.controlRecommendationIds == std::vector<long long>{
-                       359, 404, 416, 361, 360, 406, 405, 378, 410, 418} &&
-                top.candidateRecommendationIds == std::vector<long long>{
-                       416, 404, 418, 417, 410, 406, 405, 359, 407, 411} &&
-                top.retainedRecommendationIds == std::vector<long long>{
-                       359, 404, 405, 406, 410, 416, 418} &&
-                top.candidateOnlyEntrants ==
-                       std::vector<long long>{407, 411, 417} &&
-                top.controlOnlyExits ==
-                       std::vector<long long>{360, 361, 378};
-        if (top.n == 20)
-            return top.controlRecommendationIds == std::vector<long long>{
-                       359, 404, 416, 361, 360, 406, 405, 378, 410, 418,
-                       417, 368, 380, 379, 411, 412, 370, 369, 362, 407} &&
-                top.candidateRecommendationIds == std::vector<long long>{
-                       416, 404, 418, 417, 410, 406, 405, 359, 407, 411,
-                       412, 361, 360, 378, 368, 409, 408, 362, 380, 379} &&
-                top.retainedRecommendationIds == std::vector<long long>{
-                       359, 360, 361, 362, 368, 378, 379, 380, 404, 405,
-                       406, 407, 410, 411, 412, 416, 417, 418} &&
-                top.candidateOnlyEntrants ==
-                       std::vector<long long>{408, 409} &&
-                top.controlOnlyExits ==
-                       std::vector<long long>{369, 370};
-        return false;
+    const auto exactTopN = [&](const CampaignProfitabilityForwardValidationTopN& top) {
+        if ((top.n != 5 && top.n != 10 && top.n != 20) ||
+            top.controlRecommendationIds.size() != static_cast<std::size_t>(top.n) ||
+            top.candidateRecommendationIds.size() != static_cast<std::size_t>(top.n) ||
+            !TaggedHash(top.hash)) return false;
+        return top.retainedRecommendationIds == sortedUnique(
+                   [&] { std::vector<long long> v; for (auto id : top.controlRecommendationIds) if (std::find(top.candidateRecommendationIds.begin(), top.candidateRecommendationIds.end(), id) != top.candidateRecommendationIds.end()) v.push_back(id); return v; }()) &&
+            top.candidateOnlyEntrants == sortedUnique(
+                   [&] { std::vector<long long> v; for (auto id : top.candidateRecommendationIds) if (std::find(top.controlRecommendationIds.begin(), top.controlRecommendationIds.end(), id) == top.controlRecommendationIds.end()) v.push_back(id); return v; }()) &&
+            top.controlOnlyExits == sortedUnique(
+                   [&] { std::vector<long long> v; for (auto id : top.controlRecommendationIds) if (std::find(top.candidateRecommendationIds.begin(), top.candidateRecommendationIds.end(), id) == top.candidateRecommendationIds.end()) v.push_back(id); return v; }());
     };
 
     CampaignProfitabilityProspectiveComparison result;
     result.validationCohortIdentityHash =
         request.validationCohortIdentityHash;
+    result.rankingSnapshotId = request.preparation.rankingSnapshotId;
+    result.sourceEvaluationRunId = request.preparation.sourceEvaluationRunId;
     result.phase11ArtifactSha256 = request.phase11ArtifactSha256;
     result.phase12PreparationArtifactSha256 =
         request.phase12PreparationArtifactSha256;
@@ -1005,57 +986,34 @@ BuildCampaignProfitabilityProspectiveComparison(
             contractFailureReason = reason;
         }
     };
-    if (request.validationCohortIdentityHash !=
-            kPhase12ValidationCohortIdentityHash ||
+    if (!TaggedHash(request.validationCohortIdentityHash) ||
         !request.preparation.artifactIdentityVerified ||
-        request.preparation.jobs.size() != 23 ||
-        recommendationCount != kPhase12MemberCount || duplicateJobModel ||
+        request.preparation.validationCohortIdentityHash != request.validationCohortIdentityHash ||
+        request.preparation.rankingSnapshotId <= 0 || request.preparation.sourceEvaluationRunId <= 0 ||
+        request.preparation.jobs.empty() || recommendationCount == 0 || duplicateJobModel ||
         duplicateRecommendation || request.preparation.topN.size() != 3 ||
+        request.preparation.frozenSourceModelByRecommendation != modelByRecommendation ||
         !std::all_of(request.preparation.topN.begin(),
                      request.preparation.topN.end(), exactTopN) ||
         std::any_of(request.preparation.jobs.begin(),
-                    request.preparation.jobs.end(), [](const auto& job) {
-                        return job.validationCohortIdentityHash !=
-                                kPhase12ValidationCohortIdentityHash ||
-                            job.rankingSnapshotId != kPhase12RankingSnapshotId ||
-                            job.sourceEvaluationRunId !=
-                                kPhase12SourceEvaluationRunId;
+                    request.preparation.jobs.end(), [&](const auto& job) {
+                        return job.validationCohortIdentityHash != request.validationCohortIdentityHash ||
+                            job.rankingSnapshotId != request.preparation.rankingSnapshotId ||
+                            job.sourceEvaluationRunId != request.preparation.sourceEvaluationRunId ||
+                            job.outcomeStart != request.preparation.outcomeStart ||
+                            job.outcomeEnd != request.preparation.outcomeEnd;
                     }))
         failContract(ProspectiveComparisonReadiness::cohortIdentityMismatch,
                      "frozen_cohort_contract_mismatch");
 
-    const std::array<std::pair<long long, long long>, 10>
-        changedRecommendationSources{{
-            {359, 999}, {360, 999}, {361, 999}, {369, 1029}, {370, 1029},
-            {407, 1658}, {408, 1658}, {409, 1658}, {410, 1702},
-            {417, 1660}}};
-    for (const auto& [recommendationId, sourceModelId] :
-         changedRecommendationSources)
-    {
-        const auto found = modelByRecommendation.find(recommendationId);
-        if (found == modelByRecommendation.end() ||
-            found->second != sourceModelId)
-            failContract(ProspectiveComparisonReadiness::cohortIdentityMismatch,
-                         "frozen_changed_source_mapping_mismatch");
-    }
-    const auto recommendation418 = modelByRecommendation.find(418);
-    const auto recommendation411 = modelByRecommendation.find(411);
-    const auto recommendation378 = modelByRecommendation.find(378);
-    if (recommendation418 == modelByRecommendation.end() ||
-        recommendation418->second != 1660 ||
-        recommendation411 == modelByRecommendation.end() ||
-        recommendation411->second != 1702 ||
-        recommendation378 == modelByRecommendation.end() ||
-        recommendation378->second != 1015)
-        failContract(ProspectiveComparisonReadiness::cohortIdentityMismatch,
-                     "frozen_changed_source_mapping_mismatch");
-    if (request.phase11ArtifactSha256 != kPhase12ArtifactSha256 ||
-        request.preparation.artifactSha256 != kPhase12ArtifactSha256 ||
-        request.phase12PreparationArtifactSha256 !=
-            kPhase12PreparationArtifactSha256 ||
-        request.phase12PreparationIdentityHash !=
-            kPhase12PreparationIdentityHash ||
-        request.preparation.hash != kPhase12PreparationIdentityHash)
+    for (const auto& top : request.preparation.topN)
+        for (long long id : top.controlRecommendationIds)
+            if (!modelByRecommendation.contains(id)) failContract(ProspectiveComparisonReadiness::cohortIdentityMismatch, "top_n_recommendation_not_in_frozen_cohort");
+    if (request.phase11ArtifactSha256 != request.preparation.artifactSha256 ||
+        !Sha256(request.phase11ArtifactSha256) || !Sha256(request.phase12PreparationArtifactSha256) ||
+        request.phase12PreparationArtifactSha256 != request.preparation.preparationArtifactSha256 ||
+        !TaggedHash(request.phase12PreparationIdentityHash) ||
+        request.phase12PreparationIdentityHash != request.preparation.hash)
         failContract(ProspectiveComparisonReadiness::artifactIdentityMismatch,
                      "phase11_or_phase12_artifact_identity_mismatch");
     if (request.metricDefinitionCanonical !=
@@ -1063,7 +1021,7 @@ BuildCampaignProfitabilityProspectiveComparison(
         request.metricDefinitionHash !=
             InferenceProfitability::MetricDefinitionHash() ||
         std::any_of(request.preparation.jobs.begin(),
-                    request.preparation.jobs.end(), [](const auto& job) {
+                    request.preparation.jobs.end(), [&](const auto& job) {
                         return job.metricDefinitionCanonical !=
                                 InferenceProfitability::
                                     kMetricDefinitionCanonical ||
@@ -1072,12 +1030,12 @@ BuildCampaignProfitabilityProspectiveComparison(
                     }))
         failContract(ProspectiveComparisonReadiness::metricIdentityMismatch,
                      "profitability_metric_identity_mismatch");
-    if (request.outcomeStart != kPhase12OutcomeStart ||
-        request.outcomeEnd != kPhase12OutcomeEnd ||
+    if (request.outcomeStart != request.preparation.outcomeStart ||
+        request.outcomeEnd != request.preparation.outcomeEnd ||
         std::any_of(request.preparation.jobs.begin(),
-                    request.preparation.jobs.end(), [](const auto& job) {
-                        return job.outcomeStart != kPhase12OutcomeStart ||
-                            job.outcomeEnd != kPhase12OutcomeEnd;
+                    request.preparation.jobs.end(), [&](const auto& job) {
+                        return job.outcomeStart != request.preparation.outcomeStart ||
+                            job.outcomeEnd != request.preparation.outcomeEnd;
                     }))
         failContract(
             ProspectiveComparisonReadiness::outcomeWindowIdentityMismatch,
@@ -1111,17 +1069,16 @@ BuildCampaignProfitabilityProspectiveComparison(
             continue;
         }
         const auto& job = *jobIt->second;
-        if (outcome.validationCohortIdentityHash !=
-                kPhase12ValidationCohortIdentityHash ||
-            outcome.rankingSnapshotId != kPhase12RankingSnapshotId ||
-            outcome.sourceEvaluationRunId != kPhase12SourceEvaluationRunId)
+        if (outcome.validationCohortIdentityHash != request.validationCohortIdentityHash ||
+            outcome.rankingSnapshotId != request.preparation.rankingSnapshotId ||
+            outcome.sourceEvaluationRunId != request.preparation.sourceEvaluationRunId)
         {
             validated.failure =
                 ProspectiveComparisonReadiness::cohortIdentityMismatch;
             validated.reason = "outcome_cohort_identity_mismatch";
         }
-        else if (outcome.outcomeStart != kPhase12OutcomeStart ||
-                 outcome.outcomeEnd != kPhase12OutcomeEnd)
+        else if (outcome.outcomeStart != request.preparation.outcomeStart ||
+                 outcome.outcomeEnd != request.preparation.outcomeEnd)
         {
             validated.failure = ProspectiveComparisonReadiness::
                 outcomeWindowIdentityMismatch;
@@ -1346,7 +1303,7 @@ BuildCampaignProfitabilityProspectiveComparison(
                 }
             }
             if (top.blockingReasons.empty() &&
-                request.currentDate <= kPhase12OutcomeEnd)
+                request.currentDate <= request.preparation.outcomeEnd)
             {
                 top.readiness =
                     ProspectiveComparisonReadiness::pendingOutcomes;

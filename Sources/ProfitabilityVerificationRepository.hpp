@@ -7,6 +7,13 @@
 namespace EA::ProfitabilityVerification
 {
 
+// These resolve only committed files.  They intentionally perform no database
+// access, allowing unknown/tampered cohorts to fail before PostgreSQL opens.
+void VerifyCampaignProfitabilityPhase11Artifact(
+    const std::string& validationCohortIdentityHash);
+void VerifyCampaignProfitabilityPhase12PreparationArtifact(
+    const std::string& validationCohortIdentityHash);
+
 EvidenceResult LoadAndVerifyExactFinalEvidence(
     pqxx::transaction_base& transaction,
     long long experimentId);
@@ -31,15 +38,13 @@ CampaignProfitabilityOutcomePreparation
 LoadCampaignProfitabilityOutcomePreparation(
     pqxx::transaction_base& transaction,
     const std::string& currentDate,
-    const std::string& artifactPath = kPhase12ArtifactPath);
+    const std::string& validationCohortIdentityHash);
 
 CampaignProfitabilityProspectiveComparison
 LoadCampaignProfitabilityProspectiveComparison(
     pqxx::transaction_base& transaction,
     const std::string& currentDate,
-    const std::string& phase11ArtifactPath = kPhase12ArtifactPath,
-    const std::string& phase12PreparationArtifactPath =
-        kPhase12PreparationArtifactPath);
+    const std::string& validationCohortIdentityHash);
 
 CampaignProfitabilityOutcomeJob LoadCampaignProfitabilityOutcomeExecutionJob(
     pqxx::transaction_base& transaction,
@@ -49,8 +54,7 @@ CampaignProfitabilityOutcomeJob LoadCampaignProfitabilityOutcomeExecutionJob(
     const std::string& outcomeStart,
     const std::string& outcomeEnd,
     const std::string& jobHash,
-    const std::string& currentDate,
-    const std::string& artifactPath = kPhase12ArtifactPath);
+    const std::string& currentDate);
 
 CampaignProfitabilityOutcomePersistResult
 PersistCampaignProfitabilityOutcomeIdempotently(

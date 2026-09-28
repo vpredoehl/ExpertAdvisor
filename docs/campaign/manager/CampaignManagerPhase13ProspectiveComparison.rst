@@ -124,6 +124,20 @@ provenance correction.  Model 499 is lower-ranked and is absent from all three
 changed-selection source sets, so it limits full-cohort coverage without
 blocking Top-5, Top-10, or Top-20.
 
+Immutable cohort resolution
+---------------------------
+
+Phase 12 resolves its requested cohort only through
+``docs/archive/phase11/forward-validation/registry.tsv``.  The registry binds
+the cohort hash to one committed artifact path and SHA-256; an unknown or
+duplicate registration, missing file, SHA mismatch, malformed record, or a
+cohort mismatch fails closed.  Phase 13 independently resolves the matching
+Phase-12 artifact through ``docs/archive/phase12/prospective-outcome/registry.tsv``
+and requires it to bind to the same Phase-11 SHA.  No directory scan or current
+database state can select an artifact.  Snapshot 5 remains the initial
+registered fixture; registering another cohort requires its exact Phase-11
+command output bytes and computed SHA-256.
+
 Post-window procedure
 ---------------------
 

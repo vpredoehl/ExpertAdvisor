@@ -49,7 +49,7 @@ if LSTM_DB_HOST="${db_host}" LSTM_DB_NAME="${db_name}" \
     echo "expected cohort hash mismatch rejection" >&2
     exit 1
 fi
-grep -q 'phase12_validation_cohort_hash_mismatch' "${tmp_dir}/bad-cohort.err"
+grep -q 'profitability_artifact_registry_cohort_unregistered' "${tmp_dir}/bad-cohort.err"
 
 job_line="$(grep '^CAMPAIGN_PROFITABILITY_OUTCOME_JOB,' "${tmp_dir}/first.txt" | \
     grep 'compatibility_state=compatible,' | head -1)"

@@ -512,7 +512,16 @@ struct CampaignProfitabilityOutcomePreparation
 {
     std::string artifactPath;
     std::string artifactSha256;
+    std::string preparationArtifactSha256;
     bool artifactIdentityVerified = false;
+    // These are copied from the verified Phase-11 artifact.  They are not
+    // policy defaults: every Phase-12/13 consumer binds to these values.
+    std::string validationCohortIdentityHash;
+    long long rankingSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
+    std::string outcomeStart;
+    std::string outcomeEnd;
+    std::map<long long, long long> frozenSourceModelByRecommendation;
     std::string currentDate;
     std::vector<CampaignProfitabilityOutcomeJob> jobs;
     std::vector<CampaignProfitabilityForwardValidationTopN> topN;
@@ -657,6 +666,8 @@ struct CampaignProfitabilityProspectiveComparison
 {
     int protocolVersion = 1;
     std::string validationCohortIdentityHash;
+    long long rankingSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
     std::string phase11ArtifactSha256;
     std::string phase12PreparationArtifactSha256;
     std::string phase12PreparationIdentityHash;
