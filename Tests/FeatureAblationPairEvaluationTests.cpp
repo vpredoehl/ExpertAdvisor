@@ -258,6 +258,31 @@ int main()
     assert(fibonacciComparable.canonicalAblatedFeatureSet ==
            EA::kCausalFibonacciStructuralAblationMaskText);
 
+    const auto fibonacciWildcardComparable = EvaluatePair(
+        fibonacciControl, fibonacciAblation, "fibonacci.*");
+    assert(fibonacciWildcardComparable.disposition ==
+           Feature::Disposition::ComparableComplete);
+    assert(fibonacciWildcardComparable.canonicalAblatedFeatureSet ==
+           EA::kCausalFibonacciStructuralAblationMaskText);
+
+    // The persisted concrete mask remains unavailable to layout 8 even when
+    // an offline pair-evaluation caller supplies the historical flat names.
+    // Evaluation must use each arm's authoritative layout, not Parse's
+    // current-layout convenience default.
+    auto unavailableFibonacciControl = fibonacciControl;
+    auto unavailableFibonacciAblation = fibonacciAblation;
+    unavailableFibonacciControl.authoritative.configuration
+        .modelInputLayoutVersion = 8;
+    unavailableFibonacciAblation.authoritative.configuration
+        .modelInputLayoutVersion = 8;
+    const auto unavailableFibonacci = EvaluatePair(
+        unavailableFibonacciControl, unavailableFibonacciAblation,
+        EA::kCausalFibonacciStructuralAblationMaskText);
+    assert(unavailableFibonacci.disposition ==
+           Feature::Disposition::InvalidAblationPair);
+    assert(Has(unavailableFibonacci.invalidReasons,
+               "feature_ablation_mask_invalid"));
+
     // The Fibonacci intervention is the complete, concrete layout-9 mask;
     // it is not satisfied by a subset or by an adjacent extra channel.
     auto missingFibonacciChannel = fibonacciAblation;

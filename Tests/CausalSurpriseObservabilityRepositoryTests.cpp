@@ -65,7 +65,10 @@ INSERT INTO experiment VALUES
 (500,'eurusdrmp',4,'2010-01-01','2025-01-01',NULL,NULL,
  75,5,'zero_ablation','legacy_cold_boundary',30,''),
 (501,'eurusdrmp',4,'2010-01-01','2025-01-01',NULL,NULL,
- NULL,NULL,'enabled','legacy_cold_boundary',20,'');
+ NULL,NULL,'enabled','legacy_cold_boundary',20,''),
+(621,'eurusdrmp',4,'2010-01-01','2025-01-01',NULL,NULL,
+ 80,8,'enabled','full_history_warmup',20,
+ 'fib_up_recent_h1_count_log');
 )SQL");
         write.commit();
     }
@@ -96,6 +99,19 @@ INSERT INTO experiment VALUES
             Observability::LoadExperimentContext(read, 501);
         assert(!preIdentity.modelInputWidth);
         assert(!preIdentity.modelInputSemanticLayoutVersion);
+
+        bool unavailableChannelFailedClosed = false;
+        try
+        {
+            (void)Observability::LoadExperimentContext(read, 621);
+        }
+        catch (const std::invalid_argument& error)
+        {
+            unavailableChannelFailedClosed = std::string{error.what()}.find(
+                "FEATURE_ABLATION_MASK_FEATURE_UNAVAILABLE_IN_SEMANTIC_LAYOUT") !=
+                std::string::npos;
+        }
+        assert(unavailableChannelFailedClosed);
 
         bool unknownFailedClosed = false;
         try

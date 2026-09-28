@@ -26,6 +26,11 @@ experiments. For example, the configuration ID
 `fibonacci.up.recent.h1_count_log` resolves to the persisted channel name
 `fib_up_recent_h1_count_log`.
 
+The catalog validates its lookup namespace before use. Duplicate family IDs,
+duplicate Tensor columns, an unknown channel family, and collisions between a
+hierarchical ID and any persisted flat ID reject explicitly rather than relying
+on declaration order.
+
 The layout-9 Fibonacci producer is an immutable legacy composition over the
 pre-existing TG1/TG3 research primitives. Its current implementation is not a
 new independent Fibonacci detector, and this phase does not refactor it: doing
@@ -71,6 +76,11 @@ canonical positions but do not change `model_input_width` or
 experiment's semantic layout, so a layout-8 experiment cannot be given a
 layout-9 Fibonacci mask. Training and every inference route use the same
 `FeatureAblationMask` and `CopyTensorFeaturesForModelInput` implementation.
+When a persisted experiment has an explicit semantic-layout identity,
+scheduler admission and model materialization revalidate the concrete mask
+against that stored layout. The intentional legacy NULL/NULL identity retains
+only its historical concrete-mask compatibility; it is not a wildcard
+fallback.
 
 At new-experiment materialization the scheduler emits one bounded diagnostic:
 

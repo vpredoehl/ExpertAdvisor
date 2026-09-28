@@ -280,8 +280,10 @@ void TestWarmupDenominatorAndIdentity()
     assert(result.warmupRowCount == 1);
     assert(result.coverage.totalFeatureRows == 2);
     assert(result.coverage.surpriseAvailableCount == 1);
-    assert(result.experiment.modelInputWidth == 80);
-    assert(result.experiment.modelInputSemanticLayoutVersion == 8);
+    assert(result.experiment.modelInputWidth == static_cast<int>(
+        EA::kCurrentModelInputWidth));
+    assert(result.experiment.modelInputSemanticLayoutVersion ==
+           EA::kModelInputSemanticLayoutVersion);
     assert(!result.upstreamFeatureIdentity.empty());
     assert(!result.coverageIdentity.empty());
     assert(!result.diagnosticIdentity.empty());

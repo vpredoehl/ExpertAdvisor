@@ -398,10 +398,10 @@ int RunComparisonCommand(const std::string& connectionString,
         ? command.experimentIds.first : command.experimentIds.second;
     try
     {
-        const std::string expectedMask = FeatureAblationMask::Parse(
-            command.expectedAblationMask.value_or(
-                std::string{kEconomicEventConsensusAblationMaskText}))
-                .CanonicalText();
+        const std::string expectedMask = command.expectedAblationMask
+            ? FeatureAblationMask::CanonicalizeRequestedExpression(
+                  *command.expectedAblationMask)
+            : std::string{kEconomicEventConsensusAblationMaskText};
         if (command.expectedAblationMask && expectedMask.empty())
             throw std::invalid_argument(
                 "--expected-ablation-mask must not be empty");

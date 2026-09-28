@@ -1588,8 +1588,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareExperimentPairSummary = true;
         else if (arg == "--expected-ablation-mask")
             options.expectedFeatureAblationMask =
-                EA::FeatureAblationMask::Parse(
-                    RequireNextArg(argc, argv, i, arg)).CanonicalText();
+                EA::FeatureAblationMask::CanonicalizeRequestedExpression(
+                    RequireNextArg(argc, argv, i, arg));
         else if (arg == "--compare-feature-ablation-replications")
             options.compareFeatureAblationReplications =
                 EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
@@ -3453,7 +3453,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (SplitOptionWithValue(
                      arg, "--expected-ablation-mask", value))
             options.expectedFeatureAblationMask =
-                EA::FeatureAblationMask::Parse(value).CanonicalText();
+                EA::FeatureAblationMask::CanonicalizeRequestedExpression(value);
         else if (SplitOptionWithValue(
                      arg, "--compare-feature-ablation-replications", value))
             options.compareFeatureAblationReplications =

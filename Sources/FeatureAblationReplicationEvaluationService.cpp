@@ -341,8 +341,8 @@ ReplicationEvaluation EvaluateComparison(
                                      command.expectedAblationMask));
     EvidenceScope evidenceScope = EvidenceScope::GenericFeatureAblation;
     if (command.expectedAblationMask &&
-        EA::FeatureAblationMask::Parse(*command.expectedAblationMask)
-                .CanonicalText() ==
+        EA::FeatureAblationMask::CanonicalizeRequestedExpression(
+            *command.expectedAblationMask) ==
             EA::kCausalEconomicEventSurpriseAblationMaskText)
         evidenceScope = EvidenceScope::CorrectedCausalSurprise;
     return Evaluate(

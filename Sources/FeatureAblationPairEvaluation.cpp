@@ -466,11 +466,15 @@ bool ValidateAblationIdentity(const ScientificConfiguration& control,
     try
     {
         const FeatureAblationMask controlMask =
-            FeatureAblationMask::Parse(control.featureAblationMask);
+            FeatureAblationMask::ParseForSemanticLayout(
+                control.featureAblationMask, control.modelInputLayoutVersion);
         const FeatureAblationMask ablationMask =
-            FeatureAblationMask::Parse(ablation.featureAblationMask);
-        const FeatureAblationMask expected = FeatureAblationMask::Parse(
-            std::string(expectedAblationMask));
+            FeatureAblationMask::ParseForSemanticLayout(
+                ablation.featureAblationMask, ablation.modelInputLayoutVersion);
+        const FeatureAblationMask expected =
+            FeatureAblationMask::ParseForSemanticLayout(
+                std::string(expectedAblationMask),
+                ablation.modelInputLayoutVersion);
         const std::string controlCanonical = controlMask.CanonicalText();
         const std::string ablationCanonical = ablationMask.CanonicalText();
         const std::string expectedCanonical = expected.CanonicalText();

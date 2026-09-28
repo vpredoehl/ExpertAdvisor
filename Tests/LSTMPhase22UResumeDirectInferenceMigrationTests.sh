@@ -14,5 +14,9 @@ rg -U -q 'if \(selectedModelMaterialization\.has_value\(\)\)[\s\S]{0,700}ApplyPe
 rg -q 'PrintMaterializedModelConfigValidation\(' "${main_file}"
 rg -q 'const DBIO::PgModelIO::PersistedModelMaterialization\*' "${main_file}"
 rg -q 'The applier deliberately accepts no transaction or connection' "${io_file}"
+# A model-backed experiment's mask is decoded against its immutable semantic
+# layout; only the migration-089 NULL/NULL legacy state may use historical
+# concrete-mask compatibility.
+rg -U -q 'e\.feature_ablation_mask,e\.model_input_semantic_layout_version[\s\S]{0,1800}ParseForSemanticLayout' "${io_file}"
 
 printf '%s\n' 'LSTMPhase22UResumeDirectInferenceMigrationTests passed'

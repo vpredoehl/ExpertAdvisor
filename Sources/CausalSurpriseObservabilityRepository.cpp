@@ -64,8 +64,6 @@ ExperimentContext LoadExperimentContext(
         row["feature_warmup_scope"].as<std::string>());
     context.donchianLookback = ParseDonchianLookback(
         row["donchian_lookback"].as<std::string>());
-    context.featureAblationMask = FeatureAblationMask::Parse(
-        row["feature_ablation_mask"].as<std::string>()).CanonicalText();
 
     if (context.modelInputWidth.has_value() !=
         context.modelInputSemanticLayoutVersion.has_value())
@@ -83,6 +81,12 @@ ExperimentContext LoadExperimentContext(
             *context.modelInputSemanticLayoutVersion,
             static_cast<std::size_t>(*context.modelInputWidth));
     }
+    context.featureAblationMask = context.modelInputSemanticLayoutVersion
+        ? FeatureAblationMask::ParseForSemanticLayout(
+              row["feature_ablation_mask"].as<std::string>(),
+              *context.modelInputSemanticLayoutVersion).CanonicalText()
+        : FeatureAblationMask::Parse(
+              row["feature_ablation_mask"].as<std::string>()).CanonicalText();
     (void)ResolveRanges(context, Scope::train);
     return context;
 }

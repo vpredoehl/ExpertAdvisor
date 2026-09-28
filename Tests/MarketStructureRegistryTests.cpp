@@ -61,6 +61,40 @@ void TestRegistryAndHierarchicalResolution()
     assert(tg.resolvedMask.tensorColumns().size() == 3);
 }
 
+void TestRegistryValidationFailsClosed()
+{
+    using EA::MarketStructure::Channel;
+    using EA::MarketStructure::Family;
+    using EA::MarketStructure::ValidateCatalog;
+
+    const std::array<Family, 1> families{{
+        {"family", 1, "detector-v1", "available-at"},
+    }};
+    const std::array<Channel, 2> validChannels{{
+        {"family.one", "legacy_one", "family", 10, 1},
+        {"family.two", "legacy_two", "family", 11, 1},
+    }};
+    ValidateCatalog(families, validChannels);
+
+    auto duplicateColumn = validChannels;
+    duplicateColumn[1].tensorColumn = duplicateColumn[0].tensorColumn;
+    assert(ThrowsInvalidArgument([&] {
+        ValidateCatalog(families, duplicateColumn);
+    }));
+
+    auto ambiguousIdentity = validChannels;
+    ambiguousIdentity[1].persistedFeatureId = ambiguousIdentity[0].featureId;
+    assert(ThrowsInvalidArgument([&] {
+        ValidateCatalog(families, ambiguousIdentity);
+    }));
+
+    auto unknownFamily = validChannels;
+    unknownFamily[1].familyId = "missing";
+    assert(ThrowsInvalidArgument([&] {
+        ValidateCatalog(families, unknownFamily);
+    }));
+}
+
 void TestCanonicalAndHistoricalResolutionStability()
 {
     using EA::FeatureAblationMask;
@@ -198,6 +232,7 @@ void TestCausalObservationAndConfluenceIndependence()
 int main()
 {
     TestRegistryAndHierarchicalResolution();
+    TestRegistryValidationFailsClosed();
     TestCanonicalAndHistoricalResolutionStability();
     TestLayoutAndFixedWidthParity();
     TestWildcardRequestIsDeferredUntilSemanticLayoutSelection();

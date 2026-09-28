@@ -1013,7 +1013,8 @@ public:
         PersistedModelMaterialization result;
         const pqxx::result identityRows = transaction.exec_params(
             "SELECT m.model_id,COALESCE(m.name,''),m.experiment_id,m.parent_model_id,"
-            "e.feature_ablation_mask,m.economic_calendar_snapshot_id,"
+            "e.feature_ablation_mask,e.model_input_semantic_layout_version,"
+            "m.economic_calendar_snapshot_id,"
             "m.economic_calendar_snapshot_hash,"
             "e.economic_calendar_snapshot_id,e.economic_calendar_snapshot_hash,"
             "e.training_objective_canonical,e.training_objective_hash "
@@ -1036,33 +1037,38 @@ public:
             if (identityRow[4].is_null())
                 throw std::runtime_error(
                     "model_experiment_lineage_missing_feature_ablation_mask");
-            result.identity.featureAblationMask = EA::FeatureAblationMask::Parse(
-                identityRow[4].as<std::string>());
+            // The NULL layout is migration 089's deliberate legacy state.
+            // It retains historical concrete-mask compatibility; modern
+            // persisted models must validate against their stored layout.
+            result.identity.featureAblationMask = identityRow[5].is_null()
+                ? EA::FeatureAblationMask::Parse(identityRow[4].as<std::string>())
+                : EA::FeatureAblationMask::ParseForSemanticLayout(
+                    identityRow[4].as<std::string>(), identityRow[5].as<int>());
             result.identity.featureAblationCanonicalText =
                 result.identity.featureAblationMask.CanonicalText();
         }
         if (options.afterStage) options.afterStage("materialization_identity_decoded");
 
-        const bool modelCalendarNull = identityRow[5].is_null() &&
-            identityRow[6].is_null();
-        const bool experimentCalendarNull = identityRow[7].is_null() &&
-            identityRow[8].is_null();
-        if (identityRow[5].is_null() != identityRow[6].is_null() ||
-            identityRow[7].is_null() != identityRow[8].is_null())
+        const bool modelCalendarNull = identityRow[6].is_null() &&
+            identityRow[7].is_null();
+        const bool experimentCalendarNull = identityRow[8].is_null() &&
+            identityRow[9].is_null();
+        if (identityRow[6].is_null() != identityRow[7].is_null() ||
+            identityRow[8].is_null() != identityRow[9].is_null())
             throw std::runtime_error(
                 "economic_calendar_snapshot_identity_incomplete");
         if (modelCalendarNull != experimentCalendarNull ||
             (!modelCalendarNull &&
-             (identityRow[5].as<long long>() != identityRow[7].as<long long>() ||
-              identityRow[6].as<std::string>() != identityRow[8].as<std::string>())))
+             (identityRow[6].as<long long>() != identityRow[8].as<long long>() ||
+              identityRow[7].as<std::string>() != identityRow[9].as<std::string>())))
             throw std::runtime_error(
                 "model_experiment_economic_calendar_snapshot_mismatch");
         if (!modelCalendarNull)
         {
             result.identity.economicCalendarSnapshotId =
-                identityRow[5].as<long long>();
+                identityRow[6].as<long long>();
             result.identity.economicCalendarSnapshotHash =
-                identityRow[6].as<std::string>();
+                identityRow[7].as<std::string>();
             const pqxx::result snapshot = transaction.exec_params(
                 "SELECT 1 FROM economic_calendar_snapshot WHERE "
                 "economic_calendar_snapshot_id=$1 AND content_hash=$2 "
@@ -1089,14 +1095,14 @@ public:
 
         if (result.identity.experimentId.has_value())
         {
-            if (identityRow[9].is_null() != identityRow[10].is_null())
+            if (identityRow[10].is_null() != identityRow[11].is_null())
                 throw std::runtime_error(
                     "experiment_training_objective_identity_incomplete");
-            if (!identityRow[9].is_null())
+            if (!identityRow[10].is_null())
                 result.experimentTrainingObjective =
                     EA::TrainingObjective::ResolvePersisted(
-                        identityRow[9].as<std::string>(),
-                        identityRow[10].as<std::string>());
+                        identityRow[10].as<std::string>(),
+                        identityRow[11].as<std::string>());
         }
 
         result.modelMeta = loadRequiredModelMeta(transaction, modelId);

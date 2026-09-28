@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <stdexcept>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -128,8 +129,69 @@ inline constexpr std::array<Channel, 26> kChannels{{
      fibDownRecentMedianPullback0618Col, 9},
 }};
 
+// Keep catalog validation separate from lookup so focused tests can exercise
+// malformed future catalogs without modifying the production registry.  The
+// lookup namespace is deliberately shared by hierarchical and historical
+// persisted names: a collision between either form would make identity
+// resolution ambiguous and must never depend on declaration order.
+inline void ValidateCatalog(std::span<const Family> families,
+                            std::span<const Channel> channels)
+{
+    for (std::size_t left = 0; left < families.size(); ++left)
+    {
+        const Family& family = families[left];
+        if (family.id.empty() || family.detectorVersion.empty() ||
+            family.causalAvailability.empty())
+        {
+            throw std::invalid_argument("MARKET_STRUCTURE_FAMILY_INVALID");
+        }
+        for (std::size_t right = left + 1; right < families.size(); ++right)
+        {
+            if (family.id == families[right].id)
+                throw std::invalid_argument("MARKET_STRUCTURE_DUPLICATE_FAMILY");
+        }
+    }
+
+    for (std::size_t left = 0; left < channels.size(); ++left)
+    {
+        const Channel& channel = channels[left];
+        if (channel.featureId.empty() || channel.persistedFeatureId.empty() ||
+            channel.familyId.empty() || channel.introducedSemanticLayout <= 0)
+        {
+            throw std::invalid_argument("MARKET_STRUCTURE_CHANNEL_INVALID");
+        }
+        const bool familyExists = std::any_of(
+            families.begin(), families.end(), [&channel](const Family& family) {
+                return family.id == channel.familyId;
+            });
+        if (!familyExists)
+            throw std::invalid_argument("MARKET_STRUCTURE_CHANNEL_UNKNOWN_FAMILY");
+
+        for (std::size_t right = left + 1; right < channels.size(); ++right)
+        {
+            const Channel& other = channels[right];
+            if (channel.tensorColumn == other.tensorColumn)
+                throw std::invalid_argument("MARKET_STRUCTURE_DUPLICATE_TENSOR_COLUMN");
+            if (channel.featureId == other.featureId ||
+                channel.persistedFeatureId == other.persistedFeatureId ||
+                channel.featureId == other.persistedFeatureId ||
+                channel.persistedFeatureId == other.featureId)
+            {
+                throw std::invalid_argument(
+                    "MARKET_STRUCTURE_AMBIGUOUS_CHANNEL_IDENTITY");
+            }
+        }
+    }
+}
+
+inline void ValidateRegistry()
+{
+    ValidateCatalog(kFamilies, kChannels);
+}
+
 inline const Channel* FindChannel(std::string_view id)
 {
+    ValidateRegistry();
     const auto found = std::find_if(kChannels.begin(), kChannels.end(),
         [id](const Channel& channel) {
             return channel.featureId == id || channel.persistedFeatureId == id;
@@ -139,6 +201,7 @@ inline const Channel* FindChannel(std::string_view id)
 
 inline const Family* FindFamily(std::string_view id)
 {
+    ValidateRegistry();
     const auto found = std::find_if(kFamilies.begin(), kFamilies.end(),
         [id](const Family& family) { return family.id == id; });
     return found == kFamilies.end() ? nullptr : &*found;
@@ -157,6 +220,7 @@ inline bool ChannelAvailableForSemanticLayout(const Channel& channel,
 inline std::vector<const Channel*> ResolvePrefix(std::string_view prefix,
                                                   int semanticLayoutVersion = 9)
 {
+    ValidateRegistry();
     std::vector<const Channel*> result;
     const std::string prefixWithSeparator = std::string{prefix} + ".";
     for (const Channel& channel : kChannels)
@@ -173,6 +237,7 @@ inline std::vector<const Channel*> ResolvePrefix(std::string_view prefix,
 inline std::vector<std::string_view> RegisteredFamilyIdsForSemanticLayout(
     int semanticLayoutVersion)
 {
+    ValidateRegistry();
     std::vector<std::string_view> result;
     for (const Family& family : kFamilies)
     {

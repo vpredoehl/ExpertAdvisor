@@ -265,7 +265,8 @@ bool ModelExists(pqxx::work& w, long long modelId)
 std::string LoadModelFeatureAblationMask(pqxx::work& w, long long modelId)
 {
     const pqxx::result rows = w.exec_params(
-        "SELECT m.experiment_id,e.feature_ablation_mask FROM model m "
+        "SELECT m.experiment_id,e.feature_ablation_mask,"
+        "e.model_input_semantic_layout_version FROM model m "
         "LEFT JOIN experiment e ON e.experiment_id=m.experiment_id "
         "WHERE m.model_id=$1;",
         modelId);
@@ -276,7 +277,14 @@ std::string LoadModelFeatureAblationMask(pqxx::work& w, long long modelId)
     if (rows[0][0].is_null()) return {};
     if (rows[0][1].is_null())
         throw std::runtime_error("resume_model_feature_ablation_lineage_missing");
-    return EA::FeatureAblationMask::Parse(rows[0][1].as<std::string>()).CanonicalText();
+    // NULL/NULL is the explicit legacy semantic-identity state retained by
+    // migration 089.  It can only carry historical concrete masks; every
+    // layout-bearing experiment must validate against its own layout.
+    if (rows[0][2].is_null())
+        return EA::FeatureAblationMask::Parse(
+            rows[0][1].as<std::string>()).CanonicalText();
+    return EA::FeatureAblationMask::ParseForSemanticLayout(
+        rows[0][1].as<std::string>(), rows[0][2].as<int>()).CanonicalText();
 }
 
 std::string DateOnly(const std::string& value)
@@ -1941,8 +1949,16 @@ EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
             return {false, "semantic_worker_training_capability_identity_unavailable"};
         try
         {
-            *canonicalFeatureAblationMask = EA::FeatureAblationMask::Parse(
-                rows[0][4].as<std::string>()).CanonicalText();
+            // Training worker capability and launch identity must use the
+            // experiment's persisted layout, never FeatureAblationMask's
+            // current-layout convenience default.
+            if (!persisted.layoutVersion.has_value())
+                return {false,
+                        "semantic_worker_training_capability_layout_unavailable"};
+            *canonicalFeatureAblationMask =
+                EA::FeatureAblationMask::ParseForSemanticLayout(
+                    rows[0][4].as<std::string>(),
+                    *persisted.layoutVersion).CanonicalText();
         }
         catch (const std::exception&)
         {

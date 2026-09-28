@@ -16,6 +16,7 @@ rg -U -q 'registry\.selectTrainingReferenceWorker\([\s\S]{0,120}persisted' "${se
 # used to build the command before any child can be spawned.
 test "$(rg -c 'LoadTrainingWorkerSelection\(' "${daemon}")" -ge 4
 rg -U -q 'LoadSemanticWorkerAdmission\([\s\S]{0,700}feature_ablation_mask[\s\S]{0,1000}canonicalFeatureAblationMask' "${daemon}"
+rg -U -q 'ParseForSemanticLayout\([\s\S]{0,300}\*persisted\.layoutVersion' "${daemon}"
 rg -U -q 'LoadTrainingWorkerSelection[\s\S]{0,900}expectedFeatureAblationMask[\s\S]{0,1000}semantic_worker_training_capability_identity_mismatch[\s\S]{0,500}RequiredTrainingWorkerCapabilities[\s\S]{0,900}SelectTrainingWorker' "${daemon}"
 rg -U -q 'SemanticWorkerPreflight\([\s\S]{0,1800}phase == "train"[\s\S]{0,400}LoadTrainingWorkerSelection[\s\S]{0,700}validateRuntimeForExecutable\(executable\)' "${daemon}"
 rg -U -q 'ReserveExperimentWorkerAttempt\([\s\S]{0,1800}phase == "train"[\s\S]{0,500}LoadTrainingWorkerSelection\([\s\S]{0,300}&experiment\.featureAblationMask[\s\S]{0,1400}validateRuntimeForExecutable\(selectedWorkerExecutable\)[\s\S]{0,1400}findByCanonicalExecutable\(selectedWorkerExecutable\)' "${daemon}"
