@@ -629,9 +629,11 @@ public:
     ImmutableArtifactWriter(const ImmutableArtifactWriter&) = delete;
 
     void Publish(const RunConfiguration& configuration, std::string_view provenance,
-        const std::vector<EvaluatedObservation>& records)
+        const std::vector<EvaluatedObservation>& records,
+        std::string_view configurationText = CanonicalConfigurationText(),
+        std::string_view artifactSchema = {})
     {
-        Write("configuration.conf", CanonicalConfigurationText());
+        Write("configuration.conf", configurationText);
         Write("observations.csv", ObservationsCsv(records));
         Write("aggregates.csv", AggregatesCsv(configuration, records));
         const std::string configurationHash = FileSha256(staging_ / "configuration.conf");
@@ -642,14 +644,21 @@ public:
             "\ndetector_baseline=" + configuration.detectorBaseline + "\nconfiguration_sha256=" + configuration.configurationSha256 +
             "\nconfiguration_file_sha256=" + configurationHash + "\nobservations_sha256=" + observationsHash +
             "\naggregates_sha256=" + aggregatesHash +
+            (artifactSchema.empty() ? "" : "\nartifact_schema=" + std::string(artifactSchema)) +
             "\nprovenance=" + std::string(provenance) + "\n";
         Write("manifest.txt", manifest);
-        VerifyDirectory(staging_);
+        VerifyDirectoryContract(staging_, configuration, configurationText, artifactSchema);
         std::filesystem::rename(staging_, target_);
         published_ = true;
     }
 
     static void VerifyDirectory(const std::filesystem::path& directory)
+    {
+        VerifyDirectoryContract(directory, FrozenConfiguration(), CanonicalConfigurationText());
+    }
+    static void VerifyDirectoryContract(const std::filesystem::path& directory,
+        const RunConfiguration& expected, std::string_view configurationText,
+        std::string_view artifactSchema = {})
     {
         if (!std::filesystem::is_directory(directory)) throw std::invalid_argument("POCKET_ARTIFACT_DIRECTORY_MISSING");
         const std::string manifest = ReadTextFile(directory / "manifest.txt");
@@ -658,14 +667,15 @@ public:
             const auto start = manifest.find(prefix); if (start == std::string::npos) throw std::invalid_argument("POCKET_MANIFEST_FIELD_MISSING");
             const auto end = manifest.find('\n', start); return manifest.substr(start + prefix.size(), end - start - prefix.size());
         };
-        if (field("study") != kStudyId || field("protocol") != kProtocolId || field("detector") != kDetectorId ||
-            field("protocol_document_sha256") != kProtocolDocumentSha256 ||
+        if (field("study") != expected.study || field("protocol") != expected.protocol || field("detector") != expected.detector ||
+            field("protocol_document_sha256") != expected.protocolDocumentSha256 ||
             field("configuration_file_sha256") != FileSha256(directory / "configuration.conf") ||
             field("observations_sha256") != FileSha256(directory / "observations.csv") ||
             field("aggregates_sha256") != FileSha256(directory / "aggregates.csv"))
             throw std::invalid_argument("POCKET_ARTIFACT_TAMPER_OR_INCOMPLETE");
-        const RunConfiguration config = LoadAndValidateConfiguration(directory / "configuration.conf");
-        if (field("configuration_sha256") != config.configurationSha256)
+        if (ReadTextFile(directory / "configuration.conf") != configurationText ||
+            field("configuration_sha256") != expected.configurationSha256 ||
+            (!artifactSchema.empty() && field("artifact_schema") != artifactSchema))
             throw std::invalid_argument("POCKET_ARTIFACT_CONFIGURATION_MISMATCH");
     }
 private:

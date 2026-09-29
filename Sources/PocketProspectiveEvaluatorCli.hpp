@@ -79,11 +79,11 @@ inline std::int64_t ParseTimestamp(const std::string& source)
 
 template <typename Transaction>
 inline std::string ReadOnlyBarsStreamQuery(Transaction& transaction,
-    const SymbolSource& source)
+    const SymbolSource& source, std::int64_t resolutionEnd = kPreconfirmationEnd)
 {
     // This finite upper bound is the firewall.  No preconfirmation command
     // constructs a query that can request a 2025 confirmation/outcome bar.
-    const auto end = PriceTP{std::chrono::seconds{kPreconfirmationEnd}};
+    const auto end = PriceTP{std::chrono::seconds{resolutionEnd}};
     // pqxx::stream wraps this SELECT in COPY (...).  It must therefore remain
     // a query expression, with no terminating statement semicolon.
     return CanonicalMarketData::CanonicalFullHistoryThroughCandlestickCte(
@@ -93,9 +93,9 @@ inline std::string ReadOnlyBarsStreamQuery(Transaction& transaction,
 }
 
 inline std::vector<CompletedBar> ReadOnlyBars(pqxx::read_transaction& transaction,
-    const SymbolSource& source)
+    const SymbolSource& source, std::int64_t resolutionEnd)
 {
-    const std::string query = ReadOnlyBarsStreamQuery(transaction, source);
+    const std::string query = ReadOnlyBarsStreamQuery(transaction, source, resolutionEnd);
     std::vector<CompletedBar> bars;
     auto stream = transaction.stream<std::string, double, double, double, double>(query);
     for (const auto& [timestamp, open, high, low, close] : stream)
@@ -109,6 +109,43 @@ inline std::string DatabaseIdentity(pqxx::read_transaction& transaction)
     const std::string identity = row[0].as<std::string>() + ":postgresql:" + row[1].as<std::string>();
     if (identity.empty()) throw std::invalid_argument("POCKET_SOURCE_PROVENANCE_MISSING");
     return identity;
+}
+
+inline int ExecuteFrozenStudy(const RunConfiguration& configuration,
+    std::string_view configurationText, std::string_view artifactSchema,
+    const Options& options, std::string_view statusPrefix)
+{
+    VerifyFrozenProtocolDocument();
+    if (std::filesystem::exists(options.output)) throw std::invalid_argument("POCKET_OUTPUT_TARGET_EXISTS_OR_EMPTY");
+    pqxx::connection connection(options.connection.value_or(DefaultConnection()));
+    pqxx::read_transaction transaction(connection);
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+    const std::string database = DatabaseIdentity(transaction);
+    std::vector<EvaluatedObservation> records; std::vector<SourceAudit> audits;
+    std::vector<std::pair<SymbolSource, std::vector<CompletedBar>>> preparedSources;
+    for (const SymbolSource& source : configuration.symbols) {
+        std::vector<CompletedBar> bars=ReadOnlyBars(transaction,source,configuration.resolutionEnd);
+        audits.push_back(PreflightCompletedBars(configuration,source.symbol,source.table,database,bars));
+        bool warmupFound=false;
+        for(std::size_t i=configuration.warmupBars;i<bars.size();++i) if(bars[i].timestamp>=configuration.partitions.front().start) {
+            warmupFound=true; for(std::size_t p=i-configuration.warmupBars+1;p<i;++p)
+                if(bars[p].timestamp-bars[p-1].timestamp!=configuration.cadenceSeconds) throw std::invalid_argument("POCKET_INSUFFICIENT_OR_DISCONTINUOUS_WARMUP");
+            break;
+        }
+        if(!warmupFound) throw std::invalid_argument("POCKET_INSUFFICIENT_WARMUP");
+        preparedSources.emplace_back(source,std::move(bars));
+    }
+    transaction.commit();
+    std::cout<<statusPrefix<<"_PREFLIGHT study="<<configuration.study<<",configuration_sha256="<<configuration.configurationSha256
+             <<",protocol="<<configuration.protocol<<",detector="<<configuration.detector<<",source_end_exclusive="<<configuration.resolutionEnd
+             <<",output="<<options.output.string()<<",outcome_blind="<<(options.validateOnly?"true":"false")<<'\n';
+    if(options.validateOnly) return 0;
+    for(const auto& [source,bars]:preparedSources){auto rows=ReplayCausallyAndLabelBounded(configuration,source.symbol,bars);records.insert(records.end(),std::make_move_iterator(rows.begin()),std::make_move_iterator(rows.end()));}
+    std::sort(records.begin(),records.end(),[](const auto& a,const auto& b){return a.identity<b.identity;});
+    std::ostringstream provenance; provenance<<"git="<<options.gitCommit<<";executable_sha256="<<options.executableIdentity<<";database="<<database<<";read_only=true;isolation=repeatable_read";
+    for(const SourceAudit& audit:audits) provenance<<';'<<audit.symbol<<':'<<audit.table<<':'<<audit.rowCount<<':'<<audit.firstTimestamp<<':'<<audit.lastTimestamp;
+    ImmutableArtifactWriter(options.output).Publish(configuration,provenance.str(),records,configurationText,artifactSchema);
+    std::cout<<statusPrefix<<"_EVALUATION_PUBLISHED observations="<<records.size()<<'\n'; return 0;
 }
 
 inline std::optional<int> TryRun(int argc, const char* const argv[])
@@ -142,7 +179,7 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
         std::vector<std::pair<SymbolSource, std::vector<CompletedBar>>> preparedSources;
         for (const SymbolSource& source : configuration.symbols)
         {
-            std::vector<CompletedBar> bars = ReadOnlyBars(transaction, source);
+            std::vector<CompletedBar> bars = ReadOnlyBars(transaction, source, configuration.resolutionEnd);
             audits.push_back(PreflightCompletedBars(configuration, source.symbol, source.table, database, bars));
             // Warmup is checked without reading a post-firewall outcome: a
             // structurally scored confirmation cannot be admitted until 21

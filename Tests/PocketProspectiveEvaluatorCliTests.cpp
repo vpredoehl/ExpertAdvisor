@@ -37,6 +37,9 @@ void TestCopyStreamQueryIsAnUnterminatedQueryExpression()
     assert(copy.find("ORDER BY dt;) TO STDOUT") == std::string::npos);
     assert(copy.find("ORDER BY dt) TO STDOUT") != std::string::npos);
     assert(query.find("candlestick('audcadrmp'") != std::string::npos);
+    const std::string confirmation = EA::Pocket::Prospective::Cli::ReadOnlyBarsStreamQuery(
+        transaction, source, EA::Pocket::Prospective::Confirmation::kResolutionEnd);
+    assert(confirmation.find("2026-01-01 16:00:00") != std::string::npos);
 }
 
 void TestDedicatedEntrypointSharesVerificationWiring()
@@ -69,5 +72,10 @@ int main()
     assert(ParseRejects({"--validate-only", "--config", "x", "--output-dir", "/tmp/x", "--git-commit", kCommit, "--executable-identity", kSha, "--symbol", "EURUSD"}));
     TestCopyStreamQueryIsAnUnterminatedQueryExpression();
     TestDedicatedEntrypointSharesVerificationWiring();
+    const char* confirmationValidateOnly[] = {"PocketResearch_Release", "--pocket-confirmation-evaluator", "--validate-only", "--config",
+        "Scripts/pocket_prospective_confirmation_2025_v1.conf", "--output-dir", "/tmp/pocket-confirmation", "--git-commit", kCommit,
+        "--executable-identity", kSha};
+    // Rejected before ExecuteFrozenStudy opens a source connection.
+    assert(EA::Pocket::Research::RunCli(static_cast<int>(std::size(confirmationValidateOnly)), confirmationValidateOnly) == 1);
     std::cout << "PocketProspectiveEvaluatorCliTests passed\n";
 }

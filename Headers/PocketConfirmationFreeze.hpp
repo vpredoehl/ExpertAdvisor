@@ -79,6 +79,21 @@ inline Configuration FrozenConfiguration()
     output.symbols=::EA::Pocket::Prospective::FrozenConfiguration().symbols;
     return output;
 }
+inline RunConfiguration EvaluatorConfiguration()
+{
+    const Configuration frozen=FrozenConfiguration();
+    RunConfiguration output=::EA::Pocket::Prospective::FrozenConfiguration();
+    output.schema=frozen.schema; output.study=frozen.study;
+    output.configurationSha256=frozen.configurationSha256;
+    output.partitions={{{"confirmation",kScoringStart,kScoringEnd},{"",0,0},{"",0,0}}};
+    output.resolutionEnd=kResolutionEnd;
+    return output;
+}
+inline void VerifyPrimaryArtifact(const std::filesystem::path& directory)
+{
+    ImmutableArtifactWriter::VerifyDirectoryContract(directory, EvaluatorConfiguration(),
+        CanonicalConfigurationText(), kPrimaryArtifactSchema);
+}
 inline Configuration LoadAndValidateConfiguration(const std::filesystem::path& path)
 {
     if (ReadTextFile(path) != CanonicalConfigurationText())

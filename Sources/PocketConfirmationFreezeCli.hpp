@@ -13,6 +13,10 @@ inline std::optional<int> TryRun(int argc, const char* const argv[])
     if (argc < 2) return std::nullopt;
     const std::string_view command(argv[1]);
     try {
+        if (command == "--verify-pocket-confirmation-artifact") {
+            if (argc != 3) throw std::invalid_argument("usage: --verify-pocket-confirmation-artifact ARTIFACT_DIRECTORY");
+            VerifyPrimaryArtifact(argv[2]); std::cout << "POCKET_CONFIRMATION_ARTIFACT_VERIFIED\n"; return 0;
+        }
         if (command == "--print-pocket-confirmation-freeze") {
             if (argc != 2) throw std::invalid_argument("usage: --print-pocket-confirmation-freeze");
             std::cout << CanonicalConfigurationText() << ValidationSummary(FrozenConfiguration()); return 0;

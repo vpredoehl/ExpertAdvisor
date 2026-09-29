@@ -71,15 +71,19 @@ inline std::size_t ConfirmationBarFromIdentity(const std::string& identity, cons
     return Unsigned(fields[6], "POCKET_DERIVED_IDENTITY");
 }
 
-inline std::vector<Row> ReadVerifiedRows(const std::filesystem::path& source)
+inline std::vector<Row> ReadVerifiedRowsContract(const std::filesystem::path& source,
+    const RunConfiguration& config, std::string_view configurationText,
+    std::string_view primarySchema)
 {
     // This call intentionally precedes ReadTextFile(observations.csv).
-    ImmutableArtifactWriter::VerifyDirectory(source);
+    ImmutableArtifactWriter::VerifyDirectoryContract(source, config, configurationText, primarySchema);
     // The original verifier establishes the content hashes.  Reject surplus or
     // malformed manifest material too: there is no self-hash for a manifest,
     // so accepting appended text would make its provenance ambiguous.
     const std::string sourceManifest = ReadTextFile(source / "manifest.txt");
-    const std::array<std::string_view, 10> manifestKeys{{"study", "protocol", "protocol_document_sha256", "detector", "detector_baseline", "configuration_sha256", "configuration_file_sha256", "observations_sha256", "aggregates_sha256", "provenance"}};
+    const std::vector<std::string_view> manifestKeys = primarySchema.empty()
+        ? std::vector<std::string_view>{{"study", "protocol", "protocol_document_sha256", "detector", "detector_baseline", "configuration_sha256", "configuration_file_sha256", "observations_sha256", "aggregates_sha256", "provenance"}}
+        : std::vector<std::string_view>{{"study", "protocol", "protocol_document_sha256", "detector", "detector_baseline", "configuration_sha256", "configuration_file_sha256", "observations_sha256", "aggregates_sha256", "artifact_schema", "provenance"}};
     std::istringstream manifestInput(sourceManifest); std::string manifestLine; std::size_t manifestIndex=0;
     while (std::getline(manifestInput, manifestLine)) {
         if (manifestIndex >= manifestKeys.size() || manifestLine.rfind(std::string(manifestKeys[manifestIndex])+"=",0)!=0)
@@ -87,9 +91,8 @@ inline std::vector<Row> ReadVerifiedRows(const std::filesystem::path& source)
         ++manifestIndex;
     }
     if (manifestIndex != manifestKeys.size()) throw std::invalid_argument("POCKET_DERIVED_SOURCE_MANIFEST_NONCANONICAL");
-    const RunConfiguration config = LoadAndValidateConfiguration(source / "configuration.conf");
-    if (config.study != kStudyId || config.protocol != kProtocolId || config.detector != kDetectorId ||
-        config.resolutionEnd != kPreconfirmationEnd || config.partitions.back().end != kPreconfirmationEnd)
+    if (config.protocol != kProtocolId || config.detector != kDetectorId ||
+        config.partitions.front().end > config.resolutionEnd)
         throw std::invalid_argument("POCKET_DERIVED_SOURCE_NOT_FROZEN_PRECONFIRMATION");
     const std::string content = ReadTextFile(source / "observations.csv");
     std::istringstream input(content); std::string line;
@@ -108,7 +111,7 @@ inline std::vector<Row> ReadVerifiedRows(const std::filesystem::path& source)
         if (std::find(kLookbacks.begin(), kLookbacks.end(), row.lookback) == kLookbacks.end() ||
             std::find(kHorizons.begin(), kHorizons.end(), row.horizon) == kHorizons.end() ||
             (row.direction != "bullish" && row.direction != "bearish") || !(row.upper > row.lower) ||
-            row.confirmationTimestamp >= kPreconfirmationEnd || !PartitionFor(config, row.confirmationTimestamp) ||
+            row.confirmationTimestamp >= config.resolutionEnd || !PartitionFor(config, row.confirmationTimestamp) ||
             PartitionFor(config, row.confirmationTimestamp)->name != row.partition || row.mfe < 0 || row.mae < 0)
             throw std::invalid_argument("POCKET_DERIVED_ROW_OUTSIDE_FROZEN_CONTRACT");
         row.confirmationBar=ConfirmationBarFromIdentity(row.identity, config, row);
@@ -116,6 +119,10 @@ inline std::vector<Row> ReadVerifiedRows(const std::filesystem::path& source)
     }
     if (rows.empty()) throw std::invalid_argument("POCKET_DERIVED_EMPTY_OBSERVATIONS");
     return rows;
+}
+inline std::vector<Row> ReadVerifiedRows(const std::filesystem::path& source)
+{
+    return ReadVerifiedRowsContract(source, FrozenConfiguration(), CanonicalConfigurationText(), {});
 }
 
 inline std::optional<double> Quantile(std::vector<double> values, std::size_t numerator)
@@ -264,18 +271,26 @@ public:
     explicit Writer(std::filesystem::path target) : target_(std::move(target)), staging_(target_.string()+".tmp."+std::to_string(::getpid()))
     { if(target_.empty()||std::filesystem::exists(target_)||std::filesystem::exists(staging_)) throw std::invalid_argument("POCKET_DERIVED_OUTPUT_TARGET_EXISTS_OR_EMPTY"); std::filesystem::create_directories(staging_); }
     ~Writer(){if(!published_){std::error_code error;std::filesystem::remove_all(staging_,error);}}
-    void Publish(const std::filesystem::path& source,std::string_view git,std::string_view executable,const std::vector<Row>& rows) {
-        const RunConfiguration config=FrozenConfiguration(); Write("outcomes.csv",OutcomesCsv(rows,config)); Write("equal_symbol.csv",EqualSymbolCsv(rows,config)); Write("uncertainty.csv",UncertaintyCsv(rows,config)); Write("structural.csv",StructuralCsv(rows,config));
+    void Publish(const std::filesystem::path& source,std::string_view git,std::string_view executable,const std::vector<Row>& rows,
+        const RunConfiguration& config, std::string_view analyzerSchema) {
+        Write("outcomes.csv",OutcomesCsv(rows,config)); Write("equal_symbol.csv",EqualSymbolCsv(rows,config)); Write("uncertainty.csv",UncertaintyCsv(rows,config)); Write("structural.csv",StructuralCsv(rows,config));
         const std::string sourceManifest=ReadTextFile(source/"manifest.txt"); auto field=[&](std::string_view key){const std::string prefix=std::string(key)+"=";const auto a=sourceManifest.find(prefix);if(a==std::string::npos)throw std::invalid_argument("POCKET_DERIVED_SOURCE_MANIFEST");const auto b=sourceManifest.find('\n',a);return sourceManifest.substr(a+prefix.size(),b-a-prefix.size());};
-        const std::string manifest="analyzer_schema="+std::string(kAnalyzerSchema)+"\nsource_study="+field("study")+"\nsource_protocol="+field("protocol")+"\nsource_protocol_document_sha256="+field("protocol_document_sha256")+"\nsource_detector="+field("detector")+"\nsource_configuration_sha256="+field("configuration_sha256")+"\nsource_observations_sha256="+field("observations_sha256")+"\nsource_aggregates_sha256="+field("aggregates_sha256")+"\ngit_commit="+std::string(git)+"\nexecutable_sha256="+std::string(executable)+"\nbootstrap_seed="+std::to_string(DerivedBootstrapSeed(config.configurationSha256))+"\nbootstrap_replicates="+std::to_string(kBootstrapReplicates)+"\noutcomes_sha256="+FileSha256(staging_/"outcomes.csv")+"\nequal_symbol_sha256="+FileSha256(staging_/"equal_symbol.csv")+"\nuncertainty_sha256="+FileSha256(staging_/"uncertainty.csv")+"\nstructural_sha256="+FileSha256(staging_/"structural.csv")+"\n"; Write("manifest.txt",manifest); Verify(staging_); std::filesystem::rename(staging_,target_);published_=true;
+        const std::string manifest="analyzer_schema="+std::string(analyzerSchema)+"\nsource_study="+field("study")+"\nsource_protocol="+field("protocol")+"\nsource_protocol_document_sha256="+field("protocol_document_sha256")+"\nsource_detector="+field("detector")+"\nsource_configuration_sha256="+field("configuration_sha256")+"\nsource_observations_sha256="+field("observations_sha256")+"\nsource_aggregates_sha256="+field("aggregates_sha256")+"\ngit_commit="+std::string(git)+"\nexecutable_sha256="+std::string(executable)+"\nbootstrap_seed="+std::to_string(DerivedBootstrapSeed(config.configurationSha256))+"\nbootstrap_replicates="+std::to_string(kBootstrapReplicates)+"\noutcomes_sha256="+FileSha256(staging_/"outcomes.csv")+"\nequal_symbol_sha256="+FileSha256(staging_/"equal_symbol.csv")+"\nuncertainty_sha256="+FileSha256(staging_/"uncertainty.csv")+"\nstructural_sha256="+FileSha256(staging_/"structural.csv")+"\n"; Write("manifest.txt",manifest); VerifyContract(staging_,analyzerSchema,config.configurationSha256); std::filesystem::rename(staging_,target_);published_=true;
     }
-    static void Verify(const std::filesystem::path& directory) { const std::string m=ReadTextFile(directory/"manifest.txt"); auto f=[&](std::string_view key){const std::string x=std::string(key)+"=";const auto a=m.find(x);if(a==std::string::npos)throw std::invalid_argument("POCKET_DERIVED_MANIFEST");const auto b=m.find('\n',a);return m.substr(a+x.size(),b-a-x.size());};const std::string schema=f("analyzer_schema");if(schema==kAnalyzerSchemaV1){if(f("outcomes_sha256")!=FileSha256(directory/"outcomes.csv")||f("equal_symbol_sha256")!=FileSha256(directory/"equal_symbol.csv")||f("structural_sha256")!=FileSha256(directory/"structural.csv"))throw std::invalid_argument("POCKET_DERIVED_TAMPER_OR_INCOMPLETE");return;}if(schema!=kAnalyzerSchema||f("bootstrap_replicates")!="2000"||f("bootstrap_seed")!=std::to_string(DerivedBootstrapSeed(FrozenConfiguration().configurationSha256))||f("outcomes_sha256")!=FileSha256(directory/"outcomes.csv")||f("equal_symbol_sha256")!=FileSha256(directory/"equal_symbol.csv")||f("uncertainty_sha256")!=FileSha256(directory/"uncertainty.csv")||f("structural_sha256")!=FileSha256(directory/"structural.csv"))throw std::invalid_argument("POCKET_DERIVED_TAMPER_OR_INCOMPLETE"); }
+    static void Verify(const std::filesystem::path& directory) { const std::string manifest=ReadTextFile(directory/"manifest.txt"); if(manifest.rfind("analyzer_schema="+std::string(kAnalyzerSchemaV1),0)==0) { VerifyContract(directory,kAnalyzerSchemaV1,FrozenConfiguration().configurationSha256); return; } VerifyContract(directory,kAnalyzerSchema,FrozenConfiguration().configurationSha256); }
+    static void VerifyContract(const std::filesystem::path& directory,std::string_view expectedSchema,std::string_view configurationHash) { const std::string m=ReadTextFile(directory/"manifest.txt"); auto f=[&](std::string_view key){const std::string x=std::string(key)+"=";const auto a=m.find(x);if(a==std::string::npos)throw std::invalid_argument("POCKET_DERIVED_MANIFEST");const auto b=m.find('\n',a);return m.substr(a+x.size(),b-a-x.size());};const std::string schema=f("analyzer_schema");if(schema==kAnalyzerSchemaV1&&expectedSchema==kAnalyzerSchemaV1){if(f("outcomes_sha256")!=FileSha256(directory/"outcomes.csv")||f("equal_symbol_sha256")!=FileSha256(directory/"equal_symbol.csv")||f("structural_sha256")!=FileSha256(directory/"structural.csv"))throw std::invalid_argument("POCKET_DERIVED_TAMPER_OR_INCOMPLETE");return;}if(schema!=expectedSchema||f("bootstrap_replicates")!="2000"||f("bootstrap_seed")!=std::to_string(DerivedBootstrapSeed(configurationHash))||f("outcomes_sha256")!=FileSha256(directory/"outcomes.csv")||f("equal_symbol_sha256")!=FileSha256(directory/"equal_symbol.csv")||f("uncertainty_sha256")!=FileSha256(directory/"uncertainty.csv")||f("structural_sha256")!=FileSha256(directory/"structural.csv"))throw std::invalid_argument("POCKET_DERIVED_TAMPER_OR_INCOMPLETE"); }
 private:
     void Write(std::string_view n,std::string_view s){std::ofstream o(staging_/std::string(n),std::ios::binary);if(!o)throw std::runtime_error("POCKET_DERIVED_WRITE");o<<s;o.close();if(!o)throw std::runtime_error("POCKET_DERIVED_WRITE");} std::filesystem::path target_,staging_;bool published_=false;
 };
 inline void Analyze(const std::filesystem::path& source,const std::filesystem::path& target,std::string_view git,std::string_view executable)
 {
     if(git.size()!=40 || !std::all_of(git.begin(),git.end(),[](char c){return std::isxdigit(static_cast<unsigned char>(c));}) || !IsHexSha256(executable)) throw std::invalid_argument("POCKET_DERIVED_PROVENANCE_REQUIRED");
-    const std::vector<Row> rows=ReadVerifiedRows(source); Writer(target).Publish(source,git,executable,rows);
+    const std::vector<Row> rows=ReadVerifiedRows(source); Writer(target).Publish(source,git,executable,rows,FrozenConfiguration(),kAnalyzerSchema);
+}
+inline void AnalyzeContract(const std::filesystem::path& source,const std::filesystem::path& target,std::string_view git,std::string_view executable,
+    const RunConfiguration& config,std::string_view configurationText,std::string_view primarySchema,std::string_view derivedSchema)
+{
+    if(git.size()!=40 || !std::all_of(git.begin(),git.end(),[](char c){return std::isxdigit(static_cast<unsigned char>(c));}) || !IsHexSha256(executable)) throw std::invalid_argument("POCKET_DERIVED_PROVENANCE_REQUIRED");
+    const auto rows=ReadVerifiedRowsContract(source,config,configurationText,primarySchema); Writer(target).Publish(source,git,executable,rows,config,derivedSchema);
 }
 } // namespace EA::Pocket::Prospective::Derived
