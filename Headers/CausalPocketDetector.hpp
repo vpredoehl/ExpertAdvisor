@@ -67,11 +67,14 @@ public:
     static constexpr std::size_t kSourceDefaultLookbackBars = 15;
     static constexpr std::size_t kConfirmationLatencyBars = 1;
 
-    explicit CausalPocketDetector(std::string sourceTimeframe)
-        : sourceTimeframe_(std::move(sourceTimeframe))
+    explicit CausalPocketDetector(std::string sourceTimeframe,
+        std::size_t lookbackBars = kSourceDefaultLookbackBars)
+        : sourceTimeframe_(std::move(sourceTimeframe)), lookbackBars_(lookbackBars)
     {
         if (sourceTimeframe_.empty())
             throw std::invalid_argument("Pocket source timeframe must be non-empty");
+        if (lookbackBars_ == 0)
+            throw std::invalid_argument("Pocket lookback must be positive");
     }
 
     std::optional<PocketObservation> AddCompletedBar(const CompletedBar& bar)
@@ -84,21 +87,19 @@ public:
         const std::size_t barIndex = nextBar_++;
         lastTimestamp_ = bar.timestamp;
         history_.push_back({barIndex, bar});
-        while (history_.size() > kRequiredHistoryBars)
+        while (history_.size() > RequiredHistoryBars())
             history_.pop_front();
 
-        if (history_.size() != kRequiredHistoryBars)
+        if (history_.size() != RequiredHistoryBars())
             return std::nullopt;
         return DetectLatest();
     }
 
     const std::string& SourceTimeframe() const { return sourceTimeframe_; }
     std::size_t CompletedBarCount() const { return nextBar_; }
+    std::size_t LookbackBars() const { return lookbackBars_; }
 
 private:
-    static constexpr std::size_t kRequiredHistoryBars =
-        kSourceDefaultLookbackBars + 1 + kConfirmationLatencyBars;
-
     struct IndexedBar
     {
         std::size_t index = 0;
@@ -106,6 +107,7 @@ private:
     };
 
     std::string sourceTimeframe_;
+    std::size_t lookbackBars_;
     std::deque<IndexedBar> history_;
     std::optional<std::int64_t> lastTimestamp_;
     std::size_t nextBar_ = 0;
@@ -123,13 +125,13 @@ private:
     {
         double referenceHigh = history_.front().bar.high;
         double referenceLow = history_.front().bar.low;
-        for (std::size_t index = 1; index < kSourceDefaultLookbackBars; ++index)
+        for (std::size_t index = 1; index < lookbackBars_; ++index)
         {
             referenceHigh = std::max(referenceHigh, history_[index].bar.high);
             referenceLow = std::min(referenceLow, history_[index].bar.low);
         }
 
-        const IndexedBar& event = history_[kSourceDefaultLookbackBars];
+        const IndexedBar& event = history_[lookbackBars_];
         const IndexedBar& confirmation = history_.back();
         if (event.bar.close > event.bar.open && event.bar.close > referenceHigh &&
             confirmation.bar.low > referenceHigh)
@@ -142,6 +144,11 @@ private:
                 referenceLow, event, confirmation);
 
         return std::nullopt;
+    }
+
+    std::size_t RequiredHistoryBars() const
+    {
+        return lookbackBars_ + 1 + kConfirmationLatencyBars;
     }
 
     PocketObservation MakeObservation(PocketDirection direction, double lower,
