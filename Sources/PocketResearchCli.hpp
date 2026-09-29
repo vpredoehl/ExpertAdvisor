@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PocketProspectiveDerivedAnalyzerCli.hpp"
 #include "PocketProspectiveEvaluatorCli.hpp"
 
 #include <iostream>
@@ -11,10 +12,13 @@ namespace EA::Pocket::Research
 // prospective CLI; this target owns no scientific, source, or artifact logic.
 inline int RunCli(int argc, const char* const argv[])
 {
+    const auto derived = Prospective::Derived::Cli::TryRun(argc, argv);
+    if (derived.has_value()) return *derived;
     const auto result = Prospective::Cli::TryRun(argc, argv);
     if (result.has_value()) return *result;
     std::cerr << "POCKET_RESEARCH_ERROR expected --pocket-prospective-evaluator "
-              << "or --verify-pocket-prospective-artifact\n";
+              << "or --verify-pocket-prospective-artifact, --derive-pocket-prospective-report, "
+              << "or --verify-pocket-prospective-derived-report\n";
     return 2;
 }
 } // namespace EA::Pocket::Research
