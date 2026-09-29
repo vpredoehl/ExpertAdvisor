@@ -16,8 +16,12 @@ mkdir -p "${build_dir}"
 scheduler_source="${repo_root}/Sources/SchedulerCore/ExperimentScheduler.cpp"
 rg -q -- '--validate-controlled-replication-study=PATH' "${scheduler_source}"
 rg -q -- '--compare-controlled-replication-study=PATH' "${scheduler_source}"
+rg -q -- '--freeze-controlled-replication-study=PATH' "${scheduler_source}"
+rg -q -- '--verify-controlled-replication-study=FNV1A64_HASH' "${scheduler_source}"
 rg -q 'RunValidateCommand' "${scheduler_source}"
 rg -q 'RunCompareCommand' "${scheduler_source}"
+rg -q 'RunFreezeCommand' "${scheduler_source}"
+rg -q 'RunVerifyCommand' "${scheduler_source}"
 rg -q 'EvaluateFamilyComparison' \
     "${repo_root}/Sources/ControlledReplicationStudySpecificationService.cpp"
 if rg -n '\b(pqxx::work|INSERT|UPDATE|DELETE|Persist|Queue|CreateExperiment)\b' \

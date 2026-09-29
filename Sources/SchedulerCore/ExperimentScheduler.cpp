@@ -107,6 +107,7 @@
 #include "ExperimentReplicationPlanningService.hpp"
 #include "ExperimentReplicationMaterialization.hpp"
 #include "ControlledReplicationStudySpecificationService.hpp"
+#include "ControlledReplicationStudyArchive.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
 #include "CorrectedCausalSurpriseReplicationContinuationService.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
@@ -498,6 +499,10 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--validate-controlled-replication-study=", 0) == 0 ||
             arg == "--compare-controlled-replication-study" ||
             arg.rfind("--compare-controlled-replication-study=", 0) == 0 ||
+            arg == "--freeze-controlled-replication-study" ||
+            arg.rfind("--freeze-controlled-replication-study=", 0) == 0 ||
+            arg == "--verify-controlled-replication-study" ||
+            arg.rfind("--verify-controlled-replication-study=", 0) == 0 ||
             arg == "--plan-experiment-replications" ||
             arg.rfind("--plan-experiment-replications=", 0) == 0 ||
             arg == "--materialize-experiment-replications" ||
@@ -3470,6 +3475,44 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "--compare-controlled-replication-study requires a path");
             options.compareControlledReplicationStudy = value;
         }
+        else if (arg == "--freeze-controlled-replication-study")
+        {
+            if (options.freezeControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--freeze-controlled-replication-study specified more than once");
+            options.freezeControlledReplicationStudy =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--freeze-controlled-replication-study", value))
+        {
+            if (options.freezeControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--freeze-controlled-replication-study specified more than once");
+            if (value.empty())
+                throw std::invalid_argument(
+                    "--freeze-controlled-replication-study requires a path");
+            options.freezeControlledReplicationStudy = value;
+        }
+        else if (arg == "--verify-controlled-replication-study")
+        {
+            if (options.verifyControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--verify-controlled-replication-study specified more than once");
+            options.verifyControlledReplicationStudy =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--verify-controlled-replication-study", value))
+        {
+            if (options.verifyControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--verify-controlled-replication-study specified more than once");
+            if (value.empty())
+                throw std::invalid_argument(
+                    "--verify-controlled-replication-study requires a hash");
+            options.verifyControlledReplicationStudy = value;
+        }
         else if (SplitOptionWithValue(
                      arg, "--plan-experiment-replications", value))
         {
@@ -3855,6 +3898,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareExperimentReplicationFamilies.has_value() ? 1 : 0) +
         (options.validateControlledReplicationStudy.has_value() ? 1 : 0) +
         (options.compareControlledReplicationStudy.has_value() ? 1 : 0) +
+        (options.freezeControlledReplicationStudy.has_value() ? 1 : 0) +
+        (options.verifyControlledReplicationStudy.has_value() ? 1 : 0) +
         (options.planExperimentReplications.has_value() ? 1 : 0) +
         (options.materializeExperimentReplications.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
@@ -13128,6 +13173,17 @@ void PrintExperimentSchedulerHelp(const char* executable)
            "comparison engine. It never pools raw pairs and remains descriptive, "
            "read-only, and non-inferential.\n"
         << "Usage: " << exe
+        << " --freeze-controlled-replication-study=PATH\n"
+        << "Validates and immutably archives the canonical study artifact under "
+           "docs/archive/controlled-replication, then appends its semantic "
+           "identity and exact byte SHA-256 to the registry. Existing identical "
+           "registrations are idempotent; conflicting or non-canonical bytes "
+           "fail closed. This is the explicit pre-outcome freeze boundary.\n"
+        << "Usage: " << exe
+        << " --verify-controlled-replication-study=FNV1A64_HASH\n"
+        << "Verifies the registered study registry entry, archive-root path, "
+           "exact artifact SHA-256, and embedded semantic identity read-only.\n"
+        << "Usage: " << exe
         << " --plan-experiment-replications=SOURCE_A_ID:SOURCE_B_ID "
            "--replication-seeds=SEED[,SEED...]\n"
         << "Plans an ordered, read-only replication wave by copying the exact "
@@ -14603,6 +14659,18 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         if (options.compareControlledReplicationStudy)
             return EA::ControlledReplicationStudy::RunCompareCommand(
                 LstmDbConnectionString(), *options.compareControlledReplicationStudy,
+                std::cout, std::cerr);
+        if (options.freezeControlledReplicationStudy)
+            return EA::ControlledReplicationStudyArchive::RunFreezeCommand(
+                *options.freezeControlledReplicationStudy,
+                EA::ControlledReplicationStudyArchive::kDefaultArchiveRoot,
+                EA::ControlledReplicationStudyArchive::kDefaultRegistryPath,
+                std::cout, std::cerr);
+        if (options.verifyControlledReplicationStudy)
+            return EA::ControlledReplicationStudyArchive::RunVerifyCommand(
+                *options.verifyControlledReplicationStudy,
+                EA::ControlledReplicationStudyArchive::kDefaultArchiveRoot,
+                EA::ControlledReplicationStudyArchive::kDefaultRegistryPath,
                 std::cout, std::cerr);
         if (options.planExperimentReplications)
         {

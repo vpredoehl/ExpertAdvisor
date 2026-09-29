@@ -139,6 +139,8 @@ struct SchedulerOptions
         compareExperimentReplicationFamilies;
     std::optional<std::string> validateControlledReplicationStudy;
     std::optional<std::string> compareControlledReplicationStudy;
+    std::optional<std::string> freezeControlledReplicationStudy;
+    std::optional<std::string> verifyControlledReplicationStudy;
     std::optional<std::pair<long long, long long>>
         planExperimentReplications;
     std::optional<std::pair<long long, long long>>

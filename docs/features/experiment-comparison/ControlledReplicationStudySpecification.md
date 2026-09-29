@@ -39,3 +39,32 @@ intervals, winners, recommendations, or efficacy claims.
 No production TG4 study is registered by this change. An operator must archive
 the exact rendered bytes and their reported identity hash before outcome
 inspection if a production study is later authorized.
+
+## Immutable archive and registry
+
+The pre-outcome freeze boundary is an immutable repository artifact, not a
+database row. Freeze a validated canonical artifact with:
+
+```text
+LSTM_Release --freeze-controlled-replication-study=/path/to/study.txt
+```
+
+The command writes only under
+`docs/archive/controlled-replication/`: the artifact is stored at a
+deterministic identity-derived path under `studies/`, and `registry.tsv`
+records registry version, study identifier/type/version, semantic FNV identity,
+freeze timestamp, repository-relative artifact path, and the exact byte
+SHA-256. Canonical bytes are never overwritten. An identical existing
+registration is idempotent; conflicting identity, bytes, or registry records
+fail closed.
+
+Verify the registered study later without PostgreSQL or outcome inspection:
+
+```text
+LSTM_Release --verify-controlled-replication-study=fnv1a64:<16-lowercase-hex>
+```
+
+Verification checks the registry schema and duplicate constraints, archive-root
+containment (including symlink escape), exact SHA-256, canonical artifact
+rendering, embedded semantic identity, and registry/artifact metadata equality.
+The semantic identity and byte SHA-256 are distinct attestations.
