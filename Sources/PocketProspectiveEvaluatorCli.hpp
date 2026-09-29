@@ -77,16 +77,25 @@ inline std::int64_t ParseTimestamp(const std::string& source)
     return parsed.time_since_epoch().count();
 }
 
-inline std::vector<CompletedBar> ReadOnlyBars(pqxx::read_transaction& transaction,
+template <typename Transaction>
+inline std::string ReadOnlyBarsStreamQuery(Transaction& transaction,
     const SymbolSource& source)
 {
     // This finite upper bound is the firewall.  No preconfirmation command
     // constructs a query that can request a 2025 confirmation/outcome bar.
     const auto end = PriceTP{std::chrono::seconds{kPreconfirmationEnd}};
-    const std::string query = CanonicalMarketData::CanonicalFullHistoryThroughCandlestickCte(
+    // pqxx::stream wraps this SELECT in COPY (...).  It must therefore remain
+    // a query expression, with no terminating statement semicolon.
+    return CanonicalMarketData::CanonicalFullHistoryThroughCandlestickCte(
         transaction, source.table, end) +
         "SELECT to_char(dt,'YYYY-MM-DD HH24:MI:SS'),open::double precision,high::double precision,"
-        "low::double precision,close::double precision FROM bounded ORDER BY dt;";
+        "low::double precision,close::double precision FROM bounded ORDER BY dt";
+}
+
+inline std::vector<CompletedBar> ReadOnlyBars(pqxx::read_transaction& transaction,
+    const SymbolSource& source)
+{
+    const std::string query = ReadOnlyBarsStreamQuery(transaction, source);
     std::vector<CompletedBar> bars;
     auto stream = transaction.stream<std::string, double, double, double, double>(query);
     for (const auto& [timestamp, open, high, low, close] : stream)
