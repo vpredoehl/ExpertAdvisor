@@ -148,6 +148,31 @@ void TestAtomicArtifacts()
     catch (const std::invalid_argument&) { tampered = true; } assert(tampered);
     std::filesystem::remove_all(target);
 }
+
+void TestScientificArtifactEquivalenceAcrossExecutableProvenance()
+{
+    const auto root = std::filesystem::temp_directory_path() / ("pocket_phase4_equivalence_" + std::to_string(::getpid()));
+    const auto monolith = root / "lstm";
+    const auto dedicated = root / "pocket_research";
+    std::filesystem::remove_all(root);
+    const std::vector<EvaluatedObservation> records{Record("AUDCAD", 21, 1262322900, true)};
+    ImmutableArtifactWriter(monolith).Publish(FrozenConfiguration(),
+        "git=test;executable_sha256=lstm", records);
+    ImmutableArtifactWriter(dedicated).Publish(FrozenConfiguration(),
+        "git=test;executable_sha256=pocket_research", records);
+    for (const char* name : {"configuration.conf", "observations.csv", "aggregates.csv"})
+        assert(ReadTextFile(monolith / name) == ReadTextFile(dedicated / name));
+    const auto withoutProvenance = [](std::string manifest) {
+        const std::size_t start = manifest.find("provenance=");
+        assert(start != std::string::npos);
+        const std::size_t end = manifest.find('\n', start);
+        manifest.erase(start, end - start + 1);
+        return manifest;
+    };
+    assert(withoutProvenance(ReadTextFile(monolith / "manifest.txt")) ==
+           withoutProvenance(ReadTextFile(dedicated / "manifest.txt")));
+    std::filesystem::remove_all(root);
+}
 } // namespace
 
 int main()
@@ -157,5 +182,6 @@ int main()
     TestBoundedOutcomes();
     TestMetricsBootstrapAndThinning();
     TestAtomicArtifacts();
+    TestScientificArtifactEquivalenceAcrossExecutableProvenance();
     std::cout << "PocketProspectiveEvaluatorTests passed\n";
 }

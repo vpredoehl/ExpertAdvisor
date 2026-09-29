@@ -40,22 +40,28 @@ noncanonical field and validates the frozen protocol-document hash.
 
 ## CLI
 
+The evaluator is isolated in the `PocketResearch Release` Xcode target.  It
+links only its entry point, the shared Pocket evaluator headers, timestamp
+parsing, and libpq/libpqxx; it does not link the LSTM runtime, scheduler,
+training, inference, Tensor, or experiment components. `LSTM_Release` no
+longer exposes this Pocket command.
+
 Preconfirmation review (read-only and outcome-blind):
 
 ```text
-DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release --pocket-prospective-evaluator --validate-only --config Scripts/pocket_prospective_preconfirmation_v1.conf --output-dir /absolute/new/output-dir --git-commit <40-hex-HEAD> --executable-identity <sha256-of-LSTM_Release>
+DerivedData/PocketResearch/Build/Products/Release/PocketResearch_Release --pocket-prospective-evaluator --validate-only --config Scripts/pocket_prospective_preconfirmation_v1.conf --output-dir /absolute/new/output-dir --git-commit <40-hex-HEAD> --executable-identity <sha256-of-PocketResearch_Release>
 ```
 
 Real preconfirmation evaluation (implemented, but not run by Phase Pocket 4):
 
 ```text
-DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release --pocket-prospective-evaluator --execute --config Scripts/pocket_prospective_preconfirmation_v1.conf --output-dir /absolute/new/output-dir --git-commit <40-hex-HEAD> --executable-identity <sha256-of-LSTM_Release>
+DerivedData/PocketResearch/Build/Products/Release/PocketResearch_Release --pocket-prospective-evaluator --execute --config Scripts/pocket_prospective_preconfirmation_v1.conf --output-dir /absolute/new/output-dir --git-commit <40-hex-HEAD> --executable-identity <sha256-of-PocketResearch_Release>
 ```
 
 Verification is read-only and does not rerun an evaluation:
 
 ```text
-DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release --verify-pocket-prospective-artifact /absolute/output-dir
+DerivedData/PocketResearch/Build/Products/Release/PocketResearch_Release --verify-pocket-prospective-artifact /absolute/output-dir
 ```
 
 The output target must be absent.  Publication writes a sibling temporary

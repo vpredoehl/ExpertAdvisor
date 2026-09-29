@@ -79,7 +79,6 @@
 #include "EconomicEventRepository.hpp"
 #include "../Sources/ScientificExecutionProvenanceBackfillService.hpp"
 #include "../Sources/CausalFibonacciIncrementalInformationCli.hpp"
-#include "../Sources/PocketProspectiveEvaluatorCli.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -5584,8 +5583,6 @@ std::optional<int> RunCheckpointStopOwnershipTestBoundary(
 
 int main(int argc, const char * argv[])
 {
-    if (const auto result = EA::Pocket::Prospective::Cli::TryRun(argc, argv); result.has_value())
-        return *result;
     if (const auto result = EA::CausalFibonacciIncrementalInformation::Cli::TryRun(argc, argv); result.has_value())
         return *result;
     if (const auto result = EA::LegacyDiagnosticCli::TryRun(argc, argv); result.has_value())
