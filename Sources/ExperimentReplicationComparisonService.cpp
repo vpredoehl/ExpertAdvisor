@@ -197,4 +197,17 @@ int RunFamilyComparisonCommand(
     }
 }
 
+FamilyReport EvaluateFamilyComparison(
+    const FamilyComparisonCommand& command,
+    const ExperimentPairComparison::EvidenceSource& source)
+{
+    ValidateFamilies(command.families);
+    std::vector<std::vector<ExperimentPairComparison::ComparisonResult>>
+        families;
+    families.reserve(command.families.size());
+    for (const auto& family : command.families)
+        families.push_back(ComparePairs(family, source));
+    return CompareFamilies(std::move(families));
+}
+
 } // namespace EA::ExperimentReplicationComparison

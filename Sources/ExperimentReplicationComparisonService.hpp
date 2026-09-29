@@ -45,6 +45,13 @@ int RunFamilyComparisonCommand(
     std::ostream& output,
     std::ostream& errors);
 
+// Library seam used by immutable study specifications. It is the same
+// validation, pair-comparison, and family aggregation path as the public
+// family command; callers cannot accidentally pool raw pairs.
+FamilyReport EvaluateFamilyComparison(
+    const FamilyComparisonCommand& command,
+    const ExperimentPairComparison::EvidenceSource& source);
+
 // PostgreSQL adapter used by the CLI. All members are loaded through the
 // existing authoritative selector inside one repeatable-read transaction.
 int RunComparisonCommand(const std::string& connectionString,

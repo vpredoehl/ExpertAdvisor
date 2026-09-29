@@ -106,6 +106,7 @@
 #include "ExperimentReplicationComparisonService.hpp"
 #include "ExperimentReplicationPlanningService.hpp"
 #include "ExperimentReplicationMaterialization.hpp"
+#include "ControlledReplicationStudySpecificationService.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
 #include "CorrectedCausalSurpriseReplicationContinuationService.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
@@ -493,6 +494,10 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--compare-experiment-replications=", 0) == 0 ||
             arg == "--compare-experiment-replication-families" ||
             arg.rfind("--compare-experiment-replication-families=", 0) == 0 ||
+            arg == "--validate-controlled-replication-study" ||
+            arg.rfind("--validate-controlled-replication-study=", 0) == 0 ||
+            arg == "--compare-controlled-replication-study" ||
+            arg.rfind("--compare-controlled-replication-study=", 0) == 0 ||
             arg == "--plan-experiment-replications" ||
             arg.rfind("--plan-experiment-replications=", 0) == 0 ||
             arg == "--materialize-experiment-replications" ||
@@ -3427,6 +3432,44 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareExperimentReplicationFamilies =
                 EA::ExperimentReplicationComparison::ParseExperimentIdPairFamilies(
                     value);
+        else if (arg == "--validate-controlled-replication-study")
+        {
+            if (options.validateControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--validate-controlled-replication-study specified more than once");
+            options.validateControlledReplicationStudy =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--validate-controlled-replication-study", value))
+        {
+            if (options.validateControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--validate-controlled-replication-study specified more than once");
+            if (value.empty())
+                throw std::invalid_argument(
+                    "--validate-controlled-replication-study requires a path");
+            options.validateControlledReplicationStudy = value;
+        }
+        else if (arg == "--compare-controlled-replication-study")
+        {
+            if (options.compareControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--compare-controlled-replication-study specified more than once");
+            options.compareControlledReplicationStudy =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--compare-controlled-replication-study", value))
+        {
+            if (options.compareControlledReplicationStudy)
+                throw std::invalid_argument(
+                    "--compare-controlled-replication-study specified more than once");
+            if (value.empty())
+                throw std::invalid_argument(
+                    "--compare-controlled-replication-study requires a path");
+            options.compareControlledReplicationStudy = value;
+        }
         else if (SplitOptionWithValue(
                      arg, "--plan-experiment-replications", value))
         {
@@ -3810,6 +3853,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareExperimentPair.has_value() ? 1 : 0) +
         (options.compareExperimentReplications.has_value() ? 1 : 0) +
         (options.compareExperimentReplicationFamilies.has_value() ? 1 : 0) +
+        (options.validateControlledReplicationStudy.has_value() ? 1 : 0) +
+        (options.compareControlledReplicationStudy.has_value() ? 1 : 0) +
         (options.planExperimentReplications.has_value() ? 1 : 0) +
         (options.materializeExperimentReplications.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
@@ -13070,6 +13115,19 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "explicit and suppress the cross-context summary. "
         << "No winner, ranking, recommendation, or database write is produced.\n"
         << "Usage: " << exe
+        << " --validate-controlled-replication-study=PATH\n"
+        << "Validates a versioned prospective controlled-replication study "
+           "artifact, recomputes its canonical identity, and reports frozen "
+           "contexts without loading or modifying outcomes. The artifact "
+           "contains intent only; completed producer provenance remains "
+           "authoritative.\n"
+        << "Usage: " << exe
+        << " --compare-controlled-replication-study=PATH\n"
+        << "Loads a validated study artifact in repeatable-read mode and "
+           "delegates each preserved context to the existing replication-family "
+           "comparison engine. It never pools raw pairs and remains descriptive, "
+           "read-only, and non-inferential.\n"
+        << "Usage: " << exe
         << " --plan-experiment-replications=SOURCE_A_ID:SOURCE_B_ID "
            "--replication-seeds=SEED[,SEED...]\n"
         << "Plans an ordered, read-only replication wave by copying the exact "
@@ -14538,6 +14596,14 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return EA::ExperimentReplicationComparison::RunFamilyComparisonCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
         }
+        if (options.validateControlledReplicationStudy)
+            return EA::ControlledReplicationStudy::RunValidateCommand(
+                *options.validateControlledReplicationStudy, std::cout,
+                std::cerr);
+        if (options.compareControlledReplicationStudy)
+            return EA::ControlledReplicationStudy::RunCompareCommand(
+                LstmDbConnectionString(), *options.compareControlledReplicationStudy,
+                std::cout, std::cerr);
         if (options.planExperimentReplications)
         {
             EA::ExperimentReplicationPlanning::PlanningCommand command;
