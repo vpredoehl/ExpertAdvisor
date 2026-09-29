@@ -65,3 +65,14 @@ EconomicCalendar/raw/dol_eta/**/*.pdf
 
 # Xcode per-user state
 *.xcuserdatad/
+
+# Immutable Pocket prospective-confirmation artifacts are repository-tracked.
+!docs/archive/pockets/
+!docs/archive/pockets/confirmation-2025-v1/
+!docs/archive/pockets/confirmation-2025-v1/primary/
+!docs/archive/pockets/confirmation-2025-v1/derived/
+!docs/archive/pockets/confirmation-2025-v1/primary/*.txt
+!docs/archive/pockets/confirmation-2025-v1/primary/*.csv
+!docs/archive/pockets/confirmation-2025-v1/primary/*.conf
+!docs/archive/pockets/confirmation-2025-v1/derived/*.txt
+!docs/archive/pockets/confirmation-2025-v1/derived/*.csv
