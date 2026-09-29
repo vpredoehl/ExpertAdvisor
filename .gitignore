@@ -9,6 +9,8 @@ ratedata.gaincapital.com
 xcuserdata/
 *.txt
 !Tests/fixtures/economic_calendar/federal_reserve/*.txt
+# Immutable controlled-replication study artifacts are repository-tracked.
+!docs/archive/controlled-replication/studies/*.txt
 *.plpgsql
 .derived-data-log*
 # Generated analysis output
