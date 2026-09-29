@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PocketConfirmationFreezeCli.hpp"
 #include "PocketProspectiveDerivedAnalyzerCli.hpp"
 #include "PocketProspectiveEvaluatorCli.hpp"
 
@@ -12,6 +13,8 @@ namespace EA::Pocket::Research
 // prospective CLI; this target owns no scientific, source, or artifact logic.
 inline int RunCli(int argc, const char* const argv[])
 {
+    const auto confirmation = Prospective::Confirmation::Cli::TryRun(argc, argv);
+    if (confirmation.has_value()) return *confirmation;
     const auto derived = Prospective::Derived::Cli::TryRun(argc, argv);
     if (derived.has_value()) return *derived;
     const auto result = Prospective::Cli::TryRun(argc, argv);
