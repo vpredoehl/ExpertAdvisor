@@ -31,6 +31,9 @@ void TestVerifierPrecedesParsingAndTampering()
     const std::string original=ReadTextFile(source/"observations.csv");
     Derived::Analyze(source,output,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     Derived::Writer::Verify(output); assert(ReadTextFile(source/"observations.csv")==original);
+    const std::string manifest=ReadTextFile(output/"manifest.txt");
+    assert(manifest.find("analyzer_schema=phase-pocket-4-derived-preconfirmation-report-v2")!=std::string::npos);
+    assert(manifest.find("bootstrap_replicates=2000")!=std::string::npos && manifest.find("bootstrap_seed=")!=std::string::npos);
     assert(ReadTextFile(output/"outcomes.csv").find("continuation_first")!=std::string::npos);
     bool exists=false; try { Derived::Analyze(source,output,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); } catch(const std::invalid_argument&) {exists=true;} assert(exists);
     std::filesystem::remove_all(output); Append(source/"observations.csv"); bool rejected=false; try { Derived::Analyze(source,output,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); }catch(const std::invalid_argument&){rejected=true;} assert(rejected);
@@ -47,7 +50,7 @@ void TestMetricsAndRaceCategories()
     ImmutableArtifactWriter(source).Publish(FrozenConfiguration(),"synthetic=true",records);
     Derived::Analyze(source,output,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     const std::string report=ReadTextFile(output/"outcomes.csv"); const std::string structural=ReadTextFile(output/"structural.csv");
-    assert(report.find("directional_close_return_median_pips")!=std::string::npos && report.find("race_censored")!=std::string::npos);
+    assert(report.find("directional_close_return_p25_pips")!=std::string::npos && report.find("directional_close_return_p75_pips")!=std::string::npos && report.find("race_censored")!=std::string::npos);
     assert(report.find("same_bar_intrabar_order_indeterminate")!=std::string::npos && structural.find("greedy_temporal_thinned_64")!=std::string::npos);
     std::filesystem::remove_all(source);std::filesystem::remove_all(output);
 }
@@ -59,5 +62,23 @@ void TestManifestConfigAggregateTamperAndAtomicFailure()
         bool rejected=false;try{Derived::Analyze(source,output,"cccccccccccccccccccccccccccccccccccccccc","cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");}catch(const std::invalid_argument&){rejected=true;}assert(rejected);assert(!std::filesystem::exists(output));std::filesystem::remove_all(source);
     }
 }
+void TestFrozenQuantilesAndHierarchicalBootstrap()
+{
+    const RunConfiguration config=FrozenConfiguration(); std::vector<Derived::Row> rows;
+    for(std::size_t i=0;i<4;++i) { Derived::Row row; row.symbol="AUDCAD";row.partition="exploratory";row.direction="bullish";row.lookback=15;row.horizon=64;row.complete=true;row.confirmationTimestamp=1262322900+static_cast<std::int64_t>(i)*7*24*60*60;row.lower=10;row.upper=11;row.mfe=static_cast<double>(i+1);row.mae=static_cast<double>(i+1)*2;row.directionalReturn=-static_cast<double>(4-i);row.touchAt=i+1;row.closeAt=i+1;row.race="continuation_first";rows.push_back(row); }
+    std::vector<const Derived::Row*> pointers;for(const auto& row:rows)pointers.push_back(&row);
+    assert(Derived::Statistic(pointers,config,"mfe_p25_price")==1.0);
+    assert(Derived::Statistic(pointers,config,"mfe_median_price")==2.0);
+    assert(Derived::Statistic(pointers,config,"mfe_p75_price")==3.0);
+    assert(Derived::Statistic(pointers,config,"mae_p75_price")==6.0);
+    assert(Derived::Statistic(pointers,config,"directional_close_return_p25_price")==-4.0);
+    assert(Derived::Statistic(pointers,config,"mfe_median_pips")==20000.0);
+    assert(Derived::Statistic(pointers,config,"mfe_median_widths")==2.0);
+    std::map<std::string,std::vector<const Derived::Row*>> symbols{{"AUDCAD",pointers}};
+    const auto seed=DerivedBootstrapSeed(config.configurationSha256); const auto one=Derived::EventInterval(symbols,config,"mfe_median_price",seed);const auto two=Derived::EventInterval(symbols,config,"mfe_median_price",seed);
+    assert(one==two && one.first && one.second && Derived::kBootstrapReplicates==2000);
+    const auto equalOne=Derived::EqualSymbolInterval(symbols,config,"mfe_median_price",seed);const auto equalTwo=Derived::EqualSymbolInterval(symbols,config,"mfe_median_price",seed);assert(equalOne==equalTwo);
+    assert(!Derived::Statistic(pointers,config,"race_revisit_first_proportion").value());
 }
-int main(){TestVerifierPrecedesParsingAndTampering();TestMetricsAndRaceCategories();TestManifestConfigAggregateTamperAndAtomicFailure();std::cout<<"PocketProspectiveDerivedAnalyzerTests passed\n";}
+}
+int main(){TestVerifierPrecedesParsingAndTampering();TestMetricsAndRaceCategories();TestManifestConfigAggregateTamperAndAtomicFailure();TestFrozenQuantilesAndHierarchicalBootstrap();std::cout<<"PocketProspectiveDerivedAnalyzerTests passed\n";}

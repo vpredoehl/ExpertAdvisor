@@ -40,7 +40,43 @@ defect identified by this audit.  The incomplete aggregate reporting and its
 limited bootstrap coverage are reporting implementation defects, not a change
 to the frozen scientific contract.
 
-## Corrective derived report
+## Corrective derived reports and schema history
+
+The first corrective analyzer (`phase-pocket-4-derived-preconfirmation-report-v1`)
+correctly verified and preserved the source artifact, but its schema review
+found two remaining frozen-reporting omissions: excursion/return P25/P75 in
+all three units, and the required hierarchical percentile intervals.  No
+scientific result row was inspected in making that correction; only the v1
+manifest, file names, CSV headers, and row counts were reviewed.
+
+The v2 analyzer (`phase-pocket-4-derived-preconfirmation-report-v2`) corrects
+those omissions.  It adds P25/P50/P75 for MFE, MAE, and signed directional
+close return in price, pips, and Pocket-width multiples to event-weighted and
+equal-symbol reports.  `uncertainty.csv` supplies the frozen 95% percentile
+intervals for touch/close rates, resolved touch/fill P25/P50/P75, excursion
+P25/P50/P75 in all units, and signed-return P25/P50/P75 in all units.  H64
+race categories remain separately reported counts: the protocol does not
+freeze a race-proportion denominator (particularly for censored rows), so an
+interval would introduce a new analysis choice. Counts, censor-reason counts,
+structural diagnostics, and undefined comparison ratios are not interval
+estimates.
+
+For event-weighted uncertainty, each symbol/lookback/partition/direction/
+horizon cohort is split into UTC-week confirmation blocks; 2,000 draws sample
+each symbol's weeks with replacement and pool the sampled observations.  For
+equal-symbol uncertainty, each draw samples six frozen symbols with
+replacement, resamples the selected symbol's weeks, and takes the unweighted
+mean over defined selected-symbol statistics.  The deterministic seed is the
+existing configuration-hash derivation (`DerivedBootstrapSeed`): the first 16
+hexadecimal digits of the immutable configuration SHA-256, interpreted as an
+unsigned 64-bit value.  Both the derived seed and `bootstrap_replicates=2000`
+are bound in the v2 manifest.  This is descriptive dependence-aware
+uncertainty, not an independence, causal-effect, or winner claim.
+
+v1 reports remain valid as v1 evidence and are not reinterpreted as v2.
+Verification is schema-aware and fails closed rather than treating v1 as v2.
+
+## Current corrective derived report
 
 After operator review, run only against the already verified sealed artifact:
 
@@ -55,7 +91,8 @@ DerivedData/PocketResearch/Build/Products/Release/PocketResearch_Release \
 
 The target must not exist.  Publication writes a sibling staging directory,
 verifies the derived manifest and hashes, and atomically renames it.  Files are
-`outcomes.csv`, `equal_symbol.csv`, `structural.csv`, and `manifest.txt`.
+`outcomes.csv`, `equal_symbol.csv`, `uncertainty.csv`, `structural.csv`, and
+`manifest.txt`.
 The manifest records the source study/protocol/protocol-document hash/detector,
 source configuration/observation/aggregate hashes, Git identity, executable
 SHA-256, analyzer schema, and derived file hashes.  Verify it with:
