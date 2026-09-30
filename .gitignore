@@ -76,3 +76,8 @@ EconomicCalendar/raw/dol_eta/**/*.pdf
 !docs/archive/pockets/confirmation-2025-v1/primary/*.conf
 !docs/archive/pockets/confirmation-2025-v1/derived/*.txt
 !docs/archive/pockets/confirmation-2025-v1/derived/*.csv
+# RepositoryAgent runtime state
+Tools/RepositoryAgent/.expertadvisor*_evidence.json
+Tools/RepositoryAgent/*.ledger.json
+Tools/RepositoryAgent/__pycache__/
+Tools/RepositoryAgent/tests/__pycache__/
