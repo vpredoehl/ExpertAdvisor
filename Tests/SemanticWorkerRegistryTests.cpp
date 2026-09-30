@@ -424,64 +424,36 @@ bool Contains(const std::string& value, const std::string& expected)
     return value.find(expected) != std::string::npos;
 }
 
-void AssertTrainingCommandAblationIdentity(
+void AssertTrainingCommandIdentity(
     const EA::Scheduler::TrainingWorkerSelection& historical,
     const EA::Scheduler::TrainingWorkerSelection& current)
 {
-    const auto freshControlCommand =
+    const auto historicalCommand =
         EA::Scheduler::BeginTrainingWorkerCommand(
-            historical.canonicalExecutablePath, "");
-    assert(freshControlCommand.size() == 2);
-    assert(freshControlCommand.front() ==
+            historical.canonicalExecutablePath);
+    assert(historicalCommand.size() == 2);
+    assert(historicalCommand.front() ==
            historical.canonicalExecutablePath);
-    assert(freshControlCommand[1] == "--train");
-
-    const std::string noncanonicalMask =
-        "return_direction_imbalance, return_sign_persistence";
-    const std::string canonicalMask =
-        EA::FeatureAblationMask::Parse(noncanonicalMask).CanonicalText();
-    assert(canonicalMask ==
-           "return_sign_persistence,return_direction_imbalance");
-    const std::string expectedAblationArgument =
-        "--ablate-features=" + canonicalMask;
-
-    const auto freshAblationCommand =
-        EA::Scheduler::BeginTrainingWorkerCommand(
-            historical.canonicalExecutablePath, canonicalMask);
-    assert(freshAblationCommand.size() == 3);
-    assert(freshAblationCommand.front() ==
-           historical.canonicalExecutablePath);
-    assert(freshAblationCommand[1] == "--train");
-    assert(freshAblationCommand[2] == expectedAblationArgument);
-    assert(std::find(freshAblationCommand.begin(),
-                     freshAblationCommand.end(),
-                     "--ablate-features=" + noncanonicalMask) ==
-           freshAblationCommand.end());
-
-    // Resumed and fresh training share this command prefix. These cases
-    // protect both sides of BuildTrainCommand's later resume branch.
-    const auto resumedControlCommand =
-        EA::Scheduler::BeginTrainingWorkerCommand(
-            historical.canonicalExecutablePath, "");
+    assert(historicalCommand[1] == "--train");
     assert(std::none_of(
-        resumedControlCommand.begin(), resumedControlCommand.end(),
+        historicalCommand.begin(), historicalCommand.end(),
         [](const std::string& argument) {
             return argument.starts_with("--ablate-features");
         }));
-    const auto resumedAblationCommand =
-        EA::Scheduler::BeginTrainingWorkerCommand(
-            historical.canonicalExecutablePath, canonicalMask);
-    assert(resumedAblationCommand.front() ==
-           historical.canonicalExecutablePath);
-    assert(std::count(resumedAblationCommand.begin(),
-                      resumedAblationCommand.end(),
-                      expectedAblationArgument) == 1);
-    assert(std::find(resumedAblationCommand.begin(),
-                     resumedAblationCommand.end(),
-                     current.canonicalExecutablePath) ==
-           resumedAblationCommand.end());
-}
 
+    const auto currentCommand =
+        EA::Scheduler::BeginTrainingWorkerCommand(
+            current.canonicalExecutablePath);
+    assert(currentCommand.size() == 2);
+    assert(currentCommand.front() ==
+           current.canonicalExecutablePath);
+    assert(currentCommand[1] == "--train");
+    assert(std::none_of(
+        currentCommand.begin(), currentCommand.end(),
+        [](const std::string& argument) {
+            return argument.starts_with("--ablate-features");
+        }));
+}
 } // namespace
 
 int main()
@@ -700,7 +672,7 @@ int main()
     assert(combinedCurrent.reason == "current_published_semantic_worker");
     assert(combinedHistorical.canonicalExecutablePath !=
            combinedCurrent.canonicalExecutablePath);
-    AssertTrainingCommandAblationIdentity(
+    AssertTrainingCommandIdentity(
         combinedHistorical, combinedCurrent);
 
     // An exact layout/width with an explicitly ablation-qualified candidate

@@ -7,18 +7,11 @@ namespace EA::Scheduler
 {
 
 inline std::vector<std::string> BeginTrainingWorkerCommand(
-    const std::string& selectedWorkerExecutable,
-    const std::string& canonicalFeatureAblationMask)
+    const std::string& selectedWorkerExecutable)
 {
-    std::vector<std::string> argv{
+    return {
         selectedWorkerExecutable,
         "--train"};
-    if (!canonicalFeatureAblationMask.empty())
-    {
-        argv.push_back(
-            "--ablate-features=" + canonicalFeatureAblationMask);
-    }
-    return argv;
 }
 
 } // namespace EA::Scheduler

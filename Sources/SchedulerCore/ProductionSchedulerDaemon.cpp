@@ -3628,8 +3628,7 @@ std::vector<std::string> BuildTrainCommand(
             experiment.trainingObjective));
     std::vector<std::string> argv =
         EA::Scheduler::BeginTrainingWorkerCommand(
-            selectedWorkerExecutable,
-            experiment.featureAblationMask);
+            selectedWorkerExecutable);
     AddCliOption(argv, "--log-level", "summary");
     AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
     AddCliOption(argv, "--new-model-name", BaseModelName(experiment));

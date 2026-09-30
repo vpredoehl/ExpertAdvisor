@@ -35,15 +35,15 @@ if rg -U -q 'BuildTrainCommand\([\s\S]{0,700}argv\.push_back\(options\.currentWo
     exit 1
 fi
 
-# The selected executable and canonical persisted ablation identity initialize
-# one shared argv before the resume branch. Empty masks are omitted by the
-# command helper; nonempty masks use the training CLI's exact equals form.
-rg -U -q 'BeginTrainingWorkerCommand\([\s\S]{0,200}selectedWorkerExecutable,[\s\S]{0,100}experiment\.featureAblationMask' "${daemon}"
+# Scheduler-managed TRAIN uses the selected semantic worker and identifies the
+# persisted experiment with --scheduler-experiment-id. The worker loads the
+# authoritative feature_ablation_mask from that experiment; it must not receive
+# a duplicate --ablate-features command-line override.
+rg -U -q 'BeginTrainingWorkerCommand\([\s\S]{0,200}selectedWorkerExecutable\)' "${daemon}"
 rg -U -q 'operations\.reserveWorkerAttempt[\s\S]{0,900}const ExperimentRow& job[\s\S]{0,700}ReserveExperimentWorkerAttempt\([\s\S]{0,300}job[\s\S]{0,1400}operations\.prepareReservedLaunch[\s\S]{0,500}const ExperimentRow& job[\s\S]{0,500}BuildTrainCommand\([\s\S]{0,200}job' "${daemon}"
-rg -U -q 'BeginTrainingWorkerCommand\([\s\S]{0,1200}const std::optional<long long> resumeFrom[\s\S]{0,500}return argv' "${daemon}"
-rg -U -q 'if \(!canonicalFeatureAblationMask\.empty\(\)\)[\s\S]{0,200}"--ablate-features=" \+ canonicalFeatureAblationMask' "${command}"
-if rg -q -- '"--ablate-features=" \+ experiment\.' "${daemon}"; then
-    echo "train ablation propagation bypasses the shared command prefix" >&2
+rg -U -q 'BuildTrainCommand\([\s\S]{0,2500}"--scheduler-experiment-id"[\s\S]{0,1000}const std::optional<long long> resumeFrom' "${daemon}"
+if rg -q -- '--ablate-features' "${command}" "${daemon}"; then
+    echo "scheduler-managed train must not propagate feature ablation through worker argv" >&2
     exit 1
 fi
 
