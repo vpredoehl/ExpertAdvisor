@@ -24,8 +24,9 @@ from .evidence import (
     evidence_source_hash, VerifiedEvidenceLedger,
 )
 from .verifier import (
-    CATEGORY_DEFINITIONS, SEMANTIC_VERIFY_SYSTEM, extract_json_object, render_prompt,
+    SEMANTIC_VERIFY_SYSTEM, extract_json_object, render_prompt,
     run_generation, verify_evidence_semantics, verify_evidence_bundle_semantics,
+    configure_category_definitions,
 )
 from .retrieval import (
     MAX_READ_LINES,
@@ -33,6 +34,7 @@ from .retrieval import (
     get_repository_index, _navigation_symbol_score, topic_index_navigation,
     execute_tool, normalize_call, record_retrieved_lines, retrieved_evidence_excerpt,
     _topic_resolved_symbols, _retrieved_window, generic_relationship_bundle_candidates,
+    configure_topic_navigation,
 )
 
 
@@ -62,7 +64,7 @@ MAX_RECOVERY_TOOLS_PER_TOPIC = 6
 MAX_RECOVERY_TURNS_PER_TOPIC = 8
 
 # Final synthesis is not a repository investigation. It receives only the
-# evidence packages produced by the seven controlled investigations.
+# evidence packages produced by the configured controlled investigations.
 SYNTHESIS_MAX_TOKENS = 2200
 
 # Production refactor phase 2C: Phase 1 ledger + generic repository-index navigation.
@@ -74,141 +76,26 @@ SYNTHESIS_MAX_TOKENS = 2200
 EVIDENCE_LEDGER = VerifiedEvidenceLedger()
 
 
-from .scheduler_architecture_benchmark import (
-    TOPICS,
-    TOPIC_NAVIGATION,
-    TOPIC_BOOTSTRAP_SEARCHES,
-    TOPIC_BOOTSTRAP_READS,
-)
-
-INVESTIGATION_SYSTEM = r"""
-You are a read-only source-code investigator for the ExpertAdvisor C++ project.
-
-The HOST CONTROLLER assigns exactly one architecture topic at a time.
-You must investigate ONLY that assigned topic.
-
-Admission ontology note: do not invent a separate worker eligibility predicate.
-For admission topics, role-specific candidate/selection/claim evidence and the
-capacity/dispatch gate are separate controller requirements.
-
-You do not decide when the overall architecture investigation is complete.
-You are not allowed to produce FINAL:.
-
-You have exactly these repository tools:
-
-1. list_files
-   {"tool":"list_files","prefix":"Sources/SchedulerCore"}
-
-2. search
-   {"tool":"search","pattern":"some pattern"}
-
-3. read
-   {"tool":"read",
-    "file":"Sources/SchedulerCore/File.cpp",
-    "start":100,
-    "end":250}
-
-While investigating:
-- Output exactly ONE JSON tool request and nothing else.
-- Do not wrap JSON in markdown.
-- Prefer search before large reads.
-- Follow references when necessary.
-- Never invent filenames, symbols, source text, or line numbers.
-- A read may contain at most 500 lines.
-- Do not investigate unrelated architecture topics.
-- Do not propose code or architectural changes.
-- Do not use general knowledge as evidence for repository behavior.
-"""
+from .benchmark import load_benchmark
 
 
-EVIDENCE_SYSTEM = r"""
-You are extracting evidence from a completed read-only source investigation.
-
-Return exactly ONE JSON object and no markdown.
-
-Schema:
-
-{
-  "status": "supported" | "insufficient",
-  "summary": "short explanation of what the inspected source establishes",
-  "evidence": [
-    {
-      "file": "Sources/SchedulerCore/File.cpp",
-      "start": 100,
-      "end": 125,
-      "category": "one exact controller-required category",
-      "establishes": "what these exact lines establish"
-    }
-  ],
-  "uncertainties": [
-    "anything important not established by the inspected source"
-  ]
-}
-
-Rules:
-- Use only source evidence actually present in the investigation transcript.
-- Never invent filenames or line numbers.
-- Evidence ranges must correspond to source lines that were actually returned.
-- Keep ranges as narrow as reasonably possible.
-- Do not include a range merely because it was read; it must support the claim.
-- A topic is "supported" only when ALL controller-required evidence
-  categories for that topic are established.
-- Generic infrastructure alone does not prove that a specific worker kind
-  uses that infrastructure.
-- For training/inference launch topics, generic WorkerProcessController::spawn
-  evidence is insufficient unless retrieved evidence also establishes the
-  worker-specific path AND a source-visible worker_to_spawn_linkage bridge.
-- For analysis launch, do not require spawn if the retrieved source instead
-  establishes an analysis-specific path and direct in-process execution.
-- For admission topics, worker compatibility/selection alone is insufficient
-  unless retrieved evidence also establishes the relevant capacity,
-  readiness, admission, or dispatch gate.
-- For priority/preemption, process stopping alone is insufficient unless
-  retrieved evidence also establishes priority comparison or victim
-  eligibility.
-- If the evidence is inadequate, use status "insufficient".
-- Do not propose changes.
-"""
+def configure_benchmark(benchmark):
+    """Bind benchmark-owned policy while leaving production mechanics unchanged."""
+    global TOPICS, TOPIC_NAVIGATION, TOPIC_BOOTSTRAP_SEARCHES, TOPIC_BOOTSTRAP_READS
+    global CATEGORY_DEFINITIONS, INVESTIGATION_SYSTEM, EVIDENCE_SYSTEM, SYNTHESIS_SYSTEM
+    TOPICS = tuple(benchmark["topics"])
+    TOPIC_NAVIGATION = dict(benchmark.get("topic_navigation", {}))
+    TOPIC_BOOTSTRAP_SEARCHES = dict(benchmark.get("topic_bootstrap_searches", {}))
+    TOPIC_BOOTSTRAP_READS = dict(benchmark.get("topic_bootstrap_reads", {}))
+    CATEGORY_DEFINITIONS = dict(benchmark.get("category_definitions", {}))
+    INVESTIGATION_SYSTEM = str(benchmark["investigation_system"])
+    EVIDENCE_SYSTEM = str(benchmark["evidence_system"])
+    SYNTHESIS_SYSTEM = str(benchmark["synthesis_system"])
+    configure_topic_navigation(TOPIC_NAVIGATION)
+    configure_category_definitions(CATEGORY_DEFINITIONS)
 
 
-SYNTHESIS_SYSTEM = r"""
-You are a source-code architecture analyst.
-
-The host controller has already completed seven separate read-only repository
-investigations. You will receive their structured evidence packages.
-
-Your job is synthesis only.
-
-Rules:
-- Do not invent repository facts beyond the supplied evidence packages.
-- Clearly distinguish confirmed behavior from uncertainty.
-- Cover all seven required areas:
-  1. training admission
-  2. training launch
-  3. inference admission
-  4. inference launch
-  5. analysis admission
-  6. analysis launch
-  7. priority/preemption
-- CONTROLLER STATUS IS AUTHORITATIVE.
-- If a package is marked insufficient, say that the requested point was not
-  fully established.
-- For an insufficient package, describe only its accepted evidence and the
-  categories still missing.
-- Never state or imply that a missing category was established.
-- Never upgrade an insufficient package to a positive conclusion.
-- Package summaries, extractor claims, uncertainties, and rejected evidence
-  are not evidence.
-- Do not propose architectural changes.
-- Cite factual claims using exact source references:
-  Sources/SchedulerCore/File.cpp:120-145
-- Do not repeat the same citation unnecessarily.
-- Do not append citation spam.
-- Begin exactly with:
-
-FINAL:
-"""
-
+configure_benchmark(load_benchmark())
 
 def extract_tool_call(text):
     text = text.strip()

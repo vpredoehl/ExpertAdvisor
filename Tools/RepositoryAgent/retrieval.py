@@ -5,7 +5,12 @@ import os
 import re
 from pathlib import Path
 from .repository_index import build_repository_index
-from .scheduler_architecture_benchmark import TOPIC_NAVIGATION
+TOPIC_NAVIGATION = {}
+
+def configure_topic_navigation(navigation):
+    """Install benchmark-owned navigation text without importing a benchmark."""
+    global TOPIC_NAVIGATION
+    TOPIC_NAVIGATION = dict(navigation or {})
 from expertadvisor_agent import list_files, search, read_file
 
 MAX_TOOL_OUTPUT = 30000

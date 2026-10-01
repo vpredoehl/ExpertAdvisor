@@ -45,64 +45,12 @@ def run_generation(model, tokenizer, messages, max_tokens):
         verbose=False,
     ).strip()
 
-CATEGORY_DEFINITIONS = {
-    "role_specific_candidate_or_selection": (
-        "The excerpt must directly establish that the scheduler is selecting, "
-        "claiming, resolving, or otherwise identifying work for the named role. "
-        "A distinct eligibility predicate is NOT required. Capacity alone, a "
-        "role name in a log, or generic worker infrastructure does not qualify."
-    ),
-    "capacity_or_dispatch_gate": (
-        "The excerpt must directly establish a condition controlling whether "
-        "work may be admitted, claimed, dispatched, or started. Capability "
-        "computation alone does not qualify. A capacity-class log field does "
-        "not qualify."
-    ),
-    "worker_specific_path": (
-        "The excerpt must establish a training-, inference-, or analysis-"
-        "specific command, dispatch, or call path leading toward launch. "
-        "Generic WorkerLaunchRequest/process infrastructure does not qualify."
-    ),
-    "worker_to_spawn_linkage": (
-        "The excerpt must directly establish a source-visible bridge from the "
-        "named training or inference launch path toward the process-launch "
-        "operation. A role-specific command and a generic fork/exec shown only "
-        "in unrelated excerpts do not qualify. The bridge may be a concrete "
-        "caller/callee handoff, launch helper invocation, or equivalent control "
-        "flow that connects the role-specific path to the spawn infrastructure."
-    ),
-    "process_spawn": (
-        "The excerpt must directly show the concrete process-creation/execution "
-        "operation itself, such as a literal fork(), exec*(), posix_spawn(), or "
-        "equivalent OS/process-controller spawn implementation. Merely calling a "
-        "helper named Launch*, spawn*, or execute* without showing its concrete "
-        "process-creation operation does NOT qualify. Generic concrete process "
-        "creation is allowed for this category."
-    ),
-    "analysis_specific_path": (
-        "The excerpt must directly establish an analysis-specific dispatch, "
-        "orchestration, callback binding, or call path that leads to execution "
-        "of analysis work. A role name in a log is not enough."
-    ),
-    "analysis_execution_mechanism": (
-        "The excerpt must directly establish how analysis work actually runs. "
-        "Either a separate process creation/exec path OR a direct in-process "
-        "call to the analysis execution operation qualifies. Do not assume "
-        "spawn merely because generic process infrastructure exists."
-    ),
-    "priority_or_victim_eligibility": (
-        "The excerpt must directly establish scheduler priority ordering, "
-        "strict priority comparison, or victim eligibility/selection."
-    ),
-    "preemption_execution": (
-        "The evidence must directly establish the executable source-code mechanism "
-        "used to carry out preemption, or an authoritative lifecycle/state transition "
-        "caused by preemption. For architecture analysis, a connected source path "
-        "from the preemption operation to the process-control/signal operation is "
-        "sufficient; runtime telemetry proving that a historical signal was delivered "
-        "is NOT required. Do not claim more than the source path establishes."
-    ),
-}
+CATEGORY_DEFINITIONS = {}
+
+def configure_category_definitions(definitions):
+    """Install benchmark-owned semantic category definitions."""
+    global CATEGORY_DEFINITIONS
+    CATEGORY_DEFINITIONS = dict(definitions or {})
 
 SEMANTIC_VERIFY_SYSTEM = r"""
 You are an independent source-evidence verifier.

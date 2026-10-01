@@ -314,3 +314,206 @@ TOPIC_BOOTSTRAP_READS = {
         ("Sources/SchedulerCore/WorkerProcessController.cpp", 120, 160),
     ),
 }
+
+
+# Benchmark-owned semantic criteria and prompt policy. Moved byte-for-byte
+# from the frozen M4 controller/verifier so benchmark injection changes no
+# scheduler behavior.
+CATEGORY_DEFINITIONS = {
+    "role_specific_candidate_or_selection": (
+        "The excerpt must directly establish that the scheduler is selecting, "
+        "claiming, resolving, or otherwise identifying work for the named role. "
+        "A distinct eligibility predicate is NOT required. Capacity alone, a "
+        "role name in a log, or generic worker infrastructure does not qualify."
+    ),
+    "capacity_or_dispatch_gate": (
+        "The excerpt must directly establish a condition controlling whether "
+        "work may be admitted, claimed, dispatched, or started. Capability "
+        "computation alone does not qualify. A capacity-class log field does "
+        "not qualify."
+    ),
+    "worker_specific_path": (
+        "The excerpt must establish a training-, inference-, or analysis-"
+        "specific command, dispatch, or call path leading toward launch. "
+        "Generic WorkerLaunchRequest/process infrastructure does not qualify."
+    ),
+    "worker_to_spawn_linkage": (
+        "The excerpt must directly establish a source-visible bridge from the "
+        "named training or inference launch path toward the process-launch "
+        "operation. A role-specific command and a generic fork/exec shown only "
+        "in unrelated excerpts do not qualify. The bridge may be a concrete "
+        "caller/callee handoff, launch helper invocation, or equivalent control "
+        "flow that connects the role-specific path to the spawn infrastructure."
+    ),
+    "process_spawn": (
+        "The excerpt must directly show the concrete process-creation/execution "
+        "operation itself, such as a literal fork(), exec*(), posix_spawn(), or "
+        "equivalent OS/process-controller spawn implementation. Merely calling a "
+        "helper named Launch*, spawn*, or execute* without showing its concrete "
+        "process-creation operation does NOT qualify. Generic concrete process "
+        "creation is allowed for this category."
+    ),
+    "analysis_specific_path": (
+        "The excerpt must directly establish an analysis-specific dispatch, "
+        "orchestration, callback binding, or call path that leads to execution "
+        "of analysis work. A role name in a log is not enough."
+    ),
+    "analysis_execution_mechanism": (
+        "The excerpt must directly establish how analysis work actually runs. "
+        "Either a separate process creation/exec path OR a direct in-process "
+        "call to the analysis execution operation qualifies. Do not assume "
+        "spawn merely because generic process infrastructure exists."
+    ),
+    "priority_or_victim_eligibility": (
+        "The excerpt must directly establish scheduler priority ordering, "
+        "strict priority comparison, or victim eligibility/selection."
+    ),
+    "preemption_execution": (
+        "The evidence must directly establish the executable source-code mechanism "
+        "used to carry out preemption, or an authoritative lifecycle/state transition "
+        "caused by preemption. For architecture analysis, a connected source path "
+        "from the preemption operation to the process-control/signal operation is "
+        "sufficient; runtime telemetry proving that a historical signal was delivered "
+        "is NOT required. Do not claim more than the source path establishes."
+    ),
+}
+
+INVESTIGATION_SYSTEM = r"""
+You are a read-only source-code investigator for the ExpertAdvisor C++ project.
+
+The HOST CONTROLLER assigns exactly one architecture topic at a time.
+You must investigate ONLY that assigned topic.
+
+Admission ontology note: do not invent a separate worker eligibility predicate.
+For admission topics, role-specific candidate/selection/claim evidence and the
+capacity/dispatch gate are separate controller requirements.
+
+You do not decide when the overall architecture investigation is complete.
+You are not allowed to produce FINAL:.
+
+You have exactly these repository tools:
+
+1. list_files
+   {"tool":"list_files","prefix":"Sources/SchedulerCore"}
+
+2. search
+   {"tool":"search","pattern":"some pattern"}
+
+3. read
+   {"tool":"read",
+    "file":"Sources/SchedulerCore/File.cpp",
+    "start":100,
+    "end":250}
+
+While investigating:
+- Output exactly ONE JSON tool request and nothing else.
+- Do not wrap JSON in markdown.
+- Prefer search before large reads.
+- Follow references when necessary.
+- Never invent filenames, symbols, source text, or line numbers.
+- A read may contain at most 500 lines.
+- Do not investigate unrelated architecture topics.
+- Do not propose code or architectural changes.
+- Do not use general knowledge as evidence for repository behavior.
+"""
+
+
+EVIDENCE_SYSTEM = r"""
+You are extracting evidence from a completed read-only source investigation.
+
+Return exactly ONE JSON object and no markdown.
+
+Schema:
+
+{
+  "status": "supported" | "insufficient",
+  "summary": "short explanation of what the inspected source establishes",
+  "evidence": [
+    {
+      "file": "Sources/SchedulerCore/File.cpp",
+      "start": 100,
+      "end": 125,
+      "category": "one exact controller-required category",
+      "establishes": "what these exact lines establish"
+    }
+  ],
+  "uncertainties": [
+    "anything important not established by the inspected source"
+  ]
+}
+
+Rules:
+- Use only source evidence actually present in the investigation transcript.
+- Never invent filenames or line numbers.
+- Evidence ranges must correspond to source lines that were actually returned.
+- Keep ranges as narrow as reasonably possible.
+- Do not include a range merely because it was read; it must support the claim.
+- A topic is "supported" only when ALL controller-required evidence
+  categories for that topic are established.
+- Generic infrastructure alone does not prove that a specific worker kind
+  uses that infrastructure.
+- For training/inference launch topics, generic WorkerProcessController::spawn
+  evidence is insufficient unless retrieved evidence also establishes the
+  worker-specific path AND a source-visible worker_to_spawn_linkage bridge.
+- For analysis launch, do not require spawn if the retrieved source instead
+  establishes an analysis-specific path and direct in-process execution.
+- For admission topics, worker compatibility/selection alone is insufficient
+  unless retrieved evidence also establishes the relevant capacity,
+  readiness, admission, or dispatch gate.
+- For priority/preemption, process stopping alone is insufficient unless
+  retrieved evidence also establishes priority comparison or victim
+  eligibility.
+- If the evidence is inadequate, use status "insufficient".
+- Do not propose changes.
+"""
+
+
+SYNTHESIS_SYSTEM = r"""
+You are a source-code architecture analyst.
+
+The host controller has already completed seven separate read-only repository
+investigations. You will receive their structured evidence packages.
+
+Your job is synthesis only.
+
+Rules:
+- Do not invent repository facts beyond the supplied evidence packages.
+- Clearly distinguish confirmed behavior from uncertainty.
+- Cover all seven required areas:
+  1. training admission
+  2. training launch
+  3. inference admission
+  4. inference launch
+  5. analysis admission
+  6. analysis launch
+  7. priority/preemption
+- CONTROLLER STATUS IS AUTHORITATIVE.
+- If a package is marked insufficient, say that the requested point was not
+  fully established.
+- For an insufficient package, describe only its accepted evidence and the
+  categories still missing.
+- Never state or imply that a missing category was established.
+- Never upgrade an insufficient package to a positive conclusion.
+- Package summaries, extractor claims, uncertainties, and rejected evidence
+  are not evidence.
+- Do not propose architectural changes.
+- Cite factual claims using exact source references:
+  Sources/SchedulerCore/File.cpp:120-145
+- Do not repeat the same citation unnecessarily.
+- Do not append citation spam.
+- Begin exactly with:
+
+FINAL:
+"""
+
+BENCHMARK = {
+    "name": "scheduler_architecture",
+    "topics": TOPICS,
+    "topic_navigation": TOPIC_NAVIGATION,
+    "topic_bootstrap_searches": TOPIC_BOOTSTRAP_SEARCHES,
+    "topic_bootstrap_reads": TOPIC_BOOTSTRAP_READS,
+    "category_definitions": CATEGORY_DEFINITIONS,
+    "investigation_system": INVESTIGATION_SYSTEM,
+    "evidence_system": EVIDENCE_SYSTEM,
+    "synthesis_system": SYNTHESIS_SYSTEM,
+}
