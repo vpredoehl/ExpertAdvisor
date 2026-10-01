@@ -433,6 +433,125 @@ def _retrieved_window(retrieved_lines, filename, line, radius=6):
         return None
     return {"file": filename, "start": start, "end": end, "excerpt": excerpt}
 
+
+def _bounded_relationship_traversal(
+    topic,
+    category,
+    retrieved_lines,
+    max_depth=2,
+    max_reads=2,
+    max_frontier=8,
+):
+    """Perform a tiny generic structural expansion for relationship completion.
+
+    Phase 5C.1 ranks useful symbols that are already visible in exact retrieved
+    source.  Some relationships require one more structural hop before the
+    semantic verifier can see the producer/consumer or write/read connection.
+    This helper follows repository-index definitions and call edges with strict
+    depth/read/frontier budgets.  Every newly admitted line is obtained through
+    the ordinary read tool and recorded in the same exact-provenance store.
+
+    The traversal is deliberately category-agnostic: topic/category text only
+    influences lexical ranking.  It never accepts evidence; the independent
+    bundle verifier remains authoritative.
+    """
+    if max_depth < 1 or max_reads < 1:
+        return []
+
+    idx = get_repository_index()
+    target_text = " ".join([
+        str(category),
+        str(topic.get("title", "")),
+        str(topic.get("question", "")),
+        str(topic.get("hints", "")),
+        str(TOPIC_NAVIGATION.get(topic.get("id"), "")),
+    ])
+    target_terms = _semantic_identifier_terms(target_text)
+    initial = _retrieved_category_symbols(
+        topic, category, retrieved_lines, max_symbols=max_frontier
+    )
+
+    visited_symbols = set()
+    visited_locations = set()
+    frontier = [(symbol, resolved, 0) for symbol, resolved in initial]
+    admitted = []
+    reads = 0
+
+    def lexical_score(symbol):
+        terms = _semantic_identifier_terms(symbol)
+        return len(terms & target_terms) * 20
+
+    while frontier and reads < max_reads:
+        symbol, resolved, depth = frontier.pop(0)
+        if symbol in visited_symbols or depth >= max_depth:
+            continue
+        visited_symbols.add(symbol)
+
+        locations = []
+        for row in resolved.get("definitions", [])[:4]:
+            filename, line = row.get("file"), row.get("line")
+            if filename and isinstance(line, int):
+                locations.append((lexical_score(symbol) + 8, filename, line,
+                                  f"traversal_definition:{depth + 1}:{symbol}"))
+        for row in resolved.get("callers", [])[:8]:
+            filename, line = row.get("file"), row.get("line")
+            caller = str(row.get("caller") or "")
+            if filename and isinstance(line, int):
+                locations.append((lexical_score(caller) + 5, filename, line,
+                                  f"traversal_caller:{depth + 1}:{symbol}"))
+        for row in resolved.get("callees", [])[:8]:
+            filename, line = row.get("file"), row.get("line")
+            callee = str(row.get("callee") or "")
+            if filename and isinstance(line, int):
+                locations.append((lexical_score(callee) + 6, filename, line,
+                                  f"traversal_callee:{depth + 1}:{symbol}->{callee}"))
+
+        locations.sort(key=lambda x: (-x[0], x[1], x[2], x[3]))
+        newly_read = []
+        reads_for_symbol = 0
+        for _, filename, line, origin in locations:
+            if reads >= max_reads or reads_for_symbol >= 1:
+                break
+            key = (filename, line)
+            if key in visited_locations:
+                continue
+            visited_locations.add(key)
+            if line in retrieved_lines.get(filename, {}):
+                continue
+
+            start = max(1, line - 12)
+            end = line + 12
+            result = execute_tool({"tool": "read", "file": filename,
+                                   "start": start, "end": end})
+            if result.startswith("TOOL ERROR:"):
+                continue
+            record_retrieved_lines(retrieved_lines, filename, result)
+            reads += 1
+            reads_for_symbol += 1
+            window = _retrieved_window(retrieved_lines, filename, line, radius=12)
+            if window:
+                row = dict(window)
+                row["origin"] = origin
+                admitted.append(row)
+                newly_read.append((filename, start, end))
+
+        if depth + 1 >= max_depth or not newly_read:
+            continue
+
+        # The next frontier is derived only from exact source admitted above.
+        # Re-rank after each hop so newly exposed consumer/loader symbols can
+        # outrank implementation-local helpers from the previous neighborhood.
+        ranked = _retrieved_category_symbols(
+            topic, category, retrieved_lines, max_symbols=max_frontier * 2
+        )
+        for next_symbol, next_resolved in ranked:
+            if next_symbol not in visited_symbols:
+                frontier.append((next_symbol, next_resolved, depth + 1))
+        frontier = frontier[:max_frontier * 2]
+
+    return admitted
+
+
 def generic_relationship_bundle_candidates(
     topic,
     category,
@@ -472,6 +591,15 @@ def generic_relationship_bundle_candidates(
             continue
         for item in items[:2]:
             add(item, f"sibling_category:{other_category}")
+
+    # If one-hop completion cannot expose a relationship, admit a very small
+    # controller-owned structural expansion. Newly read ranges use the same
+    # exact provenance store and remain merely candidates until verification.
+    for item in _bounded_relationship_traversal(
+        topic, category, retrieved_lines, max_depth=2, max_reads=2, max_frontier=8
+    ):
+        origin = item.pop("origin", "traversal")
+        add(item, origin)
 
     # Follow concrete symbols that appeared in category-local retrieved source.
     # This closes relationships the investigator already discovered (for example
