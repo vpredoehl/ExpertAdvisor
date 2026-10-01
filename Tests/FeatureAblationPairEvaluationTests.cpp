@@ -501,6 +501,41 @@ int main()
     assert(pending.disposition ==
            Feature::Disposition::ComparableIncomplete);
     assert(Feature::ExitCode(pending.disposition) == 4);
+    // A pre-model pair has no authoritative final-model input metadata yet.
+    // Ablation identity must therefore use the experiment's configured input
+    // layout. This specifically protects newly introduced feature families:
+    // parsing a layout-10 Pocket mask against the fixture's stale layout-4
+    // model metadata would incorrectly reject an otherwise valid pending pair.
+    auto pendingPocketControl = pendingControl;
+    auto pendingPocketAblation = pendingAblation;
+
+    pendingPocketControl.extended.configuredModelInputWidth = 114;
+    pendingPocketControl.extended.configuredModelInputLayoutVersion = 10;
+    pendingPocketAblation.extended.configuredModelInputWidth = 114;
+    pendingPocketAblation.extended.configuredModelInputLayoutVersion = 10;
+
+    pendingPocketControl.authoritative.configuration.featureAblationMask.clear();
+    pendingPocketAblation.authoritative.configuration.featureAblationMask =
+        EA::FeatureAblationMask::ParseForSemanticLayout("pockets.*", 10)
+            .CanonicalText();
+
+    const auto pendingPocket = EvaluatePair(
+        pendingPocketControl, pendingPocketAblation, "pockets.*");
+
+    assert(pendingPocket.disposition ==
+           Feature::Disposition::ComparableIncomplete);
+    assert(pendingPocket.invalidReasons.empty());
+    assert(pendingPocket.canonicalAblatedFeatureSet ==
+           pendingPocketAblation.authoritative.configuration
+               .featureAblationMask);
+    assert(Has(pendingPocket.incompleteReasons,
+               "control_experiment_not_complete"));
+    assert(Has(pendingPocket.incompleteReasons,
+               "ablation_experiment_not_complete"));
+    assert(Has(pendingPocket.incompleteReasons,
+               "final_model_input_contract_provenance_unavailable"));
+    assert(Feature::ExitCode(pendingPocket.disposition) == 4);
+
 
     auto noProfitability = ablation;
     noProfitability.authoritative.profitability.reset();

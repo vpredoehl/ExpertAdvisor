@@ -455,8 +455,23 @@ void ValidateExtendedPair(const ExtendedScientificConfiguration& control,
 #undef EA_COMPARE_EXTENDED
 }
 
+int AblationIdentitySemanticLayout(
+    const FeatureAblationPairEvaluation::ArmEvidence& arm)
+{
+    if (arm.authoritative.finalModelId)
+        return arm.authoritative.configuration.modelInputLayoutVersion;
+
+    if (!arm.extended.configuredModelInputLayoutVersion ||
+        *arm.extended.configuredModelInputLayoutVersion <= 0)
+        return 0;
+
+    return *arm.extended.configuredModelInputLayoutVersion;
+}
+
 bool ValidateAblationIdentity(const ScientificConfiguration& control,
                               const ScientificConfiguration& ablation,
+                              int controlSemanticLayoutVersion,
+                              int ablationSemanticLayoutVersion,
                               std::string_view expectedAblationMask,
                               ComparisonResult& result)
 {
@@ -467,14 +482,16 @@ bool ValidateAblationIdentity(const ScientificConfiguration& control,
     {
         const FeatureAblationMask controlMask =
             FeatureAblationMask::ParseForSemanticLayout(
-                control.featureAblationMask, control.modelInputLayoutVersion);
+                control.featureAblationMask, controlSemanticLayoutVersion);
+
         const FeatureAblationMask ablationMask =
             FeatureAblationMask::ParseForSemanticLayout(
-                ablation.featureAblationMask, ablation.modelInputLayoutVersion);
+                ablation.featureAblationMask, ablationSemanticLayoutVersion);
+
         const FeatureAblationMask expected =
             FeatureAblationMask::ParseForSemanticLayout(
                 std::string(expectedAblationMask),
-                ablation.modelInputLayoutVersion);
+                ablationSemanticLayoutVersion);
         const std::string controlCanonical = controlMask.CanonicalText();
         const std::string ablationCanonical = ablationMask.CanonicalText();
         const std::string expectedCanonical = expected.CanonicalText();
@@ -498,10 +515,9 @@ bool ValidateAblationIdentity(const ScientificConfiguration& control,
             result.ablationIdentityCanonical);
         return true;
     }
-    catch (const std::exception& error)
+    catch (const std::exception&)
     {
-        Add(result.invalidReasons,
-            std::string{"feature_ablation_mask_invalid:"} + error.what());
+        Add(result.invalidReasons, "feature_ablation_mask_invalid");
         return false;
     }
 }
@@ -701,9 +717,15 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
     ValidateResumeCompatibility(control, ablation, result.invalidReasons);
     ValidateExtendedPair(control.extended, ablation.extended,
                          result.invalidReasons);
+    const int controlAblationLayout =
+        AblationIdentitySemanticLayout(control);
+    const int ablationAblationLayout =
+        AblationIdentitySemanticLayout(ablation);
+
     const bool validAblation = ValidateAblationIdentity(
-        controlConfiguration, ablationConfiguration, expectedAblationMask,
-        result);
+        controlConfiguration, ablationConfiguration,
+        controlAblationLayout, ablationAblationLayout,
+        expectedAblationMask, result);
     const bool causalSurpriseEvaluation =
         result.canonicalAblatedFeatureSet ==
         kCausalEconomicEventSurpriseAblationMaskText;
