@@ -14,16 +14,12 @@ python3 Scripts/ExpertAdvisorInvestigator.py authorities
 python3 Scripts/ExpertAdvisorInvestigator.py semantics
 python3 Scripts/ExpertAdvisorInvestigator.py workers
 python3 Scripts/ExpertAdvisorInvestigator.py status
+python3 Scripts/ExpertAdvisorInvestigator.py domains
+python3 Scripts/ExpertAdvisorInvestigator.py evidence scheduler
 ```
 
-Each command also accepts:
-
-```text
---repo-root <path>
---format text|json
-```
-
-`text` is the default.
+Each command accepts `--repo-root <path>` and `--format text|json`. `text` is
+the default. `evidence` additionally requires a domain.
 
 ### `authorities`
 
@@ -46,16 +42,60 @@ path.
 
 ### `status`
 
-Reports repository status only:
-
-- Git HEAD;
-- current branch or detached state;
-- clean/dirty worktree state; and
-- whether `docs/ai/ExpertAdvisorReference.md` exactly matches current generated
-  content.
+Reports repository status only: Git HEAD, current branch or detached state,
+clean/dirty worktree state, and whether `docs/ai/ExpertAdvisorReference.md`
+exactly matches current generated content.
 
 `status` deliberately does not claim scheduler, process, database, experiment,
 or runtime-worker state.
+
+## Q3 authoritative evidence routing
+
+### `domains`
+
+Lists the deterministic evidence domains known to the investigator and reports
+missing routed authority paths.
+
+### `evidence <domain>`
+
+Returns four deliberately separate evidence layers:
+
+1. **constitutional authority** — relevant numbered sections of Volume I;
+2. **domain authority** — numbered sections of the owning architecture volume;
+3. **accepted decisions** — ADR files routed for investigation of that domain;
+4. **implementation authority** — checked-in schema/contracts/registries that
+   demonstrate shipped behavior.
+
+Supported domains are:
+
+```text
+data-pipeline
+labels
+model
+training
+inference
+experiment-lifecycle
+recommendations
+profitability
+research-automation
+scheduler
+database
+```
+
+The Markdown section spans are discovered from headings at runtime. The routing
+map is navigation metadata; it does not copy normative prose, does not establish
+exclusivity, and does not supersede architecture. A routed ADR is a relevant
+starting point, not a claim that no other ADR can apply.
+
+The architecture distinction remains controlling: architecture describes
+intended contracts, while implementation demonstrates currently shipped
+behavior. Neither silently overrides the other.
+
+Example:
+
+```bash
+python3 Scripts/ExpertAdvisorInvestigator.py evidence scheduler --format json
+```
 
 ## Safety boundary
 
@@ -65,7 +105,8 @@ publication, semantic-layout mutation, or production cutover.
 
 Its output is evidence for investigation, not authorization for an operational
 action. Repository architecture, accepted ADRs, physical schema, semantic
-contracts, and normal operator controls remain authoritative.
+contracts, and normal operator controls remain authoritative. Live operational
+state belongs in a separately authorized interface.
 
 ## Machine-readable use
 
@@ -73,12 +114,6 @@ JSON output is intended for GPT, Qwen, Codex, shell tooling, and other
 investigators that need deterministic repository context before inspecting
 deeper authoritative sources.
 
-Example:
-
-```bash
-python3 Scripts/ExpertAdvisorInvestigator.py semantics --format json
-```
-
 The investigator should be extended only when a new query can be answered
-deterministically from checked-in authoritative sources. Live operational state
-belongs in a separately authorized interface rather than this tool.
+deterministically from checked-in authoritative sources. Do not add free-text
+heuristic routing that can silently choose the wrong authority.
