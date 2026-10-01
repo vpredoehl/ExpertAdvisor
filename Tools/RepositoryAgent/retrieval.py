@@ -341,6 +341,78 @@ def _topic_resolved_symbols(topic, max_symbols=18):
     ranked.sort(key=lambda item: (item[0], item[1]))
     return [(token, resolved) for _, _, token, resolved in ranked[:max_symbols]]
 
+def _semantic_identifier_terms(text):
+    """Return lightweight lexical terms for generic source-symbol ranking.
+
+    This is deliberately mechanical: split prose/identifiers, split camelCase,
+    and normalize a few common English suffixes. It does not encode repository
+    or benchmark-specific vocabulary.
+    """
+    terms = set()
+    for raw in re.findall(r"[A-Za-z][A-Za-z0-9_]*", str(text or "")):
+        pieces = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", raw).replace("_", " ").split()
+        for piece in pieces:
+            word = piece.lower()
+            if len(word) < 3:
+                continue
+            terms.add(word)
+            for suffix in ("ing", "tion", "ed", "er", "s"):
+                if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+                    terms.add(word[:-len(suffix)])
+    return terms
+
+
+def _retrieved_category_symbols(topic, category, retrieved_lines, max_symbols=16):
+    """Rank resolvable call symbols already present in retrieved source.
+
+    Phase 5C could close a relationship when the extractor proposed a caller,
+    but it could miss a stronger implementation that had already been read.
+    This helper never broadens retrieval: it considers only callable symbols on
+    exact lines already in ``retrieved_lines`` and uses the repository index only
+    to resolve structural facts. Ranking favors lexical alignment with the
+    missing category/topic and compact, concrete repository footprints.
+    """
+    idx = get_repository_index()
+    target_text = " ".join([
+        str(category),
+        str(topic.get("title", "")),
+        str(topic.get("question", "")),
+        str(topic.get("hints", "")),
+        str(TOPIC_NAVIGATION.get(topic.get("id"), "")),
+    ])
+    target_terms = _semantic_identifier_terms(target_text)
+    seen = set()
+    ranked = []
+    position = 0
+    for filename in sorted(retrieved_lines):
+        for line in sorted(retrieved_lines[filename]):
+            text = retrieved_lines[filename][line]
+            for qualified in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\(", text):
+                symbol = qualified.split("::")[-1]
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                resolved = idx.resolve_symbol(symbol)
+                if not (resolved.get("definitions") or resolved.get("callers") or resolved.get("callees")):
+                    continue
+                symbol_terms = _semantic_identifier_terms(symbol)
+                overlap = len(symbol_terms & target_terms)
+                score = overlap * 20 + _navigation_symbol_score(symbol, resolved)
+                # A symbol whose implementation or use is itself already read is
+                # more useful for an exact-provenance bundle than an index-only hit.
+                retrieved_structural_hits = 0
+                for row in resolved.get("definitions", []) + resolved.get("callers", []):
+                    f = row.get("file")
+                    n = row.get("line")
+                    if f and isinstance(n, int) and n in retrieved_lines.get(f, {}):
+                        retrieved_structural_hits += 1
+                score += min(retrieved_structural_hits, 4) * 3
+                ranked.append((-score, -overlap, position, symbol, resolved))
+                position += 1
+    ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [(symbol, resolved) for _, _, _, symbol, resolved in ranked[:max_symbols]]
+
+
 def _retrieved_window(retrieved_lines, filename, line, radius=6):
     """Return a narrow exact-provenance window around an already retrieved line."""
     file_lines = retrieved_lines.get(filename, {})
@@ -432,6 +504,31 @@ def generic_relationship_bundle_candidates(
             if filename and isinstance(line, int) and line in retrieved_lines.get(filename, {}):
                 add(_retrieved_window(retrieved_lines, filename, line),
                     f"evidence_call:{symbol}")
+
+    # Next, prefer concrete resolvable call symbols from source that was already
+    # retrieved for this investigation. This is category-directed completion,
+    # not broader search: no new file or line enters the bundle unless its exact
+    # source was already read. It lets a missing category move outward from a
+    # nearby producer/caller toward a more relevant consumer/load/store path.
+    for symbol, resolved in _retrieved_category_symbols(topic, category, retrieved_lines):
+        for definition in resolved.get("definitions", [])[:4]:
+            filename = definition.get("file")
+            line = definition.get("line")
+            if filename and isinstance(line, int) and line in retrieved_lines.get(filename, {}):
+                add(
+                    _retrieved_window(retrieved_lines, filename, line, radius=12),
+                    f"category_definition:{symbol}",
+                )
+        for site in resolved.get("callers", [])[:6]:
+            filename = site.get("file")
+            line = site.get("line")
+            if filename and isinstance(line, int) and line in retrieved_lines.get(filename, {}):
+                add(
+                    _retrieved_window(retrieved_lines, filename, line),
+                    f"category_call:{symbol}",
+                )
+        if len(out) >= max_items:
+            break
 
     # Add exact retrieved windows around topic-derived call sites. These are
     # structural candidates only; they cannot become evidence without semantic
