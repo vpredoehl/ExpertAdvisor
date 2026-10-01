@@ -283,6 +283,37 @@ int main()
     assert(sameSeed.compatibility == Replication::Compatibility::Compatible);
     assert(sameSeed.seedReplicationMode ==
            Replication::SeedReplicationMode::SameSeedRepeatedPairs);
+    assert(Metric(sameSeed, "inference_accuracy").pairCount == 2);
+
+    // A single matched A/B seed is valid paired evidence. Repeating it does
+    // not turn the family into different-seed replication.
+    const auto oneSameSeedPair = PairResult(
+        Arm(105, "", 42, 0.60, 0.10),
+        Arm(106, std::string{kMask}, 42, 0.70, 0.20));
+    assert(oneSameSeedPair.status == Pair::Status::ComparableComplete);
+    const std::string oneSameSeed = "42";
+    assert(std::find_if(oneSameSeedPair.armAScientificIdentity.begin(),
+                        oneSameSeedPair.armAScientificIdentity.end(),
+                        [&](const auto& field) {
+                            return field.name == "fresh_initialization_seed" &&
+                                field.value == oneSameSeed;
+                        }) != oneSameSeedPair.armAScientificIdentity.end());
+
+    auto missingSeedA = Arm(107, "", 43, 0.60, 0.10);
+    auto missingSeedB = Arm(108, std::string{kMask}, 43, 0.70, 0.20);
+    missingSeedA.extended.freshInitializationSeed.reset();
+    missingSeedB.extended.freshInitializationSeed.reset();
+    const auto missingSeed = Replication::Compare(
+        {PairResult(Arm(109, "", 42, 0.60, 0.10),
+                    Arm(110, std::string{kMask}, 42, 0.70, 0.20)),
+         PairResult(missingSeedA, missingSeedB)});
+    assert(missingSeed.seedReplicationMode ==
+           Replication::SeedReplicationMode::UnavailableOrNotApplicable);
+    assert(missingSeed.replicationDimensions[1].armASeed == std::nullopt);
+    assert(missingSeed.replicationDimensions[1].armBSeed == std::nullopt);
+    assert(Replication::Render(missingSeed).find(
+               "seed_replication_mode=unavailable_or_not_applicable") !=
+           std::string::npos);
 
     auto a1 = Arm(201, "", 42, 0.60, 0.10);
     auto b1 = Arm(202, std::string{kMask}, 42, 0.70, 0.20);
@@ -539,6 +570,29 @@ int main()
            std::string::npos);
     assert(familyRendered.find("subjective_winner=NONE") != std::string::npos);
 
+    // A context built from repeated matched pairs with one seed remains valid
+    // local evidence, but cannot satisfy the different-seed cross-context
+    // replication contract.
+    const auto sameSeedContext = Replication::CompareFamilies({
+        {PairResult(cadA1, cadB1), PairResult(cadA2, cadB2)},
+        {PairResult(Arm(311, "", 46, 0.60, 0.10),
+                    Arm(312, std::string{kMask}, 46, 0.70, 0.20)),
+         PairResult(Arm(313, "", 46, 0.65, 0.30),
+                    Arm(314, std::string{kMask}, 46, 0.60, 0.20))}});
+    assert(sameSeedContext.families[1].replication.compatibility ==
+           Replication::Compatibility::Compatible);
+    assert(sameSeedContext.families[1].replication.seedReplicationMode ==
+           Replication::SeedReplicationMode::SameSeedRepeatedPairs);
+    assert(sameSeedContext.crossContextCompatibility ==
+           Replication::Compatibility::Incompatible);
+    assert(std::find(sameSeedContext.crossContextReasons.begin(),
+                     sameSeedContext.crossContextReasons.end(),
+                     "context_2_within_context_replication_contract_not_satisfied") !=
+           sameSeedContext.crossContextReasons.end());
+    assert(Replication::RenderFamilyReport(sameSeedContext).find(
+               "seed_replication_mode=same_seed_repeated_pairs") !=
+           std::string::npos);
+
     FixtureSource source;
     source.evidence.emplace(101, Arm(101, "", 42, 0.60, 0.10));
     source.evidence.emplace(102, Arm(102, std::string{kMask}, 42, 0.70, 0.20));
@@ -591,6 +645,10 @@ int main()
         {PairResult(audGoodA1, audGoodB1), PairResult(audGoodA2, audGoodB2),
          PairResult(audGoodA3, audGoodB3)}});
     assert(cross.crossContextCompatibility == Replication::Compatibility::Compatible);
+    assert(cross.families[0].replication.seedReplicationMode ==
+           Replication::SeedReplicationMode::DifferentSeeds);
+    assert(cross.families[1].replication.seedReplicationMode ==
+           Replication::SeedReplicationMode::DifferentSeeds);
     assert(cross.families[0].homogeneousPredictionHorizon == "4");
     assert(cross.families[1].homogeneousPredictionHorizon == "6");
     const auto crossAccuracy = std::find_if(cross.crossContextMetrics.begin(),
@@ -611,6 +669,8 @@ int main()
            std::string::npos);
     assert(crossRendered.find("subjective_winner=NONE") != std::string::npos);
     assert(crossRendered.find("recommendation=") == std::string::npos);
+    assert(crossRendered.find("seed_replication_mode=different_seed_replications") !=
+           std::string::npos);
 
     // A third valid context remains an ordered family-level observation. Its
     // negative B-minus-A mean is preserved rather than offset by pooling raw

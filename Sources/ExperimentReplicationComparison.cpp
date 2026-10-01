@@ -969,6 +969,9 @@ std::string RenderFamilyReport(const FamilyReport& report)
                << ",pair_count=" << family.replication.pairs.size()
                << ",seed_set=" << SeedSet(family.replication)
                << ",replication_dimension=fresh_initialization_seed"
+               << ",seed_replication_mode="
+               << SeedReplicationModeText(
+                      family.replication.seedReplicationMode)
                << ",compatibility="
                << CompatibilityText(family.replication.compatibility)
                << '\n';
