@@ -294,15 +294,12 @@ def sanitize_evidence_package(topic, obj, retrieved_lines, model, tokenizer):
             )
 
     individually_covered = {item["category"] for item in clean_evidence}
-    bundle_categories = {
-        "worker_to_spawn_linkage",
-        "preemption_execution",
-        "capacity_or_dispatch_gate",
-        "role_specific_candidate_or_selection",
-    }
-
+    # Any still-missing required category may need a relationship proof.
+    # Candidate construction is repository-generic and the existing semantic
+    # bundle verifier remains authoritative, so no benchmark-specific category
+    # allow-list is needed here.
     for category in topic["required_evidence"]:
-        if category in individually_covered or category not in bundle_categories:
+        if category in individually_covered:
             continue
         candidates = generic_relationship_bundle_candidates(
             topic,

@@ -401,6 +401,38 @@ def generic_relationship_bundle_candidates(
         for item in items[:2]:
             add(item, f"sibling_category:{other_category}")
 
+    # Follow concrete symbols that appeared in category-local retrieved source.
+    # This closes relationships the investigator already discovered (for example
+    # caller -> callee implementation) without relying on benchmark vocabulary.
+    # Only definitions/call sites whose exact lines were already retrieved can
+    # enter a bundle; semantic acceptance is still delegated to the verifier.
+    evidence_symbols = []
+    evidence_symbol_seen = set()
+    for item in provenance_valid_by_category.get(category, []):
+        text = item.get("excerpt", "")
+        for qualified in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\(", text):
+            symbol = qualified.split("::")[-1]
+            if symbol in evidence_symbol_seen:
+                continue
+            evidence_symbol_seen.add(symbol)
+            resolved = idx.resolve_symbol(symbol)
+            if resolved.get("definitions") or resolved.get("callers"):
+                evidence_symbols.append((symbol, resolved))
+
+    for symbol, resolved in evidence_symbols[:12]:
+        for definition in resolved.get("definitions", [])[:4]:
+            filename = definition.get("file")
+            line = definition.get("line")
+            if filename and isinstance(line, int) and line in retrieved_lines.get(filename, {}):
+                add(_retrieved_window(retrieved_lines, filename, line, radius=12),
+                    f"evidence_definition:{symbol}")
+        for site in resolved.get("callers", [])[:6]:
+            filename = site.get("file")
+            line = site.get("line")
+            if filename and isinstance(line, int) and line in retrieved_lines.get(filename, {}):
+                add(_retrieved_window(retrieved_lines, filename, line),
+                    f"evidence_call:{symbol}")
+
     # Add exact retrieved windows around topic-derived call sites. These are
     # structural candidates only; they cannot become evidence without semantic
     # bundle acceptance.
