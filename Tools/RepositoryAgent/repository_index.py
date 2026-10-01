@@ -231,6 +231,10 @@ class RepositoryIndex:
                     break
 
                 if brace_pos >= 0:
+                    # A candidate window must not cross a closing brace from a
+                    # preceding scope/function into the next function head.
+                    if "}" in candidate[:brace_pos]:
+                        break
                     head = candidate[:brace_pos + 1]
                     name = self._candidate_function_name(head)
                     if name:
@@ -313,6 +317,24 @@ class RepositoryIndex:
                     short = callee.split("::")[-1]
                     if short in _CONTROL_WORDS:
                         continue
+                    # A function definition signature looks call-like to the
+                    # lightweight regex. Suppress that synthetic self-edge
+                    # anywhere from the indexed signature start through the
+                    # line containing its opening body brace. Genuine recursive
+                    # calls later in the body remain indexed.
+                    if owner is not None and short == owner.name.split("::")[-1]:
+                        signature_has_open_brace = any(
+                            "{" in lines[k - 1]
+                            for k in range(owner.start_line, line_no + 1)
+                        )
+                        if not signature_has_open_brace:
+                            continue
+                        if line_no == owner.start_line and "{" in line:
+                            continue
+                        if "{" in line:
+                            prefix = line.split("{", 1)[0]
+                            if match.start() < len(prefix):
+                                continue
                     call = CallSite(file, line_no, owner_name, callee)
                     self.calls_by_callee[short].append(call)
                     if callee != short:
