@@ -183,6 +183,38 @@ their persisted immutable executable path across current-worker publication.
 Retention is indefinite/manual and reachability-based; the publisher performs
 no deletion.
 
+### Historical schema-v1 inference bootstrap
+
+When an archived `LSTM_Release` is the supported inference artifact for a
+historical semantic layout, publish exactly one immutable historical INFER
+binding with:
+
+```bash
+/usr/bin/python3 Scripts/PublishHistoricalInferenceWorker.py \
+  --artifact-root /absolute/path/to/Builds/SemanticWorkers \
+  --inference-executable /absolute/path/to/LSTM_Release \
+  --semantic-layout <historical-layout> \
+  --model-input-width <historical-width> \
+  --source-commit <approved-40-hex-commit>
+```
+
+This command requires an existing valid registry and an absolute executable
+named `LSTM_Release`. It verifies the exact embedded source commit and the
+managed Metal runtime package, but deliberately does not require the modern
+dedicated-inference `--build-identity` interface. It adds only a schema-v1
+`worker_role: infer`, `worker_rule: historical`, `capabilities: [infer]`,
+priority-zero binding at the legacy path
+`layout<N>/<commit>/<sha256>/LSTM_Release`; it never changes `current_layout`,
+existing worker rules, or the `current` convenience link. The success summary
+records the layout, width, immutable executable SHA-256, runtime identity, and
+that `current_layout` was preserved.
+
+The scheduler is a read-only consumer of a validated startup registry
+snapshot. After a successful historical binding publication, restart scheduler
+authority (or use a separately approved explicit reload procedure) before
+expecting semantic admission to use it. Publication itself neither reloads nor
+restarts an already-running scheduler.
+
 ### Current semantic layout rollover
 
 `PublishSemanticWorker.py` remains intentionally infer-only. It can replace an
