@@ -2,7 +2,29 @@
 import tempfile
 from pathlib import Path
 
-from ..claim_evidence import VerifiedClaimLedger, CLAIM_ACCEPTED
+from ..claim_evidence import (
+    CLAIM_ACCEPTED,
+    VerifiedClaimLedger,
+    resolve_claim_ledger_path,
+)
+
+
+with tempfile.TemporaryDirectory() as td:
+    root = Path(td)
+    home = root / "home"
+    override = "~/custom-claims.json"
+
+    # A non-empty override is used exactly as supplied, including a literal tilde.
+    assert resolve_claim_ledger_path({"EXPERTADVISOR_CLAIM_EVIDENCE_LEDGER": override}, home=home) == Path(override)
+
+    default = resolve_claim_ledger_path({}, home=home)
+    assert default == home / "Library/Caches/ExpertAdvisor/RepositoryAgent/verified_claims.json"
+    # Resolving a path has no persistence side effects.
+    assert not home.exists()
+    assert not (home / "Library").exists()
+    assert not (home / "Library/Caches").exists()
+    assert not default.parent.exists()
+    assert not default.exists()
 
 with tempfile.TemporaryDirectory() as td:
     path = Path(td) / "claims.json"

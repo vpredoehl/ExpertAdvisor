@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 CLAIM_LEDGER_SCHEMA_VERSION = 1
@@ -25,12 +26,20 @@ CLAIM_REJECTED = "rejected"
 CLAIM_INDETERMINATE = "indeterminate"
 CLAIM_VERIFIER_ERROR = "verifier_error"
 
-CLAIM_LEDGER_PATH = Path(
-    os.environ.get(
-        "EXPERTADVISOR_CLAIM_EVIDENCE_LEDGER",
-        str(Path(__file__).with_name(".expertadvisor_verified_claims.json")),
-    )
-)
+
+def resolve_claim_ledger_path(
+    environ: Mapping[str, str] | None = None, *, home: Path | None = None
+) -> Path:
+    """Select the claim-evidence ledger location without creating filesystem state."""
+    environ = os.environ if environ is None else environ
+    override = environ.get("EXPERTADVISOR_CLAIM_EVIDENCE_LEDGER")
+    if override:
+        return Path(override)
+    home = Path.home() if home is None else Path(home)
+    return home / "Library" / "Caches" / "ExpertAdvisor" / "RepositoryAgent" / "verified_claims.json"
+
+
+CLAIM_LEDGER_PATH = resolve_claim_ledger_path()
 
 
 def normalize_claim(claim: str) -> str:
