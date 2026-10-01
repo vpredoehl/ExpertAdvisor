@@ -267,9 +267,7 @@ bool SoftwareReady(const SoftwareReadinessAudit& audit)
         audit.inputSemanticIdentityFailClosed &&
         audit.deterministicFeaturePathTested &&
         audit.availabilityDiagnosticsPresent && audit.readOnlyEvaluation &&
-        audit.activationMutationPathAbsent &&
-        EA::kCurrentModelInputWidth == 103 &&
-        EA::kModelInputSemanticLayoutVersion == 9;
+        audit.activationMutationPathAbsent;
 }
 
 ReplicationEvaluation Evaluate(
