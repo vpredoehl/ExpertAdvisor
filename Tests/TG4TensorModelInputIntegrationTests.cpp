@@ -7,6 +7,7 @@
 #include "Tensor.hpp"
 #include "TG4ProductionStreamingPulseAdapter.hpp"
 #include "CausalFibonacciStructuralFeatures.hpp"
+#include "CausalPocketFeatures.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <string_view>
 #include <vector>
 
 extern "C" bool LstmRuntimeDiagnosticLoggingEnabled()
@@ -97,9 +99,9 @@ void AssertExact(const std::vector<float>& lhs, const std::vector<float>& rhs)
 
 void TestLayoutAndCanonicalPulseAlignment()
 {
-    static_assert(EA::kModelInputSemanticLayoutVersion == 9);
-    static_assert(EA::kCurrentModelInputWidth == 103);
-    static_assert(feature_size == 99);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 10);
+    static_assert(EA::kCurrentModelInputWidth == 114);
+    static_assert(feature_size == 110);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);
@@ -108,13 +110,22 @@ void TestLayoutAndCanonicalPulseAlignment()
     bars.reserve(192);
     Tensor tensor{"eurusdrmp"};
     EA::CausalFibonacciFeatures::Producer fibReplayProducer{"eurusdrmp"};
+    EA::CausalPocketFeatures::Producer pocketReplayProducer{"eurusdrmp"};
     std::vector<std::array<float, EA::CausalFibonacciFeatures::kFeatureCount>> fibReplay;
+    std::vector<std::array<float, EA::CausalPocketFeatures::kFeatureCount>>
+        pocketReplay;
     for (std::size_t index = 0; index < 192; ++index)
     {
         bars.push_back(Bar(index));
-        fibReplay.push_back(fibReplayProducer.AddCompletedBar(
-            {bars.back().time.time_since_epoch().count(), bars.back().open,
-             bars.back().high, bars.back().low, bars.back().close}));
+        const EA::TG1A::Candle completedBar{
+            bars.back().time.time_since_epoch().count(),
+            static_cast<double>(bars.back().open),
+            static_cast<double>(bars.back().high),
+            static_cast<double>(bars.back().low),
+            static_cast<double>(bars.back().close)};
+        fibReplay.push_back(fibReplayProducer.AddCompletedBar(completedBar));
+        pocketReplay.push_back(
+            pocketReplayProducer.AddCompletedBar(completedBar));
         tensor.Add(bars.back());
     }
     const auto replay = EA::TG4Pulse::ReplayCanonicalCompletedBars(
@@ -140,9 +151,12 @@ void TestLayoutAndCanonicalPulseAlignment()
         for (std::size_t column = 0; column < fibReplay[row].size(); ++column)
             assert(values[fibRecentPriceScaleValidCol + column] ==
                    fibReplay[row][column]);
+        for (std::size_t column = 0; column < pocketReplay[row].size(); ++column)
+            assert(values[pocketRecentPriceScaleValidCol + column] ==
+                   pocketReplay[row][column]);
     }
 
-    const auto semantics = EA::ModelInputFeatureSemantics(103);
+    const auto semantics = EA::ModelInputFeatureSemantics(114);
     assert(semantics.at(73).name == "tg4_inner_break_any");
     assert(semantics.at(74).name == "tg4_source_tg3_structurally_eligible");
     assert(semantics.at(75).name == "tg4_source_tg3_confluent");
@@ -150,8 +164,24 @@ void TestLayoutAndCanonicalPulseAlignment()
            semantics.at(75).categorical);
     assert(semantics.at(76).name == "fib_recent_price_scale_valid");
     assert(semantics.at(98).name == "fib_down_recent_median_pullback_0618_signed_atr");
-    assert(semantics.at(99).name == "lookback_log_return_1_scaled");
-    assert(semantics.at(102).name == "lookback_log_return_16_scaled");
+    constexpr std::array<std::string_view, EA::CausalPocketFeatures::kFeatureCount>
+        pocketNames{{
+            "pocket_recent_price_scale_valid",
+            "pocket_bull_recent_count_log",
+            "pocket_bull_youngest_age20",
+            "pocket_bull_median_touch_distance",
+            "pocket_bull_median_close_distance",
+            "pocket_bull_median_width",
+            "pocket_bear_recent_count_log",
+            "pocket_bear_youngest_age20",
+            "pocket_bear_median_touch_distance",
+            "pocket_bear_median_close_distance",
+            "pocket_bear_median_width"}};
+    for (std::size_t column = 0; column < pocketNames.size(); ++column)
+        assert(semantics.at(pocketRecentPriceScaleValidCol + column).name ==
+               pocketNames[column]);
+    assert(semantics.at(110).name == "lookback_log_return_1_scaled");
+    assert(semantics.at(113).name == "lookback_log_return_16_scaled");
 
     // Full-history construction occurs before the scored window. Both model
     // consumers therefore use the exact stateful Tensor row at its boundary.
@@ -163,10 +193,16 @@ void TestLayoutAndCanonicalPulseAlignment()
     for (std::size_t column = tg4InnerBreakAnyCol;
          column <= tg4SourceTg3ConfluentCol; ++column)
         assert(training[column] == 0.0f || training[column] == 1.0f);
+    for (std::size_t column = 0; column < pocketReplay[scoreWindowStart].size();
+         ++column)
+        assert(training[pocketRecentPriceScaleValidCol + column] ==
+               pocketReplay[scoreWindowStart][column]);
 
     // State is causal: extending a stream cannot mutate already-emitted rows.
     std::vector<std::array<float, EA::CausalFibonacciFeatures::kFeatureCount>>
         prefix = fibReplay;
+    std::vector<std::array<float, EA::CausalPocketFeatures::kFeatureCount>>
+        pocketPrefix = pocketReplay;
     for (std::size_t index = 192; index < 224; ++index)
         tensor.Add(Bar(index));
     for (std::size_t row = 0; row < prefix.size(); ++row) {
@@ -175,22 +211,82 @@ void TestLayoutAndCanonicalPulseAlignment()
         for (std::size_t column = 0; column < prefix[row].size(); ++column)
             assert(physical.RawMemory()[fibRecentPriceScaleValidCol + column] ==
                    prefix[row][column]);
+        for (std::size_t column = 0; column < pocketPrefix[row].size(); ++column)
+            assert(physical.RawMemory()[pocketRecentPriceScaleValidCol + column] ==
+                   pocketPrefix[row][column]);
+    }
+
+    // Layout 9 projects only the immutable Tensor prefix through column 98,
+    // then appends its own return suffix at rows 99..102. Pocket columns are
+    // absent from the persisted width-103 model identity.
+    const auto layout9 = EA::ResolveModelInputContract(103, feature_size);
+    assert(layout9.tensorFeatureCount == causal_fibonacci_structural_feature_size);
+    std::vector<float> historicalLayout9(103, -1.0f);
+    const auto boundary = tensor.begin() +
+        static_cast<std::ptrdiff_t>(scoreWindowStart);
+    const auto boundaryPhysical = MetaNN::LowerAccess(*boundary);
+    EA::CopyTensorFeaturesForModelInput(historicalLayout9.data(),
+                                        boundaryPhysical.RawMemory(), layout9);
+    for (std::size_t column = 0; column < layout9.tensorFeatureCount; ++column)
+        assert(historicalLayout9[column] == training[column]);
+    for (std::size_t column = layout9.tensorFeatureCount;
+         column < historicalLayout9.size(); ++column)
+        assert(historicalLayout9[column] == -1.0f);
+    const std::size_t layout9Appended =
+        EA::AppendMultiHorizonReturnFeaturesAtGlobalPosition(
+            scoreWindowStart, historicalLayout9.data(), layout9.tensorFeatureCount,
+            1000.0f, [&tensor](std::size_t position) {
+                return tensor.RawCloseAtIterator(
+                    tensor.begin() + static_cast<std::ptrdiff_t>(position));
+            });
+    assert(layout9Appended == EA::kModelReturnFeatureCount);
+    for (std::size_t column = 0; column < EA::kModelReturnFeatureCount; ++column)
+        assert(historicalLayout9[layout9.tensorFeatureCount + column] ==
+               training[EA::kCurrentModelInputWidth -
+                        EA::kModelReturnFeatureCount + column]);
+
+    const auto layout9Semantics = EA::ModelInputFeatureSemantics(103);
+    assert(layout9Semantics.at(98).name ==
+           "fib_down_recent_median_pullback_0618_signed_atr");
+    assert(layout9Semantics.at(99).name == "lookback_log_return_1_scaled");
+    assert(layout9Semantics.at(102).name == "lookback_log_return_16_scaled");
+
+    // Distinct Pocket and return sentinels prove no Pocket value can alias
+    // into Layout 9's independently materialized historical return suffix.
+    std::array<float, feature_size> layout9SentinelPhysical{};
+    for (std::size_t column = 0; column < layout9SentinelPhysical.size(); ++column)
+        layout9SentinelPhysical[column] = 100.0f + static_cast<float>(column);
+    constexpr std::array<float, EA::kModelReturnFeatureCount> layout9Returns{{
+        -10.0f, -20.0f, -30.0f, -40.0f}};
+    std::array<float, EA::kCausalFibonacciStructuralModelInputWidth>
+        layout9SentinelInput{};
+    layout9SentinelInput.fill(-1.0f);
+    EA::CopyTensorFeaturesForModelInput(layout9SentinelInput.data(),
+                                        layout9SentinelPhysical.data(), layout9);
+    std::copy(layout9Returns.begin(), layout9Returns.end(),
+              layout9SentinelInput.begin() +
+                  static_cast<std::ptrdiff_t>(layout9.tensorFeatureCount));
+    for (std::size_t column = 0; column < layout9.tensorFeatureCount; ++column)
+        assert(layout9SentinelInput[column] == layout9SentinelPhysical[column]);
+    for (std::size_t column = 0; column < layout9Returns.size(); ++column)
+    {
+        assert(layout9SentinelInput[layout9.tensorFeatureCount + column] ==
+               layout9Returns[column]);
+        assert(layout9SentinelInput[layout9.tensorFeatureCount + column] !=
+               layout9SentinelPhysical[pocketRecentPriceScaleValidCol + column]);
     }
 
     // The retained layout-7 identity projects only the unchanged prefix and
     // retains its return suffix semantics at its historical positions.
     const auto layout7 = EA::ResolveModelInputContract(77, feature_size);
     std::vector<float> historical(77, -1.0f);
-    const auto boundary = tensor.begin() +
-        static_cast<std::ptrdiff_t>(scoreWindowStart);
-    const auto boundaryPhysical = MetaNN::LowerAccess(*boundary);
     EA::CopyTensorFeaturesForModelInput(historical.data(),
                                         boundaryPhysical.RawMemory(), layout7);
     for (std::size_t column = 0;
          column < causal_economic_event_surprise_feature_size; ++column)
         assert(historical[column] == training[column]);
 
-    // Distinct sentinels prove that a current physical layout-8 row cannot
+    // Distinct sentinels prove that a current physical layout-10 row cannot
     // alias TG4 positions into layout-7's historical return suffix.
     std::array<float, feature_size> sentinelPhysical{};
     for (std::size_t column = 0;

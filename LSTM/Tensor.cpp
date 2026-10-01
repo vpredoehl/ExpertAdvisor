@@ -137,6 +137,9 @@ void Tensor::Add(Feature f)
     const auto fibFeatures = causalFibonacciStructuralFeatures.AddCompletedBar(
         {epochSeconds, static_cast<double>(f.open), static_cast<double>(f.high),
          static_cast<double>(f.low), static_cast<double>(f.close)});
+    const auto pocketFeatures = causalPocketFeatures.AddCompletedBar(
+        {epochSeconds, static_cast<double>(f.open), static_cast<double>(f.high),
+         static_cast<double>(f.low), static_cast<double>(f.close)});
     if (tg4Pulse.barStart != f.time)
         throw std::logic_error("tg4_tensor_pulse_timestamp_alignment_mismatch");
     if (tg4Pulse.bits[2] > tg4Pulse.bits[1] ||
@@ -179,6 +182,8 @@ void Tensor::Add(Feature f)
             static_cast<float>(tg4Pulse.bits[2]);
         std::copy(fibFeatures.begin(), fibFeatures.end(),
                   low.MutableRawMemory() + fibRecentPriceScaleValidCol);
+        std::copy(pocketFeatures.begin(), pocketFeatures.end(),
+                  low.MutableRawMemory() + pocketRecentPriceScaleValidCol);
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -449,6 +454,8 @@ void Tensor::Add(Feature f)
     p[tg4SourceTg3ConfluentCol] = static_cast<float>(tg4Pulse.bits[2]);
     std::copy(fibFeatures.begin(), fibFeatures.end(),
               p + fibRecentPriceScaleValidCol);
+    std::copy(pocketFeatures.begin(), pocketFeatures.end(),
+              p + pocketRecentPriceScaleValidCol);
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;
