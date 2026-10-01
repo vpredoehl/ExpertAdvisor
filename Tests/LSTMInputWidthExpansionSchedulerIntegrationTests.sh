@@ -151,9 +151,9 @@ test "$(psql -X -At -q -d "${test_db}" -c \
 test "$(psql -X -At -q -d "${test_db}" -c \
     "SELECT string_agg(resume_expand_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = 'false,true'
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT string_agg(model_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '80,103'
+    "SELECT string_agg(model_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '80,114'
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT string_agg(model_input_semantic_layout_version::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '8,9'
+    "SELECT string_agg(model_input_semantic_layout_version::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '8,10'
 
 # A caller-supplied fresh seed is invalid for a resume even though the
 # SchedulerOptions default remains present for schema compatibility.
@@ -246,7 +246,7 @@ LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
 test "$(psql -X -At -q -d "${test_db}" -c \
     "SELECT string_agg(fresh_initialization_seed::text,',' ORDER BY fresh_initialization_seed) FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1")" = '43,44'
 test "$(psql -X -At -q -d "${test_db}" -c \
-    "SELECT string_agg(model_input_width::text || ':' || model_input_semantic_layout_version::text,',' ORDER BY fresh_initialization_seed) FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1")" = '103:9,103:9'
+    "SELECT string_agg(model_input_width::text || ':' || model_input_semantic_layout_version::text,',' ORDER BY fresh_initialization_seed) FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1")" = '114:10,114:10'
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --enqueue-experiment --symbol=eurusdrmp --prediction-horizon=4 \
@@ -259,9 +259,9 @@ test "$(psql -X -At -q -d "${test_db}" -c \
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --resume-model-id="${source_model_id}" \
     --resume-expand-input-width --target-epochs=81 --dry-run \
-    --ablate-features=historical_level_proximity \
+    --ablate-features=pocket_recent_price_scale_valid \
     >"${test_dir}/ablation.out" 2>&1
-grep -q 'feature_ablation_mask=historical_level_proximity' \
+grep -q 'feature_ablation_mask=pocket_recent_price_scale_valid' \
     "${test_dir}/ablation.out"
 
 # A semantic marker is optional only for models that predate the marker. Once
@@ -269,9 +269,12 @@ grep -q 'feature_ablation_mask=historical_level_proximity' \
 # expansion alike.
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -v source_model_id="${source_model_id}" <<'SQL'
-INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
-VALUES(:source_model_id,'model_input_semantics_meta',1,2,0,0,1.0),
-      (:source_model_id,'model_input_semantics_meta',1,2,0,1,999.0);
+UPDATE matrix
+SET value=999.0
+WHERE model_id=:source_model_id
+  AND param_name='model_input_semantics_meta'
+  AND row_idx=0
+  AND col_idx=1;
 SQL
 set +e
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
