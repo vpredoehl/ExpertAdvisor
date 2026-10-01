@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only machine interface for external RepositoryAgent controllers.
+"""Repository-read-only machine interface for external controllers.
 
-This module intentionally exposes repository facts and verified-ledger state,
-not benchmark answers. It performs no writes to the ExpertAdvisor repository,
-no shell execution, no database access, and no Git mutation.
+Repository source remains read-only. Claim verification may persist decisions only
+in the dedicated claim-evidence ledger; it cannot write repository source, invoke
+a shell, access the database, run builds/tests, or mutate Git.
 """
 from __future__ import annotations
 
@@ -14,28 +14,44 @@ from pathlib import Path
 from typing import Any
 
 from expertadvisor_agent import list_files, read_file, search
+from .claim_evidence import VerifiedClaimLedger
+from .claim_verifier import LazyClaimVerifierRuntime, MAX_BUNDLE_RANGES
 from .evidence import VerifiedEvidenceLedger
 from .repository_index import RepositoryIndex
 
 
 class CodexRepositoryInterface:
-    def __init__(self, *, ledger_path: str | None = None):
+    def __init__(self, *, ledger_path: str | None = None, claim_ledger_path: str | None = None,
+                 claim_runtime: LazyClaimVerifierRuntime | None = None):
         self._index: RepositoryIndex | None = None
         self._ledger_path = ledger_path
+        self._claim_ledger_path = claim_ledger_path
+        self._claim_runtime = claim_runtime
 
     def _idx(self) -> RepositoryIndex:
         if self._index is None:
             self._index = RepositoryIndex().build()
         return self._index
 
+    def _claim_ledger(self) -> VerifiedClaimLedger:
+        return VerifiedClaimLedger(Path(self._claim_ledger_path)) if self._claim_ledger_path else VerifiedClaimLedger()
+
+    def _claim_verifier(self) -> LazyClaimVerifierRuntime:
+        if self._claim_runtime is None:
+            self._claim_runtime = LazyClaimVerifierRuntime()
+        return self._claim_runtime
+
     def capabilities(self) -> dict[str, Any]:
         return {
             "protocol": "expertadvisor.repository.readonly.v1",
             "read_only": True,
+            "repository_read_only": True,
+            "controlled_state_writes": ["claim_evidence_ledger"],
             "operations": [
                 "capabilities", "list_files", "search", "read", "index_stats",
                 "resolve_symbol", "function_for_line", "relationship",
                 "trace_calls", "source_excerpt", "ledger_records",
+                "verify_source_claim", "verify_source_bundle_claim", "verified_claims",
             ],
             "forbidden_capabilities": [
                 "shell", "repository_write", "git_mutation", "database",
@@ -48,6 +64,25 @@ class CodexRepositoryInterface:
         try: value = int(value)
         except (TypeError, ValueError): value = default
         return max(low, min(high, value))
+
+    @staticmethod
+    def _required_text(request: dict[str, Any], name: str) -> str:
+        value = str(request.get(name, "")).strip()
+        if not value:
+            raise ValueError(f"{name} is required")
+        return value
+
+    def _claim_item(self, spec: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(spec, dict):
+            raise ValueError("source range must be an object")
+        file = self._required_text(spec, "file")
+        start = int(spec.get("start", 0))
+        end = int(spec.get("end", 0))
+        if start < 1 or end < start or end - start + 1 > 500:
+            raise ValueError("claim source range must be 1..500 lines")
+        # Retrieve source server-side. The caller cannot inject excerpt text into verification.
+        excerpt = self._idx().source_excerpt(file, start, end)
+        return {"file": file, "start": start, "end": end, "excerpt": excerpt}
 
     def dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(request, dict):
@@ -92,7 +127,60 @@ class CodexRepositoryInterface:
             if end < start or end - start + 1 > 500: raise ValueError("source_excerpt range must be 1..500 lines")
             return {"file": file, "start": start, "end": end, "content": self._idx().source_excerpt(file, start, end)}
         if op == "ledger_records": return self._ledger_records(request)
+        if op == "verify_source_claim": return self._verify_source_claim(request)
+        if op == "verify_source_bundle_claim": return self._verify_source_bundle_claim(request)
+        if op == "verified_claims": return self._verified_claims(request)
         raise ValueError(f"unsupported operation: {op!r}")
+
+    def _verify_source_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        topic_id = self._required_text(request, "topic_id")
+        topic = self._required_text(request, "topic")
+        claim = self._required_text(request, "claim")
+        item = self._claim_item(request)
+        ledger = self._claim_ledger()
+        cached = ledger.lookup(topic_id, claim, item["file"], item["start"], item["end"], item["excerpt"])
+        if cached is not None:
+            return {"topic_id": topic_id, "claim": claim, "evidence": {k: item[k] for k in ("file","start","end")}, "verdict": cached}
+        verdict = self._claim_verifier().verify_claim(topic, claim, item)
+        ledger.record_decision(topic_id, claim, item["file"], item["start"], item["end"], item["excerpt"], verdict)
+        return {"topic_id": topic_id, "claim": claim, "evidence": {k: item[k] for k in ("file","start","end")}, "verdict": verdict}
+
+    def _verify_source_bundle_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        topic_id = self._required_text(request, "topic_id")
+        topic = self._required_text(request, "topic")
+        claim = self._required_text(request, "claim")
+        ranges = request.get("ranges")
+        if not isinstance(ranges, list) or not 2 <= len(ranges) <= MAX_BUNDLE_RANGES:
+            raise ValueError(f"ranges must contain 2-{MAX_BUNDLE_RANGES} source ranges")
+        items = [self._claim_item(spec) for spec in ranges]
+        ledger = self._claim_ledger()
+        cached = ledger.lookup_bundle(topic_id, claim, items)
+        if cached is not None:
+            verdict = cached
+        else:
+            verdict = self._claim_verifier().verify_bundle_claim(topic, claim, items)
+            ledger.record_bundle_decision(topic_id, claim, items, verdict)
+        return {
+            "topic_id": topic_id, "claim": claim,
+            "evidence": [{k: item[k] for k in ("file","start","end")} for item in items],
+            "verdict": verdict,
+        }
+
+    def _verified_claims(self, request: dict[str, Any]) -> dict[str, Any]:
+        ledger = self._claim_ledger()
+        status = str(request.get("status", "")).strip().lower()
+        topic_id = str(request.get("topic_id", "")).strip()
+        claim = str(request.get("claim", "")).strip()
+        limit = self._bounded_int(request.get("limit"), default=100, low=1, high=500)
+        rows=[]
+        for kind, records in (("range", ledger.records), ("bundle", ledger.bundle_records)):
+            for key, rec in records.items():
+                if status and str(rec.get("status", "")).lower() != status: continue
+                if topic_id and str(rec.get("topic_id", "")) != topic_id: continue
+                if claim and str(rec.get("claim", "")) != claim: continue
+                rows.append({"kind": kind, "key": key, **rec})
+        rows.sort(key=lambda r:(str(r.get("topic_id","")), str(r.get("claim","")), r["kind"], r["key"]))
+        return {"records": rows[:limit], "returned": min(len(rows), limit), "matched": len(rows)}
 
     def _ledger_records(self, request: dict[str, Any]) -> dict[str, Any]:
         ledger = VerifiedEvidenceLedger(Path(self._ledger_path)) if self._ledger_path else VerifiedEvidenceLedger()
@@ -116,11 +204,12 @@ class CodexRepositoryInterface:
 
 
 def main() -> int:
-    parser=argparse.ArgumentParser(description="Read-only JSON interface to ExpertAdvisor RepositoryAgent primitives")
+    parser=argparse.ArgumentParser(description="Repository-read-only JSON interface to ExpertAdvisor RepositoryAgent primitives")
     parser.add_argument("--request", help="single JSON request object")
     parser.add_argument("--ledger", help="optional evidence-ledger path")
+    parser.add_argument("--claim-ledger", help="optional claim-evidence-ledger path")
     args=parser.parse_args()
-    iface=CodexRepositoryInterface(ledger_path=args.ledger)
+    iface=CodexRepositoryInterface(ledger_path=args.ledger, claim_ledger_path=args.claim_ledger)
     try:
         req=json.loads(args.request) if args.request else json.load(__import__('sys').stdin)
         print(json.dumps({"ok":True,"result":iface.dispatch(req)}, sort_keys=True))

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free stdio MCP adapter for the read-only RepositoryAgent interface."""
+"""Dependency-free stdio MCP adapter for the repository-read-only RepositoryAgent interface."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from typing import Any
 from .codex_interface import CodexRepositoryInterface
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.0.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.1.0"}
 
 TOOLS = [
     {
@@ -124,13 +124,73 @@ TOOLS = [
     },
     {
         "name": "ledger_records",
-        "description": "Read verified-evidence ledger records with optional filters.",
+        "description": "Read legacy category-based verified-evidence ledger records with optional filters.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "status": {"type": "string"},
                 "topic_id": {"type": "string"},
                 "category": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "verify_source_claim",
+        "description": "Semantically verify whether one exact server-retrieved source range establishes a proposed claim. The first uncached call lazily loads Qwen; the decision is stored only in the controlled claim ledger.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "claim": {"type": "string"},
+                "file": {"type": "string"},
+                "start": {"type": "integer", "minimum": 1},
+                "end": {"type": "integer", "minimum": 1},
+            },
+            "required": ["topic_id", "topic", "claim", "file", "start", "end"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "verify_source_bundle_claim",
+        "description": "Semantically verify whether 2-8 exact server-retrieved source ranges form a source-visible path establishing a proposed claim.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "claim": {"type": "string"},
+                "ranges": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file": {"type": "string"},
+                            "start": {"type": "integer", "minimum": 1},
+                            "end": {"type": "integer", "minimum": 1},
+                        },
+                        "required": ["file", "start", "end"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["topic_id", "topic", "claim", "ranges"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "verified_claims",
+        "description": "Read claim-verification ledger records with optional status/topic/claim filters.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "topic_id": {"type": "string"},
+                "claim": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 500},
             },
             "additionalProperties": False,
