@@ -153,6 +153,86 @@ DOMAIN_ROUTES = {
 FOUNDATION = "docs/architecture/Volume_I_Foundation.md"
 
 
+# Investigation profiles compose Q3 domain routes only.  They are planning
+# metadata, not independent authority maps.
+INVESTIGATION_PROFILES = {
+    "semantic-compatibility": {
+        "purpose": "Investigate model-input and semantic-worker compatibility.",
+        "domains": (
+            "model",
+            "training",
+            "inference",
+            "scheduler",
+            "experiment-lifecycle",
+            "database",
+        ),
+    },
+    "scheduler-dispatch": {
+        "purpose": "Investigate scheduler ownership, admission, and dispatch behavior.",
+        "domains": (
+            "scheduler",
+            "experiment-lifecycle",
+            "research-automation",
+            "database",
+        ),
+    },
+    "experiment-identity": {
+        "purpose": "Investigate deterministic experiment identity and lifecycle provenance.",
+        "domains": (
+            "experiment-lifecycle",
+            "model",
+            "database",
+        ),
+    },
+    "training-configuration": {
+        "purpose": "Investigate training configuration and model-input contracts.",
+        "domains": (
+            "training",
+            "model",
+            "experiment-lifecycle",
+            "database",
+        ),
+    },
+    "inference-evaluation": {
+        "purpose": "Investigate inference configuration, evaluation, and model provenance.",
+        "domains": (
+            "inference",
+            "model",
+            "experiment-lifecycle",
+            "database",
+        ),
+    },
+    "profitability-evaluation": {
+        "purpose": "Investigate persisted profitability evidence and its inference provenance.",
+        "domains": (
+            "profitability",
+            "inference",
+            "experiment-lifecycle",
+            "database",
+        ),
+    },
+    "recommendation-governance": {
+        "purpose": "Investigate advisory recommendation governance and lifecycle boundaries.",
+        "domains": (
+            "recommendations",
+            "experiment-lifecycle",
+            "research-automation",
+            "database",
+        ),
+    },
+    "research-automation": {
+        "purpose": "Investigate Campaign Operations and research-automation authority boundaries.",
+        "domains": (
+            "research-automation",
+            "scheduler",
+            "experiment-lifecycle",
+            "database",
+        ),
+    },
+}
+
+
+
 class InvestigatorError(RuntimeError):
     pass
 
@@ -357,6 +437,46 @@ def evidence(repo: Path, domain: str) -> dict:
         ),
     }
 
+
+def investigation_list() -> dict:
+    invalid = []
+    for name, definition in INVESTIGATION_PROFILES.items():
+        for domain in definition["domains"]:
+            if domain not in DOMAIN_ROUTES:
+                invalid.append({"investigation": name, "domain": domain})
+    return {
+        "kind": "investigations",
+        "investigations": sorted(INVESTIGATION_PROFILES),
+        "invalid_domains": invalid,
+    }
+
+
+def investigation_plan(repo: Path, profile: str) -> dict:
+    definition = INVESTIGATION_PROFILES.get(profile)
+    if definition is None:
+        raise InvestigatorError(f"unknown investigation profile: {profile}")
+
+    domains = list(definition["domains"])
+    invalid = [domain for domain in domains if domain not in DOMAIN_ROUTES]
+    if invalid:
+        raise InvestigatorError(
+            f"investigation profile {profile} has unknown domain(s): "
+            + ", ".join(invalid)
+        )
+
+    return {
+        "kind": "plan",
+        "investigation": profile,
+        "purpose": definition["purpose"],
+        "domains": domains,
+        "evidence": [evidence(repo, domain) for domain in domains],
+        "boundary": (
+            "This plan selects existing authoritative evidence routes. "
+            "It is not a diagnosis, live-state observation, or authorization."
+        ),
+    }
+
+
 def text_output(value: dict) -> str:
     kind = value["kind"]
     if kind == "authorities":
@@ -442,6 +562,41 @@ def text_output(value: dict) -> str:
         lines.append(f"boundary: {value['boundary']}")
         return "\n".join(lines)
 
+    if kind == "investigations":
+        lines = ["investigation_profiles:"]
+        lines.extend(f"  {name}" for name in value["investigations"])
+        lines.append(
+            "invalid_domains: "
+            + ("none" if not value["invalid_domains"] else json.dumps(value["invalid_domains"]))
+        )
+        return "\n".join(lines)
+
+    if kind == "plan":
+        lines = [
+            f"investigation: {value['investigation']}",
+            f"purpose: {value['purpose']}",
+            "domains:",
+        ]
+        lines.extend(f"  {domain}" for domain in value["domains"])
+        lines.append("evidence:")
+        for bundle in value["evidence"]:
+            lines.append(f"  {bundle['domain']}:")
+            lines.extend(
+                f"    {item['path']}:{item['line_start']}-{item['line_end']} — {item['heading']}"
+                for item in bundle["constitutional_authority"]
+            )
+            lines.append(f"    domain_authority={bundle['domain_authority']['path']}")
+            lines.extend(
+                f"    decision={item['path']} — {item['heading']}"
+                for item in bundle["accepted_decisions"]
+            )
+            lines.extend(
+                f"    implementation={path}"
+                for path in bundle["implementation_authority"]
+            )
+        lines.append(f"boundary: {value['boundary']}")
+        return "\n".join(lines)
+
     raise InvestigatorError(f"unsupported result kind: {kind}")
 
 
@@ -451,7 +606,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "command",
-        choices=("authorities", "semantics", "workers", "status", "domains", "evidence"),
+        choices=("authorities", "semantics", "workers", "status", "domains", "evidence", "investigations", "plan"),
     )
     parser.add_argument("domain", nargs="?")
     parser.add_argument(
@@ -461,10 +616,10 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args()
-    if args.command == "evidence" and not args.domain:
-        parser.error("evidence requires a domain")
-    if args.command != "evidence" and args.domain:
-        parser.error("domain is only valid with evidence")
+    if args.command in ("evidence", "plan") and not args.domain:
+        parser.error(f"{args.command} requires a name")
+    if args.command not in ("evidence", "plan") and args.domain:
+        parser.error("name is only valid with evidence or plan")
     return args
 
 
@@ -483,8 +638,12 @@ def main() -> int:
             value = repository_status(repo)
         elif args.command == "domains":
             value = domain_list(repo)
-        else:
+        elif args.command == "evidence":
             value = evidence(repo, args.domain)
+        elif args.command == "investigations":
+            value = investigation_list()
+        else:
+            value = investigation_plan(repo, args.domain)
     except (OSError, KeyError, json.JSONDecodeError, reference.ReferenceError,
             InvestigatorError) as error:
         print(f"ExpertAdvisorInvestigator: {error}", file=sys.stderr)

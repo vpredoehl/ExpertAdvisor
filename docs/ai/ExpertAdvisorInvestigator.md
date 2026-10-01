@@ -117,3 +117,43 @@ deeper authoritative sources.
 The investigator should be extended only when a new query can be answered
 deterministically from checked-in authoritative sources. Do not add free-text
 heuristic routing that can silently choose the wrong authority.
+
+
+## Deterministic investigation manifests
+
+Q4 adds named investigation profiles that compose the authoritative domain routes
+introduced by Q3.  Profiles contain domain names only.  They do not define file
+paths, ADR associations, schema authority, or any second evidence map.
+
+List the supported profiles:
+
+```bash
+python3 Scripts/ExpertAdvisorInvestigator.py investigations
+```
+
+Build an evidence manifest:
+
+```bash
+python3 Scripts/ExpertAdvisorInvestigator.py plan semantic-compatibility
+python3 Scripts/ExpertAdvisorInvestigator.py plan semantic-compatibility --format json
+```
+
+A plan preserves profile order and embeds the exact Q3 `evidence` result for each
+selected domain.  Therefore Q4 selects existing Q3 evidence routes; it does not
+rediscover, reinterpret, rank, or supersede them.
+
+The initial profiles are:
+
+- `semantic-compatibility`
+- `scheduler-dispatch`
+- `experiment-identity`
+- `training-configuration`
+- `inference-evaluation`
+- `profitability-evaluation`
+- `recommendation-governance`
+- `research-automation`
+
+An investigation plan is navigation metadata, not a diagnosis or answer.  It
+does not inspect PostgreSQL, processes, scheduler state, logs, experiments, or
+other live runtime state, and it grants no operational authorization.  Live
+evidence acquisition requires a separately authorized interface.

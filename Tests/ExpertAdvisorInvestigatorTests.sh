@@ -95,6 +95,84 @@ for domain in domains:
     )
 PY
 
+
+python3 "${investigator}" investigations --format json >"${tmp}/investigations.json"
+python3 - "${tmp}/investigations.json" <<'PY'
+import json, sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+assert d["kind"] == "investigations"
+expected={"semantic-compatibility","scheduler-dispatch","experiment-identity",
+          "training-configuration","inference-evaluation","profitability-evaluation",
+          "recommendation-governance","research-automation"}
+assert set(d["investigations"]) == expected
+assert d["invalid_domains"] == []
+PY
+
+python3 "${investigator}" plan semantic-compatibility --format json >"${tmp}/plan.json"
+python3 - "${tmp}/plan.json" "${investigator}" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+plan=json.loads(Path(sys.argv[1]).read_text())
+assert plan["kind"] == "plan"
+assert plan["investigation"] == "semantic-compatibility"
+assert plan["domains"] == ["model","training","inference","scheduler",
+                           "experiment-lifecycle","database"]
+assert len(plan["evidence"]) == len(plan["domains"])
+for domain, bundle in zip(plan["domains"], plan["evidence"]):
+    assert bundle["domain"] == domain
+    direct=json.loads(subprocess.check_output(
+        ["python3", sys.argv[2], "evidence", domain, "--format", "json"],
+        text=True,
+    ))
+    assert bundle == direct
+assert "not a diagnosis" in plan["boundary"]
+assert "live-state" in plan["boundary"]
+assert "authorization" in plan["boundary"]
+PY
+
+# Q4 profiles may select Q3 domain names only; they do not carry authority paths.
+python3 - "${investigator}" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+
+path=Path(sys.argv[1])
+sys.path.insert(0, str(path.parent))
+
+spec=importlib.util.spec_from_file_location("investigator_q4", path)
+m=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+for name, definition in m.INVESTIGATION_PROFILES.items():
+    assert set(definition) == {"purpose", "domains"}
+    assert definition["domains"]
+    assert len(definition["domains"]) == len(set(definition["domains"]))
+    for domain in definition["domains"]:
+        assert domain in m.DOMAIN_ROUTES
+        assert "/" not in domain
+PY
+
+# Every Q4 plan must resolve and exactly compose its declared Q3 domains.
+python3 - "${tmp}/investigations.json" "${investigator}" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+names=json.loads(Path(sys.argv[1]).read_text())["investigations"]
+for name in names:
+    raw=subprocess.check_output(
+        ["python3", sys.argv[2], "plan", name, "--format", "json"],
+        text=True,
+    )
+    plan=json.loads(raw)
+    assert plan["kind"] == "plan"
+    assert plan["investigation"] == name
+    assert [x["domain"] for x in plan["evidence"]] == plan["domains"]
+PY
+
+if python3 "${investigator}" plan definitely-not-a-profile >/dev/null 2>&1; then
+    echo "unknown Q4 investigation profile unexpectedly succeeded" >&2
+    exit 1
+fi
+
 # Preserve Q2's read-only regression boundary: commands must not alter tracked content.
 before="$(git -C "${repo_root}" diff --no-ext-diff --binary HEAD | shasum -a 256)"
 python3 "${investigator}" authorities >/dev/null
@@ -102,6 +180,12 @@ python3 "${investigator}" semantics >/dev/null
 python3 "${investigator}" workers >/dev/null
 python3 "${investigator}" status >/dev/null
 python3 "${investigator}" domains >/dev/null
+python3 "${investigator}" investigations >/dev/null
+for profile in semantic-compatibility scheduler-dispatch experiment-identity \
+               training-configuration inference-evaluation profitability-evaluation \
+               recommendation-governance research-automation; do
+    python3 "${investigator}" plan "${profile}" >/dev/null
+done
 for domain in data-pipeline labels model training inference experiment-lifecycle \
               recommendations profitability research-automation scheduler database; do
     python3 "${investigator}" evidence "${domain}" >/dev/null
