@@ -72,4 +72,27 @@ inline SemanticAdmissionDecision EvaluateSemanticWorkerAdmission(
     return {true, "semantic_worker_compatible"};
 }
 
+// Registry-backed scheduler routing deliberately separates persisted identity
+// completeness from executable compatibility.  The scheduler process may be
+// from an older semantic generation than a worker advertised by its validated
+// registry, so its compiled layout table is not an admission authority here.
+// Exact layout, width, role, and capability checks belong to
+// SemanticWorkerRegistry selection.
+inline SemanticAdmissionDecision EvaluateRegistryRoutedSemanticIdentity(
+    const std::string& phase,
+    const PersistedWorkerSemanticIdentity& persisted)
+{
+    if (phase == "analyze") return {true, "analyze_not_model_bearing"};
+    if (phase != "train" && phase != "infer")
+        return {false, "unsupported_model_bearing_phase"};
+    if (!persisted.inputWidth && !persisted.layoutVersion &&
+        phase == "train" && !persisted.modelIdentityExpected)
+        return {true, "legacy_identity_unavailable"};
+    if (!persisted.inputWidth && !persisted.layoutVersion)
+        return {false, "semantic_worker_identity_unavailable"};
+    if (!persisted.inputWidth || !persisted.layoutVersion)
+        return {false, "semantic_worker_identity_incomplete"};
+    return {true, "semantic_worker_identity_complete"};
+}
+
 } // namespace EA::Scheduler

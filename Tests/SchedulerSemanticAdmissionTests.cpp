@@ -55,5 +55,30 @@ int main()
     assert(!Scheduler::EvaluateSemanticWorkerAdmission(
                 "infer", {{77}, {7}}, historical).admissible);
 
+    // Scheduler generation and semantic-worker generation are separate.  An
+    // older scheduler capability still rejects Layout 10 when it is asked to
+    // act as the worker, but registry-routed identity loading must leave the
+    // exact Layout-10/114 compatibility decision to the worker registry.
+    Scheduler::WorkerSemanticCapability layout9Scheduler;
+    layout9Scheduler.layoutVersion = 9;
+    layout9Scheduler.maximumInputWidth = 103;
+    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 1>
+        layout9OnlyRegistry{{{9, 103, 8}}};
+    constexpr std::array<std::size_t, 1> layout9OnlyWidths{{103}};
+    layout9Scheduler.registry = layout9OnlyRegistry;
+    layout9Scheduler.registeredInputWidths = layout9OnlyWidths;
+    const Scheduler::PersistedWorkerSemanticIdentity layout10{{114}, {10}, false};
+    assert(!Scheduler::EvaluateSemanticWorkerAdmission(
+                "train", layout10, layout9Scheduler).admissible);
+    assert(Scheduler::EvaluateRegistryRoutedSemanticIdentity(
+               "train", layout10).admissible);
+    assert(Scheduler::EvaluateRegistryRoutedSemanticIdentity(
+               "infer", layout10).admissible);
+
+    const Scheduler::PersistedWorkerSemanticIdentity incompleteLayout10{
+        {114}, {}, false};
+    assert(!Scheduler::EvaluateRegistryRoutedSemanticIdentity(
+                "train", incompleteLayout10).admissible);
+
     return 0;
 }

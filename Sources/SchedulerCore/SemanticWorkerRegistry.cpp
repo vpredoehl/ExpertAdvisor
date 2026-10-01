@@ -781,9 +781,14 @@ SemanticWorkerRegistry SemanticWorkerRegistry::Load(
                           }) != 1)
             Fail("semantic_worker_registry_training_reference_current_rule_invalid");
     }
-    if (registry.currentLayoutVersion_ !=
-            request.expectedCurrentSemanticLayoutVersion ||
-        currentInference->second.front().modelInputWidth != request.expectedCurrentModelInputWidth ||
+    if ((request.expectedCurrentSemanticLayoutVersion &&
+         registry.currentLayoutVersion_ !=
+             *request.expectedCurrentSemanticLayoutVersion) ||
+        (request.expectedCurrentModelInputWidth &&
+         currentInference->second.front().modelInputWidth !=
+             *request.expectedCurrentModelInputWidth) ||
+        registry.currentWorker().modelInputWidth !=
+            currentInference->second.front().modelInputWidth ||
         !currentInference->second.front().capabilities.contains("infer") ||
         (registrySchemaVersion == kLegacySemanticWorkerRegistrySchemaVersion &&
          (!currentInference->second.front().capabilities.contains("train") ||
@@ -1071,14 +1076,12 @@ SemanticWorkerSelection SelectWorkerForRole(
                     ":width=" + std::to_string(*persisted.inputWidth) +
                     ":role=" + phase,
                 {}, *persisted.layoutVersion, *persisted.inputWidth, {}};
+    // The validated registry entry is the worker contract.  Do not re-check
+    // it against the scheduler process's compiled semantic-layout table: the
+    // scheduler and semantic-worker generations intentionally roll
+    // independently.  The exact layout/width/role/capability checks above are
+    // sufficient and preserve fail-closed selection.
     const SemanticWorkerArtifact* worker = eligible.front();
-    WorkerSemanticCapability capability;
-    capability.layoutVersion = worker->semanticLayoutVersion;
-    capability.maximumInputWidth = worker->modelInputWidth;
-    const auto admission = EvaluateSemanticWorkerAdmission(
-        phase, persisted, capability);
-    if (!admission.admissible)
-        return {false, admission.diagnostic, {}, 0, 0, {}};
     return {true, "semantic_worker_compatible",
             worker->canonicalExecutablePath,
             worker->semanticLayoutVersion,

@@ -2023,7 +2023,8 @@ EA::Scheduler::SemanticAdmissionDecision LoadSemanticWorkerAdmission(
     }
 
     if (loaded != nullptr) *loaded = persisted;
-    return EA::Scheduler::EvaluateSemanticWorkerAdmission(phase, persisted);
+    return EA::Scheduler::EvaluateRegistryRoutedSemanticIdentity(
+        phase, persisted);
 }
 
 const EA::Scheduler::SemanticWorkerRegistry&
@@ -10662,7 +10663,9 @@ int RunScheduler(
         options.semanticWorkerRegistry =
             EA::Scheduler::SemanticWorkerRegistry::Load({
                 options.semanticWorkerRegistryPath,
-                options.legacyLayout6InferWorkerPath});
+                options.legacyLayout6InferWorkerPath,
+                std::nullopt,
+                std::nullopt});
         options.currentWorkerExecutablePath =
             options.semanticWorkerRegistry->currentWorker()
                 .canonicalExecutablePath;

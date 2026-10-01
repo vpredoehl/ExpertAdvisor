@@ -90,9 +90,12 @@ struct SemanticWorkerRegistryLoadRequest
 {
     std::string registryPath;
     std::optional<std::string> legacyLayout6ExecutableAssertion;
-    int expectedCurrentSemanticLayoutVersion =
+    // Source-bound callers retain the default compiled-contract assertion.
+    // A scheduler may explicitly omit both expectations because its
+    // generation is independent of the validated worker registry generation.
+    std::optional<int> expectedCurrentSemanticLayoutVersion =
         EA::kModelInputSemanticLayoutVersion;
-    std::size_t expectedCurrentModelInputWidth =
+    std::optional<std::size_t> expectedCurrentModelInputWidth =
         EA::kCurrentModelInputWidth;
 };
 

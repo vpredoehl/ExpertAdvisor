@@ -18,6 +18,17 @@ test "$(rg -c 'LoadTrainingWorkerSelection\(' "${daemon}")" -ge 4
 rg -U -q 'LoadSemanticWorkerAdmission\([\s\S]{0,700}feature_ablation_mask[\s\S]{0,1000}canonicalFeatureAblationMask' "${daemon}"
 rg -U -q 'ParseForSemanticLayout\([\s\S]{0,300}\*persisted\.layoutVersion' "${daemon}"
 rg -U -q 'LoadTrainingWorkerSelection[\s\S]{0,900}expectedFeatureAblationMask[\s\S]{0,1000}semantic_worker_training_capability_identity_mismatch[\s\S]{0,500}RequiredTrainingWorkerCapabilities[\s\S]{0,900}SelectTrainingWorker' "${daemon}"
+rg -U -q 'LoadSemanticWorkerAdmission[\s\S]{0,5000}EvaluateRegistryRoutedSemanticIdentity' "${daemon}"
+rg -U -q 'SemanticWorkerRegistry::Load\(\{[\s\S]{0,300}semanticWorkerRegistryPath,[\s\S]{0,200}legacyLayout6InferWorkerPath,[\s\S]{0,100}std::nullopt,[\s\S]{0,100}std::nullopt' "${daemon}"
+if rg -U -q 'LoadSemanticWorkerAdmission[\s\S]{0,5000}return EA::Scheduler::EvaluateSemanticWorkerAdmission' "${daemon}"; then
+    echo "registry-backed scheduler admission still uses the scheduler generation" >&2
+    exit 1
+fi
+if rg -U -q 'SelectWorkerForRole[\s\S]{0,7000}EvaluateSemanticWorkerAdmission' \
+    "${repo_root}/Sources/SchedulerCore/SemanticWorkerRegistry.cpp"; then
+    echo "semantic worker selection still uses the scheduler generation" >&2
+    exit 1
+fi
 rg -U -q 'SemanticWorkerPreflight\([\s\S]{0,1800}phase == "train"[\s\S]{0,400}LoadTrainingWorkerSelection[\s\S]{0,700}validateRuntimeForExecutable\(executable\)' "${daemon}"
 rg -U -q 'ReserveExperimentWorkerAttempt\([\s\S]{0,1800}phase == "train"[\s\S]{0,500}LoadTrainingWorkerSelection\([\s\S]{0,300}&experiment\.featureAblationMask[\s\S]{0,1400}validateRuntimeForExecutable\(selectedWorkerExecutable\)[\s\S]{0,1400}findByCanonicalExecutable\(selectedWorkerExecutable\)' "${daemon}"
 rg -U -q 'validateRuntimeForExecutable\(selectedWorkerExecutable\)[\s\S]{0,1000}hasCapacity\(phase, maximumCapacity\)' "${daemon}"

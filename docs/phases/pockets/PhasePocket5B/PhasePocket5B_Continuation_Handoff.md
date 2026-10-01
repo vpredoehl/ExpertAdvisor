@@ -6,6 +6,35 @@
 - Subject: `Implement causal Pocket feature producer`
 - Expected starting condition for the next tranche: clean worktree at that commit.
 
+## Layout-10 rollout-hardening status (2026-10-01)
+
+Layout 10 is the current frozen Pocket contract: Tensor width 110, model-input
+width 114, and predecessor Layout 9. Layout 9 remains historical with Tensor
+width 99 and model-input width 103. The Pocket contribution is exactly the 11
+Tensor channels already frozen below at columns 99..109; the canonical
+`pockets.*` ablation is exactly those channels and no others.
+
+The semantic-worker registry has rolled to Layout 10 and contains a
+Layout-10/114 TRAIN worker advertising `train_feature_ablation_v1`, while its
+historical Layout-9/103 workers remain available for matching Layout-9
+experiments. Scheduler generation and semantic-worker generation are separate
+concerns: a scheduler must resolve TRAIN through the validated registry and
+exact selection logic. It must not use its own compiled layout generation as
+the requested worker contract, and generic `train` capability never permits a
+Layout-9/103 artifact to execute a Layout-10/114 experiment.
+
+Experiments 690 and 691 are the controlled Pocket pair: 690 is the control and
+691 is the canonical 11-channel Pocket ablation. Experiments 688 and 689 are
+live Layout-9 training workers; rollout validation and hardening must not
+pause, resume, preempt, signal, restart, or otherwise disturb them.
+
+Commit `64e22790` fixed pending feature-ablation pair evaluation so a final
+model's semantic layout is authoritative whenever a final model exists, with
+no configuration fallback. Before a final model exists, the configured
+experiment semantic layout is used without masquerading as final-model
+metadata. That invariant remains required for Pocket pair comparison and
+historical layouts.
+
 ## Tranche 1 completed
 
 Added exactly these files:
@@ -218,8 +247,115 @@ Do not include in tranche 2:
 - Do not alter Tensor implementation, scheduler, database, experiments,
   ranking/profitability, or frozen Phase Pocket 4/5A artifacts in tranche 2.
 
+## Phase Pocket 5B rollout closeout
+
+The implementation and rollout described by this handoff have now progressed
+beyond the original tranche-2 continuation boundary.
+
+Final current semantic contract:
+
+- semantic layout: 10
+- Tensor width: 110
+- model input width: 114
+- predecessor layout: 9
+- historical layout-9 model input width: 103
+- Pocket Tensor columns: 99..109
+- return suffix: model columns 110..113
+- Pocket ablation surface: exactly 11 persisted feature identities
+- Pocket channels are unavailable in layouts 8 and 9 and available in layout 10.
+
+The frozen Phase Pocket 5A representation remains unchanged. Tensor integration,
+model-input expansion, registry exposure, feature-ablation exposure, semantic
+worker publication, and scheduler routing have been completed without creating
+a new semantic layout beyond layout 10.
+
+### Rollout repairs
+
+Two post-integration defects were identified and repaired:
+
+1. Commit `64e22790` fixed pending feature-ablation pair evaluation so that a
+   pending experiment with no final model uses its configured semantic layout
+   for ablation identity validation. When a final model exists, final-model
+   semantic provenance remains authoritative.
+
+2. Commit `3e2e5108` decoupled scheduler semantic generation from semantic
+   worker generation. The scheduler now validates persisted model-bearing
+   identity sufficiently to route through the semantic-worker registry, while
+   the selected immutable worker remains responsible for the exact
+   layout/width/role/capability contract.
+
+The scheduler must therefore not assume that its own compiled semantic
+generation is the TRAIN worker generation. Historical workers and current
+workers may coexist during a semantic rollover when selected through the
+validated semantic-worker registry.
+
+### Production validation
+
+Production experiments 690 and 691 provide the first Layout-10 Pocket rollout
+validation.
+
+Both experiments were materialized as:
+
+- semantic layout 10
+- model input width 114
+- TRAIN phase
+
+Experiment 690 is the Pocket control arm.
+
+Experiment 691 is the Pocket-ablation arm with the exact persisted 11-channel
+mask:
+
+`pocket_recent_price_scale_valid,pocket_bull_recent_count_log,pocket_bull_youngest_age20,pocket_bull_median_touch_distance,pocket_bull_median_close_distance,pocket_bull_median_width,pocket_bear_recent_count_log,pocket_bear_youngest_age20,pocket_bear_median_touch_distance,pocket_bear_median_close_distance,pocket_bear_median_width`
+
+The production scheduler selected the immutable registered Layout-10 TRAIN
+worker for both experiments:
+
+- worker source commit:
+  `d8d62c153710bb52b69b6ddcc6367ea7918f6b72`
+- worker semantic layout: 10
+- worker model input width: 114
+- worker role: `train`
+- worker SHA-256:
+  `ede9ad44b245ca44906d24e6047cf4607088f73f5a589ee0d6ccd48f3a6235f1`
+
+Experiment 690 registered worker attempt 1265 and experiment 691 registered
+worker attempt 1267. Both reached `running/train`.
+
+Scheduler launch evidence reported
+`reason=current_published_semantic_worker` for both experiments. The
+Pocket-ablation arm launched without
+`FEATURE_ABLATION_MASK_UNKNOWN_FEATURE`.
+
+No replacement Layout-10 TRAIN worker was required for the scheduler repair:
+the scientific worker implementation remained unchanged. The corrected
+scheduler routes to the existing immutable published worker.
+
+### Final regression validation
+
+The following regression coverage passed after the rollout repairs:
+
+- `FeatureAblationPairEvaluationTests`
+- `FeatureAblationPairEvaluationRepositoryTests`
+- `MarketStructureRegistryTests`
+- `SchedulerSemanticAdmissionTests`
+- `SemanticWorkerRegistryTests`
+- `SchedulerTrainingWorkerRoutingTests`
+- `LSTMInputWidthExpansionTests`
+- `LSTMInputWidthExpansionSchedulerIntegrationTests`
+- `SchedulerSemanticRolloverIntegrationTests`
+
+The semantic-rollover integration test additionally verifies that historical
+Layout-9/103 TRAIN workers can consume scheduler capacity while a pending
+Layout-10/114 Pocket-ablation experiment is routed to the registered current
+worker without semantic incompatibility or equal-priority preemption.
+
 ## NEXT ACTION
 
-The next session should start from clean HEAD `c2165828` and implement Phase
-Pocket 5B tranche 2 only, following this semantic-contract/layout map. It must
-not automatically continue into Tensor integration.
+Do not begin another Pocket semantic-layout implementation while experiments
+690 and 691 are training.
+
+Allow the Layout-10 Pocket control/ablation pair to complete, then run the
+normal inference, profitability, and pair-evaluation workflow. Evaluate the
+Pocket feature family from the resulting controlled experiment before deciding
+whether additional Pocket feature engineering, replication, or a new semantic
+layout is scientifically justified.

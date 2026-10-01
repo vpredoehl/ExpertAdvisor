@@ -465,6 +465,22 @@ int main()
     assert(registry.currentWorker().semanticLayoutVersion == 7);
     assert(registry.currentWorker().canonicalExecutablePath ==
            fs::canonical(valid.executable7));
+    // A scheduler generation is not a worker-contract authority. Omitting
+    // compiled-current expectations still performs complete registry,
+    // artifact, hash, runtime, role, and capability validation and permits
+    // exact selection from this older registry generation.
+    const auto schedulerIndependentRegistry =
+        EA::Scheduler::SemanticWorkerRegistry::Load({
+            (valid.root / "registry.json").string(),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt});
+    const auto schedulerIndependentCurrent =
+        schedulerIndependentRegistry.selectTrainingReferenceWorker(
+            {{77}, {7}, true});
+    assert(schedulerIndependentCurrent.selected);
+    assert(schedulerIndependentCurrent.semanticLayoutVersion == 7);
+    assert(schedulerIndependentCurrent.maximumInputWidth == 77);
     const auto legacyRegistryFreshTraining =
         registry.selectTrainingReferenceWorker({});
     assert(legacyRegistryFreshTraining.selected);
@@ -841,16 +857,16 @@ int main()
             EA::kModelInputSemanticLayoutVersion,
             EA::kCurrentModelInputWidth});
         const auto historical = EA::Scheduler::SelectTrainingWorker(
-            {{80}, {8}, true}, published);
-        const auto current = EA::Scheduler::SelectTrainingWorker(
             {{103}, {9}, true}, published);
+        const auto current = EA::Scheduler::SelectTrainingWorker(
+            {{114}, {10}, true}, published);
         assert(historical.selected);
-        assert(historical.semanticLayoutVersion == 8);
-        assert(historical.maximumInputWidth == 80);
+        assert(historical.semanticLayoutVersion == 9);
+        assert(historical.maximumInputWidth == 103);
         assert(historical.reason == "immutable_historical_semantic_worker");
         assert(current.selected);
-        assert(current.semanticLayoutVersion == 9);
-        assert(current.maximumInputWidth == 103);
+        assert(current.semanticLayoutVersion == 10);
+        assert(current.maximumInputWidth == 114);
         assert(current.reason == "current_published_semantic_worker");
         assert(historical.canonicalExecutablePath !=
                current.canonicalExecutablePath);
@@ -860,8 +876,8 @@ int main()
         assert(historicalArtifact != nullptr);
         assert(historicalArtifact->role ==
                EA::Scheduler::SemanticWorkerRole::Train);
-        assert(historicalArtifact->semanticLayoutVersion == 8);
-        assert(historicalArtifact->modelInputWidth == 80);
+        assert(historicalArtifact->semanticLayoutVersion == 9);
+        assert(historicalArtifact->modelInputWidth == 103);
         assert(!historicalArtifact->sourceCommit.empty());
         assert(!historicalArtifact->sha256.empty());
         assert(!historicalArtifact->runtimeIdentity.empty());
@@ -873,24 +889,39 @@ int main()
         assert(!EA::Scheduler::SelectTrainingWorker(
                     {{}, {}, true}, published).selected);
         assert(!EA::Scheduler::SelectTrainingWorker(
-                    {{80}, {}, false}, published).selected);
+                    {{114}, {}, false}, published).selected);
         assert(!EA::Scheduler::SelectTrainingWorker(
-                    {{}, {8}, false}, published).selected);
+                    {{}, {10}, false}, published).selected);
         assert(!EA::Scheduler::SelectTrainingWorker(
-                    {{80}, {7}, true}, published).selected);
+                    {{103}, {10}, true}, published).selected);
+        assert(!EA::Scheduler::SelectTrainingWorker(
+                    {{114}, {9}, true}, published).selected);
         assert(!EA::Scheduler::SelectTrainingWorker(
                     {{103}, {8}, true}, published).selected);
-        assert(!EA::Scheduler::SelectTrainingWorker(
-                    {{80}, {9}, true}, published).selected);
+
+        const EA::Scheduler::SemanticWorkerCapabilities ablationRequired{
+            EA::Scheduler::kTrainFeatureAblationCapability};
+        const auto pocketAblation = EA::Scheduler::SelectTrainingWorker(
+            {{114}, {10}, true}, published, ablationRequired);
+        assert(pocketAblation.selected);
+        assert(pocketAblation.canonicalExecutablePath ==
+               current.canonicalExecutablePath);
+        const auto historicalAblation =
+            EA::Scheduler::SelectTrainingWorker(
+                {{103}, {9}, true}, published, ablationRequired);
+        assert(historicalAblation.selected);
+        assert(historicalAblation.semanticLayoutVersion == 9);
+        assert(historicalAblation.maximumInputWidth == 103);
 
         // Existing role-aware inference selection remains independent.
-        const auto inference8 = published.selectInferenceWorker(
-            {{80}, {8}, true});
         const auto inference9 = published.selectInferenceWorker(
             {{103}, {9}, true});
-        assert(inference8.selected && inference8.semanticLayoutVersion == 8);
+        const auto inference10 = published.selectInferenceWorker(
+            {{114}, {10}, true});
         assert(inference9.selected && inference9.semanticLayoutVersion == 9);
-        assert(inference8.canonicalExecutablePath !=
+        assert(inference10.selected &&
+               inference10.semanticLayoutVersion == 10);
+        assert(inference9.canonicalExecutablePath !=
                historical.canonicalExecutablePath);
     }
 
