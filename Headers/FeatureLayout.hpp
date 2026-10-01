@@ -186,8 +186,32 @@ inline constexpr std::size_t fibDownRecentMedianPullback0500Col = fibDownRecentM
 inline constexpr std::size_t fibDownRecentMedianPullback0618Col = fibDownRecentMedianPullback0500Col + 1;
 inline constexpr std::size_t causal_fibonacci_structural_feature_size =
     fibDownRecentMedianPullback0618Col + 1;
-inline constexpr std::size_t feature_size =
+inline constexpr std::size_t pocketRecentPriceScaleValidCol =
     causal_fibonacci_structural_feature_size;
+inline constexpr std::size_t pocketBullRecentCountLogCol =
+    pocketRecentPriceScaleValidCol + 1;
+inline constexpr std::size_t pocketBullYoungestAge20Col =
+    pocketBullRecentCountLogCol + 1;
+inline constexpr std::size_t pocketBullMedianTouchDistanceCol =
+    pocketBullYoungestAge20Col + 1;
+inline constexpr std::size_t pocketBullMedianCloseDistanceCol =
+    pocketBullMedianTouchDistanceCol + 1;
+inline constexpr std::size_t pocketBullMedianWidthCol =
+    pocketBullMedianCloseDistanceCol + 1;
+inline constexpr std::size_t pocketBearRecentCountLogCol =
+    pocketBullMedianWidthCol + 1;
+inline constexpr std::size_t pocketBearYoungestAge20Col =
+    pocketBearRecentCountLogCol + 1;
+inline constexpr std::size_t pocketBearMedianTouchDistanceCol =
+    pocketBearYoungestAge20Col + 1;
+inline constexpr std::size_t pocketBearMedianCloseDistanceCol =
+    pocketBearMedianTouchDistanceCol + 1;
+inline constexpr std::size_t pocketBearMedianWidthCol =
+    pocketBearMedianCloseDistanceCol + 1;
+inline constexpr std::size_t causal_pocket_recent_observation_feature_size =
+    pocketBearMedianWidthCol + 1;
+inline constexpr std::size_t feature_size =
+    causal_pocket_recent_observation_feature_size;
 
 static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
@@ -209,6 +233,12 @@ static_assert(fibRecentPriceScaleValidCol == 76);
 static_assert(causal_fibonacci_structural_feature_size -
                   tg4_production_pulse_feature_size ==
               23);
-static_assert(feature_size == 99);
+static_assert(causal_fibonacci_structural_feature_size == 99);
+static_assert(pocketRecentPriceScaleValidCol == 99);
+static_assert(pocketBearMedianWidthCol == 109);
+static_assert(causal_pocket_recent_observation_feature_size -
+                  causal_fibonacci_structural_feature_size ==
+              11);
+static_assert(feature_size == 110);
 
 #endif /* FeatureLayout_hpp */

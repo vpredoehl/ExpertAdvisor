@@ -95,9 +95,10 @@ int main()
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
-    static_assert(EA::kCurrentModelInputWidth == 103);
-    static_assert(EA::kModelInputSemanticLayoutVersion == 9);
-    static_assert(feature_size == 99);
+    static_assert(EA::kCurrentModelInputWidth == 114);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 10);
+    static_assert(causal_fibonacci_structural_feature_size == 99);
+    static_assert(feature_size == 110);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);
@@ -237,9 +238,9 @@ int main()
     // zero-valued producer output cannot hide an incorrectly omitted column.
     static_assert(fibRecentPriceScaleValidCol == 76);
     static_assert(fibDownRecentMedianPullback0618Col == 98);
-    static_assert(feature_size == 99);
+    static_assert(causal_fibonacci_structural_feature_size == 99);
     static_assert(EA::kModelReturnFeatureCount == 4);
-    static_assert(EA::kCurrentModelInputWidth == 103);
+    static_assert(EA::kCausalFibonacciStructuralModelInputWidth == 103);
     const std::array<std::string_view, 23> fibonacciNames{{
         "fib_recent_price_scale_valid",
         "fib_up_recent_union_count_log",
@@ -269,7 +270,7 @@ int main()
     for (std::size_t column = 0; column < ablationSource.size(); ++column)
         ablationSource[column] = static_cast<float>(1000 + column);
     const auto layout9Contract = EA::ResolveModelInputContract(
-        EA::kCurrentModelInputWidth, ablationSource.size());
+        EA::kCausalFibonacciStructuralModelInputWidth, ablationSource.size());
     const auto completeFibonacciMask = EA::FeatureAblationMask::Parse(
         std::string{EA::kCausalFibonacciStructuralAblationMaskText});
     assert(completeFibonacciMask.tensorColumns().size() == fibonacciNames.size());
@@ -301,11 +302,11 @@ int main()
            EA::kCausalFibonacciStructuralAblationMaskText);
 
     const auto BuildSentinelModelInput = [&](const EA::FeatureAblationMask& mask) {
-        std::vector<float> values(EA::kCurrentModelInputWidth);
+        std::vector<float> values(EA::kCausalFibonacciStructuralModelInputWidth);
         EA::CopyTensorFeaturesForModelInput(values.data(), ablationSource.data(),
                                             layout9Contract, mask);
-        for (std::size_t column = feature_size;
-             column < EA::kCurrentModelInputWidth; ++column)
+        for (std::size_t column = causal_fibonacci_structural_feature_size;
+             column < EA::kCausalFibonacciStructuralModelInputWidth; ++column)
             values[column] = static_cast<float>(1000 + column);
         return values;
     };
@@ -325,8 +326,8 @@ int main()
     assert(changed == fibonacciNames.size());
     for (std::size_t column = 0; column < fibRecentPriceScaleValidCol; ++column)
         assert(sentinelAblation[column] == sentinelControl[column]);
-    for (std::size_t column = feature_size;
-         column < EA::kCurrentModelInputWidth; ++column)
+    for (std::size_t column = causal_fibonacci_structural_feature_size;
+         column < EA::kCausalFibonacciStructuralModelInputWidth; ++column)
         assert(sentinelAblation[column] == sentinelControl[column]);
     bool unknownFibonacciNameRejected = false;
     try { (void)EA::FeatureAblationMask::Parse("fib_unknown_feature"); }

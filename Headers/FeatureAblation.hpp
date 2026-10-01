@@ -24,7 +24,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 47> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 58> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -83,6 +83,17 @@ inline constexpr std::array<AblatableFeature, 47> kAblatableFeatures{{
      fibDownRecentMedianPullback0500Col},
     {"fib_down_recent_median_pullback_0618_signed_atr",
      fibDownRecentMedianPullback0618Col},
+    {"pocket_recent_price_scale_valid", pocketRecentPriceScaleValidCol},
+    {"pocket_bull_recent_count_log", pocketBullRecentCountLogCol},
+    {"pocket_bull_youngest_age20", pocketBullYoungestAge20Col},
+    {"pocket_bull_median_touch_distance", pocketBullMedianTouchDistanceCol},
+    {"pocket_bull_median_close_distance", pocketBullMedianCloseDistanceCol},
+    {"pocket_bull_median_width", pocketBullMedianWidthCol},
+    {"pocket_bear_recent_count_log", pocketBearRecentCountLogCol},
+    {"pocket_bear_youngest_age20", pocketBearYoungestAge20Col},
+    {"pocket_bear_median_touch_distance", pocketBearMedianTouchDistanceCol},
+    {"pocket_bear_median_close_distance", pocketBearMedianCloseDistanceCol},
+    {"pocket_bear_median_width", pocketBearMedianWidthCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -188,7 +199,7 @@ public:
     static FeatureAblationMask ParseForSemanticLayout(
         const std::string& text, int semanticLayoutVersion);
     static FeatureAblationResolution Resolve(
-        const std::string& requestedText, int semanticLayoutVersion = 9);
+        const std::string& requestedText, int semanticLayoutVersion = 10);
 
     bool empty() const { return columns_.empty(); }
     const std::vector<std::size_t>& tensorColumns() const { return columns_; }

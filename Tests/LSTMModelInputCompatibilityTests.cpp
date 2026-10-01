@@ -34,7 +34,8 @@ int main()
     static_assert(return_autocorrelation_feature_size == 49);
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
-    static_assert(feature_size == 99);
+    static_assert(causal_fibonacci_structural_feature_size == 99);
+    static_assert(feature_size == 110);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -58,7 +59,8 @@ int main()
     static_assert(EA::kCausalEconomicEventSurpriseModelInputWidth == 77);
     static_assert(EA::kTG4ProductionPulseModelInputWidth == 80);
     static_assert(EA::kCausalFibonacciStructuralModelInputWidth == 103);
-    static_assert(EA::kCurrentModelInputWidth == 103);
+    static_assert(EA::kCausalPocketRecentObservationModelInputWidth == 114);
+    static_assert(EA::kCurrentModelInputWidth == 114);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -290,6 +292,21 @@ int main()
                                         physicalTensor.data(), economicEvents);
     for (std::size_t i = 0; i < feature_size; ++i)
         assert(economicEventInput[i] == physicalTensor[i]);
+
+    // Layout 9 remains an exact 99-column Tensor projection despite the
+    // current layout's appended Pocket columns.
+    const auto layout9 = EA::ResolveModelInputContract(
+        EA::kCausalFibonacciStructuralModelInputWidth, physicalTensor.size());
+    assert(layout9.tensorFeatureCount == causal_fibonacci_structural_feature_size);
+    std::vector<float> layout9Input(
+        EA::kCausalFibonacciStructuralModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(layout9Input.data(),
+                                        physicalTensor.data(), layout9);
+    for (std::size_t i = 0; i < causal_fibonacci_structural_feature_size; ++i)
+        assert(layout9Input[i] == physicalTensor[i]);
+    for (std::size_t i = causal_fibonacci_structural_feature_size;
+         i < layout9Input.size(); ++i)
+        assert(layout9Input[i] == -1.0f);
     assert(returnAutocorrelationInput[inflationEventCol] == -1.0f);
     assert(economicEventInput[inflationEventCol] ==
            physicalTensor[inflationEventCol]);
@@ -623,7 +640,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80:103:114";
     }
     assert(unsupportedRejected);
 

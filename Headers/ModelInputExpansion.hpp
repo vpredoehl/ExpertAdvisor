@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 9;
+inline constexpr int kModelInputSemanticLayoutVersion = 10;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -37,7 +37,7 @@ struct ModelInputSemanticLayoutRegistryEntry
 // version as predecessor. A corrected interpretation at an existing width
 // instead branches from the newest genuinely compatible predecessor; old
 // entries and their fixed maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 9>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 10>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
@@ -55,6 +55,7 @@ inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 9>
         // return suffix. It remains append-only at semantic-feature level.
         {8, kTG4ProductionPulseModelInputWidth, 7},
         {9, kCausalFibonacciStructuralModelInputWidth, 8},
+        {10, kCausalPocketRecentObservationModelInputWidth, 9},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -197,7 +198,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 67>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 78>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -276,6 +277,17 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 67>
         {fibDownRecentMedianPullback0382Col, "fib_down_recent_median_pullback_0382_signed_atr"},
         {fibDownRecentMedianPullback0500Col, "fib_down_recent_median_pullback_0500_signed_atr"},
         {fibDownRecentMedianPullback0618Col, "fib_down_recent_median_pullback_0618_signed_atr"},
+        {pocketRecentPriceScaleValidCol, "pocket_recent_price_scale_valid"},
+        {pocketBullRecentCountLogCol, "pocket_bull_recent_count_log"},
+        {pocketBullYoungestAge20Col, "pocket_bull_youngest_age20"},
+        {pocketBullMedianTouchDistanceCol, "pocket_bull_median_touch_distance"},
+        {pocketBullMedianCloseDistanceCol, "pocket_bull_median_close_distance"},
+        {pocketBullMedianWidthCol, "pocket_bull_median_width"},
+        {pocketBearRecentCountLogCol, "pocket_bear_recent_count_log"},
+        {pocketBearYoungestAge20Col, "pocket_bear_youngest_age20"},
+        {pocketBearMedianTouchDistanceCol, "pocket_bear_median_touch_distance"},
+        {pocketBearMedianCloseDistanceCol, "pocket_bear_median_close_distance"},
+        {pocketBearMedianWidthCol, "pocket_bear_median_width"},
     }};
 
 constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()

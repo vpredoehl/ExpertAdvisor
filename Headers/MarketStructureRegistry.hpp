@@ -48,16 +48,16 @@ inline constexpr std::array<Family, 3> kFamilies{{
     {"fibonacci", 1, "layout9-legacy-tg1-tg3-composed-fibonacci-v1",
      "confirmed state at the completed decision bar"},
     // Phase Pocket 2 already has a causal detector and explicit information
-    // cutoff. It has no Tensor channels yet, so pockets.* correctly resolves
-    // to no feature channels until a future semantic layout adds some.
+    // cutoff. Layout 10 appends its frozen Tensor channels; layouts 8 and 9
+    // remain unavailable by the explicit channel-layout contract below.
     {"pockets", 1, "causal-pocket-detector-phase2-v1",
      "confirmation bar / information cutoff timestamp"},
 }};
 
-// These identities describe actual layout-8 and layout-9 channels.  They do
+// These identities describe actual layout-8, layout-9, and layout-10 channels. They do
 // not claim that TG3's historical research confluence is a generic confluence
 // feature family: no generic explicit-confluence Tensor channels exist yet.
-inline constexpr std::array<Channel, 26> kChannels{{
+inline constexpr std::array<Channel, 37> kChannels{{
     {"tg_structure.tg4.inner_break.any", "tg4_inner_break_any",
      "tg_structure", tg4InnerBreakAnyCol, 8},
     {"tg_structure.tg4.source_tg3.structurally_eligible",
@@ -127,6 +127,32 @@ inline constexpr std::array<Channel, 26> kChannels{{
     {"fibonacci.down.recent.median_pullback_0618_signed_atr",
      "fib_down_recent_median_pullback_0618_signed_atr", "fibonacci",
      fibDownRecentMedianPullback0618Col, 9},
+    {"pockets.recent.price_scale_valid", "pocket_recent_price_scale_valid",
+     "pockets", pocketRecentPriceScaleValidCol, 10},
+    {"pockets.bull.recent.count_log", "pocket_bull_recent_count_log",
+     "pockets", pocketBullRecentCountLogCol, 10},
+    {"pockets.bull.recent.youngest_age_20", "pocket_bull_youngest_age20",
+     "pockets", pocketBullYoungestAge20Col, 10},
+    {"pockets.bull.recent.median_touch_distance",
+     "pocket_bull_median_touch_distance", "pockets",
+     pocketBullMedianTouchDistanceCol, 10},
+    {"pockets.bull.recent.median_close_distance",
+     "pocket_bull_median_close_distance", "pockets",
+     pocketBullMedianCloseDistanceCol, 10},
+    {"pockets.bull.recent.median_width", "pocket_bull_median_width",
+     "pockets", pocketBullMedianWidthCol, 10},
+    {"pockets.bear.recent.count_log", "pocket_bear_recent_count_log",
+     "pockets", pocketBearRecentCountLogCol, 10},
+    {"pockets.bear.recent.youngest_age_20", "pocket_bear_youngest_age20",
+     "pockets", pocketBearYoungestAge20Col, 10},
+    {"pockets.bear.recent.median_touch_distance",
+     "pocket_bear_median_touch_distance", "pockets",
+     pocketBearMedianTouchDistanceCol, 10},
+    {"pockets.bear.recent.median_close_distance",
+     "pocket_bear_median_close_distance", "pockets",
+     pocketBearMedianCloseDistanceCol, 10},
+    {"pockets.bear.recent.median_width", "pocket_bear_median_width",
+     "pockets", pocketBearMedianWidthCol, 10},
 }};
 
 // Keep catalog validation separate from lookup so focused tests can exercise
@@ -213,12 +239,20 @@ inline bool ChannelAvailableForSemanticLayout(const Channel& channel,
     // Layouts 8 and 9 are append-only descendants for these channels.  A
     // future branch must be deliberately added here rather than inheriting a
     // family wildcard merely because it happens to have the same width.
-    return (semanticLayoutVersion == 8 && channel.introducedSemanticLayout == 8) ||
-        semanticLayoutVersion == 9;
+    switch (semanticLayoutVersion)
+    {
+        case 8: return channel.introducedSemanticLayout == 8;
+        case 9: return channel.introducedSemanticLayout == 8 ||
+                    channel.introducedSemanticLayout == 9;
+        case 10: return channel.introducedSemanticLayout == 8 ||
+                     channel.introducedSemanticLayout == 9 ||
+                     channel.introducedSemanticLayout == 10;
+        default: return false;
+    }
 }
 
 inline std::vector<const Channel*> ResolvePrefix(std::string_view prefix,
-                                                  int semanticLayoutVersion = 9)
+                                                  int semanticLayoutVersion = 10)
 {
     ValidateRegistry();
     std::vector<const Channel*> result;
