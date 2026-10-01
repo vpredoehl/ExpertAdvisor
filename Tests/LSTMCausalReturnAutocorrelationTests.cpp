@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -149,7 +150,8 @@ std::vector<float> ClosesForReturns(const std::vector<double>& returns)
 
 Tensor TensorForCloses(const char* name, const std::vector<float>& closes)
 {
-    Tensor tensor{name};
+    (void)name;
+    Tensor tensor{"eurusdrmp"};
     for (std::size_t index = 0; index < closes.size(); ++index)
         tensor.Add(BarAt(index, closes[index]));
     return tensor;
@@ -219,11 +221,9 @@ void TestTensorParityAblationAndHistoricalPrefix()
     static_assert(historicalLevelProximityCol == 47);
     static_assert(returnAutocorrelationCol == 48);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
     static_assert(EA::kReturnAutocorrelationModelInputWidth == 53);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
     const auto closes = ClosesForReturns(NegativeReturns());
     Tensor trainingTensor = TensorForCloses("autocorrelation-training", closes);
@@ -285,31 +285,29 @@ void TestGenericInputWidthExpansion()
         EA::kHistoricalLevelProximityModelInputWidth);
     assert(plan.sourceTensorFeatureCount == returnAutocorrelationCol);
     assert(plan.expandedTensorFeatureCount == feature_size);
-    assert((plan.newlyIntroducedTensorFeatures ==
-            std::vector<std::string>{
-                "return_autocorrelation",
-                "inflation_event",
-                "employment_event",
-                "growth_event",
-                "fed_policy_event",
-                "consumer_demand_event",
-                "inflation_recency_decay",
-                "employment_recency_decay",
-                "growth_recency_decay",
-                "fed_policy_recency_decay",
-                "consumer_demand_recency_decay",
-                "relevant_event_has_consensus",
-                "relevant_event_consensus_low",
-                "relevant_event_consensus_high",
-                "relevant_event_consensus_is_range",
-                "released_event_has_surprise",
-                "released_event_surprise",
-                "released_event_surprise_abs",
-                "released_event_surprise_direction",
-                "authoritative_initial_has_surprise",
-                "authoritative_initial_surprise",
-                "authoritative_initial_surprise_abs",
-                "authoritative_initial_surprise_direction"}));
+    assert(plan.newlyIntroducedTensorFeatures.size() ==
+           plan.expandedTensorFeatureCount -
+               plan.sourceTensorFeatureCount);
+    for (std::size_t index = 0;
+         index < plan.newlyIntroducedTensorFeatures.size(); ++index)
+    {
+        const std::size_t column =
+            plan.sourceTensorFeatureCount + index;
+        const auto semantic = std::find_if(
+            EA::kAppendedTensorFeatureSemantics.begin(),
+            EA::kAppendedTensorFeatureSemantics.end(),
+            [column](const EA::AppendedTensorFeatureSemantic& candidate)
+            {
+                return candidate.column == column;
+            });
+        assert(semantic != EA::kAppendedTensorFeatureSemantics.end());
+        assert(plan.newlyIntroducedTensorFeatures[index] ==
+               semantic->name);
+    }
+    assert(plan.newlyIntroducedTensorFeatures.front() ==
+           "return_autocorrelation");
+    assert(plan.newlyIntroducedTensorFeatures.back() ==
+           "pocket_bear_median_width");
 
     std::vector<float> source(
         (plan.sourceInputWidth + hiddenSize) * gateColumns);

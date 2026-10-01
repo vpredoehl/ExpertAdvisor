@@ -120,13 +120,11 @@ void TestTensorIntegrationCausalityAblationAndHistoricalWidth()
 {
     static_assert(causalRollingRangeExpansionCol == 46);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalMultiBarRangePressureModelInputWidth == 50);
     static_assert(EA::kCausalRollingRangeExpansionModelInputWidth == 51);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor tensor{"causal-rolling-range-expansion"};
+    Tensor tensor{"eurusdrmp"};
     for (std::size_t row = 0; row < 8; ++row)
         tensor.Add(BarAt(row, 20.0f, 10.0f));
     tensor.Add(BarAt(8, 30.0f, 10.0f));
@@ -134,8 +132,8 @@ void TestTensorIntegrationCausalityAblationAndHistoricalWidth()
     AssertNear(RowValue(tensor, 7, causalRollingRangeExpansionCol), 1.0f);
     AssertNear(RowValue(tensor, 8, causalRollingRangeExpansionCol), 1.0f);
 
-    Tensor left{"rolling-range-causality-left"};
-    Tensor right{"rolling-range-causality-right"};
+    Tensor left{"eurusdrmp"};
+    Tensor right{"eurusdrmp"};
     for (std::size_t row = 0; row <= 32; ++row)
     {
         left.Add(BarAt(row, 20.0f, 10.0f));

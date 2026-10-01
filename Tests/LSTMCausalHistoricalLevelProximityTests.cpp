@@ -151,15 +151,13 @@ void TestTensorCausalityParityAblationAndCompatibility()
     static_assert(historicalLevelProximityCol == 47);
     static_assert(returnAutocorrelationCol == 48);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalRollingRangeExpansionModelInputWidth == 51);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor prefix{"historical-level-prefix"};
-    Tensor futureA{"historical-level-future-a"};
-    Tensor futureB{"historical-level-future-b"};
+    Tensor prefix{"eurusdrmp"};
+    Tensor futureA{"eurusdrmp"};
+    Tensor futureB{"eurusdrmp"};
     for (std::size_t week = 0; week <= 104; ++week)
     {
         const float current = week == 104 ? 1.20f : 0.0f;

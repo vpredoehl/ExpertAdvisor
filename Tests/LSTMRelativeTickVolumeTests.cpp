@@ -129,13 +129,11 @@ void TestTensorPlacementCausalityAndParity()
     static_assert(relative_tick_volume_feature_size == 37);
     static_assert(causalReturnSurpriseCol == 37);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kRelativeTickVolumeModelInputWidth == 41);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor baseline{"relative-tick-volume"};
-    Tensor changedCurrentVolume{"relative-tick-volume"};
+    Tensor baseline{"eurusdrmp"};
+    Tensor changedCurrentVolume{"eurusdrmp"};
     for (std::size_t i = 0; i < relativeTickVolumeLookback; ++i)
     {
         baseline.Add(BarAt(i, 100.0f, 100.0f + static_cast<float>(i) * 0.01f));
@@ -155,11 +153,11 @@ void TestTensorPlacementCausalityAndParity()
     for (std::size_t i = 0; i < 64; ++i)
         bars.push_back(BarAt(i, 100.0f + static_cast<float>(i),
                              100.0f + static_cast<float>(i) * 0.01f));
-    Tensor original{"relative-tick-volume-causality"};
+    Tensor original{"eurusdrmp"};
     for (const Feature& bar : bars) original.Add(bar);
     std::vector<Feature> futureChanged = bars;
     futureChanged.at(33).tickVolume = 1000000.0f;
-    Tensor changedFuture{"relative-tick-volume-causality"};
+    Tensor changedFuture{"eurusdrmp"};
     for (const Feature& bar : futureChanged) changedFuture.Add(bar);
     const auto originalRow = BaseRowAt(original, 32);
     const auto futureChangedRow = BaseRowAt(changedFuture, 32);

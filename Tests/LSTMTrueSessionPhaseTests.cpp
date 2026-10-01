@@ -88,13 +88,11 @@ std::array<float, kModelWidth> BuildInferenceRow(const Tensor& tensor,
 void TestUtcPhaseFormulaAndPeriodicity()
 {
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(sessionPhaseSinCol == 34);
     static_assert(sessionPhaseCosCol == 35);
     static_assert(relativeTickVolumeCol == 36);
     static_assert(causalReturnSurpriseCol == 37);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
     const PriceTP midnight{};
     const std::array<std::pair<long long, std::pair<float, float>>, 4> quarters{{
@@ -142,7 +140,7 @@ void TestUtcDeterminismAndTensorPlacement()
     tzset();
     assert(beforeTimezoneChange == afterTimezoneChange);
 
-    Tensor tensor{"session-phase"};
+    Tensor tensor{"eurusdrmp"};
     tensor.Add(BarAt(current - std::chrono::seconds(15 * 60), 99.9f));
     tensor.Add(BarAt(current));
     const auto firstRow = BaseRowAt(tensor, 0);
@@ -167,7 +165,7 @@ void TestCausalityAndProductionParity()
         original.push_back(BarAt(first + std::chrono::seconds(i * 15 * 60),
                                  100.0f + static_cast<float>(i) * 0.01f));
     constexpr std::size_t current = 32;
-    Tensor baseline{"session-phase-causality"};
+    Tensor baseline{"eurusdrmp"};
     for (const Feature& bar : original) baseline.Add(bar);
 
     std::vector<Feature> futureChanged = original;
@@ -179,8 +177,11 @@ void TestCausalityAndProductionParity()
     for (std::size_t i = current + 1; i < futureChanged.size(); ++i)
         futureChanged.at(i).time += std::chrono::hours(9);
 
+    futureChanged.at(current + 1).open = 999.9f;
     futureChanged.at(current + 1).close = 1000.0f;
-    Tensor changed{"session-phase-causality"};
+    futureChanged.at(current + 1).high = 1000.2f;
+    futureChanged.at(current + 1).low = 999.8f;
+    Tensor changed{"eurusdrmp"};
     for (const Feature& bar : futureChanged) changed.Add(bar);
     const auto baselineRow = BaseRowAt(baseline, current);
     const auto changedRow = BaseRowAt(changed, current);

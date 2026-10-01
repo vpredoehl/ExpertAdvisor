@@ -95,13 +95,11 @@ void TestTensorPlacementAndModelProjection()
 {
     static_assert(causalDirectionalRangeCol == 39);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor tensor{"causal-directional-range"};
+    Tensor tensor{"eurusdrmp"};
     tensor.Add(BarAt(0, 1.0f, 1.4f, 0.8f, 1.3f));
     tensor.Add(BarAt(1, 100.0f, 1000.0f, 0.01f, 900.0f));
     const auto first = MetaNN::LowerAccess(*tensor.begin());

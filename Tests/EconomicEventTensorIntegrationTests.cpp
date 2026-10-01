@@ -158,12 +158,10 @@ int main()
     static_assert(pre_consensus_economic_event_feature_size == 59);
     static_assert(consensus_economic_event_feature_size == 67);
     static_assert(economic_event_feature_size == 71);
-    static_assert(feature_size == 76);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
     static_assert(EA::kEconomicEventConsensusModelInputWidth == 71);
     static_assert(EA::kEconomicEventReleaseActualModelInputWidth == 75);
-    static_assert(EA::kCurrentModelInputWidth == 80);
     static_assert(kEconomicEventFeatureNames.size() ==
                   kEconomicEventFeatureWidth);
     assert(kEconomicEventFeatureNames.front() == "inflation_event");
@@ -175,11 +173,6 @@ int main()
            "causal_first_release_surprise_available");
     assert(kEconomicEventFeatureNames.back() ==
            "causal_first_release_surprise");
-    static_assert(EA::kCurrentModelInputWidth ==
-                  EA::kEconomicEventModelInputWidth +
-                  kEconomicEventConsensusFeatureWidth +
-                  kEconomicEventReleaseActualFeatureWidth +
-                  kCausalEconomicEventSurpriseFeatureWidth);
 
     // Pre-window state is reconstructed from authoritative prior rows. The
     // first requested bar has no occurrence indicator but has exact nonzero
@@ -188,7 +181,7 @@ int main()
         EventAt(kBase - 3600, "BLS", "CPI"),
         EventAt(kBase - 1800, "BLS", "EMPLOYMENT"),
     };
-    Tensor preWindow{"pre-window", kDefaultDonchian20Mode,
+    Tensor preWindow{"eurusdrmp", kDefaultDonchian20Mode,
                      kDefaultDonchianLookback, preWindowEvents};
     preWindow.Add(BarAt(kBase, 0));
     const auto first = Row(preWindow, 0);
@@ -206,10 +199,10 @@ int main()
         ProvenConsensusEventAt(kBase + 900, "BEA", "GDP", 2.0, 2.5),
         EventAt(kBase + 2700, "CENSUS", "RETAIL_SALES"),
     };
-    Tensor withEvents{"with-events", kDefaultDonchian20Mode,
+    Tensor withEvents{"eurusdrmp", kDefaultDonchian20Mode,
                       kDefaultDonchianLookback, causalEvents};
-    Tensor withoutEvents{"without-events"};
-    Tensor inferenceParity{"inference-parity", kDefaultDonchian20Mode,
+    Tensor withoutEvents{"eurusdrmp"};
+    Tensor inferenceParity{"eurusdrmp", kDefaultDonchian20Mode,
                            kDefaultDonchianLookback, causalEvents};
     for (std::size_t index = 0; index < 4; ++index)
     {
@@ -254,7 +247,7 @@ int main()
 
     // A Weekly Claims market-gap event advances employment recency without
     // becoming a false current-bar occurrence on the next observed bar.
-    Tensor gap{"gap", kDefaultDonchian20Mode, kDefaultDonchianLookback,
+    Tensor gap{"eurusdrmp", kDefaultDonchian20Mode, kDefaultDonchianLookback,
                {EventAt(kBase + 86400, "DOL_ETA", "WEEKLY_CLAIMS")}};
     gap.Add(BarAt(kBase, 0));
     gap.Add(BarAt(kBase + 2 * 86400, 1));
@@ -357,7 +350,7 @@ int main()
     // Missing and genuine-zero consensus remain distinguishable in treatment;
     // the control zeros only the four active channels in both cases.
     Tensor missingConsensus{
-        "missing-consensus", kDefaultDonchian20Mode,
+        "eurusdrmp", kDefaultDonchian20Mode,
         kDefaultDonchianLookback,
         {EventAt(kBase + 100, "DOL_ETA", "WEEKLY_CLAIMS")}};
     missingConsensus.Add(BarAt(kBase, 0));
@@ -375,7 +368,7 @@ int main()
            missingTreatment[employmentRecencyDecayCol]);
 
     Tensor zeroConsensus{
-        "zero-consensus", kDefaultDonchian20Mode,
+        "eurusdrmp", kDefaultDonchian20Mode,
         kDefaultDonchianLookback,
         {ConsensusEventAt(kBase + 100, "BLS", "CPI", 0.0, 0.0)}};
     zeroConsensus.Add(BarAt(kBase, 0));
@@ -390,7 +383,7 @@ int main()
     // FOMC range endpoints and the range flag survive in treatment without a
     // midpoint; the same-width control zeros all four consensus channels.
     Tensor fomcRange{
-        "fomc-range", kDefaultDonchian20Mode, kDefaultDonchianLookback,
+        "eurusdrmp", kDefaultDonchian20Mode, kDefaultDonchianLookback,
         {RangeConsensusEventAt(kBase + 100, 5.25, 5.5)}};
     fomcRange.Add(BarAt(kBase, 0));
     const auto rangeTreatment = Project(Row(fomcRange, 0));

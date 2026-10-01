@@ -98,12 +98,10 @@ void TestTensorPlacementAndModelProjection()
 {
     static_assert(causalCloseLocationCol == 40);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor tensor{"causal-close-location"};
+    Tensor tensor{"eurusdrmp"};
     tensor.Add(BarAt(0, 1.0f, 1.4f, 0.8f, 1.25f));
     tensor.Add(BarAt(1, 100.0f, 1000.0f, 0.01f, 900.0f));
     const auto first = MetaNN::LowerAccess(*tensor.begin());

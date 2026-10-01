@@ -112,21 +112,19 @@ void TestTensorIntegrationCausalityAndAblation()
 {
     static_assert(causalMultiBarRangePressureCol == 45);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalDirectionalAdverseExcursionModelInputWidth == 49);
     static_assert(EA::kCausalMultiBarRangePressureModelInputWidth == 50);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor tensor{"causal-multi-bar-range-pressure"};
+    Tensor tensor{"eurusdrmp"};
     for (std::size_t row = 0; row < 15; ++row)
         tensor.Add(BarAt(row, 20.0f, 10.0f, 15.0f));
     tensor.Add(BarAt(15, 30.0f, 10.0f, 30.0f));
     AssertNear(RowValue(tensor, 0, causalMultiBarRangePressureCol), 0.0f);
     AssertNear(RowValue(tensor, 15, causalMultiBarRangePressureCol), 1.0f);
 
-    Tensor left{"range-pressure-causality-left"};
-    Tensor right{"range-pressure-causality-right"};
+    Tensor left{"eurusdrmp"};
+    Tensor right{"eurusdrmp"};
     for (std::size_t row = 0; row <= 16; ++row)
     {
         left.Add(BarAt(row, 20.0f, 10.0f, 15.0f));

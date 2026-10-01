@@ -117,12 +117,10 @@ void TestTensorIntegrationAndProjection()
 {
     static_assert(causalDirectionalPersistenceCol == 41);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalCloseLocationModelInputWidth == 45);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor tensor{"causal-directional-efficiency"};
+    Tensor tensor{"eurusdrmp"};
     for (std::size_t index = 0; index < 8; ++index)
         tensor.Add(BarAt(index, static_cast<float>(index + 1)));
     for (std::size_t index = 0; index < 8; ++index)

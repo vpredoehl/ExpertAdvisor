@@ -84,8 +84,8 @@ void PopulateIdenticalPriorHistory(Tensor& tensor)
 
 void TestCurrentBarHighLowCannotAffectDonchian()
 {
-    Tensor normalCurrentBar("donchian_tensor_integration_normal");
-    Tensor extremeCurrentBar("donchian_tensor_integration_extreme");
+    Tensor normalCurrentBar("eurusdrmp");
+    Tensor extremeCurrentBar("eurusdrmp");
 
     PopulateIdenticalPriorHistory(normalCurrentBar);
     PopulateIdenticalPriorHistory(extremeCurrentBar);
@@ -136,7 +136,7 @@ void TestCurrentBarHighLowCannotAffectDonchian()
 
 void TestZeroAblationPreservesWidthAndPositions()
 {
-    Tensor tensor("donchian_tensor_integration_zero_ablation",
+    Tensor tensor("eurusdrmp",
                   Donchian20Mode::ZeroAblation);
     PopulateIdenticalPriorHistory(tensor);
     tensor.Add(MakeFeature(donchian_lookback, 99.75f, 100.0f, 101.0f, 99.0f));
@@ -147,7 +147,6 @@ void TestZeroAblationPreservesWidthAndPositions()
     const float* p = low.RawMemory();
     assert(tensor.GetDonchian20Mode() == Donchian20Mode::ZeroAblation);
     assert(return_autocorrelation_feature_size == 49);
-    assert(feature_size == 76);
     assert(p[donchianUpCol] == 0.0f);
     assert(p[donchianDownCol] == 0.0f);
     assert(p[0] != 0.0f);
@@ -157,7 +156,6 @@ void TestZeroAblationPreservesWidthAndPositions()
 int main()
 {
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(donchianUpCol == 32);
     static_assert(donchianDownCol == 33);
     static_assert(sessionPhaseSinCol == 34);

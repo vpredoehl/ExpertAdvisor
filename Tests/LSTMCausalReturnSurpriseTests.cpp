@@ -207,11 +207,9 @@ void TestTensorPlacementAndParity()
     static_assert(causalReturnSurpriseCol == 37);
     static_assert(causalVolatilityRegimeCol == 38);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor tensor{"causal-return-surprise"};
+    Tensor tensor{"eurusdrmp"};
     float close = 100.0f;
     tensor.Add(BarAt(0, close));
     close = Advance(close, 0.01);

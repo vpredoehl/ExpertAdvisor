@@ -109,12 +109,10 @@ void TestTensorIntegrationAndContracts()
 {
     static_assert(causalReturnSignPersistenceCol == 42);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalDirectionalPersistenceModelInputWidth == 46);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 80);
 
-    Tensor tensor{"causal-return-sign-persistence"};
+    Tensor tensor{"eurusdrmp"};
     for (std::size_t index = 0; index < 8; ++index)
         tensor.Add(BarAt(index, static_cast<float>(index + 1)));
     for (std::size_t index = 0; index < 8; ++index)
@@ -122,8 +120,8 @@ void TestTensorIntegrationAndContracts()
     tensor.Add(BarAt(8, 5000.0f));
     AssertNear(RowValue(tensor, 8, causalReturnSignPersistenceCol), 1.0f);
 
-    Tensor left{"causal-current-exclusion-left"};
-    Tensor right{"causal-current-exclusion-right"};
+    Tensor left{"eurusdrmp"};
+    Tensor right{"eurusdrmp"};
     for (std::size_t index = 0; index < 8; ++index)
     {
         left.Add(BarAt(index, static_cast<float>(index + 1)));

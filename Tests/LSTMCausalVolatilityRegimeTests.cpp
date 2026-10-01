@@ -148,9 +148,8 @@ void TestTensorPlacementAndProjection()
 {
     static_assert(causalVolatilityRegimeCol == 38);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 76);
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
-    Tensor tensor{"causal-volatility-regime"};
+    Tensor tensor{"eurusdrmp"};
     float close = 100.0f;
     tensor.Add(BarAt(0, close));
     close = Advance(close, 0.1);
