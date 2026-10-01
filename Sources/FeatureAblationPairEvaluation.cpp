@@ -498,9 +498,10 @@ bool ValidateAblationIdentity(const ScientificConfiguration& control,
             result.ablationIdentityCanonical);
         return true;
     }
-    catch (const std::exception&)
+    catch (const std::exception& error)
     {
-        Add(result.invalidReasons, "feature_ablation_mask_invalid");
+        Add(result.invalidReasons,
+            std::string{"feature_ablation_mask_invalid:"} + error.what());
         return false;
     }
 }

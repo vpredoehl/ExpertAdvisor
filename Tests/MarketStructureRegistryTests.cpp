@@ -222,6 +222,18 @@ void TestLayoutAndFixedWidthParity()
     const auto pockets = FeatureAblationMask::ParseForSemanticLayout(
         "pockets.*", 10);
     assert(pockets.tensorColumns().size() == 11);
+    assert(pockets.CanonicalText() ==
+        "pocket_recent_price_scale_valid,"
+        "pocket_bull_recent_count_log,"
+        "pocket_bull_youngest_age20,"
+        "pocket_bull_median_touch_distance,"
+        "pocket_bull_median_close_distance,"
+        "pocket_bull_median_width,"
+        "pocket_bear_recent_count_log,"
+        "pocket_bear_youngest_age20,"
+        "pocket_bear_median_touch_distance,"
+        "pocket_bear_median_close_distance,"
+        "pocket_bear_median_width");
 
     const auto contract = EA::ResolveModelInputContract(
         EA::kCurrentModelInputWidth, feature_size);
