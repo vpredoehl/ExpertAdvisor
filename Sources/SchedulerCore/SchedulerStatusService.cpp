@@ -3566,7 +3566,7 @@ void WriteJsonSchedulerEvidence(std::ostream& output,
                << ",\"observed\":" << count.observed
                << ",\"checkpoint_workers\":" << count.checkpointWorkers << "}";
     }
-    output << "},\"process_observation\":";
+    output << "]},\"process_observation\":";
     WriteJsonProcessEvidence(output, evidence.process);
     output << "}\n";
 }
