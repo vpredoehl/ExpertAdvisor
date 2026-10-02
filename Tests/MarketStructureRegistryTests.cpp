@@ -19,7 +19,12 @@ public:
         const std::vector<EA::MarketStructure::Observation>& observations,
         std::chrono::sys_seconds decisionTime) const override
     {
-        return {{"descriptive-test-v1", decisionTime, observations}};
+        EA::MarketStructure::ConfluenceObservation result;
+        result.definitionVersion = "descriptive-test-v1";
+        result.decisionTime = decisionTime;
+        result.availableAt = decisionTime;
+        result.components = observations;
+        return {result};
     }
 };
 
@@ -299,7 +304,9 @@ void TestCausalObservationAndConfluenceIndependence()
     const auto t2 = std::chrono::sys_seconds{102s};
     std::vector<Observation> detectorOutput{{
         "fibonacci", "causal-fibonacci-structural-v1", t0, t2,
-        "test-source-v1"}};
+        "test-source-v1", "test-observation-1",
+        {"market-structure-descriptor-v1", "test-role",
+         EA::MarketStructure::DescriptorPolarity::positive, 0.5}}};
 
     assert(CausallyAvailableObservations(detectorOutput, t1).empty());
     const auto available = CausallyAvailableObservations(detectorOutput, t2);
@@ -316,7 +323,9 @@ void TestCausalObservationAndConfluenceIndependence()
     assert(ThrowsInvalidArgument([&] {
         (void)CausallyAvailableObservations(
             {{"fibonacci", "causal-fibonacci-structural-v1", t2, t1,
-              "test-source-v1"}}, t2);
+              "test-source-v1", "invalid-observation",
+              {"market-structure-descriptor-v1", "test-role",
+               EA::MarketStructure::DescriptorPolarity::positive, 0.5}}}, t2);
     }));
 }
 } // namespace

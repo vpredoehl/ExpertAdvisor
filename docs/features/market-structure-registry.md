@@ -93,20 +93,58 @@ disabled_channel_count=...
 ## Detection, causality, and confluence
 
 `MarketStructure::Observation` separates the timestamp at which a structure
-occurred from `availableAt`, when the detector could causally know it. The
-registry validates that availability is never earlier than observation, and
-`CausallyAvailableObservations` filters inputs at the decision time. A future
-detector must attach its source provenance and detector version and must not
-backfill a later-confirmed state onto prior rows.
+occurred from `availableAt`, when the detector could causally know it. Its
+immutable value contract includes source provenance, producer-owned source
+observation ID, detector version, and a typed descriptor. A descriptor has a
+nonempty schema version and role, an explicit `positive`, `negative`, or
+`neutral` polarity, and an optional `[0,1]` normalized confidence. Confidence
+is accepted only when a producer genuinely uses that normalized contract; the
+descriptive engine never ranks or compares it across detector families.
 
-`ConfluenceEngine` is a separate interface. It consumes a const collection of
-causally available detector observations and returns distinct descriptive
-confluence observations. It has no mechanism to alter detector output. There
-are no generic confluence Tensor channels or trading scores in this phase, and
-therefore no generic `confluence.*` ablation arm yet. When concrete confluence
-channels are introduced, they must be registered as a separate `confluence`
-family in a new semantic layout so `confluence.*` can be masked without
-masking Fibonacci, TG, or any other component family.
+The observation family is opaque at this boundary. It is intentionally not
+restricted to the registry's `kFamilies`, because that catalog represents only
+families with already-materialized Tensor channels. This permits an independent
+causal producer to describe evidence before any Tensor integration. The
+canonical observation identity length-prefixes all provenance, timing, and
+descriptor fields. Duplicate causally available identities reject explicitly.
+
+`CausallyAvailableObservations` first excludes observations with
+`availableAt > decisionTime`, then validates the remaining decision prefix.
+Thus a later observation, including a malformed one, cannot backfill or alter
+the result at an earlier decision time. Every participating observation must
+still satisfy `observedAt <= availableAt` once it becomes available. The
+returned causal prefix is ordered by canonical observation identity.
+
+`DescriptiveConfluenceEngine` is the Phase 2 generic implementation of the
+`ConfluenceEngine` interface. It copies and freezes a validated immutable
+`ConfluenceDefinition` at construction. Definitions contain an ID, version,
+relation (`support` or `contradiction`), exact left/right family-role
+selectors (which must differ), and a positive per-selector candidate cap.
+Their canonical identity contains every one of those fields, so a version or
+semantic change has a different identity.
+
+For an evaluation, the engine filters the causal prefix, selects each role,
+sorts candidates by canonical observation identity, and retains the canonical
+prefix up to the declared cap. It reports matching, retained, and overflow
+counts per selector. It emits at most two aggregate observations per
+definition: one for positive-left and one for negative-left. SUPPORT requires
+the same non-neutral polarity on both sides; CONTRADICTION requires the
+opposite polarity. This is bounded descriptive aggregation, not an all-pairs
+component product. Component ordering is canonical; output availability is
+the latest component availability; output identity contains definition,
+decision time, relation/polarities, availability, and canonical components.
+
+`ConfluenceReplay::CanonicalRepresentation()` is the in-memory diagnostic and
+replay record. It exposes definition identity, decision time, candidate and
+overflow accounting, selected identities, output identity, relation result,
+and full canonical component provenance/availability. Source observations are
+copied into derived observations for replay only; the engine neither mutates,
+suppresses, replaces, nor reinterprets raw detector evidence.
+
+There are no generic confluence Tensor channels, trading scores, database
+persistence, or `confluence.*` ablation arm in this phase. A later Tensor phase
+must register any materialized channels as a separate `confluence` family in a
+new semantic layout so raw evidence remains independently available.
 
 ## Adding a family or a channel
 
