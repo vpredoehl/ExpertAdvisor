@@ -3492,6 +3492,15 @@ std::optional<ExperimentOperationalEvidence> CaptureExperimentOperationalEvidenc
         return std::nullopt;
     ExperimentOperationalEvidence evidence;
     evidence.experiment = *job;
+    // Preserve the status model's durable checkpoint fallback without reading
+    // a log.  A completed epoch and the status model's selected model identity
+    // are the authoritative minimum checkpoint evidence available here.
+    if (!evidence.experiment.lastCheckpointEpoch.has_value())
+        evidence.experiment.lastCheckpointEpoch =
+            evidence.experiment.completedEpochs;
+    if (!evidence.experiment.lastCheckpointModelId.has_value())
+        evidence.experiment.lastCheckpointModelId =
+            evidence.experiment.modelId;
     evidence.attempts = LoadOperationalEvidenceAttempts(transaction, experimentId);
     const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
     const auto workers = LoadAuthoritativeSchedulerWorkers(transaction);
