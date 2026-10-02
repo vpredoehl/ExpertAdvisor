@@ -119,9 +119,10 @@ void TestExactEventMappingExclusionsAndProvenance()
                "price-level-market-structure-observation-v1");
         assert(observation.descriptor.polarity == MS::DescriptorPolarity::neutral);
         assert(!observation.descriptor.normalizedConfidence.has_value());
-        assert(!observation.correlationKey.has_value());
         assert(MS::CanonicalObservationIdentity(observation).starts_with(
-            "observation-v1;"));
+            "observation-v2;"));
+        assert(observation.sourceProvenance.starts_with(
+            "price-level-market-structure-observation-bridge-v2;"));
         assert(observation.sourceProvenance.find("symbol=eurusdrmp") !=
                std::string::npos);
         assert(observation.sourceProvenance.find("source_provenance=") !=
@@ -131,6 +132,10 @@ void TestExactEventMappingExclusionsAndProvenance()
                 return value.identity == observation.sourceObservationId;
             });
         assert(input != source.end());
+        assert(observation.correlationKey.has_value());
+        assert(observation.correlationKey->type ==
+               "price_level.level_identity.v1");
+        assert(observation.correlationKey->value == input->levelIdentity);
         assert(observation.descriptor.role == PL::CanonicalInteractionKind(input->kind));
         assert(observation.observedAt == input->observedAt);
         assert(observation.availableAt == input->availableAt);
@@ -214,6 +219,13 @@ void TestInvalidSourceDuplicateAndUpdateValidation()
         "price-level-bar-v1;bar=7").identity;
     assert(ThrowsInvalidArgument([&] {
         (void)adapter.Adapt(std::span<const PL::Observation>{&malformedRole, 1});
+    }));
+    SourceContract oversizedContract;
+    oversizedContract.levelIdentity.append(4096, 'x');
+    const auto oversizedKeySource = Source(oversizedContract,
+        PL::InteractionKind::touch, t, t, "price-level-bar-v1;bar=8");
+    assert(ThrowsInvalidArgument([&] {
+        (void)adapter.Adapt(std::span<const PL::Observation>{&oversizedKeySource, 1});
     }));
     auto unknown = source;
     unknown.kind = static_cast<PL::InteractionKind>(99);

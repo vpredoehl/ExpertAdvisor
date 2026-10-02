@@ -3,7 +3,7 @@
 ## Definition and scope
 
 `Headers/PriceLevelMarketStructureObservationAdapter.hpp` defines the
-stateless `price-level-market-structure-observation-bridge/v1` adapter. It
+stateless `price-level-market-structure-observation-bridge/v2` adapter. It
 copies immutable `causal-price-level/v1` observations into the generic
 `MarketStructure::Observation` boundary. Its opaque, pre-Tensor family is
 `price_level`; the Tensor-only `MarketStructureRegistry::kFamilies` catalog is
@@ -57,6 +57,24 @@ also supplies no numeric descriptor or ML channel; source fixed-anchor/bound
 information remains traceable through the copied canonical source identity and
 frozen configuration provenance rather than being normalized or reinterpreted.
 
+## Correlation key
+
+Bridge v2 adds immutable generic relationship metadata without changing a
+Phase-1 source observation or its descriptor. Every included observation has:
+
+```text
+type  = price_level.level_identity.v1
+value = exact source.levelIdentity
+```
+
+The value is the complete frozen Phase-1 level identity: canonical symbol,
+complete detector configuration identity, and the first pivot's frozen kind,
+bar coordinate, bar start, and exact canonical price. It is neither a current
+price nor a nearest-level/proximity lookup, insertion-order value, mutable zone
+center, role/family label, fuzzy floating-point comparison, future evidence, or
+trading outcome. Generic validation applies before output; a malformed or
+oversized key fails closed.
+
 ## Identity, provenance, validation, and ordering
 
 The MarketStructure detector version is `causal-price-level/v1`. Its source
@@ -66,7 +84,11 @@ role transition. Bridge provenance contains its own version, normalized
 canonical symbol, and a length-prefixed copy of the real Phase-1 provenance;
 that provenance includes the complete frozen detector configuration identity.
 The existing `CanonicalObservationIdentity` then provides the canonical,
-locale-independent identity for copied observations.
+locale-independent identity for copied observations. Because a correlation key
+is identity-bearing generic metadata, every v2 bridge output has
+`observation-v2` identity and v2 bridge provenance. The unchanged Phase-1
+source observation identity remains exactly in `sourceObservationId`; the
+descriptor schema remains `price-level-market-structure-observation-v1`.
 
 The adapter validates the canonical Phase-1 source identity, source/level
 provenance linkage, canonical symbol, timing, known event kind, and valid role

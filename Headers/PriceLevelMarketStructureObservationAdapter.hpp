@@ -19,9 +19,16 @@ namespace EA::MarketStructure::PriceLevelBridge
 inline constexpr std::string_view kFamilyId = "price_level";
 inline constexpr std::string_view kBridgeDefinitionId =
     "price-level-market-structure-observation-bridge";
-inline constexpr std::string_view kBridgeDefinitionVersion = "v1";
+// v2 adds immutable correlation metadata to the copied observation.  The
+// detector evidence and descriptor remain the frozen v1 values.
+inline constexpr std::string_view kBridgeDefinitionVersion = "v2";
 inline constexpr std::string_view kDescriptorSchemaVersion =
     "price-level-market-structure-observation-v1";
+// The value is the complete frozen Phase-1 Level::identity.  It is opaque to
+// MarketStructure and deliberately does not encode a price, proximity, role,
+// insertion order, or mutable active-level state.
+inline constexpr std::string_view kLevelIdentityCorrelationKeyType =
+    "price_level.level_identity.v1";
 
 class ObservationAdapter final
 {
@@ -225,13 +232,19 @@ private:
         const EA::PriceLevel::Observation& source) const
     {
         if (!Included(source.kind)) return std::nullopt;
+        const CorrelationKey correlationKey{
+            std::string{kLevelIdentityCorrelationKeyType}, source.levelIdentity};
+        // The generic boundary owns correlation-key validation.  Validate
+        // before producing an observation so malformed/oversized frozen
+        // identities fail closed rather than becoming a partial bridge output.
+        ValidateCorrelationKey(correlationKey);
         return Observation{std::string{kFamilyId}, DetectorVersion(),
             source.observedAt, source.availableAt,
             bridgeProvenancePrefix_ + LengthPrefixed(source.sourceProvenance),
             source.identity,
             {std::string{kDescriptorSchemaVersion}, std::string{
                 EA::PriceLevel::CanonicalInteractionKind(source.kind)},
-             DescriptorPolarity::neutral, std::nullopt}, std::nullopt};
+             DescriptorPolarity::neutral, std::nullopt}, correlationKey};
     }
 
     std::string symbol_;
