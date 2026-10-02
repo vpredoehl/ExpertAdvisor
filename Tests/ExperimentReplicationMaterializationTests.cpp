@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -157,6 +158,19 @@ public:
         specifications.push_back(specification);
         if (failOnCall != 0 && specifications.size() == failOnCall)
             throw std::runtime_error("fixture_insert_failure");
+        return nextId++;
+    }
+};
+
+class ConfluenceInserter final : public Materialization::Layout11ConfluenceExperimentInserter
+{
+public:
+    std::vector<Materialization::Layout11ConfluenceArm> arms;
+    long long nextId = 2000;
+    long long InsertFreshPausedLayout11ConfluenceExperiment(
+        const Materialization::Layout11ConfluenceArm& arm) override
+    {
+        arms.push_back(arm);
         return nextId++;
     }
 };
@@ -407,6 +421,52 @@ int main()
     assert(failedOutput.str().find("CONTROLLED_REPLICATION_MATERIALIZED_PAIR") ==
            std::string::npos);
     assert(failedOutput.str().find("state=materialized") == std::string::npos);
+
+    // Layout-11 confluence is a separate, fixed intervention constructor.
+    Evidence confluenceEvidence;
+    auto templateEvidence = Arm(201, "", 1001);
+    templateEvidence.authoritative.configuration.targetEpochs = 20;
+    templateEvidence.extended.configuredModelInputWidth = 114;
+    templateEvidence.extended.configuredModelInputLayoutVersion = 10;
+    templateEvidence.extended.economicCalendarSnapshotId = 1;
+    templateEvidence.extended.economicCalendarSnapshotHash =
+        "fnv1a64:67610f94f5c8e7cc";
+    confluenceEvidence.arms.emplace(201, templateEvidence);
+    Equivalents confluenceEquivalents;
+    ConfluenceInserter confluenceInserter;
+    Materialization::Layout11ConfluenceCommand confluenceCommand;
+    confluenceCommand.templateExperimentId = 201;
+    confluenceCommand.requestedSeeds = {1002};
+    std::ostringstream confluenceOut;
+    std::ostringstream confluenceErr;
+    const int confluencePlanResult = Materialization::RunLayout11ConfluenceMaterializationInTransaction(
+        confluenceCommand, confluenceEvidence, confluenceEquivalents,
+        confluenceInserter, confluenceOut, confluenceErr, &TestRegistry(), false);
+    if (confluencePlanResult != 0) std::cerr << confluenceErr.str() << '\n';
+    assert(confluencePlanResult == 0);
+    assert(confluenceInserter.arms.empty()); // dry-run is non-mutating.
+    assert(confluenceOut.str().find("mutations=0") != std::string::npos);
+    assert(Materialization::RunLayout11ConfluenceMaterializationInTransaction(
+        confluenceCommand, confluenceEvidence, confluenceEquivalents,
+        confluenceInserter, confluenceOut, confluenceErr, &TestRegistry()) == 0);
+    assert(confluenceInserter.arms.size() == 2);
+    assert(confluenceInserter.arms[0].featureAblationMask.empty());
+    assert(confluenceInserter.arms[1].featureAblationMask ==
+        "confluence_tg4_structural_fibonacci_retracement_support_available,"
+        "confluence_tg4_structural_fibonacci_retracement_contradiction_available");
+    for (const auto& arm : confluenceInserter.arms)
+    {
+        assert(Identity(arm.proposed, "configured_model_input_width").value == "116");
+        assert(Identity(arm.proposed,
+            "configured_model_input_semantic_layout_version").value == "11");
+        assert(Identity(arm.proposed, "fresh_initialization_seed").value == "1002");
+    }
+    confluenceEvidence.arms[201].extended.configuredModelInputLayoutVersion = 9;
+    confluenceInserter = {};
+    assert(Materialization::RunLayout11ConfluenceMaterializationInTransaction(
+        confluenceCommand, confluenceEvidence, confluenceEquivalents,
+        confluenceInserter, confluenceOut, confluenceErr, &TestRegistry()) == 3);
+    assert(confluenceInserter.arms.empty());
 
     return 0;
 }

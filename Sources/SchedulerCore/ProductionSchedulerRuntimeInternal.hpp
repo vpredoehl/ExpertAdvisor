@@ -145,6 +145,8 @@ struct SchedulerOptions
         planExperimentReplications;
     std::optional<std::pair<long long, long long>>
         materializeExperimentReplications;
+    std::optional<long long> planLayout11ConfluenceReplication;
+    std::optional<long long> materializeLayout11ConfluenceReplication;
     std::optional<long long> previewCrossSymbolHistoricalExperiment;
     std::optional<long long> materializeCrossSymbolHistoricalExperiment;
     std::optional<std::string> crossSymbolHistoricalTarget;

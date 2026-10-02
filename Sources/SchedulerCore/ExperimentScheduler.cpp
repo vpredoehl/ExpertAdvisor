@@ -307,6 +307,10 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--plan-experiment-replications=", 0) == 0 ||
             arg == "--materialize-experiment-replications" ||
             arg.rfind("--materialize-experiment-replications=", 0) == 0 ||
+            arg == "--plan-layout11-confluence-replication" ||
+            arg.rfind("--plan-layout11-confluence-replication=", 0) == 0 ||
+            arg == "--materialize-layout11-confluence-replication" ||
+            arg.rfind("--materialize-layout11-confluence-replication=", 0) == 0 ||
             arg == "--preview-cross-symbol-historical-experiment" ||
             arg.rfind("--preview-cross-symbol-historical-experiment=", 0) == 0 ||
             arg == "--materialize-cross-symbol-historical-experiment" ||
@@ -1393,6 +1397,20 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.materializeExperimentReplications =
                 EA::ExperimentPairComparison::ParseExperimentIdPair(
                     RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--plan-layout11-confluence-replication")
+        {
+            if (options.planLayout11ConfluenceReplication)
+                throw std::invalid_argument("--plan-layout11-confluence-replication specified more than once");
+            options.planLayout11ConfluenceReplication =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--materialize-layout11-confluence-replication")
+        {
+            if (options.materializeLayout11ConfluenceReplication)
+                throw std::invalid_argument("--materialize-layout11-confluence-replication specified more than once");
+            options.materializeLayout11ConfluenceReplication =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         }
         else if (arg == "--preview-cross-symbol-historical-experiment")
         {
@@ -3359,6 +3377,22 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 EA::ExperimentPairComparison::ParseExperimentIdPair(value);
         }
         else if (SplitOptionWithValue(
+                     arg, "--plan-layout11-confluence-replication", value))
+        {
+            if (options.planLayout11ConfluenceReplication)
+                throw std::invalid_argument("--plan-layout11-confluence-replication specified more than once");
+            options.planLayout11ConfluenceReplication =
+                ParsePositiveLongLong("--plan-layout11-confluence-replication", value);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--materialize-layout11-confluence-replication", value))
+        {
+            if (options.materializeLayout11ConfluenceReplication)
+                throw std::invalid_argument("--materialize-layout11-confluence-replication specified more than once");
+            options.materializeLayout11ConfluenceReplication =
+                ParsePositiveLongLong("--materialize-layout11-confluence-replication", value);
+        }
+        else if (SplitOptionWithValue(
                      arg, "--preview-cross-symbol-historical-experiment", value))
         {
             if (options.previewCrossSymbolHistoricalExperiment)
@@ -3749,6 +3783,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.verifyControlledReplicationStudy.has_value() ? 1 : 0) +
         (options.planExperimentReplications.has_value() ? 1 : 0) +
         (options.materializeExperimentReplications.has_value() ? 1 : 0) +
+        (options.planLayout11ConfluenceReplication.has_value() ? 1 : 0) +
+        (options.materializeLayout11ConfluenceReplication.has_value() ? 1 : 0) +
         (options.previewCrossSymbolHistoricalExperiment.has_value() ? 1 : 0) +
         (options.materializeCrossSymbolHistoricalExperiment.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
@@ -3879,7 +3915,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             "--summary requires --compare-experiment-pair");
     const bool replicationWaveCommand =
         options.planExperimentReplications.has_value() ||
-        options.materializeExperimentReplications.has_value();
+        options.materializeExperimentReplications.has_value() ||
+        options.planLayout11ConfluenceReplication.has_value() ||
+        options.materializeLayout11ConfluenceReplication.has_value();
     if (replicationWaveCommand != options.replicationSeeds.has_value())
         throw std::invalid_argument(
             "replication planning/materialization and --replication-seeds "
@@ -10425,6 +10463,17 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "closed. It creates paused/train records only and never queues, "
         << "starts, schedules, or signals work.\n"
         << "Usage: " << exe
+        << " --plan-layout11-confluence-replication=TEMPLATE_ID "
+           "--replication-seeds=SEED[,SEED...]\n"
+        << "Read-only plan for the frozen Layout-11/116 two-channel confluence "
+           "ablation. The template must be a matching empty-mask Layout-10/114 "
+           "fresh control; no experiment is created.\n"
+        << "Usage: " << exe
+        << " --materialize-layout11-confluence-replication=TEMPLATE_ID "
+           "--replication-seeds=SEED[,SEED...]\n"
+        << "After separate operator authorization, clones the locked template into "
+           "paused/train Layout-11 control/treatment pairs only.\n"
+        << "Usage: " << exe
         << " --preview-cross-symbol-historical-experiment=SOURCE_ID "
            "--cross-symbol-historical-target=SYMBOL\n"
         << "Read-only preview of one Layout-9/width-103 historical source "
@@ -11930,6 +11979,21 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return EA::ExperimentReplicationMaterialization::
                 RunMaterializationCommand(
                     LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.planLayout11ConfluenceReplication ||
+            options.materializeLayout11ConfluenceReplication)
+        {
+            EA::ExperimentReplicationMaterialization::Layout11ConfluenceCommand command;
+            command.templateExperimentId = options.planLayout11ConfluenceReplication
+                ? *options.planLayout11ConfluenceReplication
+                : *options.materializeLayout11ConfluenceReplication;
+            command.requestedSeeds = *options.replicationSeeds;
+            command.semanticWorkerRegistryPath = options.semanticWorkerRegistryPath;
+            return options.planLayout11ConfluenceReplication
+                ? EA::ExperimentReplicationMaterialization::RunLayout11ConfluencePlanCommand(
+                      LstmDbConnectionString(), command, std::cout, std::cerr)
+                : EA::ExperimentReplicationMaterialization::RunLayout11ConfluenceMaterializationCommand(
+                      LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.previewCrossSymbolHistoricalExperiment ||
             options.materializeCrossSymbolHistoricalExperiment)

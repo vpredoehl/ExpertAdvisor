@@ -13,7 +13,8 @@ long long InsertFreshPausedExperiment(
     const ExperimentReplicationPlanning::ProposedExperimentSpecification&
         specification,
     const std::string& targetSymbol,
-    bool preserveSourceSeed)
+    bool preserveSourceSeed, bool layout11Confluence,
+    const std::string& confluenceMask)
 {
     if (specification.authoritativeSourceExperimentId <= 0 ||
         specification.freshInitializationSeed == 0 ||
@@ -77,8 +78,10 @@ long long InsertFreshPausedExperiment(
         "(SELECT COALESCE(max(duplicate_nonce),0) + 1 FROM experiment),"
         "'paused','train',"
         "CASE WHEN $4::boolean THEN 'cross_symbol_historical_materialization' "
+        "WHEN $5::boolean THEN 'layout11_confluence_replication_materialization' "
         "ELSE 'controlled_replication_materialization' END,donchian20_mode,"
-        "feature_warmup_scope,donchian_lookback,feature_ablation_mask,"
+        "feature_warmup_scope,donchian_lookback,"
+        "CASE WHEN $5::boolean THEN $6::text ELSE feature_ablation_mask END,"
         "CASE WHEN $4::boolean THEN fresh_initialization_seed ELSE $2::bigint END,"
         "false,training_objective_canonical,training_objective_hash,"
         "training_objective_id,training_objective_version,"
@@ -86,8 +89,10 @@ long long InsertFreshPausedExperiment(
         "auxiliary_loss_coefficient,regression_target_definition,"
         "regression_normalization_identity,robust_loss_definition,"
         "robust_loss_delta,target_clipping_definition,"
-        "objective_normalization_identity,model_input_width,"
-        "model_input_semantic_layout_version,economic_calendar_snapshot_id,"
+        "objective_normalization_identity,"
+        "CASE WHEN $5::boolean THEN 116 ELSE model_input_width END,"
+        "CASE WHEN $5::boolean THEN 11 ELSE model_input_semantic_layout_version END,"
+        "economic_calendar_snapshot_id,"
         "economic_calendar_snapshot_hash,opportunistic_checkpoint_infer,"
         "checkpoint_infer_enabled,checkpoint_infer_min_epoch,"
         "checkpoint_infer_interval,checkpoint_policy_enabled,"
@@ -121,7 +126,7 @@ long long InsertFreshPausedExperiment(
         "RETURNING experiment_id;",
         pqxx::params{specification.authoritativeSourceExperimentId,
                      specification.freshInitializationSeed, targetSymbol,
-                     preserveSourceSeed});
+                     preserveSourceSeed, layout11Confluence, confluenceMask});
     if (inserted.size() != 1)
         throw std::runtime_error(
             "authoritative_source_experiment_disappeared_during_insert");
@@ -135,7 +140,8 @@ long long InsertFreshPausedReplicationExperiment(
     const ExperimentReplicationPlanning::ProposedExperimentSpecification&
         specification)
 {
-    return InsertFreshPausedExperiment(transaction, specification, {}, false);
+    return InsertFreshPausedExperiment(
+        transaction, specification, {}, false, false, {});
 }
 
 long long InsertFreshPausedCrossSymbolExperiment(
@@ -147,7 +153,19 @@ long long InsertFreshPausedCrossSymbolExperiment(
     source.authoritativeSourceExperimentId = sourceExperimentId;
     source.freshInitializationSeed = 1; // selected from source when true.
     return InsertFreshPausedExperiment(
-        transaction, source, targetSymbol, true);
+        transaction, source, targetSymbol, true, false, {});
+}
+
+long long InsertFreshPausedLayout11ConfluenceExperiment(
+    pqxx::transaction_base& transaction, long long templateExperimentId,
+    unsigned int freshInitializationSeed, const std::string& featureAblationMask)
+{
+    ExperimentReplicationPlanning::ProposedExperimentSpecification source;
+    source.experimentId = templateExperimentId;
+    source.authoritativeSourceExperimentId = templateExperimentId;
+    source.freshInitializationSeed = freshInitializationSeed;
+    return InsertFreshPausedExperiment(
+        transaction, source, {}, false, true, featureAblationMask);
 }
 
 } // namespace EA::ExperimentReplicationMaterialization

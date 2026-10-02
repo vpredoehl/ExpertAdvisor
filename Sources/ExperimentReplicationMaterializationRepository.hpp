@@ -19,4 +19,8 @@ long long InsertFreshPausedCrossSymbolExperiment(
     pqxx::transaction_base& transaction, long long sourceExperimentId,
     const std::string& targetSymbol);
 
+long long InsertFreshPausedLayout11ConfluenceExperiment(
+    pqxx::transaction_base& transaction, long long templateExperimentId,
+    unsigned int freshInitializationSeed, const std::string& featureAblationMask);
+
 } // namespace EA::ExperimentReplicationMaterialization

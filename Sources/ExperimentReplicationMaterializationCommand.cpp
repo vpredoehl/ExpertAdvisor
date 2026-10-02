@@ -42,6 +42,35 @@ private:
     pqxx::transaction_base& transaction_;
 };
 
+class PostgresLayout11ConfluenceInserter final :
+    public Layout11ConfluenceExperimentInserter
+{
+public:
+    explicit PostgresLayout11ConfluenceInserter(pqxx::transaction_base& transaction)
+        : transaction_(transaction) {}
+
+    long long InsertFreshPausedLayout11ConfluenceExperiment(
+        const Layout11ConfluenceArm& arm) override
+    {
+        return EA::ExperimentReplicationMaterialization::
+            InsertFreshPausedLayout11ConfluenceExperiment(
+                transaction_, arm.templateExperimentId,
+                arm.freshInitializationSeed, arm.featureAblationMask);
+    }
+private:
+    pqxx::transaction_base& transaction_;
+};
+
+class NoopLayout11ConfluenceInserter final : public Layout11ConfluenceExperimentInserter
+{
+public:
+    long long InsertFreshPausedLayout11ConfluenceExperiment(
+        const Layout11ConfluenceArm&) override
+    {
+        throw std::logic_error("layout11_confluence_plan_attempted_insert");
+    }
+};
+
 } // namespace
 
 namespace
@@ -346,6 +375,69 @@ int RunCrossSymbolPreviewCommand(const std::string& connectionString,
         errors << "CROSS_SYMBOL_HISTORICAL_MATERIALIZATION_RESULT"
                << ",state=not_previewed,reason=" << error.what()
                << ",mutations=0,queued=false,started=false\n";
+        return 2;
+    }
+}
+
+int RunLayout11ConfluencePlanCommand(const std::string& connectionString,
+                                     const Layout11ConfluenceCommand& command,
+                                     std::ostream& output,
+                                     std::ostream& errors)
+{
+    try
+    {
+        pqxx::connection connection{connectionString};
+        pqxx::read_transaction transaction{connection};
+        transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+        EA::Scheduler::SemanticWorkerRegistryLoadRequest registryRequest;
+        registryRequest.registryPath = command.semanticWorkerRegistryPath;
+        const auto registry = EA::Scheduler::SemanticWorkerRegistry::Load(registryRequest);
+        const Planning::PostgresPlanningSource source{transaction};
+        NoopLayout11ConfluenceInserter inserter;
+        const int result = RunLayout11ConfluenceMaterializationInTransaction(
+            command, source, source, inserter, output, errors, &registry, false);
+        transaction.commit();
+        return result;
+    }
+    catch (const std::exception& error)
+    {
+        errors << "LAYOUT11_CONFLUENCE_REPLICATION_RESULT,state=not_planned,reason="
+               << error.what() << ",mutations=0,queued=false,started=false\n";
+        return 2;
+    }
+}
+
+int RunLayout11ConfluenceMaterializationCommand(
+    const std::string& connectionString, const Layout11ConfluenceCommand& command,
+    std::ostream& output, std::ostream& errors)
+{
+    try
+    {
+        pqxx::connection connection{connectionString};
+        pqxx::work transaction{connection};
+        transaction.exec("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;");
+        transaction.exec("LOCK TABLE experiment IN SHARE ROW EXCLUSIVE MODE;");
+        EA::Scheduler::SemanticWorkerRegistryLoadRequest registryRequest;
+        registryRequest.registryPath = command.semanticWorkerRegistryPath;
+        const auto registry = EA::Scheduler::SemanticWorkerRegistry::Load(registryRequest);
+        const Planning::PostgresPlanningSource source{transaction};
+        PostgresLayout11ConfluenceInserter inserter{transaction};
+        const int result = RunLayout11ConfluenceMaterializationInTransaction(
+            command, source, source, inserter, output, errors, &registry, true);
+        if (result == 0) transaction.commit();
+        else transaction.abort();
+        return result;
+    }
+    catch (const pqxx::in_doubt_error& error)
+    {
+        errors << "LAYOUT11_CONFLUENCE_REPLICATION_RESULT,state=materialization_outcome_unknown,reason="
+               << error.what() << ",queued=false,started=false\n";
+        return 2;
+    }
+    catch (const std::exception& error)
+    {
+        errors << "LAYOUT11_CONFLUENCE_REPLICATION_RESULT,state=not_materialized,reason="
+               << error.what() << ",queued=false,started=false\n";
         return 2;
     }
 }

@@ -1,6 +1,10 @@
 #include "ExperimentReplicationMaterialization.hpp"
 
+#include "FeatureAblation.hpp"
+#include "ModelInputContract.hpp"
+#include "ModelInputExpansion.hpp"
 #include "SchedulerCore/SemanticWorkerRegistry.hpp"
+#include "SchedulerCore/TrainingWorkerSelection.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -310,6 +314,158 @@ bool HasEquivalenceConflict(const Planning::Plan& plan,
     return false;
 }
 
+constexpr std::string_view kConfluenceMask =
+    "confluence_tg4_structural_fibonacci_retracement_support_available,"
+    "confluence_tg4_structural_fibonacci_retracement_contradiction_available";
+static_assert(kModelInputSemanticLayoutVersion == 11);
+static_assert(kFixedConfluenceTensorModelInputWidth == 116);
+
+void SetIdentity(ExperimentPairComparison::ArmResultSet& arm,
+                 std::string_view name, std::string value)
+{
+    std::size_t matches = 0;
+    for (auto& field : arm.scientificIdentity)
+        if (field.name == name)
+        {
+            field.value = std::move(value);
+            ++matches;
+        }
+    if (matches != 1)
+        throw std::invalid_argument("layout11_confluence_identity_missing_or_duplicated:" +
+                                    std::string{name});
+}
+
+std::string Identity(const ExperimentPairComparison::ArmResultSet& arm,
+                     std::string_view name)
+{
+    const auto found = std::find_if(arm.scientificIdentity.begin(),
+                                    arm.scientificIdentity.end(),
+        [name](const auto& field) { return field.name == name; });
+    if (found == arm.scientificIdentity.end() || !found->value)
+        throw std::invalid_argument("layout11_confluence_identity_unavailable:" +
+                                    std::string{name});
+    return *found->value;
+}
+
+void ValidateTemplate(const FeatureAblationPairEvaluation::ArmEvidence& evidence)
+{
+    const auto& configuration = evidence.authoritative.configuration;
+    const auto& extended = evidence.extended;
+    if (configuration.predictionHorizon != 4 || configuration.targetEpochs != 20 ||
+        configuration.checkpointInterval != 20 ||
+        std::abs(configuration.threshold - 0.0008) > 1e-12 ||
+        !configuration.coreLearningRateMultiplier ||
+        !configuration.headLearningRateMultiplier ||
+        std::abs(*configuration.coreLearningRateMultiplier - 120.0) > 1e-12 ||
+        std::abs(*configuration.headLearningRateMultiplier - 25.0) > 1e-12 ||
+        configuration.featureWarmupScope != "full_history_warmup" ||
+        configuration.featureAblationMask != "" ||
+        !extended.configuredModelInputWidth ||
+        !extended.configuredModelInputLayoutVersion ||
+        *extended.configuredModelInputWidth != 114 ||
+        *extended.configuredModelInputLayoutVersion != 10 ||
+        !extended.economicCalendarSnapshotId ||
+        *extended.economicCalendarSnapshotId != 1 ||
+        !extended.economicCalendarSnapshotHash ||
+        *extended.economicCalendarSnapshotHash != "fnv1a64:67610f94f5c8e7cc" ||
+        !extended.freshInitializationSeed ||
+        configuration.resumeModelId || configuration.resumeExpandInputWidth ||
+        extended.continuationPolicyEnabled)
+        throw std::invalid_argument("layout11_confluence_template_baseline_mismatch");
+    const auto date = [](const std::string& value)
+    { return value.size() >= 10 ? value.substr(0, 10) : value; };
+    if (date(configuration.trainStart) != "2010-01-01" ||
+        date(configuration.trainEnd) != "2025-01-01" ||
+        date(configuration.inferenceStart) != "2025-01-01" ||
+        date(configuration.inferenceEnd) != "2026-01-01" ||
+        configuration.experimentObjective.canonical.empty() ||
+        configuration.experimentObjective.hash.empty())
+        throw std::invalid_argument("layout11_confluence_template_identity_mismatch");
+}
+
+Layout11ConfluenceArm MakeConfluenceArm(
+    const ExperimentPairComparison::ArmResultSet& templateArm,
+    long long templateExperimentId, unsigned int seed, std::string role,
+    std::string mask)
+{
+    Layout11ConfluenceArm arm;
+    arm.templateExperimentId = templateExperimentId;
+    arm.freshInitializationSeed = seed;
+    arm.role = std::move(role);
+    arm.featureAblationMask = std::move(mask);
+    arm.proposed = templateArm;
+    SetIdentity(arm.proposed, "fresh_initialization_seed", std::to_string(seed));
+    SetIdentity(arm.proposed, "feature_ablation_mask", arm.featureAblationMask);
+    SetIdentity(arm.proposed, "configured_model_input_width",
+                std::to_string(kFixedConfluenceTensorModelInputWidth));
+    SetIdentity(arm.proposed, "configured_model_input_semantic_layout_version",
+                std::to_string(kModelInputSemanticLayoutVersion));
+    return arm;
+}
+
+void ValidatePair(const Layout11ConfluenceArm& control,
+                  const Layout11ConfluenceArm& treatment)
+{
+    if (control.featureAblationMask != "" || treatment.featureAblationMask != kConfluenceMask)
+        throw std::invalid_argument("layout11_confluence_pair_mask_invalid");
+    if (EA::FeatureAblationMask::ParseForSemanticLayout(
+            treatment.featureAblationMask, 11).CanonicalText() != kConfluenceMask)
+        throw std::invalid_argument("layout11_confluence_pair_mask_not_canonical");
+    if (Identity(control.proposed, "configured_model_input_width") != "116" ||
+        Identity(treatment.proposed, "configured_model_input_width") != "116")
+        throw std::invalid_argument("layout11_confluence_pair_width_invalid");
+    if (Identity(control.proposed, "configured_model_input_semantic_layout_version") != "11" ||
+        Identity(treatment.proposed, "configured_model_input_semantic_layout_version") != "11")
+        throw std::invalid_argument("layout11_confluence_pair_layout_invalid");
+    if (control.freshInitializationSeed != treatment.freshInitializationSeed)
+        throw std::invalid_argument("layout11_confluence_pair_seed_invalid");
+    std::map<std::string, std::optional<std::string>> controlIdentity;
+    std::map<std::string, std::optional<std::string>> treatmentIdentity;
+    for (const auto& field : control.proposed.scientificIdentity)
+        if (!controlIdentity.emplace(field.name, field.value).second)
+            throw std::invalid_argument("layout11_confluence_pair_identity_duplicated");
+    for (const auto& field : treatment.proposed.scientificIdentity)
+        if (!treatmentIdentity.emplace(field.name, field.value).second)
+            throw std::invalid_argument("layout11_confluence_pair_identity_duplicated");
+    if (controlIdentity.size() != treatmentIdentity.size())
+        throw std::invalid_argument("layout11_confluence_pair_identity_mismatch");
+    for (const auto& [name, value] : controlIdentity)
+    {
+        const auto treatmentValue = treatmentIdentity.find(name);
+        if (treatmentValue == treatmentIdentity.end() ||
+            (name != "feature_ablation_mask" && treatmentValue->second != value))
+            throw std::invalid_argument("layout11_confluence_pair_identity_mismatch:" + name);
+    }
+}
+
+void ValidateRouting(const Layout11ConfluenceArm& control,
+                     const Layout11ConfluenceArm& treatment,
+                     const EA::Scheduler::SemanticWorkerRegistry& registry,
+                     std::ostream& output)
+{
+    const EA::Scheduler::PersistedWorkerSemanticIdentity identity{
+        kFixedConfluenceTensorModelInputWidth, kModelInputSemanticLayoutVersion, false};
+    const auto controlWorker = registry.selectTrainingReferenceWorker(
+        identity, EA::Scheduler::RequiredTrainingWorkerCapabilities(control.featureAblationMask));
+    const auto treatmentWorker = registry.selectTrainingReferenceWorker(
+        identity, EA::Scheduler::RequiredTrainingWorkerCapabilities(treatment.featureAblationMask));
+    if (!controlWorker.selected || !treatmentWorker.selected ||
+        controlWorker.canonicalExecutablePath != treatmentWorker.canonicalExecutablePath)
+        throw std::invalid_argument("layout11_confluence_train_worker_contract_unresolved");
+    const auto* worker = registry.findByCanonicalExecutable(
+        treatmentWorker.canonicalExecutablePath);
+    if (worker == nullptr || std::find(worker->capabilities.begin(), worker->capabilities.end(),
+        "train_feature_ablation_v1") == worker->capabilities.end())
+        throw std::invalid_argument("layout11_confluence_train_feature_ablation_capability_missing");
+    output << "LAYOUT11_CONFLUENCE_REPLICATION_TRAIN_WORKER"
+           << ",semantic_layout=11,model_input_width=116"
+           << ",canonical_executable_path=" << worker->canonicalExecutablePath
+           << ",executable_sha256=" << worker->sha256
+           << ",source_commit=" << worker->sourceCommit
+           << ",runtime_identity=" << worker->runtimeIdentity
+           << ",capability=train_feature_ablation_v1\n";
+}
+
 } // namespace
 
 int RunMaterializationInTransaction(
@@ -473,6 +629,112 @@ int RunMaterializationInTransaction(
                << ",pair_count=0,experiment_count=0"
                << ",transaction=rolled_back,queued=false,started=false"
                << ",exit_code=3\n";
+        return 3;
+    }
+}
+
+int RunLayout11ConfluenceMaterializationInTransaction(
+    const Layout11ConfluenceCommand& command,
+    const ExperimentPairComparison::EvidenceSource& evidence,
+    const Planning::EquivalentExperimentSource& equivalents,
+    Layout11ConfluenceExperimentInserter& inserter,
+    std::ostream& output,
+    std::ostream& errors,
+    const EA::Scheduler::SemanticWorkerRegistry* registry,
+    bool apply)
+{
+    try
+    {
+        if (command.templateExperimentId <= 0 || command.requestedSeeds.empty())
+            throw std::invalid_argument("layout11_confluence_command_invalid");
+        if (registry == nullptr)
+            throw std::invalid_argument("layout11_confluence_worker_registry_unavailable");
+        std::set<unsigned int> seeds;
+        for (const unsigned int seed : command.requestedSeeds)
+            if (seed == 0 || !seeds.insert(seed).second)
+                throw std::invalid_argument("layout11_confluence_seeds_invalid");
+
+        const auto templateEvidence = evidence.Load(command.templateExperimentId);
+        ValidateTemplate(templateEvidence);
+        const auto templateArm = ExperimentPairComparison::MakeArmResultSet(templateEvidence);
+        output << "LAYOUT11_CONFLUENCE_REPLICATION_PLAN"
+               << ",template_experiment_id=" << command.templateExperimentId
+               << ",template_semantic_layout=10,template_model_input_width=114"
+               << ",semantic_layout=11,model_input_width=116"
+               << ",treatment_mask=" << kConfluenceMask
+               << ",mutations=0,queued=false,started=false\n";
+        for (const unsigned int seed : command.requestedSeeds)
+        {
+            const auto control = MakeConfluenceArm(templateArm, command.templateExperimentId,
+                seed, "control", "");
+            const auto treatment = MakeConfluenceArm(templateArm, command.templateExperimentId,
+                seed, "treatment", std::string{kConfluenceMask});
+            ValidatePair(control, treatment);
+            ValidateRouting(control, treatment, *registry, output);
+            const auto controlEquivalent = equivalents.FindEquivalent(control.proposed);
+            const auto treatmentEquivalent = equivalents.FindEquivalent(treatment.proposed);
+            for (const Layout11ConfluenceArm* arm : {&control, &treatment})
+                for (const auto& field : arm->proposed.scientificIdentity)
+                    output << "LAYOUT11_CONFLUENCE_REPLICATION_CONFIGURATION"
+                           << ",seed=" << seed << ",role=" << arm->role
+                           << ",template_experiment_id=" << command.templateExperimentId
+                           << ",field=" << MachineText(field.name)
+                           << ",value=" << std::quoted(field.value.value_or("UNAVAILABLE"))
+                           << '\n';
+            output << "LAYOUT11_CONFLUENCE_REPLICATION_ARM"
+                   << ",seed=" << seed << ",role=control"
+                   << ",symbol=" << Identity(control.proposed, "symbol")
+                   << ",prediction_horizon=" << Identity(control.proposed, "prediction_horizon")
+                   << ",target_epochs=" << Identity(control.proposed, "target_epochs")
+                   << ",feature_ablation_mask=EMPTY,model_input_width=116"
+                   << ",semantic_layout=11,threshold=" << Identity(control.proposed, "threshold")
+                   << ",core_lr_mult=" << Identity(control.proposed, "core_lr_mult")
+                   << ",head_lr_mult=" << Identity(control.proposed, "head_lr_mult")
+                   << ",checkpoint_interval=" << Identity(control.proposed, "checkpoint_interval")
+                   << ",train_start=" << Identity(control.proposed, "train_start")
+                   << ",train_end=" << Identity(control.proposed, "train_end")
+                   << ",inference_start=" << Identity(control.proposed, "inference_start")
+                   << ",inference_end=" << Identity(control.proposed, "inference_end")
+                   << ",feature_warmup_scope=" << Identity(control.proposed, "feature_warmup_scope")
+                   << ",training_objective=" << Identity(control.proposed, "training_objective_canonical")
+                   << ",economic_calendar_snapshot_id=" << Identity(control.proposed, "economic_calendar_snapshot_id")
+                   << ",economic_calendar_snapshot_hash=" << Identity(control.proposed, "economic_calendar_snapshot_hash")
+                   << ",equivalence=" << Planning::EquivalentExperimentStateText(controlEquivalent.state) << '\n';
+            output << "LAYOUT11_CONFLUENCE_REPLICATION_ARM"
+                   << ",seed=" << seed << ",role=treatment"
+                   << ",symbol=" << Identity(treatment.proposed, "symbol")
+                   << ",prediction_horizon=" << Identity(treatment.proposed, "prediction_horizon")
+                   << ",target_epochs=" << Identity(treatment.proposed, "target_epochs")
+                   << ",feature_ablation_mask=" << kConfluenceMask
+                   << ",model_input_width=116,semantic_layout=11"
+                   << ",training_objective=" << Identity(treatment.proposed, "training_objective_canonical")
+                   << ",equivalence=" << Planning::EquivalentExperimentStateText(treatmentEquivalent.state) << '\n';
+            if (controlEquivalent.state != Planning::EquivalentExperimentState::NoEquivalentExperimentFound ||
+                treatmentEquivalent.state != Planning::EquivalentExperimentState::NoEquivalentExperimentFound)
+                throw std::invalid_argument("layout11_confluence_equivalence_conflict");
+            if (apply)
+            {
+                const long long controlId = inserter.InsertFreshPausedLayout11ConfluenceExperiment(control);
+                const long long treatmentId = inserter.InsertFreshPausedLayout11ConfluenceExperiment(treatment);
+                output << "LAYOUT11_CONFLUENCE_REPLICATION_MATERIALIZED_PAIR"
+                       << ",seed=" << seed << ",control_experiment_id=" << controlId
+                       << ",treatment_experiment_id=" << treatmentId
+                       << ",queued=false,started=false\n";
+            }
+        }
+        output << "LAYOUT11_CONFLUENCE_REPLICATION_RESULT,state="
+               << (apply ? "materialized" : "planned")
+               << ",pair_count=" << command.requestedSeeds.size()
+               << ",experiment_count=" << command.requestedSeeds.size() * 2
+               << ",mutations=" << (apply ? command.requestedSeeds.size() * 2 : 0)
+               << ",queued=false,started=false\n";
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        errors << "LAYOUT11_CONFLUENCE_REPLICATION_RESULT,state=not_materialized,reason="
+               << MachineText(error.what())
+               << ",mutations=0,queued=false,started=false,exit_code=3\n";
         return 3;
     }
 }

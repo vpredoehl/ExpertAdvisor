@@ -17,6 +17,54 @@ struct MaterializationCommand : Planning::PlanningCommand
     bool allowExistingEquivalent = false;
 };
 
+// A deliberately narrow, frozen Layout-11 study constructor.  The template is
+// a completed empty-mask Layout-10 control whose non-layout configuration is
+// revalidated and then cloned; it is never modified.
+struct Layout11ConfluenceCommand
+{
+    long long templateExperimentId = 0;
+    std::vector<unsigned int> requestedSeeds;
+    std::string semanticWorkerRegistryPath =
+        "Builds/SemanticWorkers/registry.json";
+};
+
+struct Layout11ConfluenceArm
+{
+    long long templateExperimentId = 0;
+    unsigned int freshInitializationSeed = 0;
+    std::string role;
+    std::string featureAblationMask;
+    ExperimentPairComparison::ArmResultSet proposed;
+};
+
+class Layout11ConfluenceExperimentInserter
+{
+public:
+    virtual ~Layout11ConfluenceExperimentInserter() = default;
+    virtual long long InsertFreshPausedLayout11ConfluenceExperiment(
+        const Layout11ConfluenceArm& arm) = 0;
+};
+
+int RunLayout11ConfluenceMaterializationInTransaction(
+    const Layout11ConfluenceCommand& command,
+    const ExperimentPairComparison::EvidenceSource& evidence,
+    const Planning::EquivalentExperimentSource& equivalents,
+    Layout11ConfluenceExperimentInserter& inserter,
+    std::ostream& output,
+    std::ostream& errors,
+    const EA::Scheduler::SemanticWorkerRegistry* registry = nullptr,
+    bool apply = true);
+
+int RunLayout11ConfluencePlanCommand(const std::string& connectionString,
+                                     const Layout11ConfluenceCommand& command,
+                                     std::ostream& output,
+                                     std::ostream& errors);
+int RunLayout11ConfluenceMaterializationCommand(
+    const std::string& connectionString,
+    const Layout11ConfluenceCommand& command,
+    std::ostream& output,
+    std::ostream& errors);
+
 // A single historical source may be transported to one canonical target
 // symbol.  This is intentionally separate from controlled replication, whose
 // only intervention is the seed.
