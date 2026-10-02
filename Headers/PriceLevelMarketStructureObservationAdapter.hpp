@@ -231,7 +231,7 @@ private:
             source.identity,
             {std::string{kDescriptorSchemaVersion}, std::string{
                 EA::PriceLevel::CanonicalInteractionKind(source.kind)},
-             DescriptorPolarity::neutral, std::nullopt}};
+             DescriptorPolarity::neutral, std::nullopt}, std::nullopt};
     }
 
     std::string symbol_;

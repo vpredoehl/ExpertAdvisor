@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <span>
@@ -373,6 +374,51 @@ inline std::string CanonicalTimestamp(std::chrono::sys_seconds value)
     return std::to_string(value.time_since_epoch().count());
 }
 
+// Correlation is explicit relationship metadata supplied by a producer.  It
+// is neither a descriptor (which states an observation's meaning) nor source
+// provenance (which records where it came from).  Values are opaque to the
+// generic engine: it can only validate and compare the complete typed value.
+struct CorrelationKey
+{
+    std::string type;
+    std::string value;
+
+    bool operator==(const CorrelationKey&) const = default;
+};
+
+inline void ValidateCorrelationKey(const CorrelationKey& key)
+{
+    constexpr std::size_t kMaximumTypeLength = 64;
+    constexpr std::size_t kMaximumValueLength = 4096;
+    if (key.type.empty() || key.type.size() > kMaximumTypeLength ||
+        key.value.empty() || key.value.size() > kMaximumValueLength ||
+        key.type.front() < 'a' || key.type.front() > 'z')
+    {
+        throw std::invalid_argument("MARKET_STRUCTURE_CORRELATION_KEY_INVALID");
+    }
+    for (const unsigned char character : key.type)
+    {
+        if (!((character >= 'a' && character <= 'z') ||
+              (character >= '0' && character <= '9') || character == '.' ||
+              character == '_' || character == '-'))
+        {
+            throw std::invalid_argument("MARKET_STRUCTURE_CORRELATION_KEY_INVALID");
+        }
+    }
+    for (const unsigned char character : key.value)
+    {
+        if (character < 0x21 || character > 0x7e)
+            throw std::invalid_argument("MARKET_STRUCTURE_CORRELATION_KEY_INVALID");
+    }
+}
+
+inline std::string CanonicalCorrelationKey(const CorrelationKey& key)
+{
+    ValidateCorrelationKey(key);
+    return "type=" + LengthPrefixed(key.type) + ";value=" +
+        LengthPrefixed(key.value);
+}
+
 // A family ID at this boundary is an opaque, producer-owned identity.  It is
 // intentionally not limited to kFamilies, which is a catalog of Tensor
 // channels only; descriptive observations may exist before Tensor integration.
@@ -385,6 +431,7 @@ struct Observation
     std::string sourceProvenance;
     std::string sourceObservationId;
     Descriptor descriptor;
+    std::optional<CorrelationKey> correlationKey;
 
     bool operator==(const Observation&) const = default;
 };
@@ -398,6 +445,8 @@ inline void ValidateObservation(const Observation& observation)
     if (observation.availableAt < observation.observedAt)
         throw std::invalid_argument("MARKET_STRUCTURE_CAUSAL_AVAILABILITY_INVALID");
     ValidateDescriptor(observation.descriptor);
+    if (observation.correlationKey)
+        ValidateCorrelationKey(*observation.correlationKey);
 }
 
 inline std::string CanonicalObservationIdentity(const Observation& observation)
@@ -405,7 +454,7 @@ inline std::string CanonicalObservationIdentity(const Observation& observation)
     ValidateObservation(observation);
     const std::string confidence = observation.descriptor.normalizedConfidence
         ? CanonicalDouble(*observation.descriptor.normalizedConfidence) : "absent";
-    return "observation-v1;family=" + LengthPrefixed(observation.familyId) +
+    const std::string fields = "family=" + LengthPrefixed(observation.familyId) +
         ";detector=" + LengthPrefixed(observation.detectorVersion) +
         ";observed_at=" + CanonicalTimestamp(observation.observedAt) +
         ";available_at=" + CanonicalTimestamp(observation.availableAt) +
@@ -416,6 +465,10 @@ inline std::string CanonicalObservationIdentity(const Observation& observation)
         ";polarity=" + std::string{CanonicalDescriptorPolarity(
             observation.descriptor.polarity)} +
         ";confidence=" + confidence;
+    if (!observation.correlationKey)
+        return "observation-v1;" + fields;
+    return "observation-v2;" + fields + ";correlation_key=" +
+        LengthPrefixed(CanonicalCorrelationKey(*observation.correlationKey));
 }
 
 inline std::vector<Observation> CausallyAvailableObservations(
@@ -452,6 +505,7 @@ enum class RelationKind
 {
     support,
     contradiction,
+    co_occurrence,
 };
 
 inline std::string_view CanonicalRelationKind(RelationKind value)
@@ -460,6 +514,7 @@ inline std::string_view CanonicalRelationKind(RelationKind value)
     {
         case RelationKind::support: return "support";
         case RelationKind::contradiction: return "contradiction";
+        case RelationKind::co_occurrence: return "co_occurrence";
     }
     throw std::invalid_argument("MARKET_STRUCTURE_RELATION_KIND_INVALID");
 }
@@ -472,6 +527,41 @@ struct RoleSelector
     bool operator==(const RoleSelector&) const = default;
 };
 
+enum class CorrelationConstraint
+{
+    none,
+    exact_key_equality,
+};
+
+inline std::string_view CanonicalCorrelationConstraint(
+    CorrelationConstraint value)
+{
+    switch (value)
+    {
+        case CorrelationConstraint::none: return "none";
+        case CorrelationConstraint::exact_key_equality:
+            return "exact_key_equality";
+    }
+    throw std::invalid_argument("MARKET_STRUCTURE_CORRELATION_CONSTRAINT_INVALID");
+}
+
+enum class TemporalPredicate
+{
+    none,
+    left_available_at_before_right_available_at,
+};
+
+inline std::string_view CanonicalTemporalPredicate(TemporalPredicate value)
+{
+    switch (value)
+    {
+        case TemporalPredicate::none: return "none";
+        case TemporalPredicate::left_available_at_before_right_available_at:
+            return "left_available_at_before_right_available_at";
+    }
+    throw std::invalid_argument("MARKET_STRUCTURE_TEMPORAL_PREDICATE_INVALID");
+}
+
 // The engine makes one bounded aggregate for each qualifying polarity, never
 // a Cartesian product of components.  Engine construction copies and freezes
 // this definition; callers cannot subsequently alter its semantics.
@@ -483,6 +573,9 @@ struct ConfluenceDefinition
     RoleSelector left;
     RoleSelector right;
     std::size_t maxCandidatesPerSelector = 0;
+    CorrelationConstraint correlationConstraint = CorrelationConstraint::none;
+    TemporalPredicate temporalPredicate = TemporalPredicate::none;
+    std::size_t maxCorrelationKeys = 0;
 
     bool operator==(const ConfluenceDefinition&) const = default;
 };
@@ -498,13 +591,33 @@ inline void ValidateConfluenceDefinition(const ConfluenceDefinition& definition)
         throw std::invalid_argument("MARKET_STRUCTURE_CONFLUENCE_DEFINITION_INVALID");
     }
     (void)CanonicalRelationKind(definition.relation);
+    (void)CanonicalCorrelationConstraint(definition.correlationConstraint);
+    (void)CanonicalTemporalPredicate(definition.temporalPredicate);
+    if (definition.correlationConstraint == CorrelationConstraint::none)
+    {
+        if (definition.relation == RelationKind::co_occurrence ||
+            definition.temporalPredicate != TemporalPredicate::none ||
+            definition.maxCorrelationKeys != 0)
+        {
+            throw std::invalid_argument("MARKET_STRUCTURE_CONFLUENCE_DEFINITION_INVALID");
+        }
+    }
+    else
+    {
+        if (definition.maxCorrelationKeys == 0 ||
+            (definition.temporalPredicate != TemporalPredicate::none &&
+             definition.maxCandidatesPerSelector != 1))
+        {
+            throw std::invalid_argument("MARKET_STRUCTURE_CONFLUENCE_DEFINITION_INVALID");
+        }
+    }
 }
 
 inline std::string CanonicalConfluenceDefinitionIdentity(
     const ConfluenceDefinition& definition)
 {
     ValidateConfluenceDefinition(definition);
-    return "confluence-definition-v1;id=" + LengthPrefixed(definition.definitionId) +
+    const std::string fields = "id=" + LengthPrefixed(definition.definitionId) +
         ";version=" + LengthPrefixed(definition.definitionVersion) +
         ";relation=" + std::string{CanonicalRelationKind(definition.relation)} +
         ";left_family=" + LengthPrefixed(definition.left.familyId) +
@@ -512,6 +625,14 @@ inline std::string CanonicalConfluenceDefinitionIdentity(
         ";right_family=" + LengthPrefixed(definition.right.familyId) +
         ";right_role=" + LengthPrefixed(definition.right.role) +
         ";candidate_cap=" + std::to_string(definition.maxCandidatesPerSelector);
+    if (definition.correlationConstraint == CorrelationConstraint::none)
+        return "confluence-definition-v1;" + fields;
+    return "confluence-definition-v2;" + fields +
+        ";correlation_constraint=" + std::string{CanonicalCorrelationConstraint(
+            definition.correlationConstraint)} +
+        ";temporal_predicate=" + std::string{CanonicalTemporalPredicate(
+            definition.temporalPredicate)} +
+        ";correlation_key_cap=" + std::to_string(definition.maxCorrelationKeys);
 }
 
 struct ConfluenceResultDescriptor
@@ -521,6 +642,8 @@ struct ConfluenceResultDescriptor
     DescriptorPolarity rightPolarity = DescriptorPolarity::neutral;
     std::size_t leftComponentCount = 0;
     std::size_t rightComponentCount = 0;
+    std::optional<CorrelationKey> correlationKey;
+    TemporalPredicate temporalPredicate = TemporalPredicate::none;
 
     bool operator==(const ConfluenceResultDescriptor&) const = default;
 };
@@ -572,7 +695,9 @@ struct ConfluenceReplay
                 result += ";selected=" + LengthPrefixed(identity);
             return result;
         };
-        std::string result = "confluence-replay-v1;definition=" +
+        const bool legacy = definitionIdentity.starts_with("confluence-definition-v1;");
+        std::string result = std::string{legacy ? "confluence-replay-v1;definition=" :
+            "confluence-replay-v2;definition="} +
             LengthPrefixed(definitionIdentity) + ";decision_time=" +
             CanonicalTimestamp(decisionTime) + ";left=" +
             LengthPrefixed(selectorText(left)) + ";right=" +
@@ -587,6 +712,19 @@ struct ConfluenceReplay
                     output.descriptor.leftPolarity)} +
                 ";right_polarity=" + std::string{CanonicalDescriptorPolarity(
                     output.descriptor.rightPolarity)};
+            if (!legacy)
+            {
+                result += ";left_count=" +
+                    std::to_string(output.descriptor.leftComponentCount) +
+                    ";right_count=" +
+                    std::to_string(output.descriptor.rightComponentCount) +
+                    ";temporal_predicate=" + std::string{CanonicalTemporalPredicate(
+                        output.descriptor.temporalPredicate)} +
+                    ";correlation_key=" + LengthPrefixed(
+                        output.descriptor.correlationKey
+                            ? CanonicalCorrelationKey(*output.descriptor.correlationKey)
+                            : "absent");
+            }
             for (const Observation& component : output.components)
                 result += ";component=" + LengthPrefixed(
                     CanonicalObservationIdentity(component));
@@ -627,6 +765,11 @@ public:
     ConfluenceReplay Evaluate(const std::vector<Observation>& observations,
                               std::chrono::sys_seconds decisionTime) const
     {
+        if (definition_.correlationConstraint ==
+            CorrelationConstraint::exact_key_equality)
+        {
+            return EvaluateKeyed(observations, decisionTime);
+        }
         const std::vector<Observation> causal = CausallyAvailableObservations(
             observations, decisionTime);
         const auto select = [&](const RoleSelector& selector,
@@ -694,7 +837,8 @@ public:
                     return left.availableAt < right.availableAt;
                 })->availableAt;
             ConfluenceResultDescriptor descriptor{definition_.relation, leftPolarity,
-                rightPolarity, leftCount, rightCount};
+                rightPolarity, leftCount, rightCount, std::nullopt,
+                TemporalPredicate::none};
             std::string outputIdentity = "confluence-output-v1;definition=" +
                 LengthPrefixed(definitionIdentity_) + ";decision_time=" +
                 CanonicalTimestamp(decisionTime) + ";available_at=" +
@@ -713,6 +857,211 @@ public:
     }
 
 private:
+    ConfluenceReplay EvaluateKeyed(const std::vector<Observation>& observations,
+                                   std::chrono::sys_seconds decisionTime) const
+    {
+        const std::vector<Observation> causal = CausallyAvailableObservations(
+            observations, decisionTime);
+        struct KeyCandidates
+        {
+            CorrelationKey key;
+            std::vector<Observation> left;
+            std::vector<Observation> right;
+        };
+        std::map<std::string, KeyCandidates> groups;
+        SelectorDiagnostic leftDiagnostic{"left", 0, 0, 0, {}};
+        SelectorDiagnostic rightDiagnostic{"right", 0, 0, 0, {}};
+        for (const Observation& observation : causal)
+        {
+            const bool isLeft = observation.familyId == definition_.left.familyId &&
+                observation.descriptor.role == definition_.left.role;
+            const bool isRight = observation.familyId == definition_.right.familyId &&
+                observation.descriptor.role == definition_.right.role;
+            if (isLeft) ++leftDiagnostic.matchingCandidateCount;
+            if (isRight) ++rightDiagnostic.matchingCandidateCount;
+            if ((!isLeft && !isRight) || !observation.correlationKey) continue;
+
+            const std::string keyIdentity = CanonicalCorrelationKey(
+                *observation.correlationKey);
+            KeyCandidates& group = groups[keyIdentity];
+            group.key = *observation.correlationKey;
+            if (isLeft) group.left.push_back(observation);
+            if (isRight) group.right.push_back(observation);
+        }
+
+        ConfluenceReplay replay{definitionIdentity_, decisionTime,
+                                 std::move(leftDiagnostic), std::move(rightDiagnostic), {}};
+        const auto canonicalLess = [](const Observation& left,
+                                      const Observation& right) {
+            return CanonicalObservationIdentity(left) <
+                CanonicalObservationIdentity(right);
+        };
+        const auto temporalLess = [&canonicalLess](const Observation& left,
+                                                   const Observation& right) {
+            if (left.availableAt != right.availableAt)
+                return left.availableAt < right.availableAt;
+            return canonicalLess(left, right);
+        };
+        const auto retain = [&](std::vector<Observation> candidates) {
+            std::sort(candidates.begin(), candidates.end(), canonicalLess);
+            if (candidates.size() > definition_.maxCandidatesPerSelector)
+                candidates.resize(definition_.maxCandidatesPerSelector);
+            return candidates;
+        };
+        const auto recordRetained = [&replay](const std::vector<Observation>& left,
+                                               const std::vector<Observation>& right) {
+            for (const Observation& observation : left)
+            {
+                ++replay.left.retainedCandidateCount;
+                replay.left.retainedComponentIdentities.push_back(
+                    CanonicalObservationIdentity(observation));
+            }
+            for (const Observation& observation : right)
+            {
+                ++replay.right.retainedCandidateCount;
+                replay.right.retainedComponentIdentities.push_back(
+                    CanonicalObservationIdentity(observation));
+            }
+        };
+        const auto appendOutput = [&](const CorrelationKey& key,
+                                      DescriptorPolarity leftPolarity,
+                                      DescriptorPolarity rightPolarity,
+                                      std::vector<Observation> left,
+                                      std::vector<Observation> right) {
+            if (left.empty() || right.empty()) return;
+            recordRetained(left, right);
+            std::vector<Observation> components = std::move(left);
+            components.insert(components.end(), right.begin(), right.end());
+            std::sort(components.begin(), components.end(), canonicalLess);
+            const auto availability = std::max_element(components.begin(), components.end(),
+                [](const Observation& first, const Observation& second) {
+                    return first.availableAt < second.availableAt;
+                })->availableAt;
+            ConfluenceResultDescriptor descriptor{definition_.relation, leftPolarity,
+                rightPolarity, components.size() - right.size(), right.size(), key,
+                definition_.temporalPredicate};
+            std::string outputIdentity = "confluence-output-v2;definition=" +
+                LengthPrefixed(definitionIdentity_) + ";decision_time=" +
+                CanonicalTimestamp(decisionTime) + ";available_at=" +
+                CanonicalTimestamp(availability) + ";relation=" +
+                std::string{CanonicalRelationKind(descriptor.relation)} +
+                ";left_polarity=" + std::string{CanonicalDescriptorPolarity(leftPolarity)} +
+                ";right_polarity=" + std::string{CanonicalDescriptorPolarity(rightPolarity)} +
+                ";correlation_key=" + LengthPrefixed(CanonicalCorrelationKey(key)) +
+                ";temporal_predicate=" + std::string{CanonicalTemporalPredicate(
+                    definition_.temporalPredicate)};
+            for (const Observation& component : components)
+                outputIdentity += ";component=" + LengthPrefixed(
+                    CanonicalObservationIdentity(component));
+            replay.outputs.push_back({std::move(outputIdentity), definitionIdentity_,
+                definition_.definitionId, definition_.definitionVersion, decisionTime,
+                availability, std::move(components), std::move(descriptor)});
+        };
+        const auto hasTemporalPair = [&temporalLess](
+            std::vector<Observation> left, std::vector<Observation> right) {
+            std::sort(left.begin(), left.end(), temporalLess);
+            std::sort(right.begin(), right.end(), temporalLess);
+            for (const Observation& rightCandidate : right)
+                if (std::any_of(left.begin(), left.end(),
+                    [&rightCandidate](const Observation& candidate) {
+                        return candidate.availableAt < rightCandidate.availableAt;
+                    }))
+                    return true;
+            return false;
+        };
+        const auto groupQualifies = [&](const KeyCandidates& group) {
+            const auto hasRelation = [&](DescriptorPolarity leftPolarity,
+                                         DescriptorPolarity rightPolarity) {
+                std::vector<Observation> left;
+                std::vector<Observation> right;
+                for (const Observation& candidate : group.left)
+                    if (candidate.descriptor.polarity == leftPolarity)
+                        left.push_back(candidate);
+                for (const Observation& candidate : group.right)
+                    if (candidate.descriptor.polarity == rightPolarity)
+                        right.push_back(candidate);
+                if (left.empty() || right.empty()) return false;
+                return definition_.temporalPredicate == TemporalPredicate::none ||
+                    hasTemporalPair(std::move(left), std::move(right));
+            };
+            if (definition_.relation == RelationKind::co_occurrence)
+                return hasRelation(DescriptorPolarity::neutral,
+                                   DescriptorPolarity::neutral);
+            return hasRelation(DescriptorPolarity::positive,
+                definition_.relation == RelationKind::support
+                    ? DescriptorPolarity::positive : DescriptorPolarity::negative) ||
+                hasRelation(DescriptorPolarity::negative,
+                definition_.relation == RelationKind::support
+                    ? DescriptorPolarity::negative : DescriptorPolarity::positive);
+        };
+
+        std::size_t retainedKeys = 0;
+        for (const auto& [keyIdentity, group] : groups)
+        {
+            (void)keyIdentity;
+            if (!groupQualifies(group)) continue;
+            if (retainedKeys++ == definition_.maxCorrelationKeys) break;
+
+            const auto byPolarity = [](const std::vector<Observation>& candidates,
+                                       DescriptorPolarity polarity) {
+                std::vector<Observation> result;
+                for (const Observation& candidate : candidates)
+                    if (candidate.descriptor.polarity == polarity)
+                        result.push_back(candidate);
+                return result;
+            };
+            const auto emit = [&](DescriptorPolarity leftPolarity,
+                                  DescriptorPolarity rightPolarity) {
+                std::vector<Observation> left = byPolarity(group.left, leftPolarity);
+                std::vector<Observation> right = byPolarity(group.right, rightPolarity);
+                if (definition_.temporalPredicate == TemporalPredicate::none)
+                {
+                    appendOutput(group.key, leftPolarity, rightPolarity,
+                                 retain(std::move(left)), retain(std::move(right)));
+                    return;
+                }
+                std::sort(left.begin(), left.end(), temporalLess);
+                std::sort(right.begin(), right.end(), temporalLess);
+                for (const Observation& rightCandidate : right)
+                {
+                    const auto leftCandidate = std::find_if(left.begin(), left.end(),
+                        [&rightCandidate](const Observation& candidate) {
+                            return candidate.availableAt < rightCandidate.availableAt;
+                        });
+                    if (leftCandidate != left.end())
+                    {
+                        appendOutput(group.key, leftPolarity, rightPolarity,
+                                     {*leftCandidate}, {rightCandidate});
+                        return;
+                    }
+                }
+            };
+
+            if (definition_.relation == RelationKind::co_occurrence)
+            {
+                emit(DescriptorPolarity::neutral, DescriptorPolarity::neutral);
+            }
+            else
+            {
+                emit(DescriptorPolarity::positive,
+                    definition_.relation == RelationKind::support
+                        ? DescriptorPolarity::positive : DescriptorPolarity::negative);
+                emit(DescriptorPolarity::negative,
+                    definition_.relation == RelationKind::support
+                        ? DescriptorPolarity::negative : DescriptorPolarity::positive);
+            }
+        }
+        replay.left.overflowCandidateCount = replay.left.matchingCandidateCount -
+            replay.left.retainedCandidateCount;
+        replay.right.overflowCandidateCount = replay.right.matchingCandidateCount -
+            replay.right.retainedCandidateCount;
+        std::sort(replay.left.retainedComponentIdentities.begin(),
+                  replay.left.retainedComponentIdentities.end());
+        std::sort(replay.right.retainedComponentIdentities.begin(),
+                  replay.right.retainedComponentIdentities.end());
+        return replay;
+    }
+
     ConfluenceDefinition definition_;
     std::string definitionIdentity_;
 };

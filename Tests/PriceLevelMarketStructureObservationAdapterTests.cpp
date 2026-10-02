@@ -119,6 +119,9 @@ void TestExactEventMappingExclusionsAndProvenance()
                "price-level-market-structure-observation-v1");
         assert(observation.descriptor.polarity == MS::DescriptorPolarity::neutral);
         assert(!observation.descriptor.normalizedConfidence.has_value());
+        assert(!observation.correlationKey.has_value());
+        assert(MS::CanonicalObservationIdentity(observation).starts_with(
+            "observation-v1;"));
         assert(observation.sourceProvenance.find("symbol=eurusdrmp") !=
                std::string::npos);
         assert(observation.sourceProvenance.find("source_provenance=") !=

@@ -141,6 +141,79 @@ and full canonical component provenance/availability. Source observations are
 copied into derived observations for replay only; the engine neither mutates,
 suppresses, replaces, nor reinterprets raw detector evidence.
 
+## Keyed neutral descriptive relationships (Phase 2C)
+
+Phase 2C adds an optional `CorrelationKey` to an observation. It is immutable
+relationship metadata, deliberately separate from the descriptor (meaning and
+polarity) and provenance/source observation ID (origin). A key has a producer
+chosen lower-case identifier type and an opaque printable value. Types are at
+most 64 bytes, values at most 4096 bytes, and neither may be empty. The engine
+does not parse, inspect, derive, or fuzzily compare a value. Equality means
+the complete `(type, value)` pair is exactly equal, so equal text under two
+different types never joins.
+
+A definition opts in through `exact_key_equality` and supplies a positive
+`maxCorrelationKeys`. Missing keys never match: one missing key and two
+missing keys both fail the join. The keyed path first filters the causal prefix
+and validates it, then selects family/role candidates, groups them by the full
+canonical typed key, discards groups absent on either side, and only then
+checks the relation's polarity and temporal condition. It retains qualifying
+canonical key groups up to `maxCorrelationKeys` and applies the existing
+selector cap independently inside each retained key group. Thus an unrelated
+earlier candidate, non-qualifying key, or key cannot consume a global selector
+cap and discard a valid same-key relationship. Duplicate canonical observation
+identities still reject before this process. There is no component Cartesian
+product.
+
+`co_occurrence` is the only new relation kind. It means only that the two
+selected neutral observations co-occur under a definition's exact key and
+optional temporal condition. It is not support, contradiction, direction,
+causation, confirmation, confidence, strength, prediction, profitability, or
+trading action. In this narrow initial contract it accepts neutral observations
+on both sides only; positive and negative observations do not silently acquire
+neutral meaning. It does not synthesize confidence, alter polarity, or mutate
+or suppress raw observations. SUPPORT and CONTRADICTION retain their prior
+same/opposite non-neutral polarity semantics. They may also opt into a keyed
+definition in a future reviewed definition, but no existing definition does.
+
+Keyed results are one aggregate per retained key and qualifying polarity. A
+neutral `co_occurrence` therefore emits at most `maxCorrelationKeys` outputs;
+a keyed directional relation remains bounded by at most two outputs per
+retained key. Every non-temporal result includes at most
+`maxCandidatesPerSelector` components from each side of its own key group,
+canonically retained. Output identity includes the key, relation, predicate,
+definition, decision time, availability, and components.
+
+The optional temporal predicate is
+`left_available_at_before_right_available_at`. It is strict (`<`): equality
+and reverse order fail. It is defined on `availableAt`, not `observedAt`, so it
+describes causal knowledge and cannot backdate a relationship. It requires
+exact key equality and a selector cap of one. For each retained key/polarity,
+the engine deterministically selects one pair: the earliest available right
+candidate for which a left candidate was already available, then the earliest
+such left candidate (canonical identity breaks equal-time ties). This is a
+linear scan of time-sorted candidates, not a pair product. Its output contains
+exactly that pair and is available at the right component's time, which is the
+latest component availability. Causal filtering still occurs before key or
+temporal processing, so a future (even malformed) observation cannot affect an
+earlier decision prefix.
+
+Canonical identity is versioned without changing historical bytes. An
+observation without a key keeps its exact `observation-v1` identity; a keyed
+one uses `observation-v2` and length-prefixes the canonical key. Definitions
+using none of the new options keep their exact `confluence-definition-v1`
+identity, legacy output identity, and `confluence-replay-v1` representation.
+Keyed definitions, outputs, and replays use their respective v2 forms and
+include key constraint, predicate, and key cap. This preserves existing
+Layout-11 definition and replay identities while preventing new semantic
+definitions from colliding with one another.
+
+This is descriptive infrastructure only. It adds no Tensor channels, model
+input width/layout, ablation behavior, persistence, scheduler/worker behavior,
+or production price-level definition. In particular, the Phase-2 price-level
+bridge remains unkeyed in Phase 2C; a separately reviewed phase must explicitly
+adopt this generic contract before defining any price-level relationship.
+
 There are no generic confluence Tensor channels, trading scores, database
 persistence, or `confluence.*` ablation arm in this phase. A later Tensor phase
 must register any materialized channels as a separate `confluence` family in a

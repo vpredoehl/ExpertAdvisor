@@ -342,7 +342,7 @@ void TestCausalObservationAndConfluenceIndependence()
         "fibonacci", "causal-fibonacci-structural-v1", t0, t2,
         "test-source-v1", "test-observation-1",
         {"market-structure-descriptor-v1", "test-role",
-         EA::MarketStructure::DescriptorPolarity::positive, 0.5}}};
+         EA::MarketStructure::DescriptorPolarity::positive, 0.5}, std::nullopt}};
 
     assert(CausallyAvailableObservations(detectorOutput, t1).empty());
     const auto available = CausallyAvailableObservations(detectorOutput, t2);
@@ -361,7 +361,8 @@ void TestCausalObservationAndConfluenceIndependence()
             {{"fibonacci", "causal-fibonacci-structural-v1", t2, t1,
               "test-source-v1", "invalid-observation",
               {"market-structure-descriptor-v1", "test-role",
-               EA::MarketStructure::DescriptorPolarity::positive, 0.5}}}, t2);
+               EA::MarketStructure::DescriptorPolarity::positive, 0.5},
+              std::nullopt}}, t2);
     }));
 }
 } // namespace

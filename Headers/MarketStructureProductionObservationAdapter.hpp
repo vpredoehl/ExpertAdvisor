@@ -101,7 +101,7 @@ private:
                     pulse.barStart.time_since_epoch().count()) + ";role=" +
                     std::string{role},
                 {std::string{kDescriptorSchemaVersion}, std::string{role},
-                 polarity, std::nullopt}};
+                 polarity, std::nullopt}, std::nullopt};
     }
 
     std::string symbol_;
