@@ -459,6 +459,9 @@ int main()
         assert(Identity(arm.proposed, "configured_model_input_width").value == "116");
         assert(Identity(arm.proposed,
             "configured_model_input_semantic_layout_version").value == "11");
+        assert(Identity(arm.proposed, "model_input_width").value == "116");
+        assert(Identity(arm.proposed,
+            "model_input_semantic_layout_version").value == "11");
         assert(Identity(arm.proposed, "fresh_initialization_seed").value == "1002");
     }
     confluenceEvidence.arms[201].extended.configuredModelInputLayoutVersion = 9;

@@ -400,6 +400,13 @@ Layout11ConfluenceArm MakeConfluenceArm(
                 std::to_string(kFixedConfluenceTensorModelInputWidth));
     SetIdentity(arm.proposed, "configured_model_input_semantic_layout_version",
                 std::to_string(kModelInputSemanticLayoutVersion));
+    // The template's completed model metadata describes its historical
+    // Layout-10 producer.  A fresh planned arm has no model, so its projected
+    // model identity must agree with the configured Layout-11 contract.
+    SetIdentity(arm.proposed, "model_input_width",
+                std::to_string(kFixedConfluenceTensorModelInputWidth));
+    SetIdentity(arm.proposed, "model_input_semantic_layout_version",
+                std::to_string(kModelInputSemanticLayoutVersion));
     return arm;
 }
 
