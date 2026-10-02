@@ -373,6 +373,11 @@
 		0F19002433C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
 		0F19002533C0000100AAA001 /* TensorPhase19StateAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F19002233C0000100AAA001 /* TensorPhase19StateAdapter.cpp */; };
 		0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
+		0F1A003133A0000100AAA001 /* SchedulerStatusService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A003033A0000100AAA001 /* SchedulerStatusService.cpp */; };
+		0F1A004633A0000100AAA001 /* SchedulerObserverCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A004033A0000100AAA001 /* SchedulerObserverCli.cpp */; };
+		0F1A004733A0000100AAA001 /* SchedulerOperationalReadModel.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A004233A0000100AAA001 /* SchedulerOperationalReadModel.cpp */; };
+		0F1A004833A0000100AAA001 /* ObserverMain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A004433A0000100AAA001 /* ObserverMain.cpp */; };
+		0F1A004933A0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
 		0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F20001033D0000100AAA001 /* SchedulerEngine.cpp */; };
 		0F20000933D0000100AAA001 /* SchedulerPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F20001233D0000100AAA001 /* SchedulerPolicy.cpp */; };
 		0F2C00103490000100AAA001 /* SemanticWorkerRegistry.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F2C00003490000100AAA001 /* SemanticWorkerRegistry.cpp */; };
@@ -569,6 +574,13 @@
 			remoteGlobalIDString = 0F20000033D0000100AAA001;
 			remoteInfo = SchedulerCore;
 		};
+		0F1A005033A0000100AAA001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 084505512047962100A0B88F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0F20000033D0000100AAA001;
+			remoteInfo = SchedulerCore;
+		};
 		0F5000093500000100AAA001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 084505512047962100A0B88F /* Project object */;
@@ -641,6 +653,14 @@
 		0F9000053900000100AAA001 /* PocketResearch_Release */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = PocketResearch_Release; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ExperimentMetaAnalyzer.cpp; sourceTree = "<group>"; };
 		0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentScheduler.cpp; path = Sources/SchedulerCore/ExperimentScheduler.cpp; sourceTree = SOURCE_ROOT; };
+		0F1A003033A0000100AAA001 /* SchedulerStatusService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerStatusService.cpp; path = Sources/SchedulerCore/SchedulerStatusService.cpp; sourceTree = SOURCE_ROOT; };
+		0F1A003233A0000100AAA001 /* SchedulerStatusService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerStatusService.hpp; path = Sources/SchedulerCore/SchedulerStatusService.hpp; sourceTree = SOURCE_ROOT; };
+		0F1A004033A0000100AAA001 /* SchedulerObserverCli.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerObserverCli.cpp; path = Sources/SchedulerCore/SchedulerObserverCli.cpp; sourceTree = SOURCE_ROOT; };
+		0F1A004133A0000100AAA001 /* SchedulerObserverCli.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerObserverCli.hpp; path = Sources/SchedulerCore/SchedulerObserverCli.hpp; sourceTree = SOURCE_ROOT; };
+		0F1A004233A0000100AAA001 /* SchedulerOperationalReadModel.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerOperationalReadModel.cpp; path = Sources/SchedulerCore/SchedulerOperationalReadModel.cpp; sourceTree = SOURCE_ROOT; };
+		0F1A004333A0000100AAA001 /* SchedulerOperationalReadModel.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerOperationalReadModel.hpp; path = Sources/SchedulerCore/SchedulerOperationalReadModel.hpp; sourceTree = SOURCE_ROOT; };
+		0F1A004433A0000100AAA001 /* ObserverMain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ObserverMain.cpp; path = LSTM/ObserverMain.cpp; sourceTree = SOURCE_ROOT; };
+		0F1A004533A0000100AAA001 /* lstm-observer */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-observer"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = GlobalExperimentControl.cpp; path = Sources/GlobalExperimentControl.cpp; sourceTree = SOURCE_ROOT; };
 		0A31000130A0000100AAA001 /* GlobalExperimentControl.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = GlobalExperimentControl.hpp; path = Sources/GlobalExperimentControl.hpp; sourceTree = SOURCE_ROOT; };
 		0A4000002FB0000100AAA001 /* RunMetadata.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = RunMetadata.cpp; path = Sources/RunMetadata.cpp; sourceTree = SOURCE_ROOT; };
@@ -1070,6 +1090,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		0F1A004A33A0000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F1A004933A0000100AAA001 /* libSchedulerCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		0F6000133600000100AAA001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -1174,6 +1202,7 @@
 				0A10000B2F70000100AAA001 /* LSTM_Release */,
 				0F9000053900000100AAA001 /* PocketResearch_Release */,
 				0F40001234D0000100AAA001 /* lstm-scheduler */,
+				0F1A004533A0000100AAA001 /* lstm-observer */,
 				0F6000123600000100AAA001 /* lstm-analyze-worker */,
 				0F8000033800000100AAA001 /* lstm-infer-worker */,
 			);
@@ -1202,6 +1231,7 @@
 				0F6200013610000100AAA001 /* LaunchArguments.cpp */,
 				0F6300013610000100AAA001 /* CheckpointTrainingControl.cpp */,
 				0F40000234D0000100AAA001 /* SchedulerMain.cpp */,
+				0F1A004433A0000100AAA001 /* ObserverMain.cpp */,
 				0F6000023600000100AAA001 /* AnalyzeWorkerMain.cpp */,
 				0F8000023800000100AAA001 /* InferWorkerMain.cpp */,
 				0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */,
@@ -1590,6 +1620,12 @@
 			isa = PBXGroup;
 			children = (
 				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
+				0F1A003033A0000100AAA001 /* SchedulerStatusService.cpp */,
+				0F1A003233A0000100AAA001 /* SchedulerStatusService.hpp */,
+				0F1A004033A0000100AAA001 /* SchedulerObserverCli.cpp */,
+				0F1A004133A0000100AAA001 /* SchedulerObserverCli.hpp */,
+				0F1A004233A0000100AAA001 /* SchedulerOperationalReadModel.cpp */,
+				0F1A004333A0000100AAA001 /* SchedulerOperationalReadModel.hpp */,
 				0F31000134B0000100AAA001 /* ProductionSchedulerDaemon.cpp */,
 				0F31000234B0000100AAA001 /* ProductionSchedulerDaemon.hpp */,
 				0F31000334B0000100AAA001 /* ProductionSchedulerRuntimeInternal.hpp */,
@@ -1779,6 +1815,23 @@
 			productReference = 0F40001234D0000100AAA001 /* lstm-scheduler */;
 			productType = "com.apple.product-type.tool";
 		};
+		0F1A004C33A0000100AAA001 /* lstm-observer */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0F1A004D33A0000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-observer" */;
+			buildPhases = (
+				0F1A004B33A0000100AAA001 /* Sources */,
+				0F1A004A33A0000100AAA001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0F1A005133A0000100AAA001 /* PBXTargetDependency */,
+			);
+			name = "lstm-observer";
+			productName = "lstm-observer";
+			productReference = 0F1A004533A0000100AAA001 /* lstm-observer */;
+			productType = "com.apple.product-type.tool";
+		};
 		0F6000143600000100AAA001 /* lstm-analyze-worker */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0F6000153600000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-analyze-worker" */;
@@ -1916,6 +1969,7 @@
 				0F5000043500000100AAA001 /* MarketDataCore */,
 				0F5100043601000100AAA001 /* ModelInputPreparation */,
 				0F40001434D0000100AAA001 /* lstm-scheduler */,
+				0F1A004C33A0000100AAA001 /* lstm-observer */,
 				0F6000143600000100AAA001 /* lstm-analyze-worker */,
 				0F8000043800000100AAA001 /* lstm-infer-worker */,
 				0F7000013700000100AAA001 /* LSTM Scheduler Bundle */,
@@ -2399,6 +2453,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				0F20000733D0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0F1A003133A0000100AAA001 /* SchedulerStatusService.cpp in Sources */,
+				0F1A004633A0000100AAA001 /* SchedulerObserverCli.cpp in Sources */,
+				0F1A004733A0000100AAA001 /* SchedulerOperationalReadModel.cpp in Sources */,
 				0F31001034B0000100AAA001 /* ProductionSchedulerDaemon.cpp in Sources */,
 				0F30001134A0000100AAA001 /* SchedulerDaemonCli.cpp in Sources */,
 				0F30001034A0000100AAA001 /* SchedulerDaemonConfiguration.cpp in Sources */,
@@ -2438,6 +2495,14 @@
 				0F40000934D0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
 				0F40000A34D0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0F40000B34D0000100AAA001 /* RunMetadata.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0F1A004B33A0000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0F1A004833A0000100AAA001 /* ObserverMain.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2737,6 +2802,12 @@
 			name = ProfitabilityCore;
 			target = 0F1700003370000100AAA001 /* ProfitabilityCore */;
 			targetProxy = 0F17000C3370000100AAA001 /* PBXContainerItemProxy */;
+		};
+		0F1A005133A0000100AAA001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = SchedulerCore;
+			target = 0F20000033D0000100AAA001 /* SchedulerCore */;
+			targetProxy = 0F1A005033A0000100AAA001 /* PBXContainerItemProxy */;
 		};
 		0F6000203600000100AAA001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -3447,6 +3518,45 @@
 			};
 			name = Release;
 		};
+		0F1A004E33A0000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, "$(inherited)");
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx");
+				PRODUCT_NAME = "lstm-observer";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+			};
+			name = Debug;
+		};
+		0F1A004F33A0000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_STANDARD_LIBRARY_HARDENING = fast;
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				DEAD_CODE_STRIPPING = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = ("NDEBUG=1", "$(inherited)");
+				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, "$(inherited)");
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx");
+				PRODUCT_NAME = "lstm-observer";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources");
+			};
+			name = Release;
+		};
 		0F6000193600000100AAA001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3652,6 +3762,15 @@
 			buildConfigurations = (
 				0F40001934D0000100AAA001 /* Debug */,
 				0F40001A34D0000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0F1A004D33A0000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-observer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F1A004E33A0000100AAA001 /* Debug */,
+				0F1A004F33A0000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

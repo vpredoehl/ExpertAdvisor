@@ -2,7 +2,7 @@
 
 Status: Generation-52 exact-attempt ownership implemented and independently reviewed; safe-window process regression remains a pre-enable gate
 Version: 0.5.1
-Last revised: 2026-08-03
+Last revised: 2026-10-01
 
 ## 1. Purpose
 
@@ -100,6 +100,13 @@ read-only. The scheduler does not read Campaign Operations policy tables.
 It never polls the Campaign Manager or Campaign Operations request tables and
 receives no Campaign Operations privilege. Pending experiments produced by
 Phase H are ordinary work under unchanged scheduler claim/capacity policy.
+
+Operational observation is separately available through a SchedulerCore
+read-only operational read model and the `lstm-observer` executable. It exposes
+durable scheduler/lifecycle evidence and diagnostic process observation only;
+it cannot claim work, acquire a lease, signal processes, or alter lifecycle or
+capacity state. Durable exact-attempt evidence remains authoritative over
+process observation.
 
 ## 5. Data model
 
@@ -302,6 +309,9 @@ whereas a foreign stopped process remains unmanaged, an expected dead process
 is authoritative/missing, and a live identity mismatch is reported separately
 from unmanaged work.
 
+The observer consumes the established status/read model and preserves machine
+record names and meanings; it does not grant operational authorization.
+
 ### 8.3 Human output
 
 Summaries distinguish queued, claimed, running, recovering, failed, and
@@ -475,3 +485,4 @@ idempotency, recovery, operator control, and regression scope.
 | 0.4.1 | 2026-07-30 | Made stop-at-checkpoint atomically complete the exact train attempt, release capacity, clear its binding, and tolerate delayed reap and replay. | ADR-0018 |
 | 0.5.0 | 2026-07-31 | Recorded generation-52 implementation/review status and the exact narrow Phase H evidence interface without scheduler polling, Campaign Operations privileges, or future-generation approval inheritance. | ADR-0018, ADR-0019 |
 | 0.5.1 | 2026-08-03 | Completed H1 readiness reporting for scheduler canonical/hash evidence, independent verification, and approved-versus-actual Manager build comparison while preserving fail-closed separation of authority. | ADR-0019B |
+| 0.5.2 | 2026-10-01 | Added the read-only SchedulerCore operational-observation boundary while preserving scheduler mutation and exact-attempt authority. | ADR-0021 |

@@ -2,7 +2,7 @@
 
 Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; database implementation complete through the Phase H direct-SQL boundary correction (migrations 055-059); H4 adds no database state
 Version: 0.16.0
-Last revised: 2026-08-10
+Last revised: 2026-10-01
 
 ## 1. Purpose
 
@@ -272,6 +272,11 @@ separate deliberate operation.
 Inspection uses read-only transactions. Multi-query evidence loading uses a
 consistent snapshot when required by the domain.
 
+Scheduler operational observation uses a typed read-model boundary with
+`REPEATABLE READ, READ ONLY` snapshots. It has no generic mutation interface
+and grants no scheduler, lifecycle, worker-attempt, capacity, or control
+authority.
+
 ### 6.2 Write paths
 
 Repositories use short explicit read-write transactions. Related mutable state
@@ -484,3 +489,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.15.0 | 2026-08-03 | Completed migration-055 fail-closed function tuples, post-recovery reacquisition, cross-principal replay, full audit/authority hydration, stable diagnostics, and recursive edge-preserving role evidence. | ADR-0019B |
 | 0.16.0 | 2026-08-10 | Aligned the implemented Phase H database state through H3 migrations 055-058, including H2 privilege/dispatch and H3 bounded Manager database contracts; recorded that ADR-0020 H4 adds no database schema, ACL, role, singleton, or scheduling authority. | ADR-0019, ADR-0019C, ADR-0020 |
 | 0.17.0 | 2026-08-11 | Corrected the confirmed direct-SQL production-readiness bypass with forward migration 059, a sealed readiness-gated acquisition service boundary, raw-transition ACL revocation, and deployment/catalog evidence. | ADR-0019, ADR-0019C |
+| 0.18.0 | 2026-10-01 | Defined repeatable-read, read-only SchedulerCore operational-observation snapshots without mutation capability. | ADR-0021 |

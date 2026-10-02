@@ -92,6 +92,7 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0019B](ADR-0019B-h1-sealed-role-deployment-contract.md) | Accepted | Exact sealed-role identity/graph, literal all-schema allowlists, automatic deployment audits, restore A–J, and complete H1 acceptance evidence. |
 | [ADR-0019C](ADR-0019C-h2-privilege-deployment-contract.md) | Accepted | Targeted H2 privilege-deployment contract for exact Manager LOGIN authority, readiness access, and sealed-role deployment verification. |
 | [ADR-0020](ADR-0020-campaign-manager-continuous-operation.md) | Accepted | External-supervisor composition of the bounded H3 run-once Manager, with deployment-owned cadence, lifecycle, health, logging, and rollback. |
+| [ADR-0021](ADR-0021-read-only-scheduler-operational-observation.md) | Accepted | Typed read-only SchedulerCore operational evidence boundary and observer executable. |
 
 ## 8. Revision history
 
@@ -109,3 +110,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.9.0 | 2026-08-01 | Accepted ADR-0019A as the narrow H1 identifier, ownership/context, replay, lock-order, ACL, and verification amendment. |
 | 1.10.0 | 2026-08-01 | Accepted ADR-0019B as the narrow H1 sealed-role deployment, audit, restore, allowlist, and acceptance-evidence correction. |
 | 1.11.0 | 2026-08-09 | Added accepted ADR-0019C to the index and accepted ADR-0020 for externally supervised continuous Campaign Manager operation after independent review and reverification. |
+| 1.12.0 | 2026-10-01 | Added ADR-0021 for read-only scheduler operational observation. |
