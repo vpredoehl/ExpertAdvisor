@@ -57,4 +57,37 @@ if rg -n 'ps -|pqxx|LSTM_DB_|lstm-observer|subprocess.*LSTM_Release' "${investig
     exit 1
 fi
 
+# A committed observer build may opt into a read-only database smoke test. This
+# keeps the source boundary test usable without a local PostgreSQL service,
+# while making JSON parsing and the closed runtime grammar regression-testable.
+if [[ -n "${LSTM_OBSERVER_EVIDENCE_BINARY:-}" ]]; then
+    experiment_id="${LSTM_OBSERVER_EVIDENCE_EXPERIMENT_ID:-688}"
+    tmp="$(mktemp -d /tmp/ea_observer_evidence.XXXXXX)"
+    trap 'rm -rf "${tmp}"' EXIT
+    "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence scheduler >"${tmp}/scheduler.json"
+    "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence experiment "${experiment_id}" >"${tmp}/experiment.json"
+    python3 - "${tmp}/scheduler.json" "${tmp}/experiment.json" "${experiment_id}" <<'PY'
+import json
+import sys
+from pathlib import Path
+scheduler = json.loads(Path(sys.argv[1]).read_text())
+experiment = json.loads(Path(sys.argv[2]).read_text())
+assert scheduler['schema'] == 'expertadvisor-operational-evidence-v1'
+assert scheduler['kind'] == 'scheduler'
+assert set(('durable', 'process_observation')) <= set(scheduler)
+assert experiment['schema'] == 'expertadvisor-operational-evidence-v1'
+assert experiment['kind'] == 'experiment'
+assert experiment['durable']['experiment']['experiment_id'] == int(sys.argv[3])
+assert set(('durable', 'process_observation')) <= set(experiment)
+PY
+    if "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence queue >/dev/null 2>&1; then
+        printf '%s\n' 'unsupported evidence operation unexpectedly succeeded' >&2
+        exit 1
+    fi
+    if "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence experiment 0 >/dev/null 2>&1; then
+        printf '%s\n' 'invalid evidence experiment identifier unexpectedly succeeded' >&2
+        exit 1
+    fi
+fi
+
 printf '%s\n' 'SchedulerOperationalEvidenceInterfaceTests passed'

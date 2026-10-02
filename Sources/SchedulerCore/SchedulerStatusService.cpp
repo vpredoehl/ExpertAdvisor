@@ -3566,7 +3566,7 @@ void WriteJsonSchedulerEvidence(std::ostream& output,
                << ",\"observed\":" << count.observed
                << ",\"checkpoint_workers\":" << count.checkpointWorkers << "}";
     }
-    output << "}},\"process_observation\":";
+    output << "},\"process_observation\":";
     WriteJsonProcessEvidence(output, evidence.process);
     output << "}\n";
 }
@@ -3624,7 +3624,7 @@ void WriteJsonExperimentEvidence(std::ostream& output,
         output << ",\"ownership_origin\":" << JsonString(attempt.ownershipOrigin)
                << "}";
     }
-    output << "]}},\"process_observation\":";
+    output << "]},\"process_observation\":";
     WriteJsonProcessEvidence(output, evidence.process, job.experimentId);
     output << "}\n";
 }
