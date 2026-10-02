@@ -40,26 +40,29 @@ std::optional<long long> PositiveId(const std::string& value)
 int RunSchedulerObserverCli(int argc, const char* argv[], std::ostream& output,
                             std::ostream& error)
 {
-    if (argc < 2 || argc > 4)
+    if (argc < 2 || argc > 5)
     {
         error << "Usage: lstm-observer scheduler | experiment [EXPERIMENT_ID] | "
                  "evidence scheduler | evidence experiment EXPERIMENT_ID | "
                  "evidence inference EXPERIMENT_ID | "
-                 "evidence profitability EXPERIMENT_ID\n";
+                 "evidence profitability EXPERIMENT_ID | "
+                 "evidence comparison LEFT_EXPERIMENT_ID RIGHT_EXPERIMENT_ID\n";
         return 1;
     }
     const std::string operation{argv[1]};
     if (operation == "evidence")
     {
-        if (argc < 3 || argc > 4)
+        if (argc < 3 || argc > 5)
         {
             error << "evidence requires scheduler, experiment, inference, or "
-                     "profitability EXPERIMENT_ID\n";
+                     "profitability EXPERIMENT_ID, or comparison "
+                     "LEFT_EXPERIMENT_ID RIGHT_EXPERIMENT_ID\n";
             return 1;
         }
         const std::string evidenceKind{argv[2]};
         if (evidenceKind != "scheduler" && evidenceKind != "experiment" &&
-            evidenceKind != "inference" && evidenceKind != "profitability")
+            evidenceKind != "inference" && evidenceKind != "profitability" &&
+            evidenceKind != "comparison")
         {
             error << "unsupported evidence kind: " << argv[2] << "\n";
             return 1;
@@ -75,6 +78,39 @@ int RunSchedulerObserverCli(int argc, const char* argv[], std::ostream& output,
             error << "evidence " << evidenceKind
                   << " requires EXPERIMENT_ID\n";
             return 1;
+        }
+        if (evidenceKind == "comparison" && argc != 5)
+        {
+            error << "evidence comparison requires LEFT_EXPERIMENT_ID "
+                     "RIGHT_EXPERIMENT_ID\n";
+            return 1;
+        }
+        if (evidenceKind == "comparison")
+        {
+            const auto leftExperimentId = PositiveId(argv[3]);
+            const auto rightExperimentId = PositiveId(argv[4]);
+            if (!leftExperimentId.has_value() || !rightExperimentId.has_value())
+            {
+                error << "LEFT_EXPERIMENT_ID and RIGHT_EXPERIMENT_ID must be "
+                         "positive integers\n";
+                return 1;
+            }
+            if (*leftExperimentId == *rightExperimentId)
+            {
+                error << "LEFT_EXPERIMENT_ID and RIGHT_EXPERIMENT_ID must differ\n";
+                return 1;
+            }
+            try
+            {
+                SchedulerOperationalReadModel readModel{ConnectionString()};
+                return PrintObserverComparisonEvidence(
+                    readModel, *leftExperimentId, *rightExperimentId, output, error);
+            }
+            catch (const std::exception& exception)
+            {
+                error << "OBSERVER_DATABASE_ERROR,error=" << exception.what() << "\n";
+                return 2;
+            }
         }
         const auto experimentId = evidenceKind != "scheduler"
             ? PositiveId(argv[3])

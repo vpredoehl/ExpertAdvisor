@@ -1,5 +1,7 @@
 #include "ExperimentPairComparison.hpp"
 
+#include "ExperimentComparisonIdentity.hpp"
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -481,6 +483,14 @@ ArmResultSet MakeArmResultSet(const FeatureArm& evidence)
                 Boolean(extended.continuationPolicyEnabled));
     AddIdentity(fields, "continuation_policy_scientific_identity",
                 extended.continuationPolicyScientificIdentity);
+    std::vector<EA::ExperimentComparisonIdentity::Field> configuredFields;
+    configuredFields.reserve(fields.size());
+    for (const auto& field : fields)
+        configuredFields.push_back({field.name, field.value});
+    if (!EA::ExperimentComparisonIdentity::HasConfiguredScientificIdentityFields(
+            configuredFields))
+        throw std::runtime_error(
+            "experiment_pair_configured_identity_catalog_incomplete");
     AddIdentity(fields, "training_execution_identity",
                 ExecutionIdentity(shared.trainingExecution));
     AddIdentity(fields, "inference_execution_identity",

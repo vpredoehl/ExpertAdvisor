@@ -196,6 +196,20 @@ experiment, inference, profitability, process-control, or registry-mutation
 authority. An existing experiment without qualifying evidence deterministically
 returns an empty array; a nonexistent experiment is rejected.
 
+V3 adds a separate neutral, FINAL-only pair route:
+
+```bash
+lstm-observer evidence comparison LEFT_EXPERIMENT_ID RIGHT_EXPERIMENT_ID
+```
+
+It emits `expertadvisor-operational-evidence-v3` comparison facts from one
+shared repeatable-read/read-only snapshot. Its roles are `left` and `right`;
+its derived arithmetic is explicitly `right_minus_left`; and it retains exact
+candidate cardinality rather than choosing a latest result. It reports factual
+configuration equality and a feature-mask relationship, but does not certify a
+controlled pair, declare a winner, or recommend an action. This repository
+investigator still does not invoke the live observer.
+
 The observer acquires no scheduler control authority and evidence never grants
 authorization for an action. Repository evidence from this script and live
 observer evidence intentionally remain separate producers: this script never

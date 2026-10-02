@@ -124,6 +124,14 @@ terminal-horizon directional log-return observations, never portfolio P&L.
 The V2 rows are ordered deterministically and V1 scheduler/experiment JSON is
 unchanged. Neither version provides generic SQL, comparison, or control.
 
+V3 adds `lstm-observer evidence comparison LEFT_EXPERIMENT_ID
+RIGHT_EXPERIMENT_ID`. It remains a closed read-only surface, but emits
+FINAL-only side-by-side evidence from one shared repeatable-read/read-only
+snapshot. It uses neutral `left`/`right` roles, preserves exact V2 FINAL
+association and candidate cardinality, exposes factual configuration equality,
+and labels arithmetic only as `right_minus_left` derived evidence. It has no
+controlled-pair certification, winner, ranking, policy, or control semantics.
+
 ## 5. Data model
 
 ### 5.1 Authoritative entities
@@ -503,3 +511,4 @@ idempotency, recovery, operator control, and regression scope.
 | 0.5.1 | 2026-08-03 | Completed H1 readiness reporting for scheduler canonical/hash evidence, independent verification, and approved-versus-actual Manager build comparison while preserving fail-closed separation of authority. | ADR-0019B |
 | 0.5.2 | 2026-10-01 | Added the read-only SchedulerCore operational-observation boundary while preserving scheduler mutation and exact-attempt authority. | ADR-0021 |
 | 0.5.3 | 2026-10-01 | Added ADR-0022's typed V2 inference and terminal-horizon profitability evidence while preserving V1 observer output. | ADR-0022 |
+| 0.5.4 | 2026-10-01 | Added ADR-0022's neutral FINAL-only V3 comparison evidence while preserving V1/V2 output and observer authority boundaries. | ADR-0022 |

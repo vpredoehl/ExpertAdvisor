@@ -1,4 +1,4 @@
-# ADR-0022: Live operational evidence interface V1, amended for V2
+# ADR-0022: Live operational evidence interface V1, amended for V2 and V3
 
 Status: Accepted
 Date: 2026-10-01
@@ -65,6 +65,47 @@ observations, not money, portfolio return, or realized P&L. V2 intentionally
 returns the persisted identity hashes but omits the potentially large canonical
 strings. It is neither generic SQL nor experiment comparison.
 
+### 2.2 V3 amendment: neutral FINAL experiment comparison evidence
+
+V3 adds the closed read-only request:
+
+```text
+lstm-observer evidence comparison LEFT_EXPERIMENT_ID RIGHT_EXPERIMENT_ID
+```
+
+It emits `expertadvisor-operational-evidence-v3`, `kind: comparison`, and
+uses neutral argument-order roles `left` and `right`. It is FINAL-only. One
+shared `REPEATABLE READ, READ ONLY` transaction loads both configurations,
+both exact FINAL inference candidate sets, their associated profitability
+observations, and equality facts. Unknown IDs are reported in left/right
+order; an existing experiment without FINAL evidence remains successful JSON
+with an explicit missing state.
+
+The route reuses the V2 exact FINAL association (final model provenance,
+model configuration, target type, and exact inference range). It never uses
+checkpoint evidence as a FINAL substitute and never chooses a latest row.
+Candidate arrays are ID-ordered. A single completed FINAL candidate is
+selectable; failed, missing, ambiguous, and unreconstructable-context states
+remain explicit. Profitability is selectable only through that selected
+completed FINAL identity and is still described as immutable terminal-horizon
+directional log-return evidence, not P&L.
+
+V3 exposes factual equality checks from the shared configured experiment-pair
+scientific-identity catalog, including lineage, training objective, input,
+calendar, feature, Donchian, checkpoint, and continuation policy facts. Null
+equality follows `IS NOT DISTINCT FROM` semantics. It returns pairs even when
+facts differ. Feature-mask relationships are factual only. The current schema
+does not provide a durable controlled-pair attachment, so V3 always reports
+`controlled_comparison: false` and `declared_controlled_pair_provenance:
+not_available`; it does not read controlled-study files.
+
+All V3 arithmetic is explicitly `DERIVED`, with `right_minus_left` as the
+universal delta convention. Deltas include selected inference and
+profitability observations plus derived actionable/win percentages; null,
+zero denominator, and non-finite rules are explicit. V3 has no winner,
+ranking, efficacy, promotion, recommendation, control, publication, or
+interpretation semantics.
+
 ## 3. Rationale and decision drivers
 
 Typed capture prevents formatting changes from becoming an unversioned API.
@@ -115,3 +156,4 @@ it would broaden observation into an unsafe authority surface.
 |---|---|
 | 2026-10-01 | Accepted the narrow typed live operational evidence interface. |
 | 2026-10-01 | Amended with additive V2 typed inference and terminal-horizon profitability evidence; V1 remains unchanged. |
+| 2026-10-01 | Amended with additive V3 neutral FINAL comparison evidence; V1/V2 remain unchanged. |

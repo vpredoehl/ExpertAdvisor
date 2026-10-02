@@ -22,6 +22,10 @@ rg -Fq 'PrintObserverSchedulerEvidence' "${observer_cli}"
 rg -Fq 'PrintObserverExperimentEvidence' "${observer_cli}"
 rg -Fq 'PrintObserverInferenceEvidence' "${observer_cli}"
 rg -Fq 'PrintObserverProfitabilityEvidence' "${observer_cli}"
+rg -Fq 'evidence comparison LEFT_EXPERIMENT_ID RIGHT_EXPERIMENT_ID' "${observer_cli}"
+rg -Fq 'evidenceKind != "comparison"' "${observer_cli}"
+rg -Fq 'LEFT_EXPERIMENT_ID and RIGHT_EXPERIMENT_ID must differ' "${observer_cli}"
+rg -Fq 'PrintObserverComparisonEvidence' "${observer_cli}"
 
 # Evidence is captured through the private read-only snapshot bridge, then
 # serialized from typed records.  It must not call a legacy text renderer.
@@ -30,12 +34,20 @@ rg -Fq 'struct SchedulerOperationalEvidence' "${status_service}"
 rg -Fq 'struct ExperimentOperationalEvidence' "${status_service}"
 rg -Fq 'struct InferenceOperationalEvidence' "${status_service}"
 rg -Fq 'struct ProfitabilityOperationalEvidence' "${status_service}"
+rg -Fq 'struct ComparisonOperationalEvidence' "${status_service}"
+rg -Fq 'struct FinalInferenceAssociation' "${status_service}"
+rg -Fq 'struct FinalProfitabilityAssociation' "${status_service}"
+rg -Fq 'struct ComparisonComparabilityEvidence' "${status_service}"
 rg -Fq 'WriteJsonSchedulerEvidence' "${status_service}"
 rg -Fq 'WriteJsonExperimentEvidence' "${status_service}"
 rg -Fq 'WriteJsonInferenceEvidence' "${status_service}"
 rg -Fq 'WriteJsonProfitabilityEvidence' "${status_service}"
 rg -Fq 'expertadvisor-operational-evidence-v1' "${status_service}"
 rg -Fq 'expertadvisor-operational-evidence-v2' "${status_service}"
+rg -Fq 'expertadvisor-operational-evidence-v3' "${status_service}"
+rg -Fq '\"kind\":\"comparison\"' "${status_service}"
+rg -Fq '\"delta_convention\":\"right_minus_left\"' "${status_service}"
+rg -Fq '\"controlled_comparison\":false' "${status_service}"
 rg -Fq '\"process_observation\":' "${status_service}"
 rg -Fq '\"durable\":' "${status_service}"
 rg -Fq 'kExperimentAssociatedInferenceCte' "${status_service}"
@@ -43,12 +55,28 @@ rg -Fq 'r.parent_experiment_id=$1' "${status_service}"
 rg -Fq 'ce.checkpoint_epoch=r.checkpoint_epoch' "${status_service}"
 rg -Fq 'ce.checkpoint_model_id=r.model_id' "${status_service}"
 rg -Fq 'r.id=o.inference_eval_result_id' "${status_service}"
+rg -Fq 'std::string{kExperimentAssociatedInferenceCte}' "${status_service}"
+rg -Fq "WHERE inference_scope='final' ORDER BY id" "${status_service}"
+rg -Fq 'not_selectable_final_inference_' "${status_service}"
+rg -Fq 'ORDER BY profitability_observation_id' "${status_service}"
+rg -Fq 'IS NOT DISTINCT FROM for nullable facts' "${status_service}"
 rg -Fq 'gross_positive_terminal_horizon_log_return_sum' "${status_service}"
 rg -Fq 'aggregate_terminal_horizon_log_return_sum' "${status_service}"
 if rg -n 'inference_eval_result\.experiment_id|r\.experiment_id' "${status_service}"; then
     printf '%s\n' 'inference evidence assumes a nonexistent experiment_id column' >&2
     exit 1
 fi
+
+# The configured identity catalog is shared with the established generic
+# experiment-pair comparator; V3 consumes the catalog rather than owning a
+# second list of scientific-equivalence field names.
+identity_header="${repo_root}/Sources/ExperimentComparisonIdentity.hpp"
+pair_comparator="${repo_root}/Sources/ExperimentPairComparison.cpp"
+rg -Fq 'kConfiguredScientificIdentityFields' "${identity_header}"
+rg -Fq 'HasConfiguredScientificIdentityFields' "${identity_header}"
+rg -Fq 'ExperimentComparisonIdentity.hpp' "${pair_comparator}"
+rg -Fq 'HasConfiguredScientificIdentityFields' "${pair_comparator}"
+rg -Fq 'kConfiguredScientificIdentityFields' "${status_service}"
 
 scheduler_evidence_render="$(sed -n '/int PrintObserverSchedulerEvidence(/,/^}/p' "${status_service}")"
 experiment_evidence_render="$(sed -n '/int PrintObserverExperimentEvidence(/,/^}/p' "${status_service}")"
@@ -194,6 +222,56 @@ from pathlib import Path
 assert json.loads(Path(sys.argv[1]).read_text())['durable']['evaluations'] == []
 assert json.loads(Path(sys.argv[2]).read_text())['durable']['observations'] == []
 PY
+    fi
+    if [[ -n "${LSTM_OBSERVER_COMPARISON_LEFT_ID:-}" && -n "${LSTM_OBSERVER_COMPARISON_RIGHT_ID:-}" ]]; then
+        "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence comparison \
+            "${LSTM_OBSERVER_COMPARISON_LEFT_ID}" \
+            "${LSTM_OBSERVER_COMPARISON_RIGHT_ID}" >"${tmp}/comparison.json"
+        python3 - "${tmp}/comparison.json" "${LSTM_OBSERVER_COMPARISON_LEFT_ID}" "${LSTM_OBSERVER_COMPARISON_RIGHT_ID}" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+evidence = json.loads(Path(sys.argv[1]).read_text())
+assert evidence['schema'] == 'expertadvisor-operational-evidence-v3'
+assert evidence['kind'] == 'comparison'
+assert evidence['requested'] == {
+    'left_experiment_id': int(sys.argv[2]),
+    'right_experiment_id': int(sys.argv[3]),
+    'scope': 'final', 'roles': ['left', 'right']}
+assert evidence['durable']['left']['side'] == 'left'
+assert evidence['durable']['right']['side'] == 'right'
+assert evidence['comparability']['controlled_comparison'] is False
+assert evidence['comparability']['declared_controlled_pair_provenance'] == 'not_available'
+assert evidence['derived']['delta_convention'] == 'right_minus_left'
+for arm in ('left', 'right'):
+    final = evidence['durable'][arm]['final_inference']
+    assert final['candidate_evaluations'] == sorted(
+        final['candidate_evaluations'], key=lambda row: row['id'])
+    assert all(row['inference_scope'] == 'final'
+               and row['checkpoint_eval_id'] is None
+               and row['parent_experiment_id'] is None
+               for row in final['candidate_evaluations'])
+    profits = evidence['durable'][arm]['final_profitability']['candidate_observations']
+    assert profits == sorted(profits,
+                             key=lambda row: (row['inference_eval_result_id'],
+                                              row['profitability_observation_id']))
+for group in ('inference_metrics', 'profitability_metrics',
+              'profitability_percentage_metrics'):
+    for delta in evidence['derived'][group]:
+        for key in ('left', 'right', 'right_minus_left', 'relative_to_absolute_left'):
+            assert delta[key] is None or math.isfinite(delta[key])
+        if delta['left'] is not None and delta['right'] is not None:
+            assert delta['right_minus_left'] == delta['right'] - delta['left']
+        if delta['left'] == 0:
+            assert delta['relative_to_absolute_left'] is None
+PY
+        if "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence comparison 0 1 >/dev/null 2>&1 || \
+           "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence comparison 1 1 >/dev/null 2>&1 || \
+           "${LSTM_OBSERVER_EVIDENCE_BINARY}" evidence comparison 1 >/dev/null 2>&1; then
+            printf '%s\n' 'invalid comparison grammar unexpectedly succeeded' >&2
+            exit 1
+        fi
     fi
 fi
 

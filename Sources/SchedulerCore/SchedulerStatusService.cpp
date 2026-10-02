@@ -1,6 +1,7 @@
 #include "SchedulerStatusService.hpp"
 #include "SchedulerOperationalReadModel.hpp"
 #include "ExperimentScheduler.hpp"
+#include "ExperimentComparisonIdentity.hpp"
 #include "CanonicalSymbol.hpp"
 #include "CausalSurpriseObservabilityService.hpp"
 #include "CheckpointPolicy.hpp"
@@ -3793,6 +3794,502 @@ CaptureProfitabilityOperationalEvidence(pqxx::transaction_base& transaction,
     return evidence;
 }
 
+// V3 deliberately retains V2's record types for exact FINAL result and
+// profitability candidates.  The association below is therefore the same
+// V2 CTE, narrowed to FINAL rows; it never guesses by time or model name.
+struct ExperimentComparisonConfiguration
+{
+    std::vector<EA::ExperimentComparisonIdentity::Field> scientificIdentity;
+};
+
+struct FinalInferenceAssociation
+{
+    std::string selectionStatus;
+    bool contextAvailable = false;
+    std::vector<InferenceOperationalEvaluation> candidates;
+    std::optional<InferenceOperationalEvaluation> selected;
+};
+
+struct FinalProfitabilityAssociation
+{
+    std::string selectionStatus;
+    std::vector<ProfitabilityOperationalObservation> candidates;
+    std::optional<ProfitabilityOperationalObservation> selected;
+};
+
+struct ComparisonArmEvidence
+{
+    std::string side;
+    long long experimentId = -1;
+    std::string status;
+    std::string phase;
+    std::optional<long long> lastModelId;
+    ExperimentComparisonConfiguration configuration;
+    FinalInferenceAssociation finalInference;
+    FinalProfitabilityAssociation finalProfitability;
+};
+
+struct EqualityCheck
+{
+    std::string field;
+    std::optional<std::string> left;
+    std::optional<std::string> right;
+    bool equal = false;
+};
+
+struct ComparisonComparabilityEvidence
+{
+    std::string featureAblationRelationship;
+    std::vector<EqualityCheck> equalityChecks;
+    std::vector<std::string> identityMismatchReasons;
+};
+
+struct DerivedMetricDelta
+{
+    std::string metric;
+    std::optional<double> left;
+    std::optional<double> right;
+    std::optional<double> rightMinusLeft;
+    std::optional<double> relativeToAbsoluteLeft;
+    std::string derivation = "DERIVED";
+};
+
+struct ComparisonOperationalEvidence
+{
+    long long leftExperimentId = -1;
+    long long rightExperimentId = -1;
+    ComparisonArmEvidence left;
+    ComparisonArmEvidence right;
+    ComparisonComparabilityEvidence comparability;
+    std::vector<DerivedMetricDelta> inferenceDeltas;
+    std::vector<DerivedMetricDelta> profitabilityDeltas;
+    std::vector<DerivedMetricDelta> profitabilityPercentageDeltas;
+};
+
+std::optional<std::string> ComparisonField(
+    const ExperimentComparisonConfiguration& configuration,
+    std::string_view name)
+{
+    for (const auto& field : configuration.scientificIdentity)
+        if (field.name == name) return field.value;
+    return std::nullopt;
+}
+
+std::optional<ExperimentComparisonConfiguration>
+LoadExperimentComparisonConfiguration(pqxx::transaction_base& transaction,
+                                      long long experimentId,
+                                      std::string& status,
+                                      std::string& phase,
+                                      std::optional<long long>& lastModelId)
+{
+    const pqxx::result rows = transaction.exec(
+        "SELECT e.status,e.phase,e.last_model_id,"
+        "e.symbol::text AS symbol,e.prediction_horizon::text AS prediction_horizon,"
+        "e.train_start::text AS train_start,e.train_end::text AS train_end,"
+        "e.infer_start::text AS inference_start,e.infer_end::text AS inference_end,"
+        "e.target_epochs::text AS target_epochs,e.c_next_threshold::text AS threshold,"
+        "e.core_lr_mult::text AS core_lr_mult,e.head_lr_mult::text AS head_lr_mult,"
+        "e.checkpoint_interval::text AS checkpoint_interval,"
+        "e.feature_warmup_scope::text AS feature_warmup_scope,"
+        "e.donchian20_mode::text AS donchian_mode,e.donchian_lookback::text AS donchian_lookback,"
+        "e.feature_ablation_mask::text AS feature_ablation_mask,"
+        "CASE WHEN e.resume_model_id IS NULL THEN 'fresh_initialization' "
+        "WHEN e.stopped_at_checkpoint_epoch IS NOT NULL "
+        " AND e.stopped_at_checkpoint_model_id=e.resume_model_id "
+        " AND resumed.experiment_id=e.experiment_id "
+        "THEN 'own_checkpoint_epoch:' || e.stopped_at_checkpoint_epoch::text "
+        "ELSE 'resume_model_id:' || e.resume_model_id::text END AS initialization_lineage,"
+        "e.resume_expand_input_width::text AS resume_expand_input_width,"
+        "e.training_objective_canonical::text AS training_objective_canonical,"
+        "e.training_objective_hash::text AS training_objective_hash,"
+        "e.model_input_width::text AS configured_model_input_width,"
+        "e.model_input_semantic_layout_version::text AS configured_model_input_semantic_layout_version,"
+        "e.economic_calendar_snapshot_id::text AS economic_calendar_snapshot_id,"
+        "e.economic_calendar_snapshot_hash::text AS economic_calendar_snapshot_hash,"
+        "'0.00033333333333333332' AS base_learning_rate,'256' AS batch_size,"
+        "CASE WHEN e.resume_model_id IS NULL THEN e.fresh_initialization_seed::text END AS fresh_initialization_seed,"
+        "e.training_objective_version::text AS training_objective_version,"
+        "e.loss_definition_version::text AS loss_definition_version,"
+        "e.auxiliary_loss_mode::text AS auxiliary_loss_mode,"
+        "e.auxiliary_loss_coefficient::text AS auxiliary_loss_coefficient,"
+        "e.regression_target_definition::text AS regression_target_definition,"
+        "e.regression_normalization_identity::text AS regression_normalization_identity,"
+        "e.robust_loss_definition::text AS robust_loss_definition,"
+        "e.robust_loss_delta::text AS robust_loss_delta,"
+        "e.target_clipping_definition::text AS target_clipping_definition,"
+        "e.objective_normalization_identity::text AS objective_normalization_identity,"
+        "e.checkpoint_infer_enabled::text AS checkpoint_inference_enabled,"
+        "e.checkpoint_infer_min_epoch::text AS checkpoint_inference_minimum_epoch,"
+        "e.checkpoint_infer_interval::text AS checkpoint_inference_interval,"
+        "e.checkpoint_policy_enabled::text AS checkpoint_policy_enabled,"
+        "e.checkpoint_policy_min_leader_score::text AS checkpoint_policy_minimum_leader_score,"
+        "e.checkpoint_policy_min_infer_accuracy::text AS checkpoint_policy_minimum_inference_accuracy,"
+        "e.checkpoint_policy_top_n::text AS checkpoint_policy_top_n,"
+        "e.checkpoint_policy_scope::text AS checkpoint_policy_scope,"
+        "e.checkpoint_policy_stop_mode::text AS checkpoint_policy_stop_mode,"
+        "e.checkpoint_policy_grace_evals::text AS checkpoint_policy_grace_evaluations,"
+        "e.checkpoint_policy_revision::text AS checkpoint_policy_revision,"
+        "e.checkpoint_policy_hash::text AS checkpoint_policy_hash,"
+        "e.continuation_policy_enabled::text AS continuation_policy_enabled,"
+        "CASE WHEN e.continuation_policy_enabled THEN ROW("
+        "e.continuation_policy_target_epochs,e.continuation_policy_min_evals,"
+        "e.continuation_policy_patience,e.continuation_policy_min_leader_score,"
+        "e.continuation_policy_min_infer_accuracy,e.continuation_policy_min_profit_actionable_count,"
+        "e.continuation_policy_min_profit_aggregate_log_return_sum,"
+        "e.continuation_policy_min_profit_average_log_return,e.continuation_policy_min_improvement,"
+        "e.continuation_policy_max_degradation,e.continuation_policy_top_n,"
+        "e.continuation_policy_scope,e.continuation_policy_trend_mode,"
+        "e.continuation_policy_source_mode,e.continuation_policy_include_excluded,"
+        "e.continuation_candidate_excluded,e.continuation_policy_inherit_to_child,"
+        "e.continuation_policy_progression_mode,array_to_string(e.continuation_policy_target_sequence,':'),"
+        "e.continuation_policy_target_increment,e.continuation_policy_max_target_epochs,"
+        "e.continuation_policy_inherited,e.continuation_policy_inherited_from_experiment_id,"
+        "e.continuation_policy_inherited_from_revision,e.continuation_policy_inherited_from_hash,"
+        "e.continuation_policy_inheritance_status,e.continuation_policy_revision"
+        ")::text ELSE 'disabled' END AS continuation_policy_scientific_identity "
+        "FROM experiment e LEFT JOIN model resumed ON resumed.model_id=e.resume_model_id "
+        "WHERE e.experiment_id=$1;", pqxx::params{experimentId});
+    if (rows.empty()) return std::nullopt;
+    if (rows.size() != 1)
+        throw std::runtime_error("comparison_experiment_identity_ambiguous");
+    const pqxx::row row = rows.one_row();
+    status = row[0].as<std::string>();
+    phase = row[1].as<std::string>();
+    lastModelId = OptionalLongLongCell(row, 2);
+    ExperimentComparisonConfiguration configuration;
+    for (const std::string_view name :
+         EA::ExperimentComparisonIdentity::kConfiguredScientificIdentityFields)
+    {
+        const std::string column{name};
+        configuration.scientificIdentity.push_back(
+            {column, row[column].is_null()
+                         ? std::optional<std::string>{}
+                         : std::optional<std::string>{row[column].as<std::string>()}});
+    }
+    return configuration;
+}
+
+InferenceOperationalEvaluation ReadInferenceOperationalEvaluation(
+    const pqxx::row& row)
+{
+    InferenceOperationalEvaluation evaluation;
+    evaluation.id = row[0].as<long long>();
+    evaluation.modelId = row[1].as<long long>();
+    evaluation.symbol = row[2].as<std::string>();
+    evaluation.predictionHorizon = row[3].as<long long>();
+    evaluation.thresholdLogret = row[4].as<double>();
+    evaluation.windowSize = row[5].as<long long>();
+    evaluation.labelRuleId = row[6].as<int>();
+    evaluation.targetType = row[7].as<int>();
+    evaluation.fromDate = row[8].as<std::string>();
+    evaluation.toDate = row[9].as<std::string>();
+    evaluation.completedEpochs = OptionalLongLongCell(row, 10);
+    evaluation.accuracy = OptionalDoubleCell(row, 11);
+    if (!row[12].is_null()) evaluation.acceptModel = row[12].as<bool>();
+    evaluation.rejectReason = OptionalStringCell(row, 13);
+    evaluation.predDown = OptionalDoubleCell(row, 14);
+    evaluation.predNeutral = OptionalDoubleCell(row, 15);
+    evaluation.predUp = OptionalDoubleCell(row, 16);
+    evaluation.status = row[17].as<std::string>();
+    evaluation.completedAt = row[18].as<std::string>();
+    evaluation.inferenceScope = row[19].as<std::string>();
+    evaluation.checkpointEvalId = OptionalLongLongCell(row, 20);
+    evaluation.parentExperimentId = OptionalLongLongCell(row, 21);
+    if (!row[22].is_null()) evaluation.checkpointEpoch = row[22].as<int>();
+    evaluation.producerWorkerAttemptId = OptionalLongLongCell(row, 23);
+    return evaluation;
+}
+
+FinalInferenceAssociation LoadFinalInferenceAssociation(
+    pqxx::transaction_base& transaction, long long experimentId)
+{
+    FinalInferenceAssociation association;
+    const pqxx::result context = transaction.exec(
+        std::string{kExperimentAssociatedInferenceCte} +
+        "SELECT EXISTS (SELECT 1 FROM final_context);", pqxx::params{experimentId});
+    association.contextAvailable = context.one_row()[0].as<bool>();
+    if (!association.contextAvailable)
+    {
+        association.selectionStatus = "context_mismatch";
+        return association;
+    }
+    const pqxx::result rows = transaction.exec(
+        std::string{kExperimentAssociatedInferenceCte} +
+        "SELECT id,model_id,symbol,prediction_horizon,threshold_logret,window_size,"
+        "label_rule_id,target_type,from_date,to_date,completed_epochs,accuracy,"
+        "accept_model,reject_reason,pred_down,pred_neutral,pred_up,status,"
+        "completed_at::text,inference_scope,checkpoint_eval_id,parent_experiment_id,"
+        "checkpoint_epoch,producer_worker_attempt_id FROM associated_evaluations "
+        "WHERE inference_scope='final' ORDER BY id;", pqxx::params{experimentId});
+    for (const auto& row : rows)
+        association.candidates.push_back(ReadInferenceOperationalEvaluation(row));
+    if (association.candidates.empty()) association.selectionStatus = "missing";
+    else if (association.candidates.size() != 1) association.selectionStatus = "ambiguous";
+    else if (association.candidates[0].status == "completed")
+    {
+        association.selectionStatus = "available_completed";
+        association.selected = association.candidates[0];
+    }
+    else association.selectionStatus = "failed";
+    return association;
+}
+
+ProfitabilityOperationalObservation ReadProfitabilityOperationalObservation(
+    const pqxx::row& row)
+{
+    ProfitabilityOperationalObservation observation;
+    observation.profitabilityObservationId = row[0].as<long long>();
+    observation.experimentId = OptionalLongLongCell(row, 1);
+    observation.modelId = row[2].as<long long>();
+    observation.inferenceEvalResultId = row[3].as<long long>();
+    observation.inferenceScope = row[4].as<std::string>();
+    observation.checkpointEvalId = OptionalLongLongCell(row, 5);
+    observation.inferenceStart = row[6].as<std::string>();
+    observation.inferenceEnd = row[7].as<std::string>();
+    observation.predictionCount = row[8].as<long long>();
+    observation.actionableCount = row[9].as<long long>();
+    observation.winningActionableCount = row[10].as<long long>();
+    observation.losingActionableCount = row[11].as<long long>();
+    observation.grossPositiveTerminalHorizonLogReturnSum = row[12].as<double>();
+    observation.grossNegativeTerminalHorizonLogReturnSum = row[13].as<double>();
+    observation.aggregateTerminalHorizonLogReturnSum = row[14].as<double>();
+    observation.averageTerminalHorizonLogReturnPerActionablePrediction =
+        OptionalDoubleCell(row, 15);
+    observation.metricDefinitionHash = row[16].as<std::string>();
+    observation.sourceContentHash = row[17].as<std::string>();
+    observation.observationIdentityHash = row[18].as<std::string>();
+    observation.createdAt = row[19].as<std::string>();
+    return observation;
+}
+
+FinalProfitabilityAssociation LoadFinalProfitabilityAssociation(
+    pqxx::transaction_base& transaction, long long experimentId,
+    const FinalInferenceAssociation& inference)
+{
+    FinalProfitabilityAssociation association;
+    for (const auto& inferenceCandidate : inference.candidates)
+    {
+        const pqxx::result rows = transaction.exec(
+            "SELECT profitability_observation_id,experiment_id,model_id,"
+            "inference_eval_result_id,inference_scope,checkpoint_eval_id,inference_start,"
+            "inference_end,prediction_count,actionable_count,winning_actionable_count,"
+            "losing_actionable_count,gross_positive_terminal_horizon_log_return_sum,"
+            "gross_negative_terminal_horizon_log_return_sum,"
+            "aggregate_terminal_horizon_log_return_sum,"
+            "average_terminal_horizon_log_return_per_actionable_prediction,"
+            "metric_definition_hash,source_content_hash,observation_identity_hash,"
+            "created_at::text FROM inference_profitability_observation "
+            "WHERE experiment_id=$1 AND inference_eval_result_id=$2 AND model_id=$3 "
+            "AND inference_scope='final' AND checkpoint_eval_id IS NULL "
+            "AND inference_start=$4 AND inference_end=$5 "
+            "ORDER BY profitability_observation_id;",
+            pqxx::params{experimentId, inferenceCandidate.id, inferenceCandidate.modelId,
+                         inferenceCandidate.fromDate, inferenceCandidate.toDate});
+        for (const auto& row : rows)
+            association.candidates.push_back(
+                ReadProfitabilityOperationalObservation(row));
+    }
+    if (!inference.selected)
+    {
+        association.selectionStatus = "not_selectable_final_inference_" +
+            inference.selectionStatus;
+        return association;
+    }
+    if (association.candidates.empty()) association.selectionStatus = "missing";
+    else if (association.candidates.size() != 1) association.selectionStatus = "ambiguous";
+    else
+    {
+        association.selectionStatus = "available";
+        association.selected = association.candidates[0];
+    }
+    return association;
+}
+
+std::optional<double> NumericDelta(std::optional<double> left,
+                                   std::optional<double> right)
+{
+    if (!left || !right || !std::isfinite(*left) || !std::isfinite(*right))
+        return std::nullopt;
+    return *right - *left;
+}
+
+DerivedMetricDelta MakeDerivedMetricDelta(std::string metric,
+                                          std::optional<double> left,
+                                          std::optional<double> right,
+                                          bool includeRelative = false)
+{
+    DerivedMetricDelta delta;
+    delta.metric = std::move(metric);
+    delta.left = left;
+    delta.right = right;
+    delta.rightMinusLeft = NumericDelta(left, right);
+    if (includeRelative && delta.rightMinusLeft && left && *left != 0.0)
+        delta.relativeToAbsoluteLeft = *delta.rightMinusLeft / std::abs(*left);
+    return delta;
+}
+
+std::optional<double> Percentage(long long numerator, long long denominator)
+{
+    if (denominator == 0) return std::nullopt;
+    return 100.0 * static_cast<double>(numerator) /
+        static_cast<double>(denominator);
+}
+
+void AddInferenceDeltas(ComparisonOperationalEvidence& evidence)
+{
+    const auto left = evidence.left.finalInference.selected;
+    const auto right = evidence.right.finalInference.selected;
+    const auto completedEpochs = [](const std::optional<InferenceOperationalEvaluation>& value)
+        -> std::optional<double>
+    {
+        return value && value->completedEpochs
+            ? std::optional<double>{static_cast<double>(*value->completedEpochs)}
+            : std::nullopt;
+    };
+    const auto metric = [](const std::optional<InferenceOperationalEvaluation>& value,
+                           const std::optional<double> InferenceOperationalEvaluation::* member)
+        -> std::optional<double>
+    {
+        return value ? ((*value).*member) : std::nullopt;
+    };
+    evidence.inferenceDeltas.push_back(MakeDerivedMetricDelta(
+        "completed_epochs", completedEpochs(left), completedEpochs(right), true));
+    evidence.inferenceDeltas.push_back(MakeDerivedMetricDelta(
+        "accuracy", metric(left, &InferenceOperationalEvaluation::accuracy),
+        metric(right, &InferenceOperationalEvaluation::accuracy), true));
+    evidence.inferenceDeltas.push_back(MakeDerivedMetricDelta(
+        "pred_down", metric(left, &InferenceOperationalEvaluation::predDown),
+        metric(right, &InferenceOperationalEvaluation::predDown), true));
+    evidence.inferenceDeltas.push_back(MakeDerivedMetricDelta(
+        "pred_neutral", metric(left, &InferenceOperationalEvaluation::predNeutral),
+        metric(right, &InferenceOperationalEvaluation::predNeutral), true));
+    evidence.inferenceDeltas.push_back(MakeDerivedMetricDelta(
+        "pred_up", metric(left, &InferenceOperationalEvaluation::predUp),
+        metric(right, &InferenceOperationalEvaluation::predUp), true));
+}
+
+void AddProfitabilityDeltas(ComparisonOperationalEvidence& evidence)
+{
+    const auto left = evidence.left.finalProfitability.selected;
+    const auto right = evidence.right.finalProfitability.selected;
+    const auto count = [](const std::optional<ProfitabilityOperationalObservation>& value,
+                          long long ProfitabilityOperationalObservation::* member)
+        -> std::optional<double>
+    {
+        return value ? std::optional<double>{static_cast<double>((*value).*member)}
+                     : std::nullopt;
+    };
+    const auto value = [](const std::optional<ProfitabilityOperationalObservation>& observation,
+                          double ProfitabilityOperationalObservation::* member)
+        -> std::optional<double>
+    {
+        return observation ? std::optional<double>{(*observation).*member} : std::nullopt;
+    };
+    const auto average = [](const std::optional<ProfitabilityOperationalObservation>& observation)
+        -> std::optional<double>
+    {
+        return observation
+            ? observation->averageTerminalHorizonLogReturnPerActionablePrediction
+            : std::nullopt;
+    };
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "prediction_count", count(left, &ProfitabilityOperationalObservation::predictionCount),
+        count(right, &ProfitabilityOperationalObservation::predictionCount), true));
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "actionable_count", count(left, &ProfitabilityOperationalObservation::actionableCount),
+        count(right, &ProfitabilityOperationalObservation::actionableCount), true));
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "winning_actionable_count", count(left, &ProfitabilityOperationalObservation::winningActionableCount),
+        count(right, &ProfitabilityOperationalObservation::winningActionableCount), true));
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "losing_actionable_count", count(left, &ProfitabilityOperationalObservation::losingActionableCount),
+        count(right, &ProfitabilityOperationalObservation::losingActionableCount), true));
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "gross_positive_terminal_horizon_log_return_sum",
+        value(left, &ProfitabilityOperationalObservation::grossPositiveTerminalHorizonLogReturnSum),
+        value(right, &ProfitabilityOperationalObservation::grossPositiveTerminalHorizonLogReturnSum), true));
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "gross_negative_terminal_horizon_log_return_sum",
+        value(left, &ProfitabilityOperationalObservation::grossNegativeTerminalHorizonLogReturnSum),
+        value(right, &ProfitabilityOperationalObservation::grossNegativeTerminalHorizonLogReturnSum), true));
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "aggregate_terminal_horizon_log_return_sum",
+        value(left, &ProfitabilityOperationalObservation::aggregateTerminalHorizonLogReturnSum),
+        value(right, &ProfitabilityOperationalObservation::aggregateTerminalHorizonLogReturnSum), true));
+    evidence.profitabilityDeltas.push_back(MakeDerivedMetricDelta(
+        "average_terminal_horizon_log_return_per_actionable_prediction",
+        average(left), average(right), true));
+    const auto actionablePercentage = [](const std::optional<ProfitabilityOperationalObservation>& observation)
+        -> std::optional<double>
+    {
+        return observation ? Percentage(observation->actionableCount,
+                                        observation->predictionCount) : std::nullopt;
+    };
+    const auto winPercentage = [](const std::optional<ProfitabilityOperationalObservation>& observation)
+        -> std::optional<double>
+    {
+        return observation ? Percentage(observation->winningActionableCount,
+                                        observation->actionableCount) : std::nullopt;
+    };
+    evidence.profitabilityPercentageDeltas.push_back(MakeDerivedMetricDelta(
+        "actionable_percentage", actionablePercentage(left), actionablePercentage(right), true));
+    evidence.profitabilityPercentageDeltas.push_back(MakeDerivedMetricDelta(
+        "actionable_win_percentage", winPercentage(left), winPercentage(right), true));
+}
+
+std::optional<ComparisonOperationalEvidence> CaptureComparisonOperationalEvidence(
+    pqxx::transaction_base& transaction, long long leftExperimentId,
+    long long rightExperimentId)
+{
+    ComparisonOperationalEvidence evidence;
+    evidence.leftExperimentId = leftExperimentId;
+    evidence.rightExperimentId = rightExperimentId;
+    evidence.left.side = "left";
+    evidence.left.experimentId = leftExperimentId;
+    evidence.right.side = "right";
+    evidence.right.experimentId = rightExperimentId;
+    const auto leftConfiguration = LoadExperimentComparisonConfiguration(
+        transaction, leftExperimentId, evidence.left.status, evidence.left.phase,
+        evidence.left.lastModelId);
+    const auto rightConfiguration = LoadExperimentComparisonConfiguration(
+        transaction, rightExperimentId, evidence.right.status, evidence.right.phase,
+        evidence.right.lastModelId);
+    if (!leftConfiguration || !rightConfiguration) return std::nullopt;
+    evidence.left.configuration = *leftConfiguration;
+    evidence.right.configuration = *rightConfiguration;
+    evidence.left.finalInference = LoadFinalInferenceAssociation(transaction, leftExperimentId);
+    evidence.right.finalInference = LoadFinalInferenceAssociation(transaction, rightExperimentId);
+    evidence.left.finalProfitability = LoadFinalProfitabilityAssociation(
+        transaction, leftExperimentId, evidence.left.finalInference);
+    evidence.right.finalProfitability = LoadFinalProfitabilityAssociation(
+        transaction, rightExperimentId, evidence.right.finalInference);
+
+    for (const std::string_view name :
+         EA::ExperimentComparisonIdentity::kConfiguredScientificIdentityFields)
+    {
+        const auto left = ComparisonField(evidence.left.configuration, name);
+        const auto right = ComparisonField(evidence.right.configuration, name);
+        const bool equal = left == right; // IS NOT DISTINCT FROM for nullable facts.
+        evidence.comparability.equalityChecks.push_back(
+            {std::string{name}, left, right, equal});
+        if (!equal) evidence.comparability.identityMismatchReasons.push_back(
+            std::string{name} + "_mismatch");
+    }
+    const auto leftMask = ComparisonField(evidence.left.configuration, "feature_ablation_mask");
+    const auto rightMask = ComparisonField(evidence.right.configuration, "feature_ablation_mask");
+    if (leftMask == rightMask)
+        evidence.comparability.featureAblationRelationship = "equal";
+    else if (leftMask.value_or("").empty())
+        evidence.comparability.featureAblationRelationship = "left_empty_right_nonempty";
+    else if (rightMask.value_or("").empty())
+        evidence.comparability.featureAblationRelationship = "left_nonempty_right_empty";
+    else
+        evidence.comparability.featureAblationRelationship = "different_nonempty_masks";
+    AddInferenceDeltas(evidence);
+    AddProfitabilityDeltas(evidence);
+    return evidence;
+}
+
 void WriteJsonSchedulerEvidence(std::ostream& output,
                                 const SchedulerOperationalEvidence& evidence)
 {
@@ -4030,6 +4527,193 @@ void WriteJsonProfitabilityEvidence(
     }
     output << "]}}\n";
 }
+
+void WriteJsonComparisonInference(std::ostream& output,
+                                  const InferenceOperationalEvaluation& value)
+{
+    output << "{\"id\":" << value.id << ",\"model_id\":" << value.modelId
+           << ",\"symbol\":" << JsonString(value.symbol)
+           << ",\"prediction_horizon\":" << value.predictionHorizon
+           << ",\"threshold_logret\":";
+    WriteJsonDouble(output, value.thresholdLogret);
+    output << ",\"window_size\":" << value.windowSize
+           << ",\"label_rule_id\":" << value.labelRuleId
+           << ",\"target_type\":" << value.targetType
+           << ",\"from_date\":" << JsonString(value.fromDate)
+           << ",\"to_date\":" << JsonString(value.toDate)
+           << ",\"completed_epochs\":";
+    WriteJsonOptional(output, value.completedEpochs);
+    output << ",\"accuracy\":";
+    WriteJsonOptionalDouble(output, value.accuracy);
+    output << ",\"accept_model\":";
+    WriteJsonOptionalBool(output, value.acceptModel);
+    output << ",\"reject_reason\":";
+    WriteJsonOptionalString(output, value.rejectReason);
+    output << ",\"pred_down\":";
+    WriteJsonOptionalDouble(output, value.predDown);
+    output << ",\"pred_neutral\":";
+    WriteJsonOptionalDouble(output, value.predNeutral);
+    output << ",\"pred_up\":";
+    WriteJsonOptionalDouble(output, value.predUp);
+    output << ",\"status\":" << JsonString(value.status)
+           << ",\"completed_at\":" << JsonString(value.completedAt)
+           << ",\"inference_scope\":" << JsonString(value.inferenceScope)
+           << ",\"checkpoint_eval_id\":";
+    WriteJsonOptional(output, value.checkpointEvalId);
+    output << ",\"parent_experiment_id\":";
+    WriteJsonOptional(output, value.parentExperimentId);
+    output << ",\"checkpoint_epoch\":";
+    WriteJsonOptional(output, value.checkpointEpoch);
+    output << ",\"producer_worker_attempt_id\":";
+    WriteJsonOptional(output, value.producerWorkerAttemptId);
+    output << '}';
+}
+
+void WriteJsonComparisonProfitability(
+    std::ostream& output, const ProfitabilityOperationalObservation& value)
+{
+    output << "{\"profitability_observation_id\":" << value.profitabilityObservationId
+           << ",\"experiment_id\":";
+    WriteJsonOptional(output, value.experimentId);
+    output << ",\"model_id\":" << value.modelId
+           << ",\"inference_eval_result_id\":" << value.inferenceEvalResultId
+           << ",\"inference_scope\":" << JsonString(value.inferenceScope)
+           << ",\"checkpoint_eval_id\":";
+    WriteJsonOptional(output, value.checkpointEvalId);
+    output << ",\"inference_start\":" << JsonString(value.inferenceStart)
+           << ",\"inference_end\":" << JsonString(value.inferenceEnd)
+           << ",\"prediction_count\":" << value.predictionCount
+           << ",\"actionable_count\":" << value.actionableCount
+           << ",\"winning_actionable_count\":" << value.winningActionableCount
+           << ",\"losing_actionable_count\":" << value.losingActionableCount
+           << ",\"gross_positive_terminal_horizon_log_return_sum\":";
+    WriteJsonDouble(output, value.grossPositiveTerminalHorizonLogReturnSum);
+    output << ",\"gross_negative_terminal_horizon_log_return_sum\":";
+    WriteJsonDouble(output, value.grossNegativeTerminalHorizonLogReturnSum);
+    output << ",\"aggregate_terminal_horizon_log_return_sum\":";
+    WriteJsonDouble(output, value.aggregateTerminalHorizonLogReturnSum);
+    output << ",\"average_terminal_horizon_log_return_per_actionable_prediction\":";
+    WriteJsonOptionalDouble(
+        output, value.averageTerminalHorizonLogReturnPerActionablePrediction);
+    output << ",\"metric_definition_hash\":" << JsonString(value.metricDefinitionHash)
+           << ",\"source_content_hash\":" << JsonString(value.sourceContentHash)
+           << ",\"observation_identity_hash\":" << JsonString(value.observationIdentityHash)
+           << ",\"created_at\":" << JsonString(value.createdAt) << '}';
+}
+
+void WriteJsonDerivedDeltas(std::ostream& output,
+                            const std::vector<DerivedMetricDelta>& values)
+{
+    output << '[';
+    for (size_t index = 0; index < values.size(); ++index)
+    {
+        if (index != 0) output << ',';
+        const auto& value = values[index];
+        output << "{\"metric\":" << JsonString(value.metric)
+               << ",\"derivation\":" << JsonString(value.derivation)
+               << ",\"left\":";
+        WriteJsonOptionalDouble(output, value.left);
+        output << ",\"right\":";
+        WriteJsonOptionalDouble(output, value.right);
+        output << ",\"right_minus_left\":";
+        WriteJsonOptionalDouble(output, value.rightMinusLeft);
+        output << ",\"relative_to_absolute_left\":";
+        WriteJsonOptionalDouble(output, value.relativeToAbsoluteLeft);
+        output << '}';
+    }
+    output << ']';
+}
+
+void WriteJsonComparisonArm(std::ostream& output, const ComparisonArmEvidence& arm)
+{
+    output << "{\"side\":" << JsonString(arm.side) << ",\"experiment\":{"
+           << "\"experiment_id\":" << arm.experimentId
+           << ",\"status\":" << JsonString(arm.status)
+           << ",\"phase\":" << JsonString(arm.phase)
+           << ",\"last_model_id\":";
+    WriteJsonOptional(output, arm.lastModelId);
+    output << "},\"configuration\":{\"scientific_identity\":[";
+    for (size_t index = 0; index < arm.configuration.scientificIdentity.size(); ++index)
+    {
+        if (index != 0) output << ',';
+        const auto& field = arm.configuration.scientificIdentity[index];
+        output << "{\"field\":" << JsonString(field.name) << ",\"value\":";
+        WriteJsonOptionalString(output, field.value);
+        output << '}';
+    }
+    output << "]},\"final_inference\":{\"selection_status\":"
+           << JsonString(arm.finalInference.selectionStatus)
+           << ",\"context_available\":"
+           << (arm.finalInference.contextAvailable ? "true" : "false")
+           << ",\"candidate_count\":" << arm.finalInference.candidates.size()
+           << ",\"selected_evaluation_id\":";
+    if (arm.finalInference.selected) output << arm.finalInference.selected->id;
+    else output << "null";
+    output << ",\"candidate_evaluations\":[";
+    for (size_t index = 0; index < arm.finalInference.candidates.size(); ++index)
+    {
+        if (index != 0) output << ',';
+        WriteJsonComparisonInference(output, arm.finalInference.candidates[index]);
+    }
+    output << "]},\"final_profitability\":{\"selection_status\":"
+           << JsonString(arm.finalProfitability.selectionStatus)
+           << ",\"candidate_count\":" << arm.finalProfitability.candidates.size()
+           << ",\"selected_profitability_observation_id\":";
+    if (arm.finalProfitability.selected)
+        output << arm.finalProfitability.selected->profitabilityObservationId;
+    else output << "null";
+    output << ",\"candidate_observations\":[";
+    for (size_t index = 0; index < arm.finalProfitability.candidates.size(); ++index)
+    {
+        if (index != 0) output << ',';
+        WriteJsonComparisonProfitability(
+            output, arm.finalProfitability.candidates[index]);
+    }
+    output << "]}}";
+}
+
+void WriteJsonComparisonEvidence(std::ostream& output,
+                                 const ComparisonOperationalEvidence& evidence)
+{
+    output << "{\"schema\":\"expertadvisor-operational-evidence-v3\","
+           << "\"kind\":\"comparison\",\"requested\":{"
+           << "\"left_experiment_id\":" << evidence.leftExperimentId
+           << ",\"right_experiment_id\":" << evidence.rightExperimentId
+           << ",\"scope\":\"final\",\"roles\":[\"left\",\"right\"]},"
+           << "\"durable\":{\"left\":";
+    WriteJsonComparisonArm(output, evidence.left);
+    output << ",\"right\":";
+    WriteJsonComparisonArm(output, evidence.right);
+    output << "},\"comparability\":{\"controlled_comparison\":false,"
+           << "\"declared_controlled_pair_provenance\":\"not_available\","
+           << "\"feature_ablation_relationship\":"
+           << JsonString(evidence.comparability.featureAblationRelationship)
+           << ",\"equality_checks\":[";
+    for (size_t index = 0; index < evidence.comparability.equalityChecks.size(); ++index)
+    {
+        if (index != 0) output << ',';
+        const auto& check = evidence.comparability.equalityChecks[index];
+        output << "{\"field\":" << JsonString(check.field) << ",\"left\":";
+        WriteJsonOptionalString(output, check.left);
+        output << ",\"right\":";
+        WriteJsonOptionalString(output, check.right);
+        output << ",\"equal\":" << (check.equal ? "true" : "false") << '}';
+    }
+    output << "],\"identity_mismatch_reasons\":[";
+    for (size_t index = 0; index < evidence.comparability.identityMismatchReasons.size(); ++index)
+    {
+        if (index != 0) output << ',';
+        output << JsonString(evidence.comparability.identityMismatchReasons[index]);
+    }
+    output << "]},\"derived\":{\"delta_convention\":\"right_minus_left\","
+           << "\"inference_metrics\":";
+    WriteJsonDerivedDeltas(output, evidence.inferenceDeltas);
+    output << ",\"profitability_metrics\":";
+    WriteJsonDerivedDeltas(output, evidence.profitabilityDeltas);
+    output << ",\"profitability_percentage_metrics\":";
+    WriteJsonDerivedDeltas(output, evidence.profitabilityPercentageDeltas);
+    output << "}}\n";
+}
 } // namespace
 
 int PrintCompactExperimentStatus(const ProductionRuntimeDetail::SchedulerOptions& options)
@@ -4145,6 +4829,32 @@ int PrintObserverProfitabilityEvidence(
                 return 1;
             }
             WriteJsonProfitabilityEvidence(output, *evidence);
+            return 0;
+        });
+}
+
+int PrintObserverComparisonEvidence(SchedulerOperationalReadModel& readModel,
+                                    long long leftExperimentId,
+                                    long long rightExperimentId,
+                                    std::ostream& output,
+                                    std::ostream& error)
+{
+    return readModel.withReadOnlySnapshot(
+        [leftExperimentId, rightExperimentId, &output, &error](
+            pqxx::read_transaction& transaction) {
+            const auto evidence = CaptureComparisonOperationalEvidence(
+                transaction, leftExperimentId, rightExperimentId);
+            if (!evidence)
+            {
+                const bool leftExists = OperationalEvidenceExperimentExists(
+                    transaction, leftExperimentId);
+                const bool rightExists = OperationalEvidenceExperimentExists(
+                    transaction, rightExperimentId);
+                if (!leftExists) error << "ERROR: left experiment not found.\n";
+                if (!rightExists) error << "ERROR: right experiment not found.\n";
+                return 1;
+            }
+            WriteJsonComparisonEvidence(output, *evidence);
             return 0;
         });
 }

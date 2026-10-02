@@ -291,6 +291,15 @@ not portfolio P&L. The V2 response intentionally emits the persisted hashes,
 not its large canonical strings; it has no generic SQL or mutation surface and
 does not change V1 observer output.
 
+ADR-0022's V3 comparison request also uses one such snapshot for both sides.
+It reuses the V2 exact FINAL result association, loads profitability only by
+that FINAL result/model/scope/range provenance, and reports all candidate
+cardinality instead of selecting a latest record. It reads no controlled-study
+files and the physical schema has no durable controlled-pair attachment, so it
+reports factual configuration equality and `controlled_comparison: false`.
+Its terminal-horizon directional log-return arithmetic is explicitly derived
+`right_minus_left`, never portfolio P&L or a promotion/ranking decision.
+
 ### 6.2 Write paths
 
 Repositories use short explicit read-write transactions. Related mutable state
@@ -505,3 +514,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.17.0 | 2026-08-11 | Corrected the confirmed direct-SQL production-readiness bypass with forward migration 059, a sealed readiness-gated acquisition service boundary, raw-transition ACL revocation, and deployment/catalog evidence. | ADR-0019, ADR-0019C |
 | 0.18.0 | 2026-10-01 | Defined repeatable-read, read-only SchedulerCore operational-observation snapshots without mutation capability. | ADR-0021 |
 | 0.19.0 | 2026-10-01 | Recorded ADR-0022's additive typed V2 inference and terminal-horizon profitability evidence while preserving V1 output. | ADR-0022 |
+| 0.20.0 | 2026-10-01 | Recorded ADR-0022's additive neutral FINAL-only V3 comparison evidence without a schema migration or write authority. | ADR-0022 |
