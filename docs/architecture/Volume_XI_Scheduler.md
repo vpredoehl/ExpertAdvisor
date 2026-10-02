@@ -106,7 +106,11 @@ read-only operational read model and the `lstm-observer` executable. It exposes
 durable scheduler/lifecycle evidence and diagnostic process observation only;
 it cannot claim work, acquire a lease, signal processes, or alter lifecycle or
 capacity state. Durable exact-attempt evidence remains authoritative over
-process observation.
+process observation. Its V1 machine surface is deliberately closed:
+`lstm-observer evidence scheduler` and `lstm-observer evidence experiment
+EXPERIMENT_ID` emit typed `expertadvisor-operational-evidence-v1` JSON. This
+evidence is for deterministic AI/tool consumption, not operational
+authorization; repository investigation remains a separate producer.
 
 ## 5. Data model
 

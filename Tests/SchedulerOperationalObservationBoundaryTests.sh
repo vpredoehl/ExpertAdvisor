@@ -17,6 +17,8 @@ rg -Fq 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;' "${read_mod
 rg -Fq 'withReadOnlySnapshot' "${read_model}"
 rg -Fq 'PrintObserverSchedulerStatus(readModel, output, error)' "${observer_cli}"
 rg -Fq 'PrintObserverExperimentStatus(' "${observer_cli}"
+rg -Fq 'PrintObserverSchedulerEvidence(readModel, output, error)' "${observer_cli}"
+rg -Fq 'PrintObserverExperimentEvidence(' "${observer_cli}"
 rg -Fq 'PrintSchedulerStatusFromTransaction' "${status_service}"
 rg -Fq 'PrintCompactExperimentStatusFromTransaction' "${status_service}"
 rg -Fq '#include "SchedulerOperationalObservation.hpp"' "${status_service}"
@@ -61,6 +63,10 @@ if rg -Fq 'count(*)' "${read_model}" || rg -Fq 'ObservedSchedulerSummary' "${rea
 fi
 
 rg -Fq 'operation != "scheduler" && operation != "experiment"' "${observer_cli}"
+rg -Fq 'if (operation == "evidence")' "${observer_cli}"
+rg -Fq 'evidenceKind != "scheduler" && evidenceKind != "experiment"' "${observer_cli}"
+rg -Fq 'PrintObserverSchedulerEvidence' "${read_header}"
+rg -Fq 'PrintObserverExperimentEvidence' "${read_header}"
 
 public_surface="$(sed -n '/public:/,/private:/p' "${read_header}")"
 if printf '%s\n' "${public_surface}" | rg -n '\b(pqxx|withReadOnlySnapshot|claim|finalize|signal|reconcile|queue|preempt)\b'; then

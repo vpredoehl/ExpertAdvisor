@@ -40,12 +40,58 @@ std::optional<long long> PositiveId(const std::string& value)
 int RunSchedulerObserverCli(int argc, const char* argv[], std::ostream& output,
                             std::ostream& error)
 {
-    if (argc < 2 || argc > 3)
+    if (argc < 2 || argc > 4)
     {
-        error << "Usage: lstm-observer scheduler | experiment [EXPERIMENT_ID]\n";
+        error << "Usage: lstm-observer scheduler | experiment [EXPERIMENT_ID] | "
+                 "evidence scheduler | evidence experiment EXPERIMENT_ID\n";
         return 1;
     }
     const std::string operation{argv[1]};
+    if (operation == "evidence")
+    {
+        if (argc < 3 || argc > 4)
+        {
+            error << "evidence requires scheduler or experiment EXPERIMENT_ID\n";
+            return 1;
+        }
+        const std::string evidenceKind{argv[2]};
+        if (evidenceKind != "scheduler" && evidenceKind != "experiment")
+        {
+            error << "unsupported evidence kind: " << argv[2] << "\n";
+            return 1;
+        }
+        if (evidenceKind == "scheduler" && argc != 3)
+        {
+            error << "evidence scheduler accepts no arguments\n";
+            return 1;
+        }
+        if (evidenceKind == "experiment" && argc != 4)
+        {
+            error << "evidence experiment requires EXPERIMENT_ID\n";
+            return 1;
+        }
+        const auto experimentId = evidenceKind == "experiment"
+            ? PositiveId(argv[3])
+            : std::optional<long long>{};
+        if (evidenceKind == "experiment" && !experimentId.has_value())
+        {
+            error << "EXPERIMENT_ID must be a positive integer\n";
+            return 1;
+        }
+        try
+        {
+            SchedulerOperationalReadModel readModel{ConnectionString()};
+            if (evidenceKind == "scheduler")
+                return PrintObserverSchedulerEvidence(readModel, output, error);
+            return PrintObserverExperimentEvidence(
+                readModel, *experimentId, output, error);
+        }
+        catch (const std::exception& exception)
+        {
+            error << "OBSERVER_DATABASE_ERROR,error=" << exception.what() << "\n";
+            return 2;
+        }
+    }
     if (operation != "scheduler" && operation != "experiment")
     {
         error << "unsupported observer operation: " << argv[1] << "\n";

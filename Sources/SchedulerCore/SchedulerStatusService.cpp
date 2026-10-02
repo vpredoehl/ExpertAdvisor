@@ -3064,6 +3064,570 @@ int PrintSchedulerStatusImpl(const SchedulerOptions& options)
     transaction.commit();
     return result;
 }
+
+// This is deliberately a typed capture model, distinct from the legacy text
+// renderers above.  JSON is only a transport for these observation values; it
+// is never parsed back into scheduler state or authority.
+struct OperationalEvidenceLease
+{
+    std::optional<std::string> authorityState;
+    std::optional<std::string> ownerInvocationId;
+    std::optional<long long> fencingToken;
+    std::optional<bool> expired;
+    std::optional<int> ownerPid;
+    std::optional<int> ownerProcessGroupId;
+    std::optional<std::string> ownerStartIdentity;
+    std::optional<std::string> canonicalExecutable;
+};
+
+struct OperationalEvidenceProtocol
+{
+    std::optional<int> requiredGeneration;
+    std::optional<std::string> cutoverState;
+    std::optional<std::string> cutoverCompletedBy;
+    std::optional<std::string> cutoverProcessEvidence;
+    std::optional<int> legacyNoPidGraceSeconds;
+    std::optional<std::string> failureDiagnostic;
+};
+
+struct OperationalEvidenceWorkerCount
+{
+    std::string capacityClass;
+    long long consuming = 0;
+    long long reservations = 0;
+    long long identityMismatches = 0;
+    long long observed = 0;
+    long long checkpointWorkers = 0;
+};
+
+struct OperationalEvidenceAttempt
+{
+    long long workerAttemptId = -1;
+    std::string workerKind;
+    std::string lifecyclePhase;
+    std::string capacityClass;
+    std::string lifecycleState;
+    std::optional<std::string> schedulerInvocationId;
+    std::optional<int> pid;
+    std::optional<int> processGroupId;
+    std::optional<std::string> canonicalExecutable;
+    std::optional<std::string> processStartIdentity;
+    std::string ownershipOrigin;
+};
+
+struct OperationalEvidenceProcess
+{
+    bool available = false;
+    std::vector<int> schedulerPids;
+    std::optional<int> maxTrainProcs;
+    std::optional<int> maxInferProcs;
+    std::optional<int> maxAnalyzeProcs;
+    std::optional<int> schedulerPollSeconds;
+    std::optional<EA::GlobalExperimentControl::ProcessObservation>
+        schedulerOwner;
+    std::string schedulerOwnerValidation = "not_observed";
+    std::vector<EA::GlobalExperimentControl::SchedulerWorkerClassification>
+        workers;
+    std::vector<std::string> warnings;
+};
+
+struct SchedulerOperationalEvidence
+{
+    OperationalEvidenceLease lease;
+    OperationalEvidenceProtocol protocol;
+    EA::GlobalExperimentControl::ControlSnapshot control;
+    SchedulerStatusCounts lifecycleCounts;
+    QueueSnapshot phaseCounts;
+    std::vector<OperationalEvidenceWorkerCount> durableWorkerCounts;
+    OperationalEvidenceProcess process;
+    std::string reporterExecutable;
+};
+
+struct ExperimentOperationalEvidence
+{
+    SchedulerStatusJob experiment;
+    std::vector<OperationalEvidenceAttempt> attempts;
+    OperationalEvidenceProcess process;
+};
+
+std::string JsonEscape(const std::string& value)
+{
+    std::ostringstream escaped;
+    for (const unsigned char character : value)
+    {
+        switch (character)
+        {
+            case '"': escaped << "\\\""; break;
+            case '\\': escaped << "\\\\"; break;
+            case '\b': escaped << "\\b"; break;
+            case '\f': escaped << "\\f"; break;
+            case '\n': escaped << "\\n"; break;
+            case '\r': escaped << "\\r"; break;
+            case '\t': escaped << "\\t"; break;
+            default:
+                if (character < 0x20)
+                {
+                    escaped << "\\u" << std::hex << std::setw(4)
+                            << std::setfill('0') << static_cast<int>(character)
+                            << std::dec << std::setfill(' ');
+                }
+                else
+                    escaped << static_cast<char>(character);
+        }
+    }
+    return escaped.str();
+}
+
+std::string JsonString(const std::string& value)
+{
+    return "\"" + JsonEscape(value) + "\"";
+}
+
+template <typename T>
+void WriteJsonOptional(std::ostream& output, const std::optional<T>& value)
+{
+    if (value.has_value())
+        output << *value;
+    else
+        output << "null";
+}
+
+void WriteJsonOptionalString(std::ostream& output,
+                             const std::optional<std::string>& value)
+{
+    if (value.has_value())
+        output << JsonString(*value);
+    else
+        output << "null";
+}
+
+void WriteJsonOptionalBool(std::ostream& output,
+                           const std::optional<bool>& value)
+{
+    if (!value.has_value())
+        output << "null";
+    else
+        output << (*value ? "true" : "false");
+}
+
+void WriteJsonProcessObservation(
+    std::ostream& output,
+    const EA::GlobalExperimentControl::ProcessObservation& observation)
+{
+    output << "{\"exists\":" << (observation.exists ? "true" : "false")
+           << ",\"inspection_succeeded\":"
+           << (observation.inspectionSucceeded ? "true" : "false")
+           << ",\"permission_denied\":"
+           << (observation.permissionDenied ? "true" : "false")
+           << ",\"stopped\":" << (observation.stopped ? "true" : "false")
+           << ",\"pid\":" << (observation.pid > 0
+                                      ? std::to_string(observation.pid)
+                                      : "null")
+           << ",\"process_group_id\":"
+           << (observation.processGroupId > 0
+                   ? std::to_string(observation.processGroupId)
+                   : "null")
+           << ",\"executable\":"
+           << (observation.executable.empty() ? "null" : JsonString(observation.executable))
+           << ",\"command_line\":"
+           << (observation.commandLine.empty() ? "null" : JsonString(observation.commandLine))
+           << ",\"process_start_identity\":"
+           << (observation.processStartIdentity.empty()
+                   ? "null"
+                   : JsonString(observation.processStartIdentity))
+           << "}";
+}
+
+void WriteJsonWorkerClassification(
+    std::ostream& output,
+    const EA::GlobalExperimentControl::SchedulerWorkerClassification& worker)
+{
+    output << "{\"pid\":" << worker.pid
+           << ",\"kind\":" << JsonString(worker.kind)
+           << ",\"managed\":" << (worker.managed ? "true" : "false")
+           << ",\"authoritative\":" << (worker.authoritative ? "true" : "false")
+           << ",\"identity\":"
+           << JsonString(EA::GlobalExperimentControl::ToString(worker.identity))
+           << ",\"execution_state\":"
+           << JsonString(EA::GlobalExperimentControl::ToString(worker.executionState))
+           << ",\"reason\":" << JsonString(worker.reason)
+           << ",\"experiment_id\":";
+    WriteJsonOptional(output, worker.experimentId);
+    output << ",\"checkpoint_eval_id\":";
+    WriteJsonOptional(output, worker.checkpointEvalId);
+    output << ",\"expected_executable\":";
+    WriteJsonOptionalString(output, worker.expectedExecutable);
+    output << ",\"observed_executable\":";
+    WriteJsonOptionalString(output, worker.observedExecutable);
+    output << ",\"executable_identity_match\":";
+    WriteJsonOptionalBool(output, worker.executableIdentityMatch);
+    output << "}";
+}
+
+void WriteJsonProcessEvidence(std::ostream& output,
+                              const OperationalEvidenceProcess& process,
+                              std::optional<long long> experimentId = std::nullopt)
+{
+    output << "{\"available\":" << (process.available ? "true" : "false")
+           << ",\"scheduler_pids\":[";
+    for (size_t index = 0; index < process.schedulerPids.size(); ++index)
+    {
+        if (index != 0)
+            output << ',';
+        output << process.schedulerPids[index];
+    }
+    output << "],\"configured_worker_limits\":{\"train\":";
+    WriteJsonOptional(output, process.maxTrainProcs);
+    output << ",\"infer\":";
+    WriteJsonOptional(output, process.maxInferProcs);
+    output << ",\"analyze\":";
+    WriteJsonOptional(output, process.maxAnalyzeProcs);
+    output << "},\"scheduler_poll_seconds\":";
+    WriteJsonOptional(output, process.schedulerPollSeconds);
+    output << ",\"scheduler_owner_validation\":"
+           << JsonString(process.schedulerOwnerValidation)
+           << ",\"scheduler_owner\":";
+    if (process.schedulerOwner.has_value())
+        WriteJsonProcessObservation(output, *process.schedulerOwner);
+    else
+        output << "null";
+    output << ",\"workers\":[";
+    bool first = true;
+    for (const auto& worker : process.workers)
+    {
+        if (experimentId.has_value() && worker.experimentId != experimentId)
+            continue;
+        if (!first)
+            output << ',';
+        first = false;
+        WriteJsonWorkerClassification(output, worker);
+    }
+    output << "],\"warnings\":[";
+    for (size_t index = 0; index < process.warnings.size(); ++index)
+    {
+        if (index != 0)
+            output << ',';
+        output << JsonString(process.warnings[index]);
+    }
+    output << "]}";
+}
+
+OperationalEvidenceLease LoadOperationalEvidenceLease(
+    pqxx::transaction_base& transaction)
+{
+    OperationalEvidenceLease lease;
+    const pqxx::result rows = transaction.exec(
+        "SELECT l.authority_state,l.owner_scheduler_invocation_id,"
+        "l.fencing_token,(l.expires_at IS NOT NULL AND "
+        "l.expires_at<=clock_timestamp()),i.process_pid,i.process_group_id,"
+        "i.process_start_identity,i.canonical_executable_path "
+        "FROM experiment_scheduler_lease l "
+        "LEFT JOIN experiment_scheduler_invocation i ON "
+        "i.scheduler_invocation_id=l.owner_scheduler_invocation_id "
+        "WHERE l.singleton=true;");
+    if (rows.size() != 1)
+        return lease;
+    const auto& row = rows[0];
+    lease.authorityState = OptionalStringCell(row, 0);
+    lease.ownerInvocationId = OptionalStringCell(row, 1);
+    if (!row[2].is_null())
+        lease.fencingToken = row[2].as<long long>();
+    if (!row[3].is_null())
+        lease.expired = row[3].as<bool>();
+    if (!row[4].is_null())
+        lease.ownerPid = row[4].as<int>();
+    if (!row[5].is_null())
+        lease.ownerProcessGroupId = row[5].as<int>();
+    lease.ownerStartIdentity = OptionalStringCell(row, 6);
+    lease.canonicalExecutable = OptionalStringCell(row, 7);
+    return lease;
+}
+
+OperationalEvidenceProtocol LoadOperationalEvidenceProtocol(
+    pqxx::transaction_base& transaction)
+{
+    OperationalEvidenceProtocol protocol;
+    const pqxx::result rows = transaction.exec(
+        "SELECT required_generation,cutover_state,cutover_completed_by,"
+        "cutover_process_evidence,legacy_no_pid_grace_seconds,failure_diagnostic "
+        "FROM experiment_scheduler_protocol WHERE singleton=true;");
+    if (rows.size() != 1)
+        return protocol;
+    const auto& row = rows[0];
+    if (!row[0].is_null())
+        protocol.requiredGeneration = row[0].as<int>();
+    protocol.cutoverState = OptionalStringCell(row, 1);
+    protocol.cutoverCompletedBy = OptionalStringCell(row, 2);
+    protocol.cutoverProcessEvidence = OptionalStringCell(row, 3);
+    if (!row[4].is_null())
+        protocol.legacyNoPidGraceSeconds = row[4].as<int>();
+    protocol.failureDiagnostic = OptionalStringCell(row, 5);
+    return protocol;
+}
+
+std::vector<OperationalEvidenceWorkerCount> LoadOperationalEvidenceWorkerCounts(
+    pqxx::transaction_base& transaction)
+{
+    const pqxx::result rows = transaction.exec(
+        "SELECT capacity_class,"
+        "count(*) FILTER (WHERE lifecycle_state IN "
+        "('reserved','spawned','running','observed','identity_ambiguous')),"
+        "count(*) FILTER (WHERE lifecycle_state='reserved'),"
+        "count(*) FILTER (WHERE lifecycle_state='identity_ambiguous'),"
+        "count(*) FILTER (WHERE lifecycle_state='observed'),"
+        "count(*) FILTER (WHERE worker_kind='checkpoint_infer' AND "
+        "lifecycle_state IN "
+        "('reserved','spawned','running','observed','identity_ambiguous')) "
+        "FROM experiment_scheduler_worker_attempt "
+        "GROUP BY capacity_class ORDER BY capacity_class;");
+    std::vector<OperationalEvidenceWorkerCount> counts;
+    counts.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        counts.push_back(OperationalEvidenceWorkerCount{
+            row[0].as<std::string>(), row[1].as<long long>(),
+            row[2].as<long long>(), row[3].as<long long>(),
+            row[4].as<long long>(), row[5].as<long long>()});
+    }
+    return counts;
+}
+
+std::vector<OperationalEvidenceAttempt> LoadOperationalEvidenceAttempts(
+    pqxx::transaction_base& transaction, long long experimentId)
+{
+    const pqxx::result rows = transaction.exec(
+        "SELECT worker_attempt_id,worker_kind,lifecycle_phase,capacity_class,"
+        "lifecycle_state,scheduler_invocation_id,worker_pid,"
+        "worker_process_group_id,canonical_executable_path,"
+        "worker_process_start_identity,ownership_origin "
+        "FROM experiment_scheduler_worker_attempt WHERE experiment_id=" +
+        std::to_string(experimentId) + " AND lifecycle_state IN "
+        "('reserved','spawned','running','observed','stopped',"
+        "'identity_ambiguous') ORDER BY worker_attempt_id;");
+    std::vector<OperationalEvidenceAttempt> attempts;
+    attempts.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        OperationalEvidenceAttempt attempt;
+        attempt.workerAttemptId = row[0].as<long long>();
+        attempt.workerKind = row[1].as<std::string>();
+        attempt.lifecyclePhase = row[2].as<std::string>();
+        attempt.capacityClass = row[3].as<std::string>();
+        attempt.lifecycleState = row[4].as<std::string>();
+        attempt.schedulerInvocationId = OptionalStringCell(row, 5);
+        if (!row[6].is_null())
+            attempt.pid = row[6].as<int>();
+        if (!row[7].is_null())
+            attempt.processGroupId = row[7].as<int>();
+        attempt.canonicalExecutable = OptionalStringCell(row, 8);
+        attempt.processStartIdentity = OptionalStringCell(row, 9);
+        attempt.ownershipOrigin = row[10].as<std::string>();
+        attempts.push_back(std::move(attempt));
+    }
+    return attempts;
+}
+
+OperationalEvidenceProcess CaptureOperationalEvidenceProcess(
+    const SchedulerStatusProcessSnapshot& processes,
+    const std::vector<EA::GlobalExperimentControl::ManagedWorker>& workers,
+    const OperationalEvidenceLease& lease)
+{
+    OperationalEvidenceProcess evidence;
+    evidence.available = processes.processDetectionAvailable;
+    evidence.schedulerPids = processes.schedulerPids;
+    std::sort(evidence.schedulerPids.begin(), evidence.schedulerPids.end());
+    evidence.maxTrainProcs = processes.maxTrainProcs;
+    evidence.maxInferProcs = processes.maxInferProcs;
+    evidence.maxAnalyzeProcs = processes.maxAnalyzeProcs;
+    evidence.schedulerPollSeconds = processes.schedulerPollSeconds;
+    auto observer = EA::GlobalExperimentControl::CreateNativeProcessObserver();
+    const SchedulerWorkerAccounting accounting = ComputeSchedulerWorkerAccounting(
+        processes, workers, *observer);
+    evidence.workers = accounting.workerClassifications;
+    std::sort(evidence.workers.begin(), evidence.workers.end(),
+              [](const auto& left, const auto& right) {
+                  if (left.pid != right.pid)
+                      return left.pid < right.pid;
+                  return left.kind < right.kind;
+              });
+    evidence.warnings = BuildSchedulerStatusWarnings(processes, accounting);
+    if (lease.authorityState && *lease.authorityState == "active" &&
+        lease.ownerPid && lease.ownerProcessGroupId &&
+        lease.ownerStartIdentity && lease.canonicalExecutable)
+    {
+        EA::GlobalExperimentControl::ProcessObservation observation;
+        const SchedulerOwnerProcessEvidence validation = InspectSchedulerOwnerProcess(
+            *lease.ownerPid, *lease.ownerProcessGroupId,
+            *lease.ownerStartIdentity, *lease.canonicalExecutable, &observation);
+        evidence.schedulerOwner = std::move(observation);
+        evidence.schedulerOwnerValidation = SchedulerOwnerProcessEvidenceText(validation);
+    }
+    return evidence;
+}
+
+SchedulerOperationalEvidence CaptureSchedulerOperationalEvidence(
+    pqxx::transaction_base& transaction)
+{
+    SchedulerOperationalEvidence evidence;
+    evidence.reporterExecutable =
+        EA::ExperimentScheduler::ResolveCanonicalExecutablePath();
+    evidence.lease = LoadOperationalEvidenceLease(transaction);
+    evidence.protocol = LoadOperationalEvidenceProtocol(transaction);
+    evidence.control = EA::GlobalExperimentControl::LoadControlSnapshot(transaction);
+    evidence.lifecycleCounts = LoadSchedulerStatusCounts(transaction);
+    evidence.phaseCounts = LoadQueueSnapshotForStatus(transaction);
+    evidence.durableWorkerCounts = LoadOperationalEvidenceWorkerCounts(transaction);
+    const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
+    const auto workers = LoadAuthoritativeSchedulerWorkers(transaction);
+    evidence.process = CaptureOperationalEvidenceProcess(
+        processes, workers, evidence.lease);
+    return evidence;
+}
+
+std::optional<ExperimentOperationalEvidence> CaptureExperimentOperationalEvidence(
+    pqxx::transaction_base& transaction, long long experimentId)
+{
+    const auto job = LoadSchedulerStatusJobById(transaction, experimentId);
+    if (!job.has_value())
+        return std::nullopt;
+    ExperimentOperationalEvidence evidence;
+    evidence.experiment = *job;
+    evidence.attempts = LoadOperationalEvidenceAttempts(transaction, experimentId);
+    const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
+    const auto workers = LoadAuthoritativeSchedulerWorkers(transaction);
+    const OperationalEvidenceLease lease = LoadOperationalEvidenceLease(transaction);
+    evidence.process = CaptureOperationalEvidenceProcess(processes, workers, lease);
+    return evidence;
+}
+
+void WriteJsonSchedulerEvidence(std::ostream& output,
+                                const SchedulerOperationalEvidence& evidence)
+{
+    output << "{\"schema\":\"expertadvisor-operational-evidence-v1\","
+           << "\"kind\":\"scheduler\",\"durable\":{"
+           << "\"scheduler_authority\":{\"state\":";
+    WriteJsonOptionalString(output, evidence.lease.authorityState);
+    output << ",\"owner_scheduler_invocation_id\":";
+    WriteJsonOptionalString(output, evidence.lease.ownerInvocationId);
+    output << ",\"fencing_token\":";
+    WriteJsonOptional(output, evidence.lease.fencingToken);
+    output << ",\"expired\":";
+    WriteJsonOptionalBool(output, evidence.lease.expired);
+    output << "},\"scheduler_protocol\":{\"required_generation\":";
+    WriteJsonOptional(output, evidence.protocol.requiredGeneration);
+    output << ",\"cutover_state\":";
+    WriteJsonOptionalString(output, evidence.protocol.cutoverState);
+    output << ",\"cutover_completed_by\":";
+    WriteJsonOptionalString(output, evidence.protocol.cutoverCompletedBy);
+    output << ",\"cutover_process_evidence\":";
+    WriteJsonOptionalString(output, evidence.protocol.cutoverProcessEvidence);
+    output << ",\"legacy_no_pid_grace_seconds\":";
+    WriteJsonOptional(output, evidence.protocol.legacyNoPidGraceSeconds);
+    output << ",\"failure_diagnostic\":";
+    WriteJsonOptionalString(output, evidence.protocol.failureDiagnostic);
+    output << "},\"reporter_executable\":"
+           << JsonString(evidence.reporterExecutable)
+           << ",\"canonical_scheduler_executable\":";
+    WriteJsonOptionalString(output, evidence.lease.canonicalExecutable);
+    output << ",\"global_execution\":{\"desired_state\":"
+           << JsonString(evidence.control.desiredState)
+           << ",\"active_request_id\":";
+    WriteJsonOptional(output, evidence.control.activeRequestId);
+    output << ",\"active_action\":";
+    WriteJsonOptionalString(output, evidence.control.activeAction);
+    output << ",\"cancellation_mode\":";
+    WriteJsonOptionalString(output, evidence.control.cancellationMode);
+    output << ",\"infer_before_cancel\":"
+           << (evidence.control.inferBeforeCancel ? "true" : "false")
+           << "},\"experiment_lifecycle_counts\":{\"pending\":"
+           << evidence.lifecycleCounts.queued << ",\"paused\":"
+           << evidence.lifecycleCounts.paused << ",\"running\":"
+           << evidence.lifecycleCounts.running << ",\"completed\":"
+           << evidence.lifecycleCounts.completed << ",\"failed\":"
+           << evidence.lifecycleCounts.failed << ",\"cancelled\":"
+           << evidence.lifecycleCounts.cancelled
+           << "},\"phase_counts\":{\"pending\":{\"train\":"
+           << evidence.phaseCounts.pendingTrain << ",\"infer\":"
+           << evidence.phaseCounts.pendingInfer << ",\"analyze\":"
+           << evidence.phaseCounts.pendingAnalyze
+           << "},\"running\":{\"train\":"
+           << evidence.phaseCounts.runningTrain << ",\"infer\":"
+           << evidence.phaseCounts.runningInfer << ",\"analyze\":"
+           << evidence.phaseCounts.runningAnalyze << "}},\"worker_attempt_counts\":[";
+    for (size_t index = 0; index < evidence.durableWorkerCounts.size(); ++index)
+    {
+        const auto& count = evidence.durableWorkerCounts[index];
+        if (index != 0)
+            output << ',';
+        output << "{\"capacity_class\":" << JsonString(count.capacityClass)
+               << ",\"consuming\":" << count.consuming
+               << ",\"reservations\":" << count.reservations
+               << ",\"identity_mismatches\":" << count.identityMismatches
+               << ",\"observed\":" << count.observed
+               << ",\"checkpoint_workers\":" << count.checkpointWorkers << "}";
+    }
+    output << "}},\"process_observation\":";
+    WriteJsonProcessEvidence(output, evidence.process);
+    output << "}\n";
+}
+
+void WriteJsonExperimentEvidence(std::ostream& output,
+                                 const ExperimentOperationalEvidence& evidence)
+{
+    const auto& job = evidence.experiment;
+    output << "{\"schema\":\"expertadvisor-operational-evidence-v1\","
+           << "\"kind\":\"experiment\",\"durable\":{\"experiment\":{"
+           << "\"experiment_id\":" << job.experimentId
+           << ",\"status\":" << JsonString(job.status)
+           << ",\"phase\":" << JsonString(job.phase)
+           << ",\"symbol\":" << JsonString(job.symbol)
+           << ",\"prediction_horizon\":" << job.predictionHorizon
+           << ",\"target_epochs\":" << job.targetEpochs
+           << ",\"completed_epochs\":";
+    WriteJsonOptional(output, job.completedEpochs);
+    output << ",\"current_epoch\":";
+    WriteJsonOptional(output, job.currentEpoch);
+    output << ",\"model_id\":";
+    WriteJsonOptional(output, job.modelId);
+    output << ",\"operation\":"
+           << JsonString(CurrentOperationForStatusJob(job))
+           << "},\"checkpoint_state\":{\"interval\":"
+           << job.checkpointInterval << ",\"last_checkpoint_epoch\":";
+    WriteJsonOptional(output, job.lastCheckpointEpoch);
+    output << ",\"last_checkpoint_model_id\":";
+    WriteJsonOptional(output, job.lastCheckpointModelId);
+    output << ",\"pending_evaluations\":" << job.checkpointEvalPending
+           << ",\"running_evaluations\":" << job.checkpointEvalRunning
+           << ",\"completed_evaluations\":" << job.checkpointEvalCompleted
+           << ",\"failed_evaluations\":" << job.checkpointEvalFailed
+           << "},\"worker_attempts\":[";
+    for (size_t index = 0; index < evidence.attempts.size(); ++index)
+    {
+        const auto& attempt = evidence.attempts[index];
+        if (index != 0)
+            output << ',';
+        output << "{\"worker_attempt_id\":" << attempt.workerAttemptId
+               << ",\"worker_kind\":" << JsonString(attempt.workerKind)
+               << ",\"lifecycle_phase\":" << JsonString(attempt.lifecyclePhase)
+               << ",\"capacity_class\":" << JsonString(attempt.capacityClass)
+               << ",\"lifecycle_state\":" << JsonString(attempt.lifecycleState)
+               << ",\"scheduler_invocation_id\":";
+        WriteJsonOptionalString(output, attempt.schedulerInvocationId);
+        output << ",\"pid\":";
+        WriteJsonOptional(output, attempt.pid);
+        output << ",\"process_group_id\":";
+        WriteJsonOptional(output, attempt.processGroupId);
+        output << ",\"canonical_executable\":";
+        WriteJsonOptionalString(output, attempt.canonicalExecutable);
+        output << ",\"process_start_identity\":";
+        WriteJsonOptionalString(output, attempt.processStartIdentity);
+        output << ",\"ownership_origin\":" << JsonString(attempt.ownershipOrigin)
+               << "}";
+    }
+    output << "]}},\"process_observation\":";
+    WriteJsonProcessEvidence(output, evidence.process, job.experimentId);
+    output << "}\n";
+}
 } // namespace
 
 int PrintCompactExperimentStatus(const ProductionRuntimeDetail::SchedulerOptions& options)
@@ -3104,6 +3668,45 @@ int PrintObserverExperimentStatus(SchedulerOperationalReadModel& readModel,
             SchedulerOptions options;
             options.statusExperimentId = experimentId;
             return PrintCompactExperimentStatusFromTransaction(options, transaction);
+        });
+}
+
+int PrintObserverSchedulerEvidence(SchedulerOperationalReadModel& readModel,
+                                   std::ostream& output,
+                                   std::ostream& error)
+{
+    return readModel.withReadOnlySnapshot(
+        [&output, &error](pqxx::read_transaction& transaction) {
+            try
+            {
+                WriteJsonSchedulerEvidence(
+                    output, CaptureSchedulerOperationalEvidence(transaction));
+                return 0;
+            }
+            catch (const std::exception& exception)
+            {
+                error << "OBSERVER_EVIDENCE_ERROR,error=" << exception.what() << "\n";
+                return 2;
+            }
+        });
+}
+
+int PrintObserverExperimentEvidence(SchedulerOperationalReadModel& readModel,
+                                    long long experimentId,
+                                    std::ostream& output,
+                                    std::ostream& error)
+{
+    return readModel.withReadOnlySnapshot(
+        [experimentId, &output, &error](pqxx::read_transaction& transaction) {
+            const auto evidence = CaptureExperimentOperationalEvidence(
+                transaction, experimentId);
+            if (!evidence.has_value())
+            {
+                error << "ERROR: experiment not found.\n";
+                return 1;
+            }
+            WriteJsonExperimentEvidence(output, *evidence);
+            return 0;
         });
 }
 

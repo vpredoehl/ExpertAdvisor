@@ -19,6 +19,13 @@ int PrintObserverExperimentStatus(SchedulerOperationalReadModel& readModel,
                                   std::optional<long long> experimentId,
                                   std::ostream& output,
                                   std::ostream& error);
+int PrintObserverSchedulerEvidence(SchedulerOperationalReadModel& readModel,
+                                   std::ostream& output,
+                                   std::ostream& error);
+int PrintObserverExperimentEvidence(SchedulerOperationalReadModel& readModel,
+                                    long long experimentId,
+                                    std::ostream& output,
+                                    std::ostream& error);
 
 // This deliberately exposes observation values only.  It has no claim,
 // lifecycle, worker-attempt, control, or generic SQL surface.  The private
@@ -34,6 +41,11 @@ private:
     friend int PrintObserverExperimentStatus(SchedulerOperationalReadModel&,
                                              std::optional<long long>,
                                              std::ostream&, std::ostream&);
+    friend int PrintObserverSchedulerEvidence(SchedulerOperationalReadModel&,
+                                              std::ostream&, std::ostream&);
+    friend int PrintObserverExperimentEvidence(SchedulerOperationalReadModel&,
+                                               long long,
+                                               std::ostream&, std::ostream&);
 
     int withReadOnlySnapshot(
         const std::function<int(pqxx::read_transaction&)>& consumer) const;

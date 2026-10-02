@@ -157,3 +157,25 @@ An investigation plan is navigation metadata, not a diagnosis or answer.  It
 does not inspect PostgreSQL, processes, scheduler state, logs, experiments, or
 other live runtime state, and it grants no operational authorization.  Live
 evidence acquisition requires a separately authorized interface.
+
+## Live operational evidence is separate
+
+`lstm-observer` is the separate, read-only producer for live scheduler and
+experiment evidence. Its V1 evidence requests are intentionally explicit:
+
+```bash
+lstm-observer evidence scheduler
+lstm-observer evidence experiment 688
+```
+
+They emit `expertadvisor-operational-evidence-v1` JSON for deterministic
+tooling consumption. The JSON separates durable PostgreSQL scheduler and
+exact-worker-attempt evidence from diagnostic operating-system process
+observation. Process observation cannot create authority or override the
+durable ADR-0018 exact-attempt record.
+
+The observer acquires no scheduler control authority and evidence never grants
+authorization for an action. Repository evidence from this script and live
+observer evidence intentionally remain separate producers: this script never
+connects to PostgreSQL or inspects processes, and `lstm-observer` does not
+route repository architecture investigations.

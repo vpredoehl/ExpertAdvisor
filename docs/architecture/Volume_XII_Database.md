@@ -275,7 +275,9 @@ consistent snapshot when required by the domain.
 Scheduler operational observation uses a typed read-model boundary with
 `REPEATABLE READ, READ ONLY` snapshots. It has no generic mutation interface
 and grants no scheduler, lifecycle, worker-attempt, capacity, or control
-authority.
+authority. Its V1 JSON evidence structurally separates durable PostgreSQL
+records from diagnostic operating-system process observations; diagnostic
+process state never overrides durable exact-attempt authority.
 
 ### 6.2 Write paths
 

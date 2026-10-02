@@ -93,6 +93,7 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0019C](ADR-0019C-h2-privilege-deployment-contract.md) | Accepted | Targeted H2 privilege-deployment contract for exact Manager LOGIN authority, readiness access, and sealed-role deployment verification. |
 | [ADR-0020](ADR-0020-campaign-manager-continuous-operation.md) | Accepted | External-supervisor composition of the bounded H3 run-once Manager, with deployment-owned cadence, lifecycle, health, logging, and rollback. |
 | [ADR-0021](ADR-0021-read-only-scheduler-operational-observation.md) | Accepted | Typed read-only SchedulerCore operational evidence boundary and observer executable. |
+| [ADR-0022](ADR-0022-live-operational-evidence-interface-v1.md) | Accepted | Closed typed JSON live scheduler/experiment evidence interface, separate from repository investigation and operational authority. |
 
 ## 8. Revision history
 
@@ -111,3 +112,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.10.0 | 2026-08-01 | Accepted ADR-0019B as the narrow H1 sealed-role deployment, audit, restore, allowlist, and acceptance-evidence correction. |
 | 1.11.0 | 2026-08-09 | Added accepted ADR-0019C to the index and accepted ADR-0020 for externally supervised continuous Campaign Manager operation after independent review and reverification. |
 | 1.12.0 | 2026-10-01 | Added ADR-0021 for read-only scheduler operational observation. |
+| 1.13.0 | 2026-10-01 | Added ADR-0022 for the V1 typed live operational evidence interface. |
