@@ -1,4 +1,4 @@
-# ADR-0022: Live operational evidence interface V1
+# ADR-0022: Live operational evidence interface V1, amended for V2
 
 Status: Accepted
 Date: 2026-10-01
@@ -34,6 +34,36 @@ The interface is a closed evidence surface. It has no generic SQL operation,
 scheduler control, process signaling, worker publication, registry mutation,
 or experiment mutation. It preserves the existing human observer commands and
 does not merge `Scripts/ExpertAdvisorInvestigator.py` with live evidence.
+
+### 2.1 V2 amendment: inference and profitability evidence
+
+V2 adds two more closed, read-only requests without changing the V1 schema or
+V1 commands:
+
+```text
+lstm-observer evidence inference EXPERIMENT_ID
+lstm-observer evidence profitability EXPERIMENT_ID
+```
+
+They emit `expertadvisor-operational-evidence-v2` with an explicit `kind` and
+`requested_experiment_id`. Their `durable` arrays contain typed PostgreSQL
+records captured in the same `REPEATABLE READ, READ ONLY` snapshot before JSON
+serialization. An existing experiment with no qualifying evidence yields an
+empty array; an unknown experiment is an error.
+
+Final inference association reconstructs the repository's established exact
+final inference context from the experiment, final model, model configuration,
+target type, and inference range. Checkpoint association requires the durable
+`parent_experiment_id`, `checkpoint_eval_id`, checkpoint epoch, and checkpoint
+model relationship. The response returns every qualifying row in deterministic
+order instead of selecting a latest row. Profitability observations additionally
+validate their persisted result ID, model, scope, checkpoint identity, and
+inference range against that associated inference evidence.
+
+Profitability values are immutable terminal-horizon directional log-return
+observations, not money, portfolio return, or realized P&L. V2 intentionally
+returns the persisted identity hashes but omits the potentially large canonical
+strings. It is neither generic SQL nor experiment comparison.
 
 ## 3. Rationale and decision drivers
 
@@ -84,3 +114,4 @@ it would broaden observation into an unsafe authority surface.
 | Date | Change |
 |---|---|
 | 2026-10-01 | Accepted the narrow typed live operational evidence interface. |
+| 2026-10-01 | Amended with additive V2 typed inference and terminal-horizon profitability evidence; V1 remains unchanged. |

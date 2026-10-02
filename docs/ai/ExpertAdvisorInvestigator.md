@@ -174,6 +174,28 @@ exact-worker-attempt evidence from diagnostic operating-system process
 observation. Process observation cannot create authority or override the
 durable ADR-0018 exact-attempt record.
 
+The same separate observer has two additive V2 durable-evidence requests:
+
+```bash
+lstm-observer evidence inference 688
+lstm-observer evidence profitability 688
+```
+
+They emit `expertadvisor-operational-evidence-v2` with an explicit kind and
+requested experiment context. Inference evidence preserves the distinct final
+and checkpoint scopes. Profitability evidence preserves immutable
+terminal-horizon directional log-return observations; it is not portfolio P&L,
+does not model money, sizing, transaction costs, or slippage, and is not an
+experiment-comparison interface. V2 returns persisted hashes for its large
+canonical identity/metric strings rather than serializing those strings by
+default.
+
+Both V2 requests remain read-only typed evidence captured in one repeatable,
+read-only PostgreSQL snapshot. They provide neither generic SQL nor scheduler,
+experiment, inference, profitability, process-control, or registry-mutation
+authority. An existing experiment without qualifying evidence deterministically
+returns an empty array; a nonexistent experiment is rejected.
+
 The observer acquires no scheduler control authority and evidence never grants
 authorization for an action. Repository evidence from this script and live
 observer evidence intentionally remain separate producers: this script never

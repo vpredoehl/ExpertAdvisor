@@ -279,6 +279,18 @@ authority. Its V1 JSON evidence structurally separates durable PostgreSQL
 records from diagnostic operating-system process observations; diagnostic
 process state never overrides durable exact-attempt authority.
 
+ADR-0022's additive V2 observer requests use that same one-snapshot boundary
+for typed `inference_eval_result` and
+`inference_profitability_observation` evidence. The physical schema remains
+authoritative: final inference has no experiment-ID column and is associated by
+the established exact experiment/model/configuration/range identity; checkpoint
+inference retains its parent experiment and checkpoint identities. Profitability
+evidence verifies its stored result/model/scope/checkpoint/range linkage and
+uses the persisted terminal-horizon directional log-return field names. It is
+not portfolio P&L. The V2 response intentionally emits the persisted hashes,
+not its large canonical strings; it has no generic SQL or mutation surface and
+does not change V1 observer output.
+
 ### 6.2 Write paths
 
 Repositories use short explicit read-write transactions. Related mutable state
@@ -492,3 +504,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.16.0 | 2026-08-10 | Aligned the implemented Phase H database state through H3 migrations 055-058, including H2 privilege/dispatch and H3 bounded Manager database contracts; recorded that ADR-0020 H4 adds no database schema, ACL, role, singleton, or scheduling authority. | ADR-0019, ADR-0019C, ADR-0020 |
 | 0.17.0 | 2026-08-11 | Corrected the confirmed direct-SQL production-readiness bypass with forward migration 059, a sealed readiness-gated acquisition service boundary, raw-transition ACL revocation, and deployment/catalog evidence. | ADR-0019, ADR-0019C |
 | 0.18.0 | 2026-10-01 | Defined repeatable-read, read-only SchedulerCore operational-observation snapshots without mutation capability. | ADR-0021 |
+| 0.19.0 | 2026-10-01 | Recorded ADR-0022's additive typed V2 inference and terminal-horizon profitability evidence while preserving V1 output. | ADR-0022 |

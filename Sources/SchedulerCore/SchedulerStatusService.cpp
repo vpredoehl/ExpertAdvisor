@@ -78,12 +78,14 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 #include <unistd.h>
 #include <pqxx/pqxx>
@@ -3150,6 +3152,74 @@ struct ExperimentOperationalEvidence
     OperationalEvidenceProcess process;
 };
 
+// V2 evidence remains separate from the scheduler/process evidence above.
+// These records carry only durable inference and profitability observations
+// captured inside the same private read-only snapshot boundary.
+struct InferenceOperationalEvaluation
+{
+    long long id = -1;
+    long long modelId = -1;
+    std::string symbol;
+    long long predictionHorizon = 0;
+    double thresholdLogret = 0.0;
+    long long windowSize = 0;
+    int labelRuleId = 0;
+    int targetType = 0;
+    std::string fromDate;
+    std::string toDate;
+    std::optional<long long> completedEpochs;
+    std::optional<double> accuracy;
+    std::optional<bool> acceptModel;
+    std::optional<std::string> rejectReason;
+    std::optional<double> predDown;
+    std::optional<double> predNeutral;
+    std::optional<double> predUp;
+    std::string status;
+    std::string completedAt;
+    std::string inferenceScope;
+    std::optional<long long> checkpointEvalId;
+    std::optional<long long> parentExperimentId;
+    std::optional<int> checkpointEpoch;
+    std::optional<long long> producerWorkerAttemptId;
+};
+
+struct InferenceOperationalEvidence
+{
+    long long requestedExperimentId = -1;
+    std::vector<InferenceOperationalEvaluation> evaluations;
+};
+
+struct ProfitabilityOperationalObservation
+{
+    long long profitabilityObservationId = -1;
+    std::optional<long long> experimentId;
+    long long modelId = -1;
+    long long inferenceEvalResultId = -1;
+    std::string inferenceScope;
+    std::optional<long long> checkpointEvalId;
+    std::string inferenceStart;
+    std::string inferenceEnd;
+    long long predictionCount = 0;
+    long long actionableCount = 0;
+    long long winningActionableCount = 0;
+    long long losingActionableCount = 0;
+    double grossPositiveTerminalHorizonLogReturnSum = 0.0;
+    double grossNegativeTerminalHorizonLogReturnSum = 0.0;
+    double aggregateTerminalHorizonLogReturnSum = 0.0;
+    std::optional<double>
+        averageTerminalHorizonLogReturnPerActionablePrediction;
+    std::string metricDefinitionHash;
+    std::string sourceContentHash;
+    std::string observationIdentityHash;
+    std::string createdAt;
+};
+
+struct ProfitabilityOperationalEvidence
+{
+    long long requestedExperimentId = -1;
+    std::vector<ProfitabilityOperationalObservation> observations;
+};
+
 std::string JsonEscape(const std::string& value)
 {
     std::ostringstream escaped;
@@ -3208,6 +3278,29 @@ void WriteJsonOptionalBool(std::ostream& output,
         output << "null";
     else
         output << (*value ? "true" : "false");
+}
+
+void WriteJsonDouble(std::ostream& output, double value)
+{
+    // JSON has no NaN or infinity literal.  The profitability columns are
+    // constrained finite; this also keeps evidence valid if legacy inference
+    // data contains a non-finite floating value.
+    if (!std::isfinite(value))
+    {
+        output << "null";
+        return;
+    }
+    output << std::setprecision(std::numeric_limits<double>::max_digits10)
+           << value;
+}
+
+void WriteJsonOptionalDouble(std::ostream& output,
+                             const std::optional<double>& value)
+{
+    if (value.has_value())
+        WriteJsonDouble(output, *value);
+    else
+        output << "null";
 }
 
 void WriteJsonProcessObservation(
@@ -3509,6 +3602,197 @@ std::optional<ExperimentOperationalEvidence> CaptureExperimentOperationalEvidenc
     return evidence;
 }
 
+bool OperationalEvidenceExperimentExists(pqxx::transaction_base& transaction,
+                                         long long experimentId)
+{
+    return !transaction.exec(
+        "SELECT 1 FROM experiment WHERE experiment_id=$1;",
+        pqxx::params{experimentId}).empty();
+}
+
+// The final branch intentionally reconstructs the same complete final
+// inference identity used by InferenceProfitability::ResolveExactFinalInferenceResult:
+// the requested experiment's final model, model configuration, target type,
+// and inference range.  It returns all matching rows rather than selecting a
+// recent row.  Checkpoint rows instead require the explicit, durable parent,
+// checkpoint evaluation, checkpoint epoch, and checkpoint-model linkage.
+const char* kExperimentAssociatedInferenceCte =
+    "WITH cfg AS ("
+    "  SELECT model_id,"
+    "    round(max(value) FILTER (WHERE col_idx=1))::bigint AS prediction_horizon,"
+    "    max(value) FILTER (WHERE col_idx=2) AS threshold_logret,"
+    "    round(max(value) FILTER (WHERE col_idx=3))::bigint AS window_size,"
+    "    round(max(value) FILTER (WHERE col_idx=4))::integer AS label_rule_id,"
+    "    round(max(value) FILTER (WHERE col_idx=10))::bigint AS completed_epochs "
+    "  FROM matrix WHERE param_name='train_config_meta' AND row_idx=0 "
+    "  GROUP BY model_id "
+    "  HAVING count(DISTINCT col_idx) FILTER "
+    "    (WHERE col_idx BETWEEN 0 AND 13) >= 14"
+    "), target AS ("
+    "  SELECT model_id,"
+    "    round(max(value) FILTER (WHERE col_idx=0))::integer AS target_type "
+    "  FROM matrix WHERE param_name='target_meta' AND row_idx=0 "
+    "  GROUP BY model_id"
+    "), final_context AS ("
+    "  SELECT e.last_model_id AS model_id,e.symbol,cfg.prediction_horizon,"
+    "    cfg.threshold_logret,cfg.window_size,cfg.label_rule_id,"
+    "    COALESCE(target.target_type,1) AS target_type,"
+    "    e.infer_start::date::text AS inference_start,"
+    "    e.infer_end::date::text AS inference_end,cfg.completed_epochs "
+    "  FROM experiment e "
+    "  JOIN model m ON m.model_id=e.last_model_id "
+    "    AND m.experiment_id=e.experiment_id "
+    "  JOIN cfg ON cfg.model_id=m.model_id "
+    "  LEFT JOIN target ON target.model_id=m.model_id "
+    "  WHERE e.experiment_id=$1 "
+    "    AND e.infer_start IS NOT NULL AND e.infer_end IS NOT NULL "
+    "    AND cfg.prediction_horizon=e.prediction_horizon "
+    "    AND abs(cfg.threshold_logret-e.c_next_threshold)<=1e-7"
+    "), associated_evaluations AS ("
+    "  SELECT r.* FROM final_context c "
+    "  JOIN inference_eval_result r ON r.model_id=c.model_id "
+    "    AND r.symbol=c.symbol "
+    "    AND r.prediction_horizon=c.prediction_horizon "
+    "    AND abs(r.threshold_logret-c.threshold_logret)<=1e-7 "
+    "    AND r.window_size=c.window_size "
+    "    AND r.label_rule_id=c.label_rule_id "
+    "    AND r.target_type=c.target_type "
+    "    AND r.from_date=c.inference_start "
+    "    AND r.to_date=c.inference_end "
+    "    AND r.completed_epochs=c.completed_epochs "
+    "    AND r.inference_scope='final' "
+    "    AND r.checkpoint_eval_id IS NULL "
+    "    AND r.parent_experiment_id IS NULL "
+    "  UNION ALL "
+    "  SELECT r.* FROM inference_eval_result r "
+    "  JOIN experiment_checkpoint_eval ce "
+    "    ON ce.checkpoint_eval_id=r.checkpoint_eval_id "
+    "    AND ce.parent_experiment_id=$1 "
+    "    AND ce.checkpoint_epoch=r.checkpoint_epoch "
+    "    AND ce.checkpoint_model_id=r.model_id "
+    "  WHERE r.inference_scope='checkpoint' "
+    "    AND r.parent_experiment_id=$1"
+    ") ";
+
+std::optional<InferenceOperationalEvidence> CaptureInferenceOperationalEvidence(
+    pqxx::transaction_base& transaction, long long experimentId)
+{
+    if (!OperationalEvidenceExperimentExists(transaction, experimentId))
+        return std::nullopt;
+
+    const pqxx::result rows = transaction.exec(
+        std::string{kExperimentAssociatedInferenceCte} +
+        "SELECT id,model_id,symbol,prediction_horizon,threshold_logret,"
+        "window_size,label_rule_id,target_type,from_date,to_date,"
+        "completed_epochs,accuracy,accept_model,reject_reason,pred_down,"
+        "pred_neutral,pred_up,status,completed_at::text,inference_scope,"
+        "checkpoint_eval_id,parent_experiment_id,checkpoint_epoch,"
+        "producer_worker_attempt_id "
+        "FROM associated_evaluations "
+        "ORDER BY CASE inference_scope WHEN 'final' THEN 0 ELSE 1 END,"
+        "checkpoint_eval_id NULLS FIRST,id;",
+        pqxx::params{experimentId});
+
+    InferenceOperationalEvidence evidence;
+    evidence.requestedExperimentId = experimentId;
+    evidence.evaluations.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        InferenceOperationalEvaluation evaluation;
+        evaluation.id = row[0].as<long long>();
+        evaluation.modelId = row[1].as<long long>();
+        evaluation.symbol = row[2].as<std::string>();
+        evaluation.predictionHorizon = row[3].as<long long>();
+        evaluation.thresholdLogret = row[4].as<double>();
+        evaluation.windowSize = row[5].as<long long>();
+        evaluation.labelRuleId = row[6].as<int>();
+        evaluation.targetType = row[7].as<int>();
+        evaluation.fromDate = row[8].as<std::string>();
+        evaluation.toDate = row[9].as<std::string>();
+        evaluation.completedEpochs = OptionalLongLongCell(row, 10);
+        evaluation.accuracy = OptionalDoubleCell(row, 11);
+        if (!row[12].is_null())
+            evaluation.acceptModel = row[12].as<bool>();
+        evaluation.rejectReason = OptionalStringCell(row, 13);
+        evaluation.predDown = OptionalDoubleCell(row, 14);
+        evaluation.predNeutral = OptionalDoubleCell(row, 15);
+        evaluation.predUp = OptionalDoubleCell(row, 16);
+        evaluation.status = row[17].as<std::string>();
+        evaluation.completedAt = row[18].as<std::string>();
+        evaluation.inferenceScope = row[19].as<std::string>();
+        evaluation.checkpointEvalId = OptionalLongLongCell(row, 20);
+        evaluation.parentExperimentId = OptionalLongLongCell(row, 21);
+        if (!row[22].is_null())
+            evaluation.checkpointEpoch = row[22].as<int>();
+        evaluation.producerWorkerAttemptId = OptionalLongLongCell(row, 23);
+        evidence.evaluations.push_back(std::move(evaluation));
+    }
+    return evidence;
+}
+
+std::optional<ProfitabilityOperationalEvidence>
+CaptureProfitabilityOperationalEvidence(pqxx::transaction_base& transaction,
+                                        long long experimentId)
+{
+    if (!OperationalEvidenceExperimentExists(transaction, experimentId))
+        return std::nullopt;
+
+    const pqxx::result rows = transaction.exec(
+        std::string{kExperimentAssociatedInferenceCte} +
+        "SELECT o.profitability_observation_id,o.experiment_id,o.model_id,"
+        "o.inference_eval_result_id,o.inference_scope,o.checkpoint_eval_id,"
+        "o.inference_start,o.inference_end,o.prediction_count,"
+        "o.actionable_count,o.winning_actionable_count,"
+        "o.losing_actionable_count,"
+        "o.gross_positive_terminal_horizon_log_return_sum,"
+        "o.gross_negative_terminal_horizon_log_return_sum,"
+        "o.aggregate_terminal_horizon_log_return_sum,"
+        "o.average_terminal_horizon_log_return_per_actionable_prediction,"
+        "o.metric_definition_hash,o.source_content_hash,"
+        "o.observation_identity_hash,o.created_at::text "
+        "FROM inference_profitability_observation o "
+        "JOIN associated_evaluations r ON r.id=o.inference_eval_result_id "
+        "  AND r.model_id=o.model_id "
+        "  AND r.inference_scope=o.inference_scope "
+        "  AND r.checkpoint_eval_id IS NOT DISTINCT FROM o.checkpoint_eval_id "
+        "  AND r.from_date=o.inference_start AND r.to_date=o.inference_end "
+        "WHERE o.experiment_id=$1 "
+        "ORDER BY CASE o.inference_scope WHEN 'final' THEN 0 ELSE 1 END,"
+        "o.checkpoint_eval_id NULLS FIRST,o.profitability_observation_id;",
+        pqxx::params{experimentId});
+
+    ProfitabilityOperationalEvidence evidence;
+    evidence.requestedExperimentId = experimentId;
+    evidence.observations.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        ProfitabilityOperationalObservation observation;
+        observation.profitabilityObservationId = row[0].as<long long>();
+        observation.experimentId = OptionalLongLongCell(row, 1);
+        observation.modelId = row[2].as<long long>();
+        observation.inferenceEvalResultId = row[3].as<long long>();
+        observation.inferenceScope = row[4].as<std::string>();
+        observation.checkpointEvalId = OptionalLongLongCell(row, 5);
+        observation.inferenceStart = row[6].as<std::string>();
+        observation.inferenceEnd = row[7].as<std::string>();
+        observation.predictionCount = row[8].as<long long>();
+        observation.actionableCount = row[9].as<long long>();
+        observation.winningActionableCount = row[10].as<long long>();
+        observation.losingActionableCount = row[11].as<long long>();
+        observation.grossPositiveTerminalHorizonLogReturnSum = row[12].as<double>();
+        observation.grossNegativeTerminalHorizonLogReturnSum = row[13].as<double>();
+        observation.aggregateTerminalHorizonLogReturnSum = row[14].as<double>();
+        observation.averageTerminalHorizonLogReturnPerActionablePrediction =
+            OptionalDoubleCell(row, 15);
+        observation.metricDefinitionHash = row[16].as<std::string>();
+        observation.sourceContentHash = row[17].as<std::string>();
+        observation.observationIdentityHash = row[18].as<std::string>();
+        observation.createdAt = row[19].as<std::string>();
+        evidence.observations.push_back(std::move(observation));
+    }
+    return evidence;
+}
+
 void WriteJsonSchedulerEvidence(std::ostream& output,
                                 const SchedulerOperationalEvidence& evidence)
 {
@@ -3637,6 +3921,115 @@ void WriteJsonExperimentEvidence(std::ostream& output,
     WriteJsonProcessEvidence(output, evidence.process, job.experimentId);
     output << "}\n";
 }
+
+void WriteJsonInferenceEvidence(std::ostream& output,
+                                const InferenceOperationalEvidence& evidence)
+{
+    output << "{\"schema\":\"expertadvisor-operational-evidence-v2\","
+           << "\"kind\":\"inference\",\"requested_experiment_id\":"
+           << evidence.requestedExperimentId << ",\"durable\":{\"evaluations\":[";
+    for (size_t index = 0; index < evidence.evaluations.size(); ++index)
+    {
+        if (index != 0)
+            output << ',';
+        const auto& evaluation = evidence.evaluations[index];
+        output << "{\"id\":" << evaluation.id
+               << ",\"model_id\":" << evaluation.modelId
+               << ",\"symbol\":" << JsonString(evaluation.symbol)
+               << ",\"prediction_horizon\":" << evaluation.predictionHorizon
+               << ",\"threshold_logret\":";
+        WriteJsonDouble(output, evaluation.thresholdLogret);
+        output << ",\"window_size\":" << evaluation.windowSize
+               << ",\"label_rule_id\":" << evaluation.labelRuleId
+               << ",\"target_type\":" << evaluation.targetType
+               << ",\"from_date\":" << JsonString(evaluation.fromDate)
+               << ",\"to_date\":" << JsonString(evaluation.toDate)
+               << ",\"completed_epochs\":";
+        WriteJsonOptional(output, evaluation.completedEpochs);
+        output << ",\"accuracy\":";
+        WriteJsonOptionalDouble(output, evaluation.accuracy);
+        output << ",\"accept_model\":";
+        WriteJsonOptionalBool(output, evaluation.acceptModel);
+        output << ",\"reject_reason\":";
+        WriteJsonOptionalString(output, evaluation.rejectReason);
+        output << ",\"pred_down\":";
+        WriteJsonOptionalDouble(output, evaluation.predDown);
+        output << ",\"pred_neutral\":";
+        WriteJsonOptionalDouble(output, evaluation.predNeutral);
+        output << ",\"pred_up\":";
+        WriteJsonOptionalDouble(output, evaluation.predUp);
+        output << ",\"status\":" << JsonString(evaluation.status)
+               << ",\"completed_at\":" << JsonString(evaluation.completedAt)
+               << ",\"inference_scope\":"
+               << JsonString(evaluation.inferenceScope)
+               << ",\"checkpoint_eval_id\":";
+        WriteJsonOptional(output, evaluation.checkpointEvalId);
+        output << ",\"parent_experiment_id\":";
+        WriteJsonOptional(output, evaluation.parentExperimentId);
+        output << ",\"checkpoint_epoch\":";
+        WriteJsonOptional(output, evaluation.checkpointEpoch);
+        output << ",\"producer_worker_attempt_id\":";
+        WriteJsonOptional(output, evaluation.producerWorkerAttemptId);
+        output << '}';
+    }
+    output << "]}}\n";
+}
+
+void WriteJsonProfitabilityEvidence(
+    std::ostream& output, const ProfitabilityOperationalEvidence& evidence)
+{
+    output << "{\"schema\":\"expertadvisor-operational-evidence-v2\","
+           << "\"kind\":\"profitability\",\"requested_experiment_id\":"
+           << evidence.requestedExperimentId << ",\"durable\":{\"observations\":[";
+    for (size_t index = 0; index < evidence.observations.size(); ++index)
+    {
+        if (index != 0)
+            output << ',';
+        const auto& observation = evidence.observations[index];
+        output << "{\"profitability_observation_id\":"
+               << observation.profitabilityObservationId
+               << ",\"experiment_id\":";
+        WriteJsonOptional(output, observation.experimentId);
+        output << ",\"model_id\":" << observation.modelId
+               << ",\"inference_eval_result_id\":"
+               << observation.inferenceEvalResultId
+               << ",\"inference_scope\":"
+               << JsonString(observation.inferenceScope)
+               << ",\"checkpoint_eval_id\":";
+        WriteJsonOptional(output, observation.checkpointEvalId);
+        output << ",\"inference_start\":"
+               << JsonString(observation.inferenceStart)
+               << ",\"inference_end\":" << JsonString(observation.inferenceEnd)
+               << ",\"prediction_count\":" << observation.predictionCount
+               << ",\"actionable_count\":" << observation.actionableCount
+               << ",\"winning_actionable_count\":"
+               << observation.winningActionableCount
+               << ",\"losing_actionable_count\":"
+               << observation.losingActionableCount
+               << ",\"gross_positive_terminal_horizon_log_return_sum\":";
+        WriteJsonDouble(output,
+                        observation.grossPositiveTerminalHorizonLogReturnSum);
+        output << ",\"gross_negative_terminal_horizon_log_return_sum\":";
+        WriteJsonDouble(output,
+                        observation.grossNegativeTerminalHorizonLogReturnSum);
+        output << ",\"aggregate_terminal_horizon_log_return_sum\":";
+        WriteJsonDouble(output,
+                        observation.aggregateTerminalHorizonLogReturnSum);
+        output << ",\"average_terminal_horizon_log_return_per_actionable_prediction\":";
+        WriteJsonOptionalDouble(
+            output,
+            observation.averageTerminalHorizonLogReturnPerActionablePrediction);
+        output << ",\"metric_definition_hash\":"
+               << JsonString(observation.metricDefinitionHash)
+               << ",\"source_content_hash\":"
+               << JsonString(observation.sourceContentHash)
+               << ",\"observation_identity_hash\":"
+               << JsonString(observation.observationIdentityHash)
+               << ",\"created_at\":" << JsonString(observation.createdAt)
+               << '}';
+    }
+    output << "]}}\n";
+}
 } // namespace
 
 int PrintCompactExperimentStatus(const ProductionRuntimeDetail::SchedulerOptions& options)
@@ -3715,6 +4108,43 @@ int PrintObserverExperimentEvidence(SchedulerOperationalReadModel& readModel,
                 return 1;
             }
             WriteJsonExperimentEvidence(output, *evidence);
+            return 0;
+        });
+}
+
+int PrintObserverInferenceEvidence(SchedulerOperationalReadModel& readModel,
+                                   long long experimentId,
+                                   std::ostream& output,
+                                   std::ostream& error)
+{
+    return readModel.withReadOnlySnapshot(
+        [experimentId, &output, &error](pqxx::read_transaction& transaction) {
+            const auto evidence = CaptureInferenceOperationalEvidence(
+                transaction, experimentId);
+            if (!evidence.has_value())
+            {
+                error << "ERROR: experiment not found.\n";
+                return 1;
+            }
+            WriteJsonInferenceEvidence(output, *evidence);
+            return 0;
+        });
+}
+
+int PrintObserverProfitabilityEvidence(
+    SchedulerOperationalReadModel& readModel, long long experimentId,
+    std::ostream& output, std::ostream& error)
+{
+    return readModel.withReadOnlySnapshot(
+        [experimentId, &output, &error](pqxx::read_transaction& transaction) {
+            const auto evidence = CaptureProfitabilityOperationalEvidence(
+                transaction, experimentId);
+            if (!evidence.has_value())
+            {
+                error << "ERROR: experiment not found.\n";
+                return 1;
+            }
+            WriteJsonProfitabilityEvidence(output, *evidence);
             return 0;
         });
 }

@@ -43,7 +43,9 @@ int RunSchedulerObserverCli(int argc, const char* argv[], std::ostream& output,
     if (argc < 2 || argc > 4)
     {
         error << "Usage: lstm-observer scheduler | experiment [EXPERIMENT_ID] | "
-                 "evidence scheduler | evidence experiment EXPERIMENT_ID\n";
+                 "evidence scheduler | evidence experiment EXPERIMENT_ID | "
+                 "evidence inference EXPERIMENT_ID | "
+                 "evidence profitability EXPERIMENT_ID\n";
         return 1;
     }
     const std::string operation{argv[1]};
@@ -51,11 +53,13 @@ int RunSchedulerObserverCli(int argc, const char* argv[], std::ostream& output,
     {
         if (argc < 3 || argc > 4)
         {
-            error << "evidence requires scheduler or experiment EXPERIMENT_ID\n";
+            error << "evidence requires scheduler, experiment, inference, or "
+                     "profitability EXPERIMENT_ID\n";
             return 1;
         }
         const std::string evidenceKind{argv[2]};
-        if (evidenceKind != "scheduler" && evidenceKind != "experiment")
+        if (evidenceKind != "scheduler" && evidenceKind != "experiment" &&
+            evidenceKind != "inference" && evidenceKind != "profitability")
         {
             error << "unsupported evidence kind: " << argv[2] << "\n";
             return 1;
@@ -65,15 +69,17 @@ int RunSchedulerObserverCli(int argc, const char* argv[], std::ostream& output,
             error << "evidence scheduler accepts no arguments\n";
             return 1;
         }
-        if (evidenceKind == "experiment" && argc != 4)
+        if ((evidenceKind == "experiment" || evidenceKind == "inference" ||
+             evidenceKind == "profitability") && argc != 4)
         {
-            error << "evidence experiment requires EXPERIMENT_ID\n";
+            error << "evidence " << evidenceKind
+                  << " requires EXPERIMENT_ID\n";
             return 1;
         }
-        const auto experimentId = evidenceKind == "experiment"
+        const auto experimentId = evidenceKind != "scheduler"
             ? PositiveId(argv[3])
             : std::optional<long long>{};
-        if (evidenceKind == "experiment" && !experimentId.has_value())
+        if (evidenceKind != "scheduler" && !experimentId.has_value())
         {
             error << "EXPERIMENT_ID must be a positive integer\n";
             return 1;
@@ -83,7 +89,13 @@ int RunSchedulerObserverCli(int argc, const char* argv[], std::ostream& output,
             SchedulerOperationalReadModel readModel{ConnectionString()};
             if (evidenceKind == "scheduler")
                 return PrintObserverSchedulerEvidence(readModel, output, error);
-            return PrintObserverExperimentEvidence(
+            if (evidenceKind == "experiment")
+                return PrintObserverExperimentEvidence(
+                    readModel, *experimentId, output, error);
+            if (evidenceKind == "inference")
+                return PrintObserverInferenceEvidence(
+                    readModel, *experimentId, output, error);
+            return PrintObserverProfitabilityEvidence(
                 readModel, *experimentId, output, error);
         }
         catch (const std::exception& exception)

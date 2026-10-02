@@ -112,6 +112,18 @@ EXPERIMENT_ID` emit typed `expertadvisor-operational-evidence-v1` JSON. This
 evidence is for deterministic AI/tool consumption, not operational
 authorization; repository investigation remains a separate producer.
 
+The same closed observer has an additive V2 durable-evidence surface:
+`lstm-observer evidence inference EXPERIMENT_ID` and `lstm-observer evidence
+profitability EXPERIMENT_ID`. These commands capture typed PostgreSQL evidence
+inside one `REPEATABLE READ, READ ONLY` snapshot and emit
+`expertadvisor-operational-evidence-v2`; they do not add process inspection.
+Final inference association reconstructs the exact final inference context,
+while checkpoint association keeps parent experiment, checkpoint evaluation,
+epoch, and model identities explicit. Profitability observations remain
+terminal-horizon directional log-return observations, never portfolio P&L.
+The V2 rows are ordered deterministically and V1 scheduler/experiment JSON is
+unchanged. Neither version provides generic SQL, comparison, or control.
+
 ## 5. Data model
 
 ### 5.1 Authoritative entities
@@ -490,3 +502,4 @@ idempotency, recovery, operator control, and regression scope.
 | 0.5.0 | 2026-07-31 | Recorded generation-52 implementation/review status and the exact narrow Phase H evidence interface without scheduler polling, Campaign Operations privileges, or future-generation approval inheritance. | ADR-0018, ADR-0019 |
 | 0.5.1 | 2026-08-03 | Completed H1 readiness reporting for scheduler canonical/hash evidence, independent verification, and approved-versus-actual Manager build comparison while preserving fail-closed separation of authority. | ADR-0019B |
 | 0.5.2 | 2026-10-01 | Added the read-only SchedulerCore operational-observation boundary while preserving scheduler mutation and exact-attempt authority. | ADR-0021 |
+| 0.5.3 | 2026-10-01 | Added ADR-0022's typed V2 inference and terminal-horizon profitability evidence while preserving V1 observer output. | ADR-0022 |
