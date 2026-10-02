@@ -146,6 +146,64 @@ persistence, or `confluence.*` ablation arm in this phase. A later Tensor phase
 must register any materialized channels as a separate `confluence` family in a
 new semantic layout so raw evidence remains independently available.
 
+## Production observation bridge (Phase 2B)
+
+Phase 2B introduces `MarketStructureProductionObservationAdapter.hpp`, a
+non-destructive bridge between the existing `TG4Pulse::ProductionStreamingAdapter`
+and the generic observation/engine contract. It consumes an already-created
+`TG4Pulse::Pulse` value; it neither owns nor invokes the TG1/TG3 detector and
+does not alter Tensor construction, raw pulse bits, or any historical feature.
+Pocket is deliberately not a participant in this bridge.
+
+The sole participating producer is the existing `tg_structure` TG4 production
+pulse (`detectorVersion=tg4-production-pulse-v1`). A pulse is the completed
+canonical 15-minute bar `[barStart, barStart + 900s)`. Every resulting generic
+observation uses `observedAt == availableAt == barStart + 900s`; source IDs
+include the bar start and role, and provenance includes the canonical symbol
+and the frozen TG4 production configuration hash. Consequently a completed-bar
+classification cannot affect a decision prefix before the bar completion time.
+
+The mapping is exact and categorical:
+
+- `inner_break` is positive exactly when `inner_break_any == 1`.
+- With an inner break, `structural_eligibility` is positive exactly when
+  `structurally_eligible == 1`, otherwise negative.
+- With structural eligibility, `fibonacci_retracement_relation` is positive
+  exactly when `confluent == 1`, otherwise negative.
+
+The source hierarchy `confluent <= structurally_eligible <= inner_break_any`
+is validated. Absent/non-applicable source states emit no observation rather
+than an invented negative signal. The categorical pulse has no established
+within-producer normalized confidence, so every bridge observation leaves
+confidence absent. This bridge is additive: its copied observations and engine
+components never suppress, replace, mutate, or reinterpret the raw TG4 pulse.
+
+The following immutable descriptive definitions are frozen at version `v1`.
+Both use canonical observation-identity ordering and a cap of one candidate per
+selector; their per-pulse input is bounded and the generic engine has no
+pairwise expansion.
+
+- `tg4-structural-fibonacci-retracement-support/v1`: `SUPPORT` between
+  `tg_structure/structural_eligibility` and
+  `tg_structure/fibonacci_retracement_relation`. It describes only the
+  existing positive/positive completed-bar state.
+- `tg4-structural-fibonacci-retracement-contradiction/v1`: `CONTRADICTION`
+  between the same selectors. It describes only the existing positive/negative
+  completed-bar state.
+
+`TG4ProductionConfluenceBridge` returns the source observations, bounded
+generic replay records, and bounded descriptive outputs for a supplied pulse
+and decision time. Output availability is computed by the generic engine and
+is no earlier than each retained component. The definitions are not a trading
+rule, score, recommendation, gate, or outcome-trained interpretation; they are
+only provenance-bearing descriptions of established source states.
+
+These results are not Tensor/model input, are not persisted, and do not create
+`confluence.*` ablation. Tensor width, layouts 8/9/10, existing raw detector
+semantics, and LSTM architecture remain immutable. A later, separately gated
+phase may consider a fixed Tensor adapter only after this descriptive bridge is
+validated; Phase 2B adds no semantic layout or Tensor registration.
+
 ## Adding a family or a channel
 
 1. Implement a causal independent detector and its availability/provenance
