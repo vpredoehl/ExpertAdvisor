@@ -5,10 +5,15 @@
 namespace EA::ExperimentReplicationMaterialization
 {
 
-long long InsertFreshPausedReplicationExperiment(
+namespace
+{
+
+long long InsertFreshPausedExperiment(
     pqxx::transaction_base& transaction,
     const ExperimentReplicationPlanning::ProposedExperimentSpecification&
-        specification)
+        specification,
+    const std::string& targetSymbol,
+    bool preserveSourceSeed)
 {
     if (specification.authoritativeSourceExperimentId <= 0 ||
         specification.freshInitializationSeed == 0 ||
@@ -66,13 +71,15 @@ long long InsertFreshPausedReplicationExperiment(
         "continuation_policy_inheritance_status,"
         "continuation_policy_revision"
         ") SELECT "
-        "symbol,prediction_horizon,c_next_threshold,core_lr_mult,"
+        "COALESCE(NULLIF($3::text,''),symbol),prediction_horizon,c_next_threshold,core_lr_mult,"
         "head_lr_mult,target_epochs,checkpoint_interval,train_start,"
         "train_end,infer_start,infer_end,NULL,"
         "(SELECT COALESCE(max(duplicate_nonce),0) + 1 FROM experiment),"
         "'paused','train',"
-        "'controlled_replication_materialization',donchian20_mode,"
-        "feature_warmup_scope,donchian_lookback,feature_ablation_mask,$2,"
+        "CASE WHEN $4::boolean THEN 'cross_symbol_historical_materialization' "
+        "ELSE 'controlled_replication_materialization' END,donchian20_mode,"
+        "feature_warmup_scope,donchian_lookback,feature_ablation_mask,"
+        "CASE WHEN $4::boolean THEN fresh_initialization_seed ELSE $2::bigint END,"
         "false,training_objective_canonical,training_objective_hash,"
         "training_objective_id,training_objective_version,"
         "loss_definition_version,auxiliary_loss_mode,"
@@ -113,11 +120,34 @@ long long InsertFreshPausedReplicationExperiment(
         "FROM experiment WHERE experiment_id=$1 "
         "RETURNING experiment_id;",
         pqxx::params{specification.authoritativeSourceExperimentId,
-                     specification.freshInitializationSeed});
+                     specification.freshInitializationSeed, targetSymbol,
+                     preserveSourceSeed});
     if (inserted.size() != 1)
         throw std::runtime_error(
             "authoritative_source_experiment_disappeared_during_insert");
     return inserted.one_row()[0].as<long long>();
+}
+
+} // namespace
+
+long long InsertFreshPausedReplicationExperiment(
+    pqxx::transaction_base& transaction,
+    const ExperimentReplicationPlanning::ProposedExperimentSpecification&
+        specification)
+{
+    return InsertFreshPausedExperiment(transaction, specification, {}, false);
+}
+
+long long InsertFreshPausedCrossSymbolExperiment(
+    pqxx::transaction_base& transaction, long long sourceExperimentId,
+    const std::string& targetSymbol)
+{
+    ExperimentReplicationPlanning::ProposedExperimentSpecification source;
+    source.experimentId = sourceExperimentId;
+    source.authoritativeSourceExperimentId = sourceExperimentId;
+    source.freshInitializationSeed = 1; // selected from source when true.
+    return InsertFreshPausedExperiment(
+        transaction, source, targetSymbol, true);
 }
 
 } // namespace EA::ExperimentReplicationMaterialization

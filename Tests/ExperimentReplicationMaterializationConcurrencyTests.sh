@@ -73,9 +73,9 @@ wait "${first_pid}"
     "SELECT count(*) FROM experiment WHERE identity='wave';")" == "1" ]]
 
 command_source="${repo_root}/Sources/ExperimentReplicationMaterializationCommand.cpp"
-lock_line="$(rg -n 'LOCK TABLE experiment IN SHARE ROW EXCLUSIVE MODE' \
+lock_line="$(rg -n -m1 'LOCK TABLE experiment IN SHARE ROW EXCLUSIVE MODE' \
     "${command_source}" | cut -d: -f1)"
-run_line="$(rg -n 'RunMaterializationInTransaction' "${command_source}" | \
+run_line="$(rg -n -m1 'RunMaterializationInTransaction' "${command_source}" | \
     cut -d: -f1)"
 [[ -n "${lock_line}" && -n "${run_line}" ]]
 (( lock_line < run_line ))

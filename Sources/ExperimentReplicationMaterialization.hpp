@@ -17,6 +17,28 @@ struct MaterializationCommand : Planning::PlanningCommand
     bool allowExistingEquivalent = false;
 };
 
+// A single historical source may be transported to one canonical target
+// symbol.  This is intentionally separate from controlled replication, whose
+// only intervention is the seed.
+struct CrossSymbolCommand
+{
+    long long sourceExperimentId = 0;
+    std::string targetSymbol;
+    std::string semanticWorkerRegistryPath =
+        "Builds/SemanticWorkers/registry.json";
+};
+
+// Preview opens a repeatable-read transaction and performs no INSERT. Apply
+// serializes against experiment writers and creates one paused/train record.
+int RunCrossSymbolPreviewCommand(const std::string& connectionString,
+                                 const CrossSymbolCommand& command,
+                                 std::ostream& output,
+                                 std::ostream& errors);
+int RunCrossSymbolMaterializationCommand(const std::string& connectionString,
+                                         const CrossSymbolCommand& command,
+                                         std::ostream& output,
+                                         std::ostream& errors);
+
 class ExperimentInserter
 {
 public:

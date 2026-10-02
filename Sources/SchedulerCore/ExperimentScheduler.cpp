@@ -307,6 +307,12 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--plan-experiment-replications=", 0) == 0 ||
             arg == "--materialize-experiment-replications" ||
             arg.rfind("--materialize-experiment-replications=", 0) == 0 ||
+            arg == "--preview-cross-symbol-historical-experiment" ||
+            arg.rfind("--preview-cross-symbol-historical-experiment=", 0) == 0 ||
+            arg == "--materialize-cross-symbol-historical-experiment" ||
+            arg.rfind("--materialize-cross-symbol-historical-experiment=", 0) == 0 ||
+            arg == "--cross-symbol-historical-target" ||
+            arg.rfind("--cross-symbol-historical-target=", 0) == 0 ||
             arg == "--allow-existing-equivalent" ||
             arg == "--replication-seeds" ||
             arg.rfind("--replication-seeds=", 0) == 0)
@@ -1387,6 +1393,27 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.materializeExperimentReplications =
                 EA::ExperimentPairComparison::ParseExperimentIdPair(
                     RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--preview-cross-symbol-historical-experiment")
+        {
+            if (options.previewCrossSymbolHistoricalExperiment)
+                throw std::invalid_argument("--preview-cross-symbol-historical-experiment specified more than once");
+            options.previewCrossSymbolHistoricalExperiment =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--materialize-cross-symbol-historical-experiment")
+        {
+            if (options.materializeCrossSymbolHistoricalExperiment)
+                throw std::invalid_argument("--materialize-cross-symbol-historical-experiment specified more than once");
+            options.materializeCrossSymbolHistoricalExperiment =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--cross-symbol-historical-target")
+        {
+            if (options.crossSymbolHistoricalTarget)
+                throw std::invalid_argument("--cross-symbol-historical-target specified more than once");
+            options.crossSymbolHistoricalTarget = EA::CanonicalSymbol::Normalize(
+                RequireNextArg(argc, argv, i, arg));
         }
         else if (arg == "--replication-seeds")
         {
@@ -3331,6 +3358,26 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.materializeExperimentReplications =
                 EA::ExperimentPairComparison::ParseExperimentIdPair(value);
         }
+        else if (SplitOptionWithValue(
+                     arg, "--preview-cross-symbol-historical-experiment", value))
+        {
+            if (options.previewCrossSymbolHistoricalExperiment)
+                throw std::invalid_argument("--preview-cross-symbol-historical-experiment specified more than once");
+            options.previewCrossSymbolHistoricalExperiment = ParsePositiveLongLong(arg, value);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--materialize-cross-symbol-historical-experiment", value))
+        {
+            if (options.materializeCrossSymbolHistoricalExperiment)
+                throw std::invalid_argument("--materialize-cross-symbol-historical-experiment specified more than once");
+            options.materializeCrossSymbolHistoricalExperiment = ParsePositiveLongLong(arg, value);
+        }
+        else if (SplitOptionWithValue(arg, "--cross-symbol-historical-target", value))
+        {
+            if (options.crossSymbolHistoricalTarget)
+                throw std::invalid_argument("--cross-symbol-historical-target specified more than once");
+            options.crossSymbolHistoricalTarget = EA::CanonicalSymbol::Normalize(value);
+        }
         else if (SplitOptionWithValue(arg, "--replication-seeds", value))
         {
             if (options.replicationSeeds)
@@ -3702,6 +3749,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.verifyControlledReplicationStudy.has_value() ? 1 : 0) +
         (options.planExperimentReplications.has_value() ? 1 : 0) +
         (options.materializeExperimentReplications.has_value() ? 1 : 0) +
+        (options.previewCrossSymbolHistoricalExperiment.has_value() ? 1 : 0) +
+        (options.materializeCrossSymbolHistoricalExperiment.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
         (options.correctedCausalSurpriseReplicationStatus.has_value()
              ? 1 : 0) +
@@ -3840,6 +3889,13 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "--allow-existing-equivalent requires "
             "--materialize-experiment-replications");
+    const bool crossSymbolHistoricalCommand =
+        options.previewCrossSymbolHistoricalExperiment.has_value() ||
+        options.materializeCrossSymbolHistoricalExperiment.has_value();
+    if (crossSymbolHistoricalCommand != options.crossSymbolHistoricalTarget.has_value())
+        throw std::invalid_argument(
+            "cross-symbol historical preview/materialization requires "
+            "--cross-symbol-historical-target");
     if (options.expectedFeatureAblationMask &&
         !options.compareFeatureAblationPair &&
         !options.compareFeatureAblationReplications)
@@ -10369,6 +10425,20 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "closed. It creates paused/train records only and never queues, "
         << "starts, schedules, or signals work.\n"
         << "Usage: " << exe
+        << " --preview-cross-symbol-historical-experiment=SOURCE_ID "
+           "--cross-symbol-historical-target=SYMBOL\n"
+        << "Read-only preview of one Layout-9/width-103 historical source "
+           "transported to a production Fibonacci-capable canonical symbol. "
+           "It verifies the preserved train and inference workers, renders the "
+           "full configured identity and exact duplicate result, and never "
+           "queues or starts a worker. TrainingSymbols() remains the sweep "
+           "universe, not this individual-experiment capability boundary.\n"
+        << "Usage: " << exe
+        << " --materialize-cross-symbol-historical-experiment=SOURCE_ID "
+           "--cross-symbol-historical-target=SYMBOL\n"
+        << "After review, serializes one source-to-target insert, rejects exact "
+           "or ambiguous equivalents, and creates only a paused/train record.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:ABLATION_ID "
         << "--expected-ablation-mask=FEATURE[,FEATURE...]\n"
         << "Feature-ablation pair comparison canonicalizes the requested mask, "
@@ -11860,6 +11930,24 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return EA::ExperimentReplicationMaterialization::
                 RunMaterializationCommand(
                     LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.previewCrossSymbolHistoricalExperiment ||
+            options.materializeCrossSymbolHistoricalExperiment)
+        {
+            EA::ExperimentReplicationMaterialization::CrossSymbolCommand command;
+            command.sourceExperimentId =
+                options.previewCrossSymbolHistoricalExperiment
+                    ? *options.previewCrossSymbolHistoricalExperiment
+                    : *options.materializeCrossSymbolHistoricalExperiment;
+            command.targetSymbol = *options.crossSymbolHistoricalTarget;
+            command.semanticWorkerRegistryPath = options.semanticWorkerRegistryPath;
+            return options.previewCrossSymbolHistoricalExperiment
+                ? EA::ExperimentReplicationMaterialization::
+                      RunCrossSymbolPreviewCommand(
+                          LstmDbConnectionString(), command, std::cout, std::cerr)
+                : EA::ExperimentReplicationMaterialization::
+                      RunCrossSymbolMaterializationCommand(
+                          LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.compareFeatureAblationPair)
         {

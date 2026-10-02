@@ -45,9 +45,9 @@ rg -q 'AttachTrainWorkerRouting' \
 rg -q 'SemanticWorkerRegistry::Load' \
     "${repo_root}/Sources/ExperimentReplicationMaterializationCommand.cpp"
 
-commit_line="$(rg -n 'transaction\.commit\(\)' "${command_source}" | cut -d: -f1)"
-abort_line="$(rg -n 'transaction\.abort\(\)' "${command_source}" | cut -d: -f1)"
-publish_line="$(rg -n 'output << stagedOutput\.str\(\)' "${command_source}" | cut -d: -f1)"
+commit_line="$(rg -n -m1 'transaction\.commit\(\)' "${command_source}" | cut -d: -f1)"
+abort_line="$(rg -n -m1 'transaction\.abort\(\)' "${command_source}" | cut -d: -f1)"
+publish_line="$(rg -n -m1 'output << stagedOutput\.str\(\)' "${command_source}" | cut -d: -f1)"
 [[ -n "${commit_line}" && -n "${abort_line}" && -n "${publish_line}" ]]
 (( commit_line < publish_line ))
 (( abort_line < publish_line ))

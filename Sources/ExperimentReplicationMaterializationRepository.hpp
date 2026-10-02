@@ -12,4 +12,11 @@ long long InsertFreshPausedReplicationExperiment(
     const ExperimentReplicationPlanning::ProposedExperimentSpecification&
         specification);
 
+// Clones the authoritative configured source row while changing only its
+// canonical symbol.  Generated database identity and operational columns are
+// deliberately fresh; the result is paused/train and is never dispatched.
+long long InsertFreshPausedCrossSymbolExperiment(
+    pqxx::transaction_base& transaction, long long sourceExperimentId,
+    const std::string& targetSymbol);
+
 } // namespace EA::ExperimentReplicationMaterialization
