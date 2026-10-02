@@ -238,14 +238,16 @@ void TestActualProductionAdapterPath()
     assert(sawContradiction);
 }
 
-void TestNoTensorRegistrationOrLayoutChange()
+void TestFixedTensorRegistrationAndLayoutChange()
 {
-    assert(MS::FindFamily("confluence") == nullptr);
+    assert(MS::FindFamily("confluence") != nullptr);
     assert(MS::ResolvePrefix("confluence", 8).empty());
     assert(MS::ResolvePrefix("confluence", 9).empty());
     assert(MS::ResolvePrefix("confluence", 10).empty());
+    assert(MS::ResolvePrefix("confluence", 11).size() == 2);
     assert(EA::kCausalFibonacciStructuralModelInputWidth == 103);
-    assert(EA::kCurrentModelInputWidth == 114);
+    assert(EA::kCausalPocketRecentObservationModelInputWidth == 114);
+    assert(EA::kCurrentModelInputWidth == 116);
 }
 
 } // namespace
@@ -257,6 +259,6 @@ int main()
     TestProductionSupportContradictionAndNoMatch();
     TestDeterminismCapInvalidInputsAndSourcePreservation();
     TestActualProductionAdapterPath();
-    TestNoTensorRegistrationOrLayoutChange();
+    TestFixedTensorRegistrationAndLayoutChange();
     std::cout << "MarketStructureProductionObservationAdapterTests passed\n";
 }

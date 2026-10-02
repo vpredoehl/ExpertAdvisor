@@ -6,6 +6,7 @@
 #include "ReturnFeatureHistory.hpp"
 #include "Tensor.hpp"
 #include "TG4ProductionStreamingPulseAdapter.hpp"
+#include "FixedConfluenceTensorAdapter.hpp"
 #include "CausalFibonacciStructuralFeatures.hpp"
 #include "CausalPocketFeatures.hpp"
 
@@ -99,9 +100,9 @@ void AssertExact(const std::vector<float>& lhs, const std::vector<float>& rhs)
 
 void TestLayoutAndCanonicalPulseAlignment()
 {
-    static_assert(EA::kModelInputSemanticLayoutVersion == 10);
-    static_assert(EA::kCurrentModelInputWidth == 114);
-    static_assert(feature_size == 110);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 11);
+    static_assert(EA::kCurrentModelInputWidth == 116);
+    static_assert(feature_size == 112);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);
@@ -111,6 +112,10 @@ void TestLayoutAndCanonicalPulseAlignment()
     Tensor tensor{"eurusdrmp"};
     EA::CausalFibonacciFeatures::Producer fibReplayProducer{"eurusdrmp"};
     EA::CausalPocketFeatures::Producer pocketReplayProducer{"eurusdrmp"};
+    EA::MarketStructure::Production::TG4ProductionConfluenceBridge confluenceBridge{
+        "eurusdrmp"};
+    EA::MarketStructure::TensorProjection::FixedConfluenceTensorAdapter
+        confluenceAdapter;
     std::vector<std::array<float, EA::CausalFibonacciFeatures::kFeatureCount>> fibReplay;
     std::vector<std::array<float, EA::CausalPocketFeatures::kFeatureCount>>
         pocketReplay;
@@ -154,9 +159,19 @@ void TestLayoutAndCanonicalPulseAlignment()
         for (std::size_t column = 0; column < pocketReplay[row].size(); ++column)
             assert(values[pocketRecentPriceScaleValidCol + column] ==
                    pocketReplay[row][column]);
+        const auto description = confluenceBridge.Describe(
+            replay[row], std::chrono::sys_seconds{
+                replay[row].barStart.time_since_epoch() + std::chrono::seconds{900}});
+        const auto expectedConfluence = confluenceAdapter.Adapt(
+            description, std::chrono::sys_seconds{
+                replay[row].barStart.time_since_epoch() + std::chrono::seconds{900}});
+        assert(values[confluenceTg4StructuralFibonacciRetracementSupportAvailableCol] ==
+               expectedConfluence[0]);
+        assert(values[confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol] ==
+               expectedConfluence[1]);
     }
 
-    const auto semantics = EA::ModelInputFeatureSemantics(114);
+    const auto semantics = EA::ModelInputFeatureSemantics(116);
     assert(semantics.at(73).name == "tg4_inner_break_any");
     assert(semantics.at(74).name == "tg4_source_tg3_structurally_eligible");
     assert(semantics.at(75).name == "tg4_source_tg3_confluent");
@@ -180,8 +195,12 @@ void TestLayoutAndCanonicalPulseAlignment()
     for (std::size_t column = 0; column < pocketNames.size(); ++column)
         assert(semantics.at(pocketRecentPriceScaleValidCol + column).name ==
                pocketNames[column]);
-    assert(semantics.at(110).name == "lookback_log_return_1_scaled");
-    assert(semantics.at(113).name == "lookback_log_return_16_scaled");
+    assert(semantics.at(110).name ==
+           "confluence_tg4_structural_fibonacci_retracement_support_available");
+    assert(semantics.at(111).name ==
+           "confluence_tg4_structural_fibonacci_retracement_contradiction_available");
+    assert(semantics.at(112).name == "lookback_log_return_1_scaled");
+    assert(semantics.at(115).name == "lookback_log_return_16_scaled");
 
     // Full-history construction occurs before the scored window. Both model
     // consumers therefore use the exact stateful Tensor row at its boundary.

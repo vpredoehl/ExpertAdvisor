@@ -35,6 +35,8 @@
 #include "CausalHistoricalLevelProximityFeatures.hpp"
 #include "CausalReturnAutocorrelationFeatures.hpp"
 #include "TG4ProductionStreamingPulseAdapter.hpp"
+#include "MarketStructureProductionObservationAdapter.hpp"
+#include "FixedConfluenceTensorAdapter.hpp"
 #include "CausalFibonacciStructuralFeatures.hpp"
 #include "CausalPocketFeatures.hpp"
 #include "../Sources/EconomicEventFeatures.hpp"
@@ -98,6 +100,10 @@ class Tensor
     CausalReturnAutocorrelation32 causalReturnAutocorrelation;
     EA::EconomicCalendar::EconomicEventFeatureEngine economicEventFeatures;
     EA::TG4Pulse::ProductionStreamingAdapter tg4ProductionPulses;
+    EA::MarketStructure::Production::TG4ProductionConfluenceBridge
+        tg4ProductionConfluence;
+    EA::MarketStructure::TensorProjection::FixedConfluenceTensorAdapter
+        fixedConfluenceTensorAdapter;
     EA::CausalFibonacciFeatures::Producer causalFibonacciStructuralFeatures;
     EA::CausalPocketFeatures::Producer causalPocketFeatures;
     
@@ -155,8 +161,8 @@ public:
         : table { name }, donchian20Mode { mode },
           donchianLookback { ValidateDonchianLookback(lookback) },
           economicEventFeatures { std::move(economicEvents) },
-          tg4ProductionPulses { name }, causalFibonacciStructuralFeatures { name },
-          causalPocketFeatures { name } {}
+          tg4ProductionPulses { name }, tg4ProductionConfluence { name },
+          causalFibonacciStructuralFeatures { name }, causalPocketFeatures { name } {}
     const string& TableName() const { return table; }
     Donchian20Mode GetDonchian20Mode() const { return donchian20Mode; }
     std::size_t GetDonchianLookback() const { return donchianLookback; }

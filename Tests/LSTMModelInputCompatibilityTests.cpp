@@ -35,7 +35,7 @@ int main()
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
     static_assert(causal_fibonacci_structural_feature_size == 99);
-    static_assert(feature_size == 110);
+    static_assert(feature_size == 112);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -60,7 +60,8 @@ int main()
     static_assert(EA::kTG4ProductionPulseModelInputWidth == 80);
     static_assert(EA::kCausalFibonacciStructuralModelInputWidth == 103);
     static_assert(EA::kCausalPocketRecentObservationModelInputWidth == 114);
-    static_assert(EA::kCurrentModelInputWidth == 114);
+    static_assert(EA::kFixedConfluenceTensorModelInputWidth == 116);
+    static_assert(EA::kCurrentModelInputWidth == 116);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -640,7 +641,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80:103:114";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80:103:114:116";
     }
     assert(unsupportedRejected);
 

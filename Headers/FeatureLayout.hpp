@@ -210,8 +210,17 @@ inline constexpr std::size_t pocketBearMedianWidthCol =
     pocketBearMedianCloseDistanceCol + 1;
 inline constexpr std::size_t causal_pocket_recent_observation_feature_size =
     pocketBearMedianWidthCol + 1;
-inline constexpr std::size_t feature_size =
+// Layout 11 appends only the two fixed availability bits from the frozen
+// Phase-2B production descriptive confluence definitions.  Raw TG4, Fibonacci
+// and Pocket columns above retain their exact layouts and meanings.
+inline constexpr std::size_t confluenceTg4StructuralFibonacciRetracementSupportAvailableCol =
     causal_pocket_recent_observation_feature_size;
+inline constexpr std::size_t confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol =
+    confluenceTg4StructuralFibonacciRetracementSupportAvailableCol + 1;
+inline constexpr std::size_t fixed_confluence_tensor_feature_size =
+    confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol + 1;
+inline constexpr std::size_t feature_size =
+    fixed_confluence_tensor_feature_size;
 
 static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
@@ -239,6 +248,11 @@ static_assert(pocketBearMedianWidthCol == 109);
 static_assert(causal_pocket_recent_observation_feature_size -
                   causal_fibonacci_structural_feature_size ==
               11);
-static_assert(feature_size == 110);
+static_assert(confluenceTg4StructuralFibonacciRetracementSupportAvailableCol == 110);
+static_assert(confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol == 111);
+static_assert(fixed_confluence_tensor_feature_size -
+                  causal_pocket_recent_observation_feature_size ==
+              2);
+static_assert(feature_size == 112);
 
 #endif /* FeatureLayout_hpp */

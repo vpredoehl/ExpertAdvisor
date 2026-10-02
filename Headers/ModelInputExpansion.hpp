@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 10;
+inline constexpr int kModelInputSemanticLayoutVersion = 11;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -37,7 +37,7 @@ struct ModelInputSemanticLayoutRegistryEntry
 // version as predecessor. A corrected interpretation at an existing width
 // instead branches from the newest genuinely compatible predecessor; old
 // entries and their fixed maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 10>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 11>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
@@ -56,6 +56,7 @@ inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 10>
         {8, kTG4ProductionPulseModelInputWidth, 7},
         {9, kCausalFibonacciStructuralModelInputWidth, 8},
         {10, kCausalPocketRecentObservationModelInputWidth, 9},
+        {11, kFixedConfluenceTensorModelInputWidth, 10},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -198,7 +199,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 78>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 80>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -288,6 +289,10 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 78>
         {pocketBearMedianTouchDistanceCol, "pocket_bear_median_touch_distance"},
         {pocketBearMedianCloseDistanceCol, "pocket_bear_median_close_distance"},
         {pocketBearMedianWidthCol, "pocket_bear_median_width"},
+        {confluenceTg4StructuralFibonacciRetracementSupportAvailableCol,
+         "confluence_tg4_structural_fibonacci_retracement_support_available"},
+        {confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol,
+         "confluence_tg4_structural_fibonacci_retracement_contradiction_available"},
     }};
 
 constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()

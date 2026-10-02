@@ -24,7 +24,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 58> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 60> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -94,6 +94,10 @@ inline constexpr std::array<AblatableFeature, 58> kAblatableFeatures{{
     {"pocket_bear_median_touch_distance", pocketBearMedianTouchDistanceCol},
     {"pocket_bear_median_close_distance", pocketBearMedianCloseDistanceCol},
     {"pocket_bear_median_width", pocketBearMedianWidthCol},
+    {"confluence_tg4_structural_fibonacci_retracement_support_available",
+     confluenceTg4StructuralFibonacciRetracementSupportAvailableCol},
+    {"confluence_tg4_structural_fibonacci_retracement_contradiction_available",
+     confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -145,6 +149,10 @@ inline constexpr std::string_view kCausalFibonacciStructuralAblationMaskText =
     "fib_down_recent_median_pullback_0382_signed_atr,"
     "fib_down_recent_median_pullback_0500_signed_atr,"
     "fib_down_recent_median_pullback_0618_signed_atr";
+
+inline constexpr std::string_view kFixedConfluenceAblationMaskText =
+    "confluence_tg4_structural_fibonacci_retracement_support_available,"
+    "confluence_tg4_structural_fibonacci_retracement_contradiction_available";
 
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.
@@ -199,7 +207,7 @@ public:
     static FeatureAblationMask ParseForSemanticLayout(
         const std::string& text, int semanticLayoutVersion);
     static FeatureAblationResolution Resolve(
-        const std::string& requestedText, int semanticLayoutVersion = 10);
+        const std::string& requestedText, int semanticLayoutVersion = 11);
 
     bool empty() const { return columns_.empty(); }
     const std::vector<std::size_t>& tensorColumns() const { return columns_; }

@@ -44,7 +44,7 @@ void TestRegistryAndHierarchicalResolution()
     // Pockets has a causal detector and gains Tensor channels only at layout 10.
     assert(EA::MarketStructure::FindFamily("pockets") != nullptr);
     assert(EA::MarketStructure::FindFamily("elliott_wave") == nullptr);
-    assert(EA::MarketStructure::FindFamily("confluence") == nullptr);
+    assert(EA::MarketStructure::FindFamily("confluence") != nullptr);
 
     const auto fib = FeatureAblationMask::Resolve("fibonacci.*");
     assert(fib.resolvedMask.CanonicalText() ==
@@ -112,6 +112,16 @@ void TestRegistryAndHierarchicalResolution()
     assert(EA::MarketStructure::ResolvePrefix("fibonacci", 8).empty());
     assert(EA::MarketStructure::ResolvePrefix("fibonacci", 9).size() == 23);
     assert(EA::MarketStructure::ResolvePrefix("fibonacci", 10).size() == 23);
+    assert(EA::MarketStructure::ResolvePrefix("confluence", 8).empty());
+    assert(EA::MarketStructure::ResolvePrefix("confluence", 9).empty());
+    assert(EA::MarketStructure::ResolvePrefix("confluence", 10).empty());
+    const auto confluenceChannels =
+        EA::MarketStructure::ResolvePrefix("confluence", 11);
+    assert(confluenceChannels.size() == 2);
+    assert(confluenceChannels[0]->tensorColumn ==
+           confluenceTg4StructuralFibonacciRetracementSupportAvailableCol);
+    assert(confluenceChannels[1]->tensorColumn ==
+           confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol);
     const auto pocketChannels = EA::MarketStructure::ResolvePrefix("pockets", 10);
     assert(pocketChannels.size() == expectedPocketChannels.size());
     for (std::size_t index = 0; index < expectedPocketChannels.size(); ++index)
@@ -240,6 +250,16 @@ void TestLayoutAndFixedWidthParity()
         "pocket_bear_median_close_distance,"
         "pocket_bear_median_width");
 
+    assert(ThrowsInvalidArgument([] {
+        (void)FeatureAblationMask::ParseForSemanticLayout("confluence.*", 10);
+    }));
+    const auto confluence = FeatureAblationMask::ParseForSemanticLayout(
+        "confluence.*", 11);
+    assert(confluence.CanonicalText() == EA::kFixedConfluenceAblationMaskText);
+    assert((confluence.tensorColumns() == std::vector<std::size_t>{
+        confluenceTg4StructuralFibonacciRetracementSupportAvailableCol,
+        confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol}));
+
     const auto contract = EA::ResolveModelInputContract(
         EA::kCurrentModelInputWidth, feature_size);
     std::vector<float> tensor(feature_size);
@@ -265,10 +285,26 @@ void TestLayoutAndFixedWidthParity()
         ablated.data(), tensor.data(), contract, pocketControl);
     for (std::size_t column = 0; column < feature_size; ++column)
         assert(ablated[column] ==
-               (column >= pocketRecentPriceScaleValidCol ? 0.0f : tensor[column]));
+               (column >= pocketRecentPriceScaleValidCol &&
+                        column <= pocketBearMedianWidthCol
+                    ? 0.0f
+                    : tensor[column]));
     for (std::size_t column = feature_size;
          column < EA::kCurrentModelInputWidth; ++column)
         assert(ablated[column] == -1.0f);
+
+    const auto confluenceControl = FeatureAblationMask::Parse("confluence.*");
+    std::vector<float> confluenceAblated(EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        confluenceAblated.data(), tensor.data(), contract, confluenceControl);
+    for (std::size_t column = 0; column < feature_size; ++column)
+    {
+        const bool confluenceColumn =
+            column == confluenceTg4StructuralFibonacciRetracementSupportAvailableCol ||
+            column == confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol;
+        assert(confluenceAblated[column] ==
+               (confluenceColumn ? 0.0f : tensor[column]));
+    }
 }
 
 void TestWildcardRequestIsDeferredUntilSemanticLayoutSelection()

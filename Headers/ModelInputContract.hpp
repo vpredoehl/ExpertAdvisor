@@ -60,10 +60,12 @@ inline constexpr std::size_t kCausalFibonacciStructuralModelInputWidth =
     causal_fibonacci_structural_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCausalPocketRecentObservationModelInputWidth =
     causal_pocket_recent_observation_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kFixedConfluenceTensorModelInputWidth =
+    fixed_confluence_tensor_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kPreEconomicEventModelInputWidth =
     kReturnAutocorrelationModelInputWidth;
 inline constexpr std::size_t kCurrentModelInputWidth =
-    kCausalPocketRecentObservationModelInputWidth;
+    kFixedConfluenceTensorModelInputWidth;
 
 static_assert(kEconomicEventModelInputWidth ==
               kPreEconomicEventModelInputWidth +
@@ -77,13 +79,14 @@ static_assert(kCausalEconomicEventSurpriseModelInputWidth ==
               EA::EconomicCalendar::kCausalEconomicEventSurpriseFeatureWidth);
 static_assert(kCausalFibonacciStructuralModelInputWidth == 103);
 static_assert(kCausalPocketRecentObservationModelInputWidth == 114);
+static_assert(kFixedConfluenceTensorModelInputWidth == 116);
 static_assert(kCurrentModelInputWidth ==
-              kCausalFibonacciStructuralModelInputWidth + 11);
+              kCausalPocketRecentObservationModelInputWidth + 2);
 
 // Every persisted width whose Tensor portion has a registered, stable
 // semantic prefix.  Append-only feature additions must retain these entries
 // and append their new width.
-inline constexpr std::array<std::size_t, 23> kRegisteredModelInputWidths{{
+inline constexpr std::array<std::size_t, 24> kRegisteredModelInputWidths{{
     kLegacyModelInputWidth,
     kDonchianModelInputWidth,
     kSessionPhaseModelInputWidth,
@@ -107,6 +110,7 @@ inline constexpr std::array<std::size_t, 23> kRegisteredModelInputWidths{{
     kTG4ProductionPulseModelInputWidth,
     kCausalFibonacciStructuralModelInputWidth,
     kCausalPocketRecentObservationModelInputWidth,
+    kFixedConfluenceTensorModelInputWidth,
 }};
 
 struct ModelInputContract
@@ -171,6 +175,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
         case kCausalPocketRecentObservationModelInputWidth:
             return {modelInputWidth,
                     causal_pocket_recent_observation_feature_size, 0};
+        case kFixedConfluenceTensorModelInputWidth:
+            return {modelInputWidth, fixed_confluence_tensor_feature_size, 0};
         default:
             throw std::runtime_error(
                 "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=" +
@@ -197,7 +203,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kCausalEconomicEventSurpriseModelInputWidth) +
                 ":" + std::to_string(kTG4ProductionPulseModelInputWidth) +
                 ":" + std::to_string(kCausalFibonacciStructuralModelInputWidth) +
-                ":" + std::to_string(kCausalPocketRecentObservationModelInputWidth));
+                ":" + std::to_string(kCausalPocketRecentObservationModelInputWidth) +
+                ":" + std::to_string(kFixedConfluenceTensorModelInputWidth));
     }
 }
 

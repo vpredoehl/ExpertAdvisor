@@ -43,7 +43,7 @@ struct Channel
     int introducedSemanticLayout;
 };
 
-inline constexpr std::array<Family, 3> kFamilies{{
+inline constexpr std::array<Family, 4> kFamilies{{
     {"tg_structure", 1, "tg4-production-pulse-v1",
      "completed canonical bar; never retrospectively rewritten"},
     // Layout 9 is retained as an immutable legacy producer. It composes the
@@ -56,12 +56,14 @@ inline constexpr std::array<Family, 3> kFamilies{{
     // remain unavailable by the explicit channel-layout contract below.
     {"pockets", 1, "causal-pocket-detector-phase2-v1",
      "confirmation bar / information cutoff timestamp"},
+    {"confluence", 1, "phase2b-fixed-descriptive-confluence-v1",
+     "completed canonical bar; no earlier than every selected component"},
 }};
 
-// These identities describe actual layout-8, layout-9, and layout-10 channels. They do
-// not claim that TG3's historical research confluence is a generic confluence
-// feature family: no generic explicit-confluence Tensor channels exist yet.
-inline constexpr std::array<Channel, 37> kChannels{{
+// These identities describe actual layout-8 through layout-11 channels.
+// TG3's historical research confluence remains distinct from the generic
+// descriptive confluence family introduced by the fixed layout-11 projection.
+inline constexpr std::array<Channel, 39> kChannels{{
     {"tg_structure.tg4.inner_break.any", "tg4_inner_break_any",
      "tg_structure", tg4InnerBreakAnyCol, 8},
     {"tg_structure.tg4.source_tg3.structurally_eligible",
@@ -157,6 +159,14 @@ inline constexpr std::array<Channel, 37> kChannels{{
      pocketBearMedianCloseDistanceCol, 10},
     {"pockets.bear.recent.median_width", "pocket_bear_median_width",
      "pockets", pocketBearMedianWidthCol, 10},
+    {"confluence.tg4.structural_fibonacci_retracement.support_available",
+     "confluence_tg4_structural_fibonacci_retracement_support_available",
+     "confluence", confluenceTg4StructuralFibonacciRetracementSupportAvailableCol,
+     11},
+    {"confluence.tg4.structural_fibonacci_retracement.contradiction_available",
+     "confluence_tg4_structural_fibonacci_retracement_contradiction_available",
+     "confluence", confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol,
+     11},
 }};
 
 // Keep catalog validation separate from lookup so focused tests can exercise
@@ -251,12 +261,16 @@ inline bool ChannelAvailableForSemanticLayout(const Channel& channel,
         case 10: return channel.introducedSemanticLayout == 8 ||
                      channel.introducedSemanticLayout == 9 ||
                      channel.introducedSemanticLayout == 10;
+        case 11: return channel.introducedSemanticLayout == 8 ||
+                     channel.introducedSemanticLayout == 9 ||
+                     channel.introducedSemanticLayout == 10 ||
+                     channel.introducedSemanticLayout == 11;
         default: return false;
     }
 }
 
 inline std::vector<const Channel*> ResolvePrefix(std::string_view prefix,
-                                                  int semanticLayoutVersion = 10)
+                                                  int semanticLayoutVersion = 11)
 {
     ValidateRegistry();
     std::vector<const Channel*> result;

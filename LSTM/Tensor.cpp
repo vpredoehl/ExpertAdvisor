@@ -134,6 +134,13 @@ void Tensor::Add(Feature f)
     const auto economicEventValues =
         economicEventFeatures.AdvanceCompletedBar(f.time).Ordered();
     const auto tg4Pulse = tg4ProductionPulses.AddCompletedCanonicalBar(f);
+    const auto tg4CompletedAt = std::chrono::sys_seconds{
+        tg4Pulse.barStart.time_since_epoch() +
+        EA::MarketStructure::Production::kCompletedCanonicalBarDuration};
+    const auto confluenceDescription = tg4ProductionConfluence.Describe(
+        tg4Pulse, tg4CompletedAt);
+    const auto confluenceTensorValues = fixedConfluenceTensorAdapter.Adapt(
+        confluenceDescription, tg4CompletedAt);
     const auto fibFeatures = causalFibonacciStructuralFeatures.AddCompletedBar(
         {epochSeconds, static_cast<double>(f.open), static_cast<double>(f.high),
          static_cast<double>(f.low), static_cast<double>(f.close)});
@@ -184,6 +191,9 @@ void Tensor::Add(Feature f)
                   low.MutableRawMemory() + fibRecentPriceScaleValidCol);
         std::copy(pocketFeatures.begin(), pocketFeatures.end(),
                   low.MutableRawMemory() + pocketRecentPriceScaleValidCol);
+        std::copy(confluenceTensorValues.begin(), confluenceTensorValues.end(),
+                  low.MutableRawMemory() +
+                      confluenceTg4StructuralFibonacciRetracementSupportAvailableCol);
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -456,6 +466,8 @@ void Tensor::Add(Feature f)
               p + fibRecentPriceScaleValidCol);
     std::copy(pocketFeatures.begin(), pocketFeatures.end(),
               p + pocketRecentPriceScaleValidCol);
+    std::copy(confluenceTensorValues.begin(), confluenceTensorValues.end(),
+              p + confluenceTg4StructuralFibonacciRetracementSupportAvailableCol);
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;
