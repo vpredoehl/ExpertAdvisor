@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SchedulerCore/SchedulerOperationalObservation.hpp"
+
 #include <chrono>
 #include <iosfwd>
 #include <memory>
@@ -51,216 +53,21 @@ std::optional<int> NextCancellationCheckpoint(
     int targetEpochs,
     std::optional<int> latestDurableCheckpointEpoch);
 
-struct ProcessObservation
-{
-    bool exists = false;
-    bool inspectionSucceeded = false;
-    bool permissionDenied = false;
-    bool stopped = false;
-    int pid = -1;
-    int processGroupId = -1;
-    std::string executable;
-    std::string commandLine;
-    std::string processStartIdentity;
-};
-
-// The native observer is intentionally factored behind this narrow interface
-// so its PID-reuse and executable-identity decisions can be tested without
-// relying on host process timing.  Production uses the macOS implementation;
-// the testing factory below is not used by scheduler/runtime callers.
-struct NativeProcessStatus
-{
-    int pid = -1;
-    int processGroupId = -1;
-    std::string state;
-    std::string commandLine;
-};
-
-class NativeProcessObservationBackend
-{
-public:
-    virtual ~NativeProcessObservationBackend() = default;
-
-    virtual bool ProcessExists(int pid, int& errorNumber) = 0;
-    virtual std::optional<std::string> ReadStartIdentity(
-        int pid,
-        int& errorNumber) = 0;
-    virtual std::optional<NativeProcessStatus> ReadStatus(
-        int pid,
-        int& errorNumber) = 0;
-    virtual std::optional<std::string> ReadProcPidPath(
-        int pid,
-        int& errorNumber) = 0;
-    // This is the kernel's exec-path record from KERN_PROCARGS2, not argv[0]
-    // or a token parsed from `ps` output.
-    virtual std::optional<std::string> ReadKernelExecutablePath(
-        int pid,
-        int& errorNumber) = 0;
-};
-
-struct ManagedWorker
-{
-    std::optional<long long> workerAttemptId;
-    std::string workerKind;
-    std::string capacityClass;
-    std::string ownershipOrigin;
-    std::string attemptLifecycleState;
-    std::string launchAttemptIdentity;
-    long long experimentId = -1;
-    std::optional<long long> checkpointEvalId;
-    std::string phase;
-    std::string lifecycleStatus;
-    int pid = -1;
-    std::optional<int> processGroupId;
-    std::optional<std::string> executable;
-    std::optional<std::string> commandLine;
-    std::optional<std::string> processStartIdentity;
-    // Status readers that reconstruct a worker from the lifecycle row and its
-    // exact active durable attempt set this false if those two persisted
-    // identities disagree. Runtime control paths already enforce the same
-    // invariant while locking the exact attempt.
-    bool authoritativeBindingMatches = true;
-};
-
-enum class IdentityResult
-{
-    Validated,
-    ProcessMissing,
-    StalePid,
-    IdentityValidationFailed,
-    UnsafeProcessGroup,
-    PermissionDenied,
-    InspectionFailed
-};
-
-enum class ProcessExecutionState
-{
-    Unknown,
-    Running,
-    Stopped,
-    Missing
-};
-
-struct ValidatedWorker
-{
-    ManagedWorker worker;
-    ProcessObservation observation;
-    IdentityResult identity = IdentityResult::InspectionFailed;
-    std::string detail;
-};
-
-struct SchedulerWorkerCandidate
-{
-    int pid = -1;
-    std::string kind;
-    std::string commandLine;
-    double cpuPercent = 0.0;
-    double memPercent = 0.0;
-    double rssMb = 0.0;
-    bool stopped = false;
-};
-
-struct SchedulerWorkerClassification
-{
-    int pid = -1;
-    std::string kind;
-    bool managed = false;
-    bool authoritative = false;
-    bool detected = true;
-    IdentityResult identity = IdentityResult::IdentityValidationFailed;
-    ProcessExecutionState executionState = ProcessExecutionState::Unknown;
-    std::string reason;
-    std::string lifecycleStatus;
-    std::string attemptLifecycleState;
-    std::optional<long long> experimentId;
-    std::optional<long long> checkpointEvalId;
-    std::optional<std::string> expectedExecutable;
-    std::optional<std::string> observedExecutable;
-    std::optional<bool> executableIdentityMatch;
-    double cpuPercent = 0.0;
-    double memPercent = 0.0;
-    double rssMb = 0.0;
-};
-
-struct SchedulerWorkerAggregate
-{
-    int workers = 0;
-    double cpuPercent = 0.0;
-    double memPercent = 0.0;
-    double rssMb = 0.0;
-};
-
-struct SchedulerWorkerClassificationSummary
-{
-    SchedulerWorkerAggregate managedTrain;
-    SchedulerWorkerAggregate managedInfer;
-    SchedulerWorkerAggregate managedAnalyze;
-    SchedulerWorkerAggregate managedRunningTrain;
-    SchedulerWorkerAggregate managedRunningInfer;
-    SchedulerWorkerAggregate managedRunningAnalyze;
-    SchedulerWorkerAggregate managedPausedTrain;
-    SchedulerWorkerAggregate managedPausedInfer;
-    SchedulerWorkerAggregate managedPausedAnalyze;
-    SchedulerWorkerAggregate unmanagedTrain;
-    SchedulerWorkerAggregate unmanagedInfer;
-    SchedulerWorkerAggregate unmanagedAnalyze;
-    SchedulerWorkerAggregate identityMismatchTrain;
-    SchedulerWorkerAggregate identityMismatchInfer;
-    SchedulerWorkerAggregate identityMismatchAnalyze;
-    SchedulerWorkerAggregate expectedMissingTrain;
-    SchedulerWorkerAggregate expectedMissingInfer;
-    SchedulerWorkerAggregate expectedMissingAnalyze;
-};
-
-class ProcessOperations
+class ProcessOperations : public ProcessObserver
 {
 public:
     virtual ~ProcessOperations() = default;
-    virtual ProcessObservation Observe(int pid) = 0;
     virtual bool SignalProcessGroup(int processGroupId,
                                     int signalNumber,
                                     int& errorNumber) = 0;
     virtual bool WaitForProcessGroupExit(
         int processGroupId,
         std::chrono::milliseconds timeout) = 0;
-    virtual int CallerPid() const = 0;
-    virtual int CallerProcessGroupId() const = 0;
 };
 
-std::optional<std::string> ReadProcessStartIdentity(int pid);
 std::unique_ptr<ProcessOperations> CreateNativeProcessOperations();
 std::unique_ptr<ProcessOperations> CreateNativeProcessOperationsForTesting(
     std::unique_ptr<NativeProcessObservationBackend> backend);
-
-ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
-                                      ProcessOperations& processes);
-
-// Scheduler admission may validate a pending experiment only after it has
-// locked and verified the exact authoritative stopped worker attempt. This
-// retains every native process-identity check used for active workers and
-// additionally requires the observed process to be stopped.
-ValidatedWorker ValidateStoppedWorkerForSchedulerAdmission(
-    const ManagedWorker& worker,
-    ProcessOperations& processes);
-
-// Status/reconciliation validation for an experiment whose lifecycle is
-// paused and whose exact active durable attempt is stopped. This uses the same
-// complete PID/PGID/start/command/executable validation as resume admission,
-// but retains the paused lifecycle as a distinct ownership state.
-ValidatedWorker ValidatePausedManagedWorker(
-    const ManagedWorker& worker,
-    ProcessOperations& processes);
-
-// Classifies scheduler worker processes against their distinct authoritative
-// experiment or checkpoint-evaluation rows. Checkpoint-tagged commands are
-// never authorized by an experiment row, even if a PID or model happens to
-// overlap.
-std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
-    const std::vector<SchedulerWorkerCandidate>& candidates,
-    const std::vector<ManagedWorker>& authoritativeWorkers,
-    ProcessOperations& processes);
-SchedulerWorkerClassificationSummary SummarizeSchedulerWorkers(
-    const std::vector<SchedulerWorkerClassification>& classifications);
 
 struct SignalOutcome
 {
@@ -285,18 +92,7 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
                            std::chrono::milliseconds grace,
                            ProcessOperations& processes);
 
-struct ControlSnapshot
-{
-    std::string desiredState = "running";
-    std::optional<long long> activeRequestId;
-    std::optional<long long> currentPauseRequestId;
-    std::optional<std::string> activeAction;
-    std::optional<std::string> cancellationMode;
-    bool inferBeforeCancel = false;
-};
-
 void AcquireCoordinationLock(pqxx::transaction_base& transaction);
-ControlSnapshot LoadControlSnapshot(pqxx::transaction_base& transaction);
 bool NormalSchedulingAllowed(const ControlSnapshot& snapshot);
 bool CancellationInferenceAllowed(const ControlSnapshot& snapshot);
 bool CancellationCheckpointTrainAllowed(const ControlSnapshot& snapshot);
@@ -486,7 +282,5 @@ int RunCampaignMaterializationResumeCommandWithProcessOperationsForTesting(
 
 const char* ToString(Action action);
 const char* ToString(CancellationMode mode);
-const char* ToString(IdentityResult result);
-const char* ToString(ProcessExecutionState state);
 
 } // namespace EA::GlobalExperimentControl

@@ -1025,9 +1025,9 @@ SchedulerOwnerProcessEvidence InspectSchedulerOwnerProcess(
     const std::string& canonicalExecutable,
     EA::GlobalExperimentControl::ProcessObservation* observed)
 {
-    std::unique_ptr<EA::GlobalExperimentControl::ProcessOperations>
+    std::unique_ptr<EA::GlobalExperimentControl::ProcessObserver>
         processes =
-            EA::GlobalExperimentControl::CreateNativeProcessOperations();
+            EA::GlobalExperimentControl::CreateNativeProcessObserver();
     const EA::GlobalExperimentControl::ProcessObservation observation =
         processes->Observe(pid);
     if (observed != nullptr)

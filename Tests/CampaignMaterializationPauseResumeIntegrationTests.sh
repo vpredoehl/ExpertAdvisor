@@ -73,12 +73,14 @@ read -r -a pqxx_link_flags <<<"$(pkg-config --libs libpqxx)"
     -I"${repo_root}/Headers" "${pqxx_compile_flags[@]}" \
     "${repo_root}/Tests/CampaignMaterializationControlCliHarness.cpp" \
     "${repo_root}/Sources/GlobalExperimentControl.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerOperationalObservation.cpp" \
     "${pqxx_link_flags[@]}" -o "${harness}"
 "${CXX:-clang++}" -std=c++20 -O0 -g \
     -Wno-deprecated-declarations -Wno-c++23-attribute-extensions \
     -I"${repo_root}/Headers" "${pqxx_compile_flags[@]}" \
     "${repo_root}/Tests/GlobalExperimentControlProcessTests.cpp" \
     "${repo_root}/Sources/GlobalExperimentControl.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerOperationalObservation.cpp" \
     "${pqxx_link_flags[@]}" -o "${process_binary}"
 
 createdb "${test_db}"

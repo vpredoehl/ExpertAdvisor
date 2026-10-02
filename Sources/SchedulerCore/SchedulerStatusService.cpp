@@ -34,7 +34,7 @@
 #include "FeatureAblationPairEvaluationService.hpp"
 #include "FeatureAblationReplicationEvaluationService.hpp"
 #include "FeatureWarmupScope.hpp"
-#include "GlobalExperimentControl.hpp"
+#include "SchedulerOperationalObservation.hpp"
 #include "InferenceProfitabilityRepository.hpp"
 #include "PairedTrainingObjectiveEvaluationService.hpp"
 #include "Params.hpp"
@@ -1454,7 +1454,7 @@ SchedulerWorkerAccounting ComputeSchedulerWorkerAccounting(
     const SchedulerStatusProcessSnapshot& processes,
     const std::vector<EA::GlobalExperimentControl::ManagedWorker>&
         authoritativeWorkers,
-    EA::GlobalExperimentControl::ProcessOperations& processOperations)
+    EA::GlobalExperimentControl::ProcessObserver& processObserver)
 {
     std::vector<EA::GlobalExperimentControl::SchedulerWorkerCandidate>
         candidates;
@@ -1473,7 +1473,7 @@ SchedulerWorkerAccounting ComputeSchedulerWorkerAccounting(
     }
     const auto classifications =
         EA::GlobalExperimentControl::ClassifySchedulerWorkers(
-            candidates, authoritativeWorkers, processOperations);
+            candidates, authoritativeWorkers, processObserver);
     const auto summary =
         EA::GlobalExperimentControl::SummarizeSchedulerWorkers(
             classifications);
@@ -2470,11 +2470,11 @@ int PrintSchedulerStatusFromTransaction(
     EnrichSchedulerStatusJobs(completed, processes);
     EnrichSchedulerStatusJobs(failed, processes);
     EnrichCheckpointStatusJobs(activeCheckpointInfer, processes);
-    auto processOperations =
-        EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    auto processObserver =
+        EA::GlobalExperimentControl::CreateNativeProcessObserver();
     const SchedulerWorkerAccounting workerAccounting =
         ComputeSchedulerWorkerAccounting(
-            processes, authoritativeWorkers, *processOperations);
+            processes, authoritativeWorkers, *processObserver);
 
     const bool schedulerRunning = !processes.schedulerPids.empty();
     const std::string schedulerPid =
@@ -3086,6 +3086,8 @@ int PrintObserverSchedulerStatus(SchedulerOperationalReadModel& readModel,
             const auto globalControl =
                 EA::GlobalExperimentControl::LoadControlSnapshot(transaction);
             SchedulerOptions options;
+            options.schedulerExecutablePath =
+                EA::ExperimentScheduler::ResolveCanonicalExecutablePath();
             return PrintSchedulerStatusFromTransaction(
                 options, transaction, globalControl);
         });

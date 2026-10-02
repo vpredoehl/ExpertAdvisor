@@ -376,6 +376,7 @@
 		0F1A003133A0000100AAA001 /* SchedulerStatusService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A003033A0000100AAA001 /* SchedulerStatusService.cpp */; };
 		0F1A004633A0000100AAA001 /* SchedulerObserverCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A004033A0000100AAA001 /* SchedulerObserverCli.cpp */; };
 		0F1A004733A0000100AAA001 /* SchedulerOperationalReadModel.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A004233A0000100AAA001 /* SchedulerOperationalReadModel.cpp */; };
+		0F1A005533A0000100AAA001 /* SchedulerOperationalObservation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A005233A0000100AAA001 /* SchedulerOperationalObservation.cpp */; };
 		0F1A004833A0000100AAA001 /* ObserverMain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F1A004433A0000100AAA001 /* ObserverMain.cpp */; };
 		0F1A004933A0000100AAA001 /* libSchedulerCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F20000133D0000100AAA001 /* libSchedulerCore.a */; };
 		0F20000833D0000100AAA001 /* SchedulerEngine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F20001033D0000100AAA001 /* SchedulerEngine.cpp */; };
@@ -659,6 +660,9 @@
 		0F1A004133A0000100AAA001 /* SchedulerObserverCli.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerObserverCli.hpp; path = Sources/SchedulerCore/SchedulerObserverCli.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A004233A0000100AAA001 /* SchedulerOperationalReadModel.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerOperationalReadModel.cpp; path = Sources/SchedulerCore/SchedulerOperationalReadModel.cpp; sourceTree = SOURCE_ROOT; };
 		0F1A004333A0000100AAA001 /* SchedulerOperationalReadModel.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerOperationalReadModel.hpp; path = Sources/SchedulerCore/SchedulerOperationalReadModel.hpp; sourceTree = SOURCE_ROOT; };
+		0F1A005233A0000100AAA001 /* SchedulerOperationalObservation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerOperationalObservation.cpp; path = Sources/SchedulerCore/SchedulerOperationalObservation.cpp; sourceTree = SOURCE_ROOT; };
+		0F1A005333A0000100AAA001 /* SchedulerOperationalObservation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerOperationalObservation.hpp; path = Sources/SchedulerCore/SchedulerOperationalObservation.hpp; sourceTree = SOURCE_ROOT; };
+		0F1A005433A0000100AAA001 /* SchedulerOperationalObservationInternal.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = SchedulerOperationalObservationInternal.hpp; path = Sources/SchedulerCore/SchedulerOperationalObservationInternal.hpp; sourceTree = SOURCE_ROOT; };
 		0F1A004433A0000100AAA001 /* ObserverMain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ObserverMain.cpp; path = LSTM/ObserverMain.cpp; sourceTree = SOURCE_ROOT; };
 		0F1A004533A0000100AAA001 /* lstm-observer */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-observer"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = GlobalExperimentControl.cpp; path = Sources/GlobalExperimentControl.cpp; sourceTree = SOURCE_ROOT; };
@@ -1626,6 +1630,9 @@
 				0F1A004133A0000100AAA001 /* SchedulerObserverCli.hpp */,
 				0F1A004233A0000100AAA001 /* SchedulerOperationalReadModel.cpp */,
 				0F1A004333A0000100AAA001 /* SchedulerOperationalReadModel.hpp */,
+				0F1A005233A0000100AAA001 /* SchedulerOperationalObservation.cpp */,
+				0F1A005333A0000100AAA001 /* SchedulerOperationalObservation.hpp */,
+				0F1A005433A0000100AAA001 /* SchedulerOperationalObservationInternal.hpp */,
 				0F31000134B0000100AAA001 /* ProductionSchedulerDaemon.cpp */,
 				0F31000234B0000100AAA001 /* ProductionSchedulerDaemon.hpp */,
 				0F31000334B0000100AAA001 /* ProductionSchedulerRuntimeInternal.hpp */,
@@ -2456,6 +2463,7 @@
 				0F1A003133A0000100AAA001 /* SchedulerStatusService.cpp in Sources */,
 				0F1A004633A0000100AAA001 /* SchedulerObserverCli.cpp in Sources */,
 				0F1A004733A0000100AAA001 /* SchedulerOperationalReadModel.cpp in Sources */,
+				0F1A005533A0000100AAA001 /* SchedulerOperationalObservation.cpp in Sources */,
 				0F31001034B0000100AAA001 /* ProductionSchedulerDaemon.cpp in Sources */,
 				0F30001134A0000100AAA001 /* SchedulerDaemonCli.cpp in Sources */,
 				0F30001034A0000100AAA001 /* SchedulerDaemonConfiguration.cpp in Sources */,

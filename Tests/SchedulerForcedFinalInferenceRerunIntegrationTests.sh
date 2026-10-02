@@ -75,6 +75,7 @@ if [[ -z "${process_binary}" ]]; then
         "${pqxx_compile_flags[@]}" \
         "${repo_root}/Tests/GlobalExperimentControlProcessTests.cpp" \
         "${repo_root}/Sources/GlobalExperimentControl.cpp" \
+        "${repo_root}/Sources/SchedulerCore/SchedulerOperationalObservation.cpp" \
         "${pqxx_link_flags[@]}" \
         -o "${process_binary}"
 else
