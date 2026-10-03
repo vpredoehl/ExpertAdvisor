@@ -1,4 +1,5 @@
 #pragma once
+#include "SchedulerPhasePriority.hpp"
 
 namespace EA::SchedulerCore::ProductionRuntimeDetail
 {
@@ -9,6 +10,8 @@ EA::SchedulerCore::SchedulerOwnerProcessEvidence InspectSchedulerOwnerProcess(in
 
 struct SchedulerOptions
 {
+    std::optional<EA::SchedulerCore::SchedulerPhasePriority> dryRunPhasePriority;
+    bool orderedPhaseAdmission = false;
     bool modelInfo = false;
     bool compactStatus = false;
     bool createEconomicCalendarSnapshot = false;

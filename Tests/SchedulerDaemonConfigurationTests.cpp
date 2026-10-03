@@ -171,5 +171,20 @@ int main()
          "--analyze-worker=/bin/sh", "--analyze-worker=/bin/sh"},
         "--analyze-worker specified more than once");
 
+    const char* controlArgv[] = {"LSTM_Release", "--set-phase-priority=infer:train:analyze"};
+    assert(IsSchedulerDaemonCommand(2, controlArgv));
+    assert(Parse({"LSTM_Release", "--set-phase-priority", "infer:train:analyze"}).setPhasePriority->canonical() == "infer:train:analyze");
+    assert(Parse({"LSTM_Release", "--show-phase-priority"}).showPhasePriority);
+    assert(Parse({"lstm-scheduler", "--schedule-experiments", "--show-phase-priority"}).showPhasePriority);
+    assert(Parse({"LSTM_Release", "--schedule-experiments", "--phase-priority=train:infer:analyze"}).phasePriority->canonical() == "train:infer:analyze");
+    assert(Parse({"LSTM_Release", "--schedule-experiments", "--phase-priority", "concurrent"}).phasePriority->concurrent);
+    ExpectInvalid({"LSTM_Release", "--set-phase-priority=concurrent", "--show-phase-priority"},
+        "choose either --set-phase-priority or --show-phase-priority");
+    ExpectInvalid({"LSTM_Release", "--show-phase-priority", "--scheduler-once"},
+        "phase-priority control does not accept daemon options");
+    ExpectInvalid({"LSTM_Release", "--schedule-experiments", "--phase-priority=concurrent", "--phase-priority=concurrent"},
+        "--phase-priority specified more than once");
+    ExpectInvalid({"LSTM_Release", "--set-phase-priority=concurrent", "--phase-priority=concurrent"},
+        "--phase-priority is a daemon startup option");
     return 0;
 }

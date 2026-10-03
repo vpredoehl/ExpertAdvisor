@@ -157,5 +157,37 @@ int main()
         assert(rejected);
     }
 
+    for (int phase = 0; phase < 3; ++phase)
+    {
+        RecordingCycle cycle;
+        cycle.preparation.trainAdmissionAllowed = phase == 0;
+        cycle.preparation.inferAdmissionAllowed = phase == 1;
+        cycle.preparation.analyzeAdmissionAllowed = phase == 2;
+        SchedulerCycleService service{cycle.operations()};
+        assert(service.runOnce() == 0);
+        std::vector<std::string> expected{"begin_poll", "prepare"};
+        if (phase == 0) expected.push_back("train");
+        if (phase == 1) expected.push_back("final_inference");
+        if (phase == 2) expected.push_back("final_analysis");
+        if (phase == 1) expected.push_back("checkpoint_inference");
+        if (phase == 2) expected.push_back("checkpoint_analysis");
+        expected.push_back("finish_poll");
+        assert(cycle.calls == expected);
+    }
+    {
+        RecordingCycle cycle;
+        cycle.preparation.trainAdmissionAllowed = false;
+        cycle.preparation.inferAdmissionAllowed = false;
+        cycle.preparation.analyzeAdmissionAllowed = false;
+        SchedulerCycleService service{cycle.operations()};
+        assert(service.runOnce() == 0);
+        assert((cycle.calls == std::vector<std::string>{"begin_poll", "prepare", "finish_poll"}));
+        cycle.calls.clear();
+        cycle.preparation.normalSchedulingAllowed = false;
+        cycle.preparation.cancellationCheckpointTrainAllowed = true;
+        cycle.preparation.cancellationInferenceAllowed = true;
+        assert(service.runOnce() == 0);
+        assert((cycle.calls == std::vector<std::string>{"begin_poll", "prepare", "train_cancellation", "checkpoint_inference", "finish_poll"}));
+    }
     return 0;
 }

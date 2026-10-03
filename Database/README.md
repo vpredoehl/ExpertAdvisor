@@ -537,3 +537,7 @@ Run backups before `./migrate_lstm_db.sh` when you need a rollback point. Dump
 files are ignored by default to avoid accidental large commits. The stable
 `Database/backups/LSTM_latest.dump` path is explicitly allowed by `.gitignore`
 for deliberate milestone snapshots.
+
+Scheduler phase admission is persisted by `099_scheduler_phase_priority.sql`.
+It defaults to concurrent scheduling and supports live phase-order updates.
+See [phase-priority usage](../docs/scheduler/phase-priority.md).

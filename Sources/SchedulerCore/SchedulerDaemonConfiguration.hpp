@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SchedulerDaemonDefaults.hpp"
+#include "SchedulerPhasePriority.hpp"
 
 #include <optional>
 #include <string>
@@ -14,6 +15,9 @@ namespace EA::SchedulerCore
 struct SchedulerDaemonConfiguration
 {
     bool help = false;
+    std::optional<SchedulerPhasePriority> phasePriority;
+    std::optional<SchedulerPhasePriority> setPhasePriority;
+    bool showPhasePriority = false;
     int maxTrainProcs = kDefaultSchedulerMaxTrainProcs;
     int maxInferProcs = kDefaultSchedulerMaxInferProcs;
     int maxAnalyzeProcs = kDefaultSchedulerMaxAnalyzeProcs;

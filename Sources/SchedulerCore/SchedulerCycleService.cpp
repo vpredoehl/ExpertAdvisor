@@ -39,11 +39,16 @@ int SchedulerCycleService::runOnce()
         return result;
     }
 
-    result |= operations_.runTrain(false);
-    result |= operations_.runFinalInference();
-    result |= operations_.runFinalAnalysis();
-    result |= operations_.runCheckpointInference();
-    result |= operations_.runCheckpointAnalysis();
+    if (preparation.trainAdmissionAllowed)
+        result |= operations_.runTrain(false);
+    if (preparation.inferAdmissionAllowed)
+        result |= operations_.runFinalInference();
+    if (preparation.analyzeAdmissionAllowed)
+        result |= operations_.runFinalAnalysis();
+    if (preparation.inferAdmissionAllowed)
+        result |= operations_.runCheckpointInference();
+    if (preparation.analyzeAdmissionAllowed)
+        result |= operations_.runCheckpointAnalysis();
     operations_.finishPoll();
     return result;
 }

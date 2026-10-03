@@ -12,6 +12,9 @@ struct SchedulerCyclePreparation
     bool cancellationInferenceAllowed = false;
     bool cancellationCheckpointTrainAllowed = false;
     int result = 0;
+    bool trainAdmissionAllowed = true;
+    bool inferAdmissionAllowed = true;
+    bool analyzeAdmissionAllowed = true;
 };
 
 // Adapter boundary for one scheduler poll. Implementations retain transaction,

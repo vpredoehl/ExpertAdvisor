@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SchedulerChildCompletionService.hpp"
+#include <string>
 
 namespace EA::SchedulerCore
 {
@@ -12,6 +13,7 @@ class SchedulerRuntimeContext final
 {
 public:
     SchedulerOwnedChildren ownedChildren;
+    std::string lastPhaseAdmissionLog;
 };
 
 } // namespace EA::SchedulerCore

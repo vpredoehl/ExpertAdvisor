@@ -28,6 +28,7 @@
 #include <vector>
 
 #include <pqxx/pqxx>
+#include "SchedulerPhasePriorityRepository.hpp"
 
 #include "ExperimentScheduler.hpp"
 #include "GlobalExperimentControl.hpp"
@@ -9745,7 +9746,7 @@ ClaimCheckpointAnalysis(
         transaction,
         "SELECT count(*) FROM experiment "
         "WHERE status='pending' AND phase='analyze';");
-    if (pendingFinalAnalyze > 0)
+    if (pendingFinalAnalyze > 0 && !options.orderedPhaseAdmission)
     {
         transaction.commit();
         return std::nullopt;
@@ -9760,6 +9761,18 @@ ClaimCheckpointAnalysis(
         return std::nullopt;
     }
     ClaimedCheckpointAnalysis claim;
+    if (options.orderedPhaseAdmission)
+    {
+        std::erase_if(pending, [&](const CheckpointEvalRow& eval) {
+            const auto parent = transaction.exec_params(
+                "SELECT status FROM experiment WHERE experiment_id=$1",
+                eval.experiment.experimentId);
+            return parent.empty() || parent[0][0].as<std::string>() == "paused" ||
+                !ModelExists(transaction, eval.checkpointModelId) ||
+                !FindCompletedCheckpointInferenceResultId(transaction, eval);
+        });
+        if (pending.empty()) { transaction.commit(); return std::nullopt; }
+    }
     claim.evaluation = pending.front();
     const std::string commandIdentity =
         "checkpoint_analyze:" +
@@ -10485,7 +10498,8 @@ int RunCheckpointEvalInferJobs(
         if (CountRows(
                 transaction,
                 "SELECT count(*) FROM experiment "
-                "WHERE status='pending' AND phase='infer';") == 0)
+                "WHERE status='pending' AND phase='infer';") == 0 ||
+            options.orderedPhaseAdmission)
         {
             jobs = LoadCheckpointEvalRows(
                 transaction, "pending", "infer");
@@ -10500,6 +10514,17 @@ int RunCheckpointEvalInferJobs(
         if (cancellationInference &&
             eval.cancellationRequestId != activeRequestId)
             continue;
+        if (options.orderedPhaseAdmission)
+        {
+            pqxx::connection connection{LstmDbConnectionString()};
+            pqxx::work transaction{connection};
+            SetTransactionReadOnly(transaction);
+            const auto parent = transaction.exec_params(
+                "SELECT status FROM experiment WHERE experiment_id=$1",
+                eval.experiment.experimentId);
+            if (parent.empty() || parent[0][0].as<std::string>() == "paused" ||
+                !ModelExists(transaction, eval.checkpointModelId)) continue;
+        }
         if (!eval.experiment.inferStart ||
             !eval.experiment.inferEnd)
             continue;
@@ -10566,10 +10591,76 @@ std::string SchedulerCancellationReconciliationOwner(
            ";executable:" + options.schedulerExecutablePath;
 }
 
+EA::SchedulerCore::SchedulerPhaseAdmissionPlan LoadPhaseAdmissionPlan(
+    pqxx::work& transaction,
+    const SchedulerOptions& options,
+    SchedulerEventLogState* logState)
+{
+    using namespace EA::SchedulerCore;
+    PostgresSchedulerPhasePriorityRepository repository{transaction};
+    const auto policy = options.dryRunPhasePriority
+        ? *options.dryRunPhasePriority : SchedulerPhasePriorityService{repository}.load();
+    std::array<SchedulerPhaseDemand, 3> demand{};
+    SchedulerServiceComposition services{transaction};
+    const std::array<int, 3> limits{
+        options.maxTrainProcs, options.maxInferProcs, options.maxAnalyzeProcs};
+    if (!policy.concurrent)
+    {
+        for (std::size_t index = 0; index < demand.size(); ++index)
+        {
+            const std::string phase{SchedulerPhaseName(static_cast<SchedulerPhase>(index))};
+            auto& state = demand[index];
+            state.enabled = limits[index] > 0;
+            // Authoritative capacity includes checkpoint attempts, reservations,
+            // and ambiguous processes; stopped managed workers do not consume it.
+            state.activeWorkers = services.admission.capacityUsed(phase);
+            if (!state.enabled) continue;
+            for (const auto& job : LoadPendingExperiments(services.admission, phase))
+            {
+                const auto modelId = phase == "train"
+                    ? (job.lastModelId ? job.lastModelId : job.resumeModelId)
+                    : job.lastModelId;
+                if (phase != "train" && !modelId) continue;
+                if (modelId && !ModelExists(transaction, *modelId)) continue;
+                if (!SemanticWorkerPreflight(options, job.experimentId,
+                        modelId, phase, logState, options.schedulerVerbose)) continue;
+                state.eligiblePending = true;
+                break;
+            }
+            if (state.eligiblePending || phase == "train") continue;
+            for (const auto& eval : LoadCheckpointEvalRows(transaction, "pending", phase))
+            {
+                // A paused parent does not demand admission in ordered mode.
+                const auto parent = transaction.exec_params(
+                    "SELECT status FROM experiment WHERE experiment_id=$1",
+                    eval.experiment.experimentId);
+                if (parent.empty() || parent[0][0].as<std::string>() == "paused") continue;
+                if (!ModelExists(transaction, eval.checkpointModelId)) continue;
+                if (phase == "infer" && (!eval.experiment.inferStart || !eval.experiment.inferEnd)) continue;
+                if (phase == "analyze" &&
+                    !FindCompletedCheckpointInferenceResultId(transaction, eval)) continue;
+                if (!SemanticWorkerPreflight(options, eval.experiment.experimentId,
+                        eval.checkpointModelId, phase, logState, options.schedulerVerbose)) continue;
+                state.eligiblePending = true;
+                break;
+            }
+        }
+    }
+    const auto plan = PlanSchedulerPhases(policy, demand);
+    const std::string message = "SCHEDULER_PHASE_ADMISSION,phase_priority=" + policy.canonical() +
+        ",selected_phase=" + (plan.selected ? std::string{SchedulerPhaseName(*plan.selected)} : "none") +
+        ",draining=" + (plan.draining ? "1" : "0");
+    if (!options.runtimeContext || options.runtimeContext->lastPhaseAdmissionLog != message || options.schedulerVerbose)
+        std::cout << message << std::endl;
+    if (options.runtimeContext) options.runtimeContext->lastPhaseAdmissionLog = message;
+    return plan;
+}
+
 int RunSchedulerOnce(const SchedulerOptions& options,
                      SchedulerEventLogState* logState)
 {
     QueueSnapshot snapshot;
+    SchedulerOptions cycleOptions = options;
     EA::SchedulerCore::SchedulerCycleOperations operations;
     operations.beginPoll = [logState] { BeginSchedulerPollLogging(logState); };
     operations.prepare = [&] {
@@ -10612,19 +10703,27 @@ int RunSchedulerOnce(const SchedulerOptions& options,
         }
         snapshot = LoadQueueSnapshot(services.admission);
         PrintQueueSnapshot(snapshot, logState, options.schedulerVerbose);
+        if (preparation.normalSchedulingAllowed)
+        {
+            const auto plan = LoadPhaseAdmissionPlan(w, options, logState);
+            cycleOptions.orderedPhaseAdmission = plan.ordered;
+            preparation.trainAdmissionAllowed = plan.allowed[0];
+            preparation.inferAdmissionAllowed = plan.allowed[1];
+            preparation.analyzeAdmissionAllowed = plan.allowed[2];
+        }
         w.commit();
         preparation.ready = true;
         return preparation;
     };
     operations.runTrain = [&](bool cancellationOnly) {
-        return RunTrainJobs(options, snapshot, logState, cancellationOnly);
+        return RunTrainJobs(cycleOptions, snapshot, logState, cancellationOnly);
     };
-    operations.runFinalInference = [&] { return RunInferJobs(options, snapshot, logState); };
-    operations.runFinalAnalysis = [&] { return RunAnalyzeJobs(options, snapshot, logState); };
+    operations.runFinalInference = [&] { return RunInferJobs(cycleOptions, snapshot, logState); };
+    operations.runFinalAnalysis = [&] { return RunAnalyzeJobs(cycleOptions, snapshot, logState); };
     operations.runCheckpointInference = [&] {
-        return RunCheckpointEvalInferJobs(options, logState);
+        return RunCheckpointEvalInferJobs(cycleOptions, logState);
     };
-    operations.runCheckpointAnalysis = [&] { return RunCheckpointEvalAnalyzeJobs(options); };
+    operations.runCheckpointAnalysis = [&] { return RunCheckpointEvalAnalyzeJobs(cycleOptions); };
     operations.finishPoll = [logState] { FinishSchedulerPollLogging(logState); };
     EA::SchedulerCore::SchedulerCycleService service{
         std::move(operations)};
@@ -10697,6 +10796,11 @@ int RunScheduler(
         if (!control)
             return 1;
         initialGlobalState = control->desiredState;
+        if (daemonConfiguration.phasePriority && !options.dryRun)
+        {
+            PostgresSchedulerPhasePriorityRepository repository{w};
+            SchedulerPhasePriorityService{repository}.set(*daemonConfiguration.phasePriority);
+        }
         if (!options.dryRun)
         {
             (void)EA::GlobalExperimentControl::ReconcileActiveCancellation(
@@ -10820,6 +10924,25 @@ int RunProductionSchedulerDaemon(
 {
     using namespace ProductionRuntimeDetail;
     SchedulerOptions options;
+    if (configuration.setPhasePriority || configuration.showPhasePriority)
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        if (configuration.setPhasePriority && !configuration.dryRun)
+            SetTransactionReadWrite(transaction);
+        PostgresSchedulerPhasePriorityRepository repository{transaction};
+        SchedulerPhasePriorityService service{repository};
+        if (configuration.setPhasePriority && !configuration.dryRun)
+            service.set(*configuration.setPhasePriority);
+        const auto policy = configuration.setPhasePriority && configuration.dryRun
+            ? *configuration.setPhasePriority : service.load();
+        transaction.commit();
+        std::cout << "SCHEDULER_PHASE_PRIORITY,phase_priority=" << policy.canonical()
+                  << ",dry_run=" << (configuration.dryRun ? 1 : 0) << std::endl;
+        return 0;
+    }
+    if (configuration.dryRun)
+        options.dryRunPhasePriority = configuration.phasePriority;
     options.scheduleExperiments = true;
     options.maxTrainProcs = configuration.maxTrainProcs;
     options.maxInferProcs = configuration.maxInferProcs;

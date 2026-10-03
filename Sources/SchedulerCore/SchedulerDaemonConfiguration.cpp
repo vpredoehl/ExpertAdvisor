@@ -68,7 +68,10 @@ bool IsSchedulerDaemonCommand(int argc, const char* argv[])
     for (int index = 1; index < argc; ++index)
     {
         if (argv[index] != nullptr &&
-            std::string{argv[index]} == "--schedule-experiments")
+            (std::string{argv[index]} == "--schedule-experiments" ||
+             std::string{argv[index]} == "--show-phase-priority" ||
+             std::string{argv[index]} == "--set-phase-priority" ||
+             std::string{argv[index]}.rfind("--set-phase-priority=", 0) == 0))
         {
             return true;
         }
@@ -113,6 +116,30 @@ SchedulerDaemonConfiguration ParseSchedulerDaemonConfiguration(
 
         if (argument == "--schedule-experiments")
             commandSeen = true;
+        else if (argument == "--show-phase-priority")
+        {
+            if (configuration.showPhasePriority)
+                throw std::invalid_argument("--show-phase-priority specified more than once");
+            configuration.showPhasePriority = true;
+        }
+        else if (argument == "--phase-priority" ||
+                 SplitOptionWithValue(argument, "--phase-priority", value))
+        {
+            if (configuration.phasePriority)
+                throw std::invalid_argument("--phase-priority specified more than once");
+            if (argument == "--phase-priority")
+                value = RequireNextArgument(argc, argv, index, argument);
+            configuration.phasePriority = SchedulerPhasePriority::Parse(value);
+        }
+        else if (argument == "--set-phase-priority" ||
+                 SplitOptionWithValue(argument, "--set-phase-priority", value))
+        {
+            if (configuration.setPhasePriority)
+                throw std::invalid_argument("--set-phase-priority specified more than once");
+            if (argument == "--set-phase-priority")
+                value = RequireNextArgument(argc, argv, index, argument);
+            configuration.setPhasePriority = SchedulerPhasePriority::Parse(value);
+        }
         else if (argument == "--help")
             configuration.help = true;
         else if (argument == "--scheduler-once")
@@ -247,7 +274,27 @@ SchedulerDaemonConfiguration ParseSchedulerDaemonConfiguration(
                 "'");
     }
 
-    if (!commandSeen)
+    const bool controlCommand = configuration.setPhasePriority.has_value() ||
+        configuration.showPhasePriority;
+    if (configuration.setPhasePriority && configuration.showPhasePriority)
+        throw std::invalid_argument("choose either --set-phase-priority or --show-phase-priority");
+    if (controlCommand && configuration.phasePriority)
+        throw std::invalid_argument("--phase-priority is a daemon startup option");
+    // Standalone entry supplies --schedule-experiments for control commands too.
+    // Controls must never launch or reconcile workers, regardless of that selector.
+    if (controlCommand)
+    {
+        for (int index = 1; index < argc; ++index)
+        {
+            const std::string argument{argv[index]};
+            if (argument == "--schedule-experiments" || argument == "--help" ||
+                argument == "--dry-run" || argument == "--show-phase-priority" ||
+                argument.rfind("--set-phase-priority=", 0) == 0) continue;
+            if (argument == "--set-phase-priority") { ++index; continue; }
+            throw std::invalid_argument("phase-priority control does not accept daemon options");
+        }
+    }
+    if (!commandSeen && !controlCommand)
         throw std::invalid_argument(
             "expected exactly one experiment scheduler command");
     if (configuration.autoQueueContinuations)
@@ -282,6 +329,10 @@ void PrintSchedulerDaemonHelp(const char* executable)
         << "[--auto-queue-continuations] [--continuation-scan-seconds=N] "
         << "[--continuation-max-queues-per-scan=N] "
         << "[--continuation-dry-run]\n"
+        << "Phase admission: --phase-priority=train:infer:analyze (any permutation)\n"
+        << "Live controls: --set-phase-priority=ORDER | --show-phase-priority\n"
+        << "Use concurrent to restore simultaneous scheduling. Controls do not start workers.\n"
+        << "Policy is persisted and reloaded each poll; existing workers drain before switching phases.\n"
         << "Scheduler worker limits accept non-negative integers. Zero "
         << "prevents new workers in that capacity class without stopping "
         << "the scheduler or existing workers.\n"
