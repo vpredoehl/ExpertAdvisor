@@ -1,5 +1,6 @@
 #include "CausalPriceLevelEngine.hpp"
 #include "CausalPriceLevelV2Engine.hpp"
+#include "CausalPriceLevelRawFeatures.hpp"
 #include "PriceLevelCharacterization.hpp"
 
 #include <algorithm>
@@ -17,6 +18,7 @@ namespace
 namespace PL = EA::PriceLevel;
 namespace PLV2 = EA::PriceLevel::V2;
 namespace PLC = EA::PriceLevel::Characterization;
+namespace PLR = EA::PriceLevel::Raw;
 using namespace std::chrono_literals;
 
 PL::CompletedBar Bar(std::size_t index, double high, double low, double close)
@@ -299,6 +301,134 @@ void TestAgeAndBoundParity()
     assert(std::get<0>(largeEvidence) == 2 && std::get<1>(largeEvidence) == 0);
     assert(std::get<2>(smallEvidence) == std::get<2>(largeEvidence));
 }
+
+PLV2::Level RawLevel(std::string identity, double anchor, double width,
+                     double lower, double upper, PL::Role role,
+                     std::size_t availableBar, std::size_t evidence = 0)
+{
+    PLV2::Level level;
+    level.identity = std::move(identity);
+    level.anchorPrice = anchor;
+    level.zoneHalfWidth = width;
+    level.lower = lower;
+    level.upper = upper;
+    level.currentRole = role;
+    level.availableBar = availableBar;
+    level.retainedPivotEvidence.resize(evidence, "evidence");
+    return level;
+}
+
+PLV2::Observation RawObservation(const PLV2::Level& level,
+                                 PL::InteractionKind kind,
+                                 std::chrono::sys_seconds decision,
+                                 bool saturated = false)
+{
+    PLV2::Observation observation;
+    observation.levelIdentity = level.identity;
+    observation.kind = kind;
+    observation.availableAt = decision;
+    observation.retainedEvidenceAlreadySaturated = saturated;
+    return observation;
+}
+
+void TestFrozenRawModelExposureProjection()
+{
+    constexpr std::array<std::string_view, 11> names{{
+        "available", "zone_scale_valid", "zone_gap_signed_clipped",
+        "zone_relation", "current_role", "age_fraction",
+        "prior_evidence_saturation", "touch_now", "cross_direction_now",
+        "retest_now", "role_reversal_now"}};
+    static_assert(PLR::kFeatureCount == names.size());
+    assert(PLR::kFeatureNames == names);
+
+    PLR::Producer producer;
+    PLV2::Update none;
+    none.decisionTime = std::chrono::sys_seconds{900s};
+    assert(producer.Project(none, 1.0, 0) == PLR::FeatureVector{});
+
+    const auto decision = std::chrono::sys_seconds{1'800s};
+    const auto selected = RawLevel("selected", 10.0, 2.0, 8.0, 12.0,
+                                   PL::Role::support_like, 0, 2);
+    PLV2::Update update;
+    update.decisionTime = decision;
+    update.activeLevels = {selected};
+    update.observations = {
+        RawObservation(selected, PL::InteractionKind::level_reinforced, decision),
+        RawObservation(selected, PL::InteractionKind::touch, decision),
+        RawObservation(selected, PL::InteractionKind::cross_up, decision),
+        RawObservation(selected, PL::InteractionKind::retest, decision),
+        RawObservation(selected, PL::InteractionKind::role_reversal, decision)};
+    const auto features = producer.Project(update, 7.0, 256);
+    assert((features == PLR::FeatureVector{{1.0f, 1.0f, -0.5f, -1.0f, 1.0f,
+                                             0.5f, 1.0f / 32.0f, 1.0f, 1.0f,
+                                             1.0f, 1.0f}}));
+    assert(producer.Project(update, 8.0, 256)[2] == 0.0f);
+    assert(producer.Project(update, 20.0, 256)[2] == 1.0f);
+
+    const auto zeroWidth = RawLevel("zero", 5.0, 0.0, 5.0, 5.0,
+                                    PL::Role::resistance_like, 512);
+    update.activeLevels = {zeroWidth};
+    update.observations.clear();
+    const auto zeroWidthFeatures = producer.Project(update, 6.0, 512);
+    assert(zeroWidthFeatures[0] == 1.0f && zeroWidthFeatures[1] == 0.0f);
+    assert(zeroWidthFeatures[2] == 0.0f && zeroWidthFeatures[3] == 1.0f);
+    assert(zeroWidthFeatures[4] == -1.0f && zeroWidthFeatures[5] == 0.0f);
+
+    // Retests take precedence over the nearest otherwise eligible active level.
+    const auto nearest = RawLevel("nearest", 0.0, 1.0, -1.0, 1.0,
+                                  PL::Role::support_like, 0);
+    const auto retested = RawLevel("retested", 20.0, 1.0, 19.0, 21.0,
+                                   PL::Role::resistance_like, 0);
+    update.activeLevels = {nearest, retested};
+    update.observations = {RawObservation(retested, PL::InteractionKind::retest, decision)};
+    assert(producer.Project(update, 0.0, 1)[4] == -1.0f);
+
+    // Fallback ranking is zone distance, anchor distance, anchor, identity.
+    const auto nearerAnchor = RawLevel("nearer", -1.0, 0.0, -1.0, -1.0,
+                                       PL::Role::support_like, 0);
+    const auto fartherAnchor = RawLevel("farther", 2.0, 1.0, 1.0, 3.0,
+                                        PL::Role::resistance_like, 0);
+    update.activeLevels = {fartherAnchor, nearerAnchor};
+    update.observations.clear();
+    assert(producer.Project(update, 0.0, 1)[4] == 1.0f);
+    const auto identityZ = RawLevel("z", 3.0, 1.0, 2.0, 4.0,
+                                    PL::Role::resistance_like, 0);
+    const auto identityA = RawLevel("a", 3.0, 1.0, 2.0, 4.0,
+                                    PL::Role::support_like, 0);
+    update.activeLevels = {identityZ, identityA};
+    assert(producer.Project(update, 0.0, 1)[4] == 1.0f);
+    const auto lowerAnchor = RawLevel("later-identity", -1.0, 1.0, -2.0, 0.0,
+                                      PL::Role::support_like, 0);
+    const auto higherAnchor = RawLevel("earlier-identity", 1.0, 1.0, 0.0, 2.0,
+                                       PL::Role::resistance_like, 0);
+    update.activeLevels = {higherAnchor, lowerAnchor};
+    assert(producer.Project(update, 0.0, 1)[4] == 1.0f);
+
+    // A retest for an evicted/expired identity is ineligible; fallback remains active.
+    update.activeLevels = {nearest};
+    update.observations = {RawObservation(retested, PL::InteractionKind::retest, decision)};
+    assert(producer.Project(update, 0.0, 1)[4] == 1.0f);
+
+    // The final selectable bar is one; an active level beyond it is malformed.
+    update.activeLevels = {RawLevel("age", 1.0, 1.0, 0.0, 2.0,
+                                    PL::Role::support_like, 0, 32)};
+    update.observations.clear();
+    assert(producer.Project(update, 1.0, 512)[5] == 1.0f);
+    assert(producer.Project(update, 1.0, 512)[6] == 1.0f);
+    update.activeLevels = {RawLevel("saturated", 1.0, 1.0, 0.0, 2.0,
+                                    PL::Role::support_like, 512, 1)};
+    update.observations = {RawObservation(update.activeLevels[0],
+        PL::InteractionKind::level_reinforced, decision, true)};
+    assert(producer.Project(update, 1.0, 512)[6] == 1.0f / 32.0f);
+
+    bool malformed = false;
+    update.observations = {
+        RawObservation(update.activeLevels[0], PL::InteractionKind::cross_up, decision),
+        RawObservation(update.activeLevels[0], PL::InteractionKind::cross_down, decision)};
+    try { (void)producer.Project(update, 1.0, 512); }
+    catch (const std::runtime_error&) { malformed = true; }
+    assert(malformed);
+}
 } // namespace
 
 int main()
@@ -308,5 +438,6 @@ int main()
     TestFrozenWidthMergeAndInteractionParity();
     TestNearestAnchorIdentityTieAndNoChaining();
     TestAgeAndBoundParity();
+    TestFrozenRawModelExposureProjection();
     std::cout << "CausalPriceLevelV2EngineTests passed\n";
 }

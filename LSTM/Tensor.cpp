@@ -147,6 +147,11 @@ void Tensor::Add(Feature f)
     const auto pocketFeatures = causalPocketFeatures.AddCompletedBar(
         {epochSeconds, static_cast<double>(f.open), static_cast<double>(f.high),
          static_cast<double>(f.low), static_cast<double>(f.close)});
+    const auto priceLevelUpdate = causalPriceLevelV2.AddCompletedBar(
+        {f.time, static_cast<double>(f.open), static_cast<double>(f.high),
+         static_cast<double>(f.low), static_cast<double>(f.close)});
+    const auto priceLevelFeatures = causalPriceLevelRawFeatures.Project(
+        priceLevelUpdate, static_cast<double>(f.close), ds.size());
     if (tg4Pulse.barStart != f.time)
         throw std::logic_error("tg4_tensor_pulse_timestamp_alignment_mismatch");
     if (tg4Pulse.bits[2] > tg4Pulse.bits[1] ||
@@ -194,6 +199,8 @@ void Tensor::Add(Feature f)
         std::copy(confluenceTensorValues.begin(), confluenceTensorValues.end(),
                   low.MutableRawMemory() +
                       confluenceTg4StructuralFibonacciRetracementSupportAvailableCol);
+        std::copy(priceLevelFeatures.begin(), priceLevelFeatures.end(),
+                  low.MutableRawMemory() + priceLevelAvailableCol);
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -468,6 +475,8 @@ void Tensor::Add(Feature f)
               p + pocketRecentPriceScaleValidCol);
     std::copy(confluenceTensorValues.begin(), confluenceTensorValues.end(),
               p + confluenceTg4StructuralFibonacciRetracementSupportAvailableCol);
+    std::copy(priceLevelFeatures.begin(), priceLevelFeatures.end(),
+              p + priceLevelAvailableCol);
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

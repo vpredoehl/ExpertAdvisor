@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 11;
+inline constexpr int kModelInputSemanticLayoutVersion = 12;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -37,7 +37,7 @@ struct ModelInputSemanticLayoutRegistryEntry
 // version as predecessor. A corrected interpretation at an existing width
 // instead branches from the newest genuinely compatible predecessor; old
 // entries and their fixed maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 11>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 12>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
@@ -57,6 +57,7 @@ inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 11>
         {9, kCausalFibonacciStructuralModelInputWidth, 8},
         {10, kCausalPocketRecentObservationModelInputWidth, 9},
         {11, kFixedConfluenceTensorModelInputWidth, 10},
+        {12, kCausalPriceLevelRawModelInputWidth, 11},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -199,7 +200,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 80>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 91>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -293,6 +294,17 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 80>
          "confluence_tg4_structural_fibonacci_retracement_support_available"},
         {confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol,
          "confluence_tg4_structural_fibonacci_retracement_contradiction_available"},
+        {priceLevelAvailableCol, "available"},
+        {priceLevelZoneScaleValidCol, "zone_scale_valid"},
+        {priceLevelZoneGapSignedClippedCol, "zone_gap_signed_clipped"},
+        {priceLevelZoneRelationCol, "zone_relation"},
+        {priceLevelCurrentRoleCol, "current_role"},
+        {priceLevelAgeFractionCol, "age_fraction"},
+        {priceLevelPriorEvidenceSaturationCol, "prior_evidence_saturation"},
+        {priceLevelTouchNowCol, "touch_now"},
+        {priceLevelCrossDirectionNowCol, "cross_direction_now"},
+        {priceLevelRetestNowCol, "retest_now"},
+        {priceLevelRoleReversalNowCol, "role_reversal_now"},
     }};
 
 constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()

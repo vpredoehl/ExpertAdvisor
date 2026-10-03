@@ -6,6 +6,7 @@
 #include "ModelInputExpansion.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -76,6 +77,13 @@ inline constexpr std::array<std::string_view, kModelReturnFeatureCount>
 
 inline bool IsCategoricalModelInputFeature(std::string_view name)
 {
+    constexpr std::array<std::string_view, 8> priceLevelCategoricalNames{{
+        "available", "zone_scale_valid", "zone_relation", "current_role",
+        "touch_now", "cross_direction_now", "retest_now", "role_reversal_now"}};
+    if (std::find(priceLevelCategoricalNames.begin(),
+                  priceLevelCategoricalNames.end(), name) !=
+        priceLevelCategoricalNames.end())
+        return true;
     return name.starts_with("tg4_") ||
         name.starts_with("confluence_") ||
         name.ends_with("_event") ||

@@ -1,9 +1,12 @@
 #include <cassert>
+#include <array>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "../Headers/ModelInputContract.hpp"
+#include "../Headers/ModelInputFeatureSemantics.hpp"
 
 int main()
 {
@@ -35,7 +38,7 @@ int main()
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
     static_assert(causal_fibonacci_structural_feature_size == 99);
-    static_assert(feature_size == 112);
+    static_assert(feature_size == 123);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -61,7 +64,24 @@ int main()
     static_assert(EA::kCausalFibonacciStructuralModelInputWidth == 103);
     static_assert(EA::kCausalPocketRecentObservationModelInputWidth == 114);
     static_assert(EA::kFixedConfluenceTensorModelInputWidth == 116);
-    static_assert(EA::kCurrentModelInputWidth == 116);
+    static_assert(EA::kCausalPriceLevelRawModelInputWidth == 127);
+    static_assert(EA::kCurrentModelInputWidth == 127);
+
+    const auto latestSemantics = EA::ModelInputFeatureSemantics(
+        EA::kCurrentModelInputWidth);
+    constexpr std::array<std::string_view, 11> priceLevelNames{{
+        "available", "zone_scale_valid", "zone_gap_signed_clipped",
+        "zone_relation", "current_role", "age_fraction",
+        "prior_evidence_saturation", "touch_now", "cross_direction_now",
+        "retest_now", "role_reversal_now"}};
+    assert(latestSemantics.size() == EA::kCurrentModelInputWidth);
+    for (std::size_t index = 0; index < priceLevelNames.size(); ++index)
+    {
+        assert(latestSemantics[priceLevelAvailableCol + index].name ==
+               priceLevelNames[index]);
+        assert(latestSemantics[priceLevelAvailableCol + index].modelInputColumn ==
+               priceLevelAvailableCol + index);
+    }
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -641,7 +661,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80:103:114:116";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80:103:114:116:127";
     }
     assert(unsupportedRejected);
 

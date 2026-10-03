@@ -45,6 +45,7 @@ void TestRegistryAndHierarchicalResolution()
     assert(EA::MarketStructure::FindFamily("pockets") != nullptr);
     assert(EA::MarketStructure::FindFamily("elliott_wave") == nullptr);
     assert(EA::MarketStructure::FindFamily("confluence") != nullptr);
+    assert(EA::MarketStructure::FindFamily("price_level_structure") != nullptr);
 
     const auto fib = FeatureAblationMask::Resolve("fibonacci.*");
     assert(fib.resolvedMask.CanonicalText() ==
@@ -122,6 +123,16 @@ void TestRegistryAndHierarchicalResolution()
            confluenceTg4StructuralFibonacciRetracementSupportAvailableCol);
     assert(confluenceChannels[1]->tensorColumn ==
            confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol);
+    assert(EA::MarketStructure::ResolvePrefix("price_level_structure", 11).empty());
+    const auto priceLevelChannels =
+        EA::MarketStructure::ResolvePrefix("price_level_structure", 12);
+    assert(priceLevelChannels.size() == 11);
+    for (std::size_t index = 0; index < priceLevelChannels.size(); ++index)
+    {
+        assert(priceLevelChannels[index]->tensorColumn ==
+               priceLevelAvailableCol + index);
+        assert(priceLevelChannels[index]->introducedSemanticLayout == 12);
+    }
     const auto pocketChannels = EA::MarketStructure::ResolvePrefix("pockets", 10);
     assert(pocketChannels.size() == expectedPocketChannels.size());
     for (std::size_t index = 0; index < expectedPocketChannels.size(); ++index)
@@ -258,7 +269,22 @@ void TestLayoutAndFixedWidthParity()
     assert(confluence.CanonicalText() == EA::kFixedConfluenceAblationMaskText);
     assert((confluence.tensorColumns() == std::vector<std::size_t>{
         confluenceTg4StructuralFibonacciRetracementSupportAvailableCol,
-        confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol}));
+            confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol}));
+
+    assert(ThrowsInvalidArgument([] {
+        (void)FeatureAblationMask::ParseForSemanticLayout(
+            "price_level_structure.*", 11);
+    }));
+    const auto priceLevel = FeatureAblationMask::ParseForSemanticLayout(
+        "price_level_structure.*", 12);
+    assert(priceLevel.CanonicalText() == EA::kPriceLevelStructureAblationMaskText);
+    assert((priceLevel.tensorColumns() == std::vector<std::size_t>{
+        priceLevelAvailableCol, priceLevelZoneScaleValidCol,
+        priceLevelZoneGapSignedClippedCol, priceLevelZoneRelationCol,
+        priceLevelCurrentRoleCol, priceLevelAgeFractionCol,
+        priceLevelPriorEvidenceSaturationCol, priceLevelTouchNowCol,
+        priceLevelCrossDirectionNowCol, priceLevelRetestNowCol,
+        priceLevelRoleReversalNowCol}));
 
     const auto contract = EA::ResolveModelInputContract(
         EA::kCurrentModelInputWidth, feature_size);
@@ -304,6 +330,19 @@ void TestLayoutAndFixedWidthParity()
             column == confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol;
         assert(confluenceAblated[column] ==
                (confluenceColumn ? 0.0f : tensor[column]));
+    }
+
+    const auto priceLevelControl = FeatureAblationMask::Parse(
+        "price_level_structure.*");
+    std::vector<float> priceLevelAblated(EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        priceLevelAblated.data(), tensor.data(), contract, priceLevelControl);
+    for (std::size_t column = 0; column < feature_size; ++column)
+    {
+        const bool priceLevelColumn =
+            column >= priceLevelAvailableCol && column <= priceLevelRoleReversalNowCol;
+        assert(priceLevelAblated[column] ==
+               (priceLevelColumn ? 0.0f : tensor[column]));
     }
 }
 

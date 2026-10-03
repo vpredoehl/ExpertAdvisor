@@ -24,7 +24,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 60> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 71> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -98,6 +98,17 @@ inline constexpr std::array<AblatableFeature, 60> kAblatableFeatures{{
      confluenceTg4StructuralFibonacciRetracementSupportAvailableCol},
     {"confluence_tg4_structural_fibonacci_retracement_contradiction_available",
      confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol},
+    {"available", priceLevelAvailableCol},
+    {"zone_scale_valid", priceLevelZoneScaleValidCol},
+    {"zone_gap_signed_clipped", priceLevelZoneGapSignedClippedCol},
+    {"zone_relation", priceLevelZoneRelationCol},
+    {"current_role", priceLevelCurrentRoleCol},
+    {"age_fraction", priceLevelAgeFractionCol},
+    {"prior_evidence_saturation", priceLevelPriorEvidenceSaturationCol},
+    {"touch_now", priceLevelTouchNowCol},
+    {"cross_direction_now", priceLevelCrossDirectionNowCol},
+    {"retest_now", priceLevelRetestNowCol},
+    {"role_reversal_now", priceLevelRoleReversalNowCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -154,6 +165,13 @@ inline constexpr std::string_view kFixedConfluenceAblationMaskText =
     "confluence_tg4_structural_fibonacci_retracement_support_available,"
     "confluence_tg4_structural_fibonacci_retracement_contradiction_available";
 
+// The Price-Level experiment treats these frozen raw v2 columns as one
+// atomic scientific group. Persisted masks are still concrete and ordered.
+inline constexpr std::string_view kPriceLevelStructureAblationMaskText =
+    "available,zone_scale_valid,zone_gap_signed_clipped,zone_relation,"
+    "current_role,age_fraction,prior_evidence_saturation,touch_now,"
+    "cross_direction_now,retest_now,role_reversal_now";
+
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.
 inline constexpr AblatableFeature kDirectionalEfficiencyFeature{
@@ -207,7 +225,7 @@ public:
     static FeatureAblationMask ParseForSemanticLayout(
         const std::string& text, int semanticLayoutVersion);
     static FeatureAblationResolution Resolve(
-        const std::string& requestedText, int semanticLayoutVersion = 11);
+        const std::string& requestedText, int semanticLayoutVersion = 12);
 
     bool empty() const { return columns_.empty(); }
     const std::vector<std::size_t>& tensorColumns() const { return columns_; }

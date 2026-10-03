@@ -95,10 +95,10 @@ int main()
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
-    static_assert(EA::kCurrentModelInputWidth == 116);
-    static_assert(EA::kModelInputSemanticLayoutVersion == 11);
+    static_assert(EA::kCurrentModelInputWidth == 127);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 12);
     static_assert(causal_fibonacci_structural_feature_size == 99);
-    static_assert(feature_size == 112);
+    static_assert(feature_size == 123);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);

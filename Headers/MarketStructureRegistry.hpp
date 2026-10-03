@@ -44,7 +44,7 @@ struct Channel
     int introducedSemanticLayout;
 };
 
-inline constexpr std::array<Family, 4> kFamilies{{
+inline constexpr std::array<Family, 5> kFamilies{{
     {"tg_structure", 1, "tg4-production-pulse-v1",
      "completed canonical bar; never retrospectively rewritten"},
     // Layout 9 is retained as an immutable legacy producer. It composes the
@@ -59,12 +59,14 @@ inline constexpr std::array<Family, 4> kFamilies{{
      "confirmation bar / information cutoff timestamp"},
     {"confluence", 1, "phase2b-fixed-descriptive-confluence-v1",
      "completed canonical bar; no earlier than every selected component"},
+    {"price_level_structure", 1, "causal-price-level/v2",
+     "post-AddCompletedBar completed decision bar"},
 }};
 
 // These identities describe actual layout-8 through layout-11 channels.
 // TG3's historical research confluence remains distinct from the generic
 // descriptive confluence family introduced by the fixed layout-11 projection.
-inline constexpr std::array<Channel, 39> kChannels{{
+inline constexpr std::array<Channel, 50> kChannels{{
     {"tg_structure.tg4.inner_break.any", "tg4_inner_break_any",
      "tg_structure", tg4InnerBreakAnyCol, 8},
     {"tg_structure.tg4.source_tg3.structurally_eligible",
@@ -168,6 +170,28 @@ inline constexpr std::array<Channel, 39> kChannels{{
      "confluence_tg4_structural_fibonacci_retracement_contradiction_available",
      "confluence", confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol,
      11},
+    {"price_level_structure.available", "available", "price_level_structure",
+     priceLevelAvailableCol, 12},
+    {"price_level_structure.zone_scale_valid", "zone_scale_valid", "price_level_structure",
+     priceLevelZoneScaleValidCol, 12},
+    {"price_level_structure.zone_gap_signed_clipped", "zone_gap_signed_clipped", "price_level_structure",
+     priceLevelZoneGapSignedClippedCol, 12},
+    {"price_level_structure.zone_relation", "zone_relation", "price_level_structure",
+     priceLevelZoneRelationCol, 12},
+    {"price_level_structure.current_role", "current_role", "price_level_structure",
+     priceLevelCurrentRoleCol, 12},
+    {"price_level_structure.age_fraction", "age_fraction", "price_level_structure",
+     priceLevelAgeFractionCol, 12},
+    {"price_level_structure.prior_evidence_saturation", "prior_evidence_saturation", "price_level_structure",
+     priceLevelPriorEvidenceSaturationCol, 12},
+    {"price_level_structure.touch_now", "touch_now", "price_level_structure",
+     priceLevelTouchNowCol, 12},
+    {"price_level_structure.cross_direction_now", "cross_direction_now", "price_level_structure",
+     priceLevelCrossDirectionNowCol, 12},
+    {"price_level_structure.retest_now", "retest_now", "price_level_structure",
+     priceLevelRetestNowCol, 12},
+    {"price_level_structure.role_reversal_now", "role_reversal_now", "price_level_structure",
+     priceLevelRoleReversalNowCol, 12},
 }};
 
 // Keep catalog validation separate from lookup so focused tests can exercise
@@ -266,12 +290,17 @@ inline bool ChannelAvailableForSemanticLayout(const Channel& channel,
                      channel.introducedSemanticLayout == 9 ||
                      channel.introducedSemanticLayout == 10 ||
                      channel.introducedSemanticLayout == 11;
+        case 12: return channel.introducedSemanticLayout == 8 ||
+                     channel.introducedSemanticLayout == 9 ||
+                     channel.introducedSemanticLayout == 10 ||
+                     channel.introducedSemanticLayout == 11 ||
+                     channel.introducedSemanticLayout == 12;
         default: return false;
     }
 }
 
 inline std::vector<const Channel*> ResolvePrefix(std::string_view prefix,
-                                                  int semanticLayoutVersion = 11)
+                                                  int semanticLayoutVersion = 12)
 {
     ValidateRegistry();
     std::vector<const Channel*> result;

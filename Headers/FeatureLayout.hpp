@@ -219,8 +219,34 @@ inline constexpr std::size_t confluenceTg4StructuralFibonacciRetracementContradi
     confluenceTg4StructuralFibonacciRetracementSupportAvailableCol + 1;
 inline constexpr std::size_t fixed_confluence_tensor_feature_size =
     confluenceTg4StructuralFibonacciRetracementContradictionAvailableCol + 1;
-inline constexpr std::size_t feature_size =
+// Layout 12 appends the frozen raw causal-price-level/v2 model exposure.
+// The prior Layout-11 confluence columns above retain their exact positions.
+inline constexpr std::size_t priceLevelAvailableCol =
     fixed_confluence_tensor_feature_size;
+inline constexpr std::size_t priceLevelZoneScaleValidCol =
+    priceLevelAvailableCol + 1;
+inline constexpr std::size_t priceLevelZoneGapSignedClippedCol =
+    priceLevelZoneScaleValidCol + 1;
+inline constexpr std::size_t priceLevelZoneRelationCol =
+    priceLevelZoneGapSignedClippedCol + 1;
+inline constexpr std::size_t priceLevelCurrentRoleCol =
+    priceLevelZoneRelationCol + 1;
+inline constexpr std::size_t priceLevelAgeFractionCol =
+    priceLevelCurrentRoleCol + 1;
+inline constexpr std::size_t priceLevelPriorEvidenceSaturationCol =
+    priceLevelAgeFractionCol + 1;
+inline constexpr std::size_t priceLevelTouchNowCol =
+    priceLevelPriorEvidenceSaturationCol + 1;
+inline constexpr std::size_t priceLevelCrossDirectionNowCol =
+    priceLevelTouchNowCol + 1;
+inline constexpr std::size_t priceLevelRetestNowCol =
+    priceLevelCrossDirectionNowCol + 1;
+inline constexpr std::size_t priceLevelRoleReversalNowCol =
+    priceLevelRetestNowCol + 1;
+inline constexpr std::size_t causal_price_level_raw_feature_size =
+    priceLevelRoleReversalNowCol + 1;
+inline constexpr std::size_t feature_size =
+    causal_price_level_raw_feature_size;
 
 static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
@@ -253,6 +279,11 @@ static_assert(confluenceTg4StructuralFibonacciRetracementContradictionAvailableC
 static_assert(fixed_confluence_tensor_feature_size -
                   causal_pocket_recent_observation_feature_size ==
               2);
-static_assert(feature_size == 112);
+static_assert(priceLevelAvailableCol == 112);
+static_assert(priceLevelRoleReversalNowCol == 122);
+static_assert(causal_price_level_raw_feature_size -
+                  fixed_confluence_tensor_feature_size ==
+              11);
+static_assert(feature_size == 123);
 
 #endif /* FeatureLayout_hpp */

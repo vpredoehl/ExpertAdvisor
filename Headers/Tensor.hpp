@@ -39,6 +39,7 @@
 #include "FixedConfluenceTensorAdapter.hpp"
 #include "CausalFibonacciStructuralFeatures.hpp"
 #include "CausalPocketFeatures.hpp"
+#include "CausalPriceLevelRawFeatures.hpp"
 #include "../Sources/EconomicEventFeatures.hpp"
 
 using std::string;
@@ -106,6 +107,9 @@ class Tensor
         fixedConfluenceTensorAdapter;
     EA::CausalFibonacciFeatures::Producer causalFibonacciStructuralFeatures;
     EA::CausalPocketFeatures::Producer causalPocketFeatures;
+    EA::PriceLevel::V2::CausalPriceLevelEngine causalPriceLevelV2{
+        "placeholder", EA::PriceLevel::V2::ProductionConfiguration()};
+    EA::PriceLevel::Raw::Producer causalPriceLevelRawFeatures;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
@@ -162,7 +166,8 @@ public:
           donchianLookback { ValidateDonchianLookback(lookback) },
           economicEventFeatures { std::move(economicEvents) },
           tg4ProductionPulses { name }, tg4ProductionConfluence { name },
-          causalFibonacciStructuralFeatures { name }, causalPocketFeatures { name } {}
+          causalFibonacciStructuralFeatures { name }, causalPocketFeatures { name },
+          causalPriceLevelV2 { name, EA::PriceLevel::V2::ProductionConfiguration() } {}
     const string& TableName() const { return table; }
     Donchian20Mode GetDonchian20Mode() const { return donchian20Mode; }
     std::size_t GetDonchianLookback() const { return donchianLookback; }

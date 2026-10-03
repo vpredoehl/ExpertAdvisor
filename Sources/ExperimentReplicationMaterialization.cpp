@@ -317,7 +317,6 @@ bool HasEquivalenceConflict(const Planning::Plan& plan,
 constexpr std::string_view kConfluenceMask =
     "confluence_tg4_structural_fibonacci_retracement_support_available,"
     "confluence_tg4_structural_fibonacci_retracement_contradiction_available";
-static_assert(kModelInputSemanticLayoutVersion == 11);
 static_assert(kFixedConfluenceTensorModelInputWidth == 116);
 
 void SetIdentity(ExperimentPairComparison::ArmResultSet& arm,

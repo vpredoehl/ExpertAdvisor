@@ -9,6 +9,7 @@
 #include "FixedConfluenceTensorAdapter.hpp"
 #include "CausalFibonacciStructuralFeatures.hpp"
 #include "CausalPocketFeatures.hpp"
+#include "CausalPriceLevelRawFeatures.hpp"
 
 #include <algorithm>
 #include <array>
@@ -100,9 +101,9 @@ void AssertExact(const std::vector<float>& lhs, const std::vector<float>& rhs)
 
 void TestLayoutAndCanonicalPulseAlignment()
 {
-    static_assert(EA::kModelInputSemanticLayoutVersion == 11);
-    static_assert(EA::kCurrentModelInputWidth == 116);
-    static_assert(feature_size == 112);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 12);
+    static_assert(EA::kCurrentModelInputWidth == 127);
+    static_assert(feature_size == 123);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);
@@ -112,6 +113,9 @@ void TestLayoutAndCanonicalPulseAlignment()
     Tensor tensor{"eurusdrmp"};
     EA::CausalFibonacciFeatures::Producer fibReplayProducer{"eurusdrmp"};
     EA::CausalPocketFeatures::Producer pocketReplayProducer{"eurusdrmp"};
+    EA::PriceLevel::V2::CausalPriceLevelEngine priceLevelReplayEngine{
+        "eurusdrmp", EA::PriceLevel::V2::ProductionConfiguration()};
+    EA::PriceLevel::Raw::Producer priceLevelReplayProducer;
     EA::MarketStructure::Production::TG4ProductionConfluenceBridge confluenceBridge{
         "eurusdrmp"};
     EA::MarketStructure::TensorProjection::FixedConfluenceTensorAdapter
@@ -119,6 +123,7 @@ void TestLayoutAndCanonicalPulseAlignment()
     std::vector<std::array<float, EA::CausalFibonacciFeatures::kFeatureCount>> fibReplay;
     std::vector<std::array<float, EA::CausalPocketFeatures::kFeatureCount>>
         pocketReplay;
+    std::vector<EA::PriceLevel::Raw::FeatureVector> priceLevelReplay;
     for (std::size_t index = 0; index < 192; ++index)
     {
         bars.push_back(Bar(index));
@@ -131,6 +136,12 @@ void TestLayoutAndCanonicalPulseAlignment()
         fibReplay.push_back(fibReplayProducer.AddCompletedBar(completedBar));
         pocketReplay.push_back(
             pocketReplayProducer.AddCompletedBar(completedBar));
+        const auto priceLevelUpdate = priceLevelReplayEngine.AddCompletedBar(
+            {bars.back().time, static_cast<double>(bars.back().open),
+             static_cast<double>(bars.back().high), static_cast<double>(bars.back().low),
+             static_cast<double>(bars.back().close)});
+        priceLevelReplay.push_back(priceLevelReplayProducer.Project(
+            priceLevelUpdate, static_cast<double>(bars.back().close), index));
         tensor.Add(bars.back());
     }
     const auto replay = EA::TG4Pulse::ReplayCanonicalCompletedBars(
@@ -159,6 +170,9 @@ void TestLayoutAndCanonicalPulseAlignment()
         for (std::size_t column = 0; column < pocketReplay[row].size(); ++column)
             assert(values[pocketRecentPriceScaleValidCol + column] ==
                    pocketReplay[row][column]);
+        for (std::size_t column = 0; column < priceLevelReplay[row].size(); ++column)
+            assert(values[priceLevelAvailableCol + column] ==
+                   priceLevelReplay[row][column]);
         const auto description = confluenceBridge.Describe(
             replay[row], std::chrono::sys_seconds{
                 replay[row].barStart.time_since_epoch() + std::chrono::seconds{900}});
@@ -201,6 +215,10 @@ void TestLayoutAndCanonicalPulseAlignment()
            "confluence_tg4_structural_fibonacci_retracement_contradiction_available");
     assert(semantics.at(112).name == "lookback_log_return_1_scaled");
     assert(semantics.at(115).name == "lookback_log_return_16_scaled");
+    const auto latestSemantics = EA::ModelInputFeatureSemantics(127);
+    assert(latestSemantics.at(priceLevelAvailableCol).name == "available");
+    assert(latestSemantics.at(priceLevelRoleReversalNowCol).name ==
+           "role_reversal_now");
 
     // Full-history construction occurs before the scored window. Both model
     // consumers therefore use the exact stateful Tensor row at its boundary.
@@ -216,12 +234,18 @@ void TestLayoutAndCanonicalPulseAlignment()
          ++column)
         assert(training[pocketRecentPriceScaleValidCol + column] ==
                pocketReplay[scoreWindowStart][column]);
+    for (std::size_t column = 0; column < priceLevelReplay[scoreWindowStart].size();
+         ++column)
+        assert(training[priceLevelAvailableCol + column] ==
+               priceLevelReplay[scoreWindowStart][column]);
 
     // State is causal: extending a stream cannot mutate already-emitted rows.
     std::vector<std::array<float, EA::CausalFibonacciFeatures::kFeatureCount>>
         prefix = fibReplay;
     std::vector<std::array<float, EA::CausalPocketFeatures::kFeatureCount>>
         pocketPrefix = pocketReplay;
+    std::vector<EA::PriceLevel::Raw::FeatureVector> priceLevelPrefix =
+        priceLevelReplay;
     for (std::size_t index = 192; index < 224; ++index)
         tensor.Add(Bar(index));
     for (std::size_t row = 0; row < prefix.size(); ++row) {
@@ -233,6 +257,9 @@ void TestLayoutAndCanonicalPulseAlignment()
         for (std::size_t column = 0; column < pocketPrefix[row].size(); ++column)
             assert(physical.RawMemory()[pocketRecentPriceScaleValidCol + column] ==
                    pocketPrefix[row][column]);
+        for (std::size_t column = 0; column < priceLevelPrefix[row].size(); ++column)
+            assert(physical.RawMemory()[priceLevelAvailableCol + column] ==
+                   priceLevelPrefix[row][column]);
     }
 
     // Layout 9 projects only the immutable Tensor prefix through column 98,

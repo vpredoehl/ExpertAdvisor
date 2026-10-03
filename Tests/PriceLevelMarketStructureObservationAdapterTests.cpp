@@ -251,7 +251,7 @@ void TestInvalidSourceDuplicateAndUpdateValidation()
     auto invalidBounds = update;
     invalidBounds.activeLevels.front().lower = invalidBounds.activeLevels.front().upper + 1.0;
     assert(ThrowsInvalidArgument([&] { (void)adapter.Adapt(invalidBounds); }));
-    assert(EA::kCurrentModelInputWidth == 116);
+    assert(EA::kCurrentModelInputWidth == 127);
 }
 
 } // namespace
