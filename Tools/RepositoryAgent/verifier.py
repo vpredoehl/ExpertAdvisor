@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Frozen semantic-verification behavior."""
 import json
-from mlx_lm import generate
 
 def extract_json_object(text):
     """Decode the first complete JSON object without greedy brace matching."""
@@ -35,6 +34,10 @@ def render_prompt(tokenizer, messages):
     )
 
 def run_generation(model, tokenizer, messages, max_tokens):
+    # Do not require MLX for read-only operations or deterministic tests.
+    # This import does not load weights; LazyClaimVerifierRuntime owns that.
+    from mlx_lm import generate
+
     prompt = render_prompt(tokenizer, messages)
 
     return generate(

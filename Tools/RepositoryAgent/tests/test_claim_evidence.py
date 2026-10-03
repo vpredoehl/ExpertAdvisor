@@ -62,6 +62,10 @@ with tempfile.TemporaryDirectory() as td:
     })
     bhit = ledger.lookup_bundle("topic", "alpha reaches gamma", bundle)
     assert bhit and bhit["supports"] is True
+    # Stable member ordering prevents an input-order cache alias.
+    assert ledger.lookup_bundle("topic", "alpha reaches gamma", list(reversed(bundle)))["supports"] is True
+    changed_bundle = [dict(bundle[0]), dict(bundle[1], excerpt="8: beta();\n9: changed();")]
+    assert ledger.lookup_bundle("topic", "alpha reaches gamma", changed_bundle) is None
     assert ledger.lookup_bundle("topic", "gamma reaches alpha", bundle) is None
 
 print("REPOSITORY AGENT PHASE 6C.1 CLAIM LEDGER TEST: PASS")

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from expertadvisor_agent import list_files, read_file, search
-from .claim_evidence import VerifiedClaimLedger
+from .claim_evidence import VerifiedClaimLedger, source_hash
 from .claim_verifier import LazyClaimVerifierRuntime, MAX_BUNDLE_RANGES
 from .evidence import VerifiedEvidenceLedger
 from .repository_index import RepositoryIndex
@@ -52,6 +52,7 @@ class CodexRepositoryInterface:
                 "resolve_symbol", "function_for_line", "relationship",
                 "trace_calls", "source_excerpt", "ledger_records",
                 "verify_source_claim", "verify_source_bundle_claim", "verified_claims",
+                "investigate_source_claim", "investigate_source_bundle_claim",
             ],
             "forbidden_capabilities": [
                 "shell", "repository_write", "git_mutation", "database",
@@ -76,13 +77,84 @@ class CodexRepositoryInterface:
         if not isinstance(spec, dict):
             raise ValueError("source range must be an object")
         file = self._required_text(spec, "file")
-        start = int(spec.get("start", 0))
-        end = int(spec.get("end", 0))
+        path = Path(file)
+        if (
+            path.is_absolute() or path.as_posix() != file or "\x00" in file or "\\" in file
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError("claim source file must be a repository-relative normalized path")
+        try:
+            raw_start = spec.get("start", 0)
+            raw_end = spec.get("end", 0)
+            if isinstance(raw_start, bool) or isinstance(raw_end, bool):
+                raise ValueError("claim source range must use integer line bounds")
+            start = int(raw_start)
+            end = int(raw_end)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("claim source range must use integer line bounds") from exc
         if start < 1 or end < start or end - start + 1 > 500:
             raise ValueError("claim source range must be 1..500 lines")
-        # Retrieve source server-side. The caller cannot inject excerpt text into verification.
-        excerpt = self._idx().source_excerpt(file, start, end)
+        # Retrieve source server-side. The caller cannot inject excerpt text into
+        # verification.  Do not initialize the repository-wide structural index
+        # simply to obtain one bounded target range.
+        try:
+            excerpt = read_file(file, start, end)
+        except Exception as exc:
+            raise ValueError("claim source range could not be read") from exc
+        if not isinstance(excerpt, str) or not excerpt.strip():
+            raise ValueError("claim source range returned no verifiable source")
         return {"file": file, "start": start, "end": end, "excerpt": excerpt}
+
+    @staticmethod
+    def _validate_verdict(verdict: Any) -> dict[str, Any]:
+        """Accept only a complete local-verifier state; fail closed otherwise."""
+        def rejected(reason: str, turns: int = 0) -> dict[str, Any]:
+            return {"supports": False, "establishes": "", "reason": reason,
+                    "verifier_error": True, "model_turns": turns}
+
+        if not isinstance(verdict, dict):
+            return rejected("claim verifier returned malformed verdict")
+        turns = verdict.get("model_turns", 0)
+        if isinstance(turns, bool) or not isinstance(turns, int) or not 0 <= turns <= 2:
+            return rejected("claim verifier returned invalid model-turn count")
+        supports = verdict.get("supports")
+        establishes = verdict.get("establishes", "")
+        reason = verdict.get("reason", "")
+        if not isinstance(supports, bool) or not isinstance(establishes, str) or not isinstance(reason, str):
+            return rejected("claim verifier returned malformed verdict", turns)
+        if supports and not establishes.strip():
+            return rejected("claim verifier returned contradictory supported verdict", turns)
+        if not supports and establishes.strip():
+            return rejected("claim verifier returned contradictory rejected verdict", turns)
+        normalized = {"supports": supports, "establishes": establishes.strip() if supports else "",
+                      "reason": reason.strip(), "model_turns": turns}
+        if verdict.get("verifier_error") is True:
+            normalized["verifier_error"] = True
+        return normalized
+
+    def _claim_bundle_items(self, ranges: Any) -> tuple[list[dict[str, Any]], int]:
+        """Read an explicit bounded bundle in one stable, unambiguous order."""
+        if not isinstance(ranges, list) or not 2 <= len(ranges) <= MAX_BUNDLE_RANGES:
+            raise ValueError(f"ranges must contain 2-{MAX_BUNDLE_RANGES} source ranges")
+        items = [self._claim_item(spec) for spec in ranges]
+        items.sort(key=lambda item: (item["file"], item["start"], item["end"]))
+        previous_by_file: dict[str, dict[str, Any]] = {}
+        for item in items:
+            previous = previous_by_file.get(item["file"])
+            if previous is not None:
+                if item["start"] == previous["start"] and item["end"] == previous["end"]:
+                    raise ValueError("claim source bundle contains a duplicate range")
+                if item["start"] <= previous["end"]:
+                    raise ValueError("claim source bundle contains overlapping ranges")
+            previous_by_file[item["file"]] = item
+        return items, len(ranges)
+
+    @staticmethod
+    def _render_claim_answer(verdict: dict[str, Any]) -> str:
+        if verdict.get("supports") is True:
+            return str(verdict.get("establishes", "")).strip()
+        reason = str(verdict.get("reason", "claim not established by supplied source")).strip()
+        return f"Not established by the supplied source: {reason}"
 
     def dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(request, dict):
@@ -130,9 +202,11 @@ class CodexRepositoryInterface:
         if op == "verify_source_claim": return self._verify_source_claim(request)
         if op == "verify_source_bundle_claim": return self._verify_source_bundle_claim(request)
         if op == "verified_claims": return self._verified_claims(request)
+        if op == "investigate_source_claim": return self._investigate_source_claim(request)
+        if op == "investigate_source_bundle_claim": return self._investigate_source_bundle_claim(request)
         raise ValueError(f"unsupported operation: {op!r}")
 
-    def _verify_source_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _verify_source_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         topic_id = self._required_text(request, "topic_id")
         topic = self._required_text(request, "topic")
         claim = self._required_text(request, "claim")
@@ -140,31 +214,111 @@ class CodexRepositoryInterface:
         ledger = self._claim_ledger()
         cached = ledger.lookup(topic_id, claim, item["file"], item["start"], item["end"], item["excerpt"])
         if cached is not None:
-            return {"topic_id": topic_id, "claim": claim, "evidence": {k: item[k] for k in ("file","start","end")}, "verdict": cached}
-        verdict = self._claim_verifier().verify_claim(topic, claim, item)
+            return ({"topic_id": topic_id, "claim": claim, "evidence": {k: item[k] for k in ("file","start","end")}, "verdict": cached}, item)
+        verdict = self._validate_verdict(self._claim_verifier().verify_claim(topic, claim, item))
         ledger.record_decision(topic_id, claim, item["file"], item["start"], item["end"], item["excerpt"], verdict)
-        return {"topic_id": topic_id, "claim": claim, "evidence": {k: item[k] for k in ("file","start","end")}, "verdict": verdict}
+        return ({"topic_id": topic_id, "claim": claim, "evidence": {k: item[k] for k in ("file","start","end")}, "verdict": verdict}, item)
 
-    def _verify_source_bundle_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _verify_source_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        result, _ = self._verify_source_claim_result(request)
+        return result
+
+    def _investigate_source_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Run one bounded source-claim investigation without topic fan-out.
+
+        The controller retrieves exactly one caller-specified, repository-allowed
+        range server-side, then uses the existing claim verifier and ledger.  The
+        rendered answer is deterministic from the verifier verdict; this mode does
+        not ask Qwen to plan, browse, or synthesize unrelated architecture topics.
+        """
+        result, item = self._verify_source_claim_result(request)
+        verdict = result["verdict"]
+        supports = verdict.get("supports") is True
+        manifest = {
+            "schema_version": 1,
+            "mode": "targeted_source_claim",
+            "topic_id": result["topic_id"],
+            "topic": self._required_text(request, "topic"),
+            "claim": result["claim"],
+            "evidence": {
+                "file": item["file"],
+                "start": item["start"],
+                "end": item["end"],
+                "source_sha256": source_hash(item["excerpt"]),
+            },
+            "verification": {
+                "supports": supports,
+                "ledger_hit": verdict.get("ledger_hit") is True,
+                "model_turns": int(verdict.get("model_turns", 0)),
+            },
+            "metrics": {
+                "requested_range_count": 1,
+                "effective_range_count": 1,
+                "repository_read_count": 1,
+                "unrelated_topic_count": 0,
+                "model_turn_count": int(verdict.get("model_turns", 0)),
+                "ledger_hit": verdict.get("ledger_hit") is True,
+            },
+        }
+        return {
+            "manifest": manifest,
+            "answer": self._render_claim_answer(verdict),
+            "verdict": verdict,
+        }
+
+    def _verify_source_bundle_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
         topic_id = self._required_text(request, "topic_id")
         topic = self._required_text(request, "topic")
         claim = self._required_text(request, "claim")
-        ranges = request.get("ranges")
-        if not isinstance(ranges, list) or not 2 <= len(ranges) <= MAX_BUNDLE_RANGES:
-            raise ValueError(f"ranges must contain 2-{MAX_BUNDLE_RANGES} source ranges")
-        items = [self._claim_item(spec) for spec in ranges]
+        items, requested_count = self._claim_bundle_items(request.get("ranges"))
         ledger = self._claim_ledger()
         cached = ledger.lookup_bundle(topic_id, claim, items)
         if cached is not None:
             verdict = cached
         else:
-            verdict = self._claim_verifier().verify_bundle_claim(topic, claim, items)
+            verdict = self._validate_verdict(self._claim_verifier().verify_bundle_claim(topic, claim, items))
             ledger.record_bundle_decision(topic_id, claim, items, verdict)
-        return {
+        return ({
             "topic_id": topic_id, "claim": claim,
             "evidence": [{k: item[k] for k in ("file","start","end")} for item in items],
             "verdict": verdict,
+        }, items, requested_count)
+
+    def _verify_source_bundle_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        result, _, _ = self._verify_source_bundle_claim_result(request)
+        return result
+
+    def _investigate_source_bundle_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Judge one explicit source bundle without controller fan-out or exploration."""
+        result, items, requested_count = self._verify_source_bundle_claim_result(request)
+        verdict = result["verdict"]
+        ledger_hit = verdict.get("bundle_ledger_hit") is True
+        manifest = {
+            "schema_version": 1,
+            "mode": "targeted_source_bundle_claim",
+            "topic_id": result["topic_id"],
+            "topic": self._required_text(request, "topic"),
+            "claim": result["claim"],
+            "evidence": [
+                {"file": item["file"], "start": item["start"], "end": item["end"],
+                 "source_sha256": source_hash(item["excerpt"])}
+                for item in items
+            ],
+            "verification": {
+                "supports": verdict.get("supports") is True,
+                "ledger_hit": ledger_hit,
+                "model_turns": int(verdict.get("model_turns", 0)),
+            },
+            "metrics": {
+                "requested_range_count": requested_count,
+                "effective_range_count": len(items),
+                "repository_read_count": len(items),
+                "unrelated_topic_count": 0,
+                "model_turn_count": int(verdict.get("model_turns", 0)),
+                "ledger_hit": ledger_hit,
+            },
         }
+        return {"manifest": manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
 
     def _verified_claims(self, request: dict[str, Any]) -> dict[str, Any]:
         ledger = self._claim_ledger()

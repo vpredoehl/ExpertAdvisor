@@ -2,6 +2,15 @@
 """Deterministic tests for the RepositoryAgent MCP adapter."""
 from __future__ import annotations
 import json
+import sys
+import types
+
+stub=types.ModuleType("expertadvisor_agent")
+stub.list_files=lambda prefix="": []
+stub.search=lambda pattern,max_results=100: ""
+stub.read_file=lambda name,start=1,end=200: "stub source"
+sys.modules.setdefault("expertadvisor_agent",stub)
+
 from Tools.RepositoryAgent.repository_agent_mcp import StdioMCPServer, TOOLS
 
 def main() -> None:

@@ -43,13 +43,14 @@ def _topic_text(topic) -> str:
     return str(topic).strip()
 
 
-def _finish_verdict(obj, invalid_reason: str):
+def _finish_verdict(obj, invalid_reason: str, *, model_turns: int):
     if not isinstance(obj, dict):
         return {
             "supports": False,
             "establishes": "",
             "reason": invalid_reason,
             "verifier_error": True,
+            "model_turns": model_turns,
         }
     supports = obj.get("supports") is True
     establishes = str(obj.get("establishes", "")).strip()
@@ -59,11 +60,13 @@ def _finish_verdict(obj, invalid_reason: str):
             "supports": False,
             "establishes": "",
             "reason": "claim verifier supplied no grounded statement",
+            "model_turns": model_turns,
         }
     return {
         "supports": supports,
         "establishes": establishes if supports else "",
         "reason": reason,
+        "model_turns": model_turns,
     }
 
 
@@ -81,6 +84,7 @@ def verify_source_claim_semantics(model, tokenizer, topic, claim, item):
             ),
         },
     ]
+    model_turns = 1
     raw = run_generation(model, tokenizer, messages, max_tokens=300)
     obj = extract_json_object(raw)
     if not isinstance(obj, dict):
@@ -91,9 +95,14 @@ def verify_source_claim_semantics(model, tokenizer, topic, claim, item):
                 "content": "Return exactly one complete valid JSON object matching the requested schema.",
             },
         ]
+        model_turns += 1
         raw = run_generation(model, tokenizer, retry, max_tokens=300)
         obj = extract_json_object(raw)
-    return _finish_verdict(obj, "claim verifier did not return valid JSON after one retry")
+    return _finish_verdict(
+        obj,
+        "claim verifier did not return valid JSON after one retry",
+        model_turns=model_turns,
+    )
 
 
 def verify_source_bundle_claim_semantics(model, tokenizer, topic, claim, items):
@@ -102,6 +111,7 @@ def verify_source_bundle_claim_semantics(model, tokenizer, topic, claim, items):
             "supports": False,
             "establishes": "",
             "reason": f"claim bundle requires 2-{MAX_BUNDLE_RANGES} source ranges",
+            "model_turns": 0,
         }
     blocks = []
     for index, item in enumerate(items, start=1):
@@ -122,6 +132,7 @@ def verify_source_bundle_claim_semantics(model, tokenizer, topic, claim, items):
             ),
         },
     ]
+    model_turns = 1
     raw = run_generation(model, tokenizer, messages, max_tokens=360)
     obj = extract_json_object(raw)
     if not isinstance(obj, dict):
@@ -132,9 +143,14 @@ def verify_source_bundle_claim_semantics(model, tokenizer, topic, claim, items):
                 "content": "Return exactly one complete valid JSON object matching the requested schema.",
             },
         ]
+        model_turns += 1
         raw = run_generation(model, tokenizer, retry, max_tokens=360)
         obj = extract_json_object(raw)
-    return _finish_verdict(obj, "claim bundle verifier did not return valid JSON after one retry")
+    return _finish_verdict(
+        obj,
+        "claim bundle verifier did not return valid JSON after one retry",
+        model_turns=model_turns,
+    )
 
 
 class LazyClaimVerifierRuntime:

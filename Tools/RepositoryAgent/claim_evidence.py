@@ -96,7 +96,7 @@ class VerifiedClaimLedger:
 
     @staticmethod
     def _bundle_members(candidates) -> list[dict]:
-        return [
+        members = [
             {
                 "file": str(item["file"]),
                 "start": int(item["start"]),
@@ -105,6 +105,12 @@ class VerifiedClaimLedger:
             }
             for item in candidates
         ]
+        # Bundle source ranges are a set of independently provenanced evidence,
+        # not a narrative ordering supplied by the caller.  One stable order
+        # prevents request-order cache aliases even for direct ledger users.
+        return sorted(members, key=lambda member: (
+            member["file"], member["start"], member["end"], member["source_sha256"]
+        ))
 
     @classmethod
     def _bundle_key(cls, topic_id, claim, members) -> str:
@@ -178,6 +184,7 @@ class VerifiedClaimLedger:
                 "reason": str(record.get("reason", "reused claim rejection")),
                 hit_name: True,
                 "ledger_status": CLAIM_REJECTED,
+                "model_turns": 0,
             }
         if status != CLAIM_ACCEPTED or not str(record.get("establishes", "")).strip():
             return None
@@ -187,6 +194,7 @@ class VerifiedClaimLedger:
             "reason": "reused claim-ledger decision for identical claim, source, and verifier identity",
             hit_name: True,
             "ledger_status": CLAIM_ACCEPTED,
+            "model_turns": 0,
         }
 
     def lookup(self, topic_id, claim, filename, start, end, excerpt):

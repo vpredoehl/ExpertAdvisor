@@ -9,7 +9,7 @@ from typing import Any
 from .codex_interface import CodexRepositoryInterface
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.1.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.3.0"}
 
 TOOLS = [
     {
@@ -154,8 +154,54 @@ TOOLS = [
         },
     },
     {
+        "name": "investigate_source_claim",
+        "description": "Run one bounded, source-grounded claim investigation. It retrieves only the requested source range server-side, verifies the claim with Qwen when uncached, records only the claim-ledger decision, and returns a deterministic manifest and answer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "claim": {"type": "string"},
+                "file": {"type": "string"},
+                "start": {"type": "integer", "minimum": 1},
+                "end": {"type": "integer", "minimum": 1},
+            },
+            "required": ["topic_id", "topic", "claim", "file", "start", "end"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "verify_source_bundle_claim",
         "description": "Semantically verify whether 2-8 exact server-retrieved source ranges form a source-visible path establishing a proposed claim.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "claim": {"type": "string"},
+                "ranges": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file": {"type": "string"},
+                            "start": {"type": "integer", "minimum": 1},
+                            "end": {"type": "integer", "minimum": 1},
+                        },
+                        "required": ["file", "start", "end"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["topic_id", "topic", "claim", "ranges"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "investigate_source_bundle_claim",
+        "description": "Run one bounded multi-range source-claim investigation. The server reads exactly 2-8 explicit non-duplicate, non-overlapping ranges, canonicalizes their order, verifies only their combined evidence with Qwen when uncached, and returns a deterministic manifest and answer.",
         "inputSchema": {
             "type": "object",
             "properties": {
