@@ -147,6 +147,197 @@ void TestChronologicalValidation()
     catch (const std::invalid_argument&) { rejected = true; }
     assert(rejected);
 }
+
+std::vector<PLC::AdaptiveObservation> AddAdaptive(
+    PLC::AdaptiveWidthResearchDetector& detector, PLC::PrecedingRangeScale& scale,
+    const PL::CompletedBar& bar)
+{
+    const PLC::AdaptiveUpdate update = detector.AddCompletedBar(bar, scale.BeforeCurrentBar());
+    scale.AddCompletedRange(bar.high - bar.low);
+    return update.observations;
+}
+
+const PLC::AdaptiveObservation& Observation(
+    const std::vector<PLC::AdaptiveObservation>& observations, PL::InteractionKind kind)
+{
+    const auto found = std::find_if(observations.begin(), observations.end(),
+        [kind](const PLC::AdaptiveObservation& value) { return value.kind == kind; });
+    assert(found != observations.end());
+    return *found;
+}
+
+void TestAdaptiveScaleBoundariesAndFrozenWidth()
+{
+    const PLC::AdaptiveConfiguration pivotTime{1, 3, 1.0, PLC::ScaleTiming::pivot_time,
+        8, 20, 3, 900s};
+    PLC::AdaptiveConfiguration confirmationTime = pivotTime;
+    confirmationTime.scaleTiming = PLC::ScaleTiming::confirmation_time;
+    PLC::AdaptiveWidthResearchDetector pivotDetector{"eurusdrmp", pivotTime};
+    PLC::AdaptiveWidthResearchDetector confirmationDetector{"eurusdrmp", confirmationTime};
+    PLC::PrecedingRangeScale pivotScale{3};
+    PLC::PrecedingRangeScale confirmationScale{3};
+    const std::vector<PL::CompletedBar> initial{
+        Bar(0, 3, 1, 2), Bar(1, 9, 3, 5), Bar(2, 4, 2, 3)};
+    std::vector<PLC::AdaptiveObservation> pivotObservations;
+    std::vector<PLC::AdaptiveObservation> confirmationObservations;
+    for (const PL::CompletedBar& bar : initial)
+    {
+        pivotObservations = AddAdaptive(pivotDetector, pivotScale, bar);
+        confirmationObservations = AddAdaptive(confirmationDetector, confirmationScale, bar);
+    }
+    // At the pivot boundary only bar zero's range (2) exists.  At the later
+    // confirmation boundary, ranges 2 and 6 exist, with median 4.
+    assert(Observation(pivotObservations, PL::InteractionKind::level_established)
+               .level.zoneHalfWidth == 2.0);
+    assert(Observation(confirmationObservations, PL::InteractionKind::level_established)
+               .level.zoneHalfWidth == 4.0);
+
+    AddAdaptive(pivotDetector, pivotScale, Bar(3, 5, 1, 3));
+    AddAdaptive(pivotDetector, pivotScale, Bar(4, 9.5, 2, 5));
+    const auto reinforced = AddAdaptive(pivotDetector, pivotScale, Bar(5, 4, 1, 2));
+    // Later high-low ranges differ, but reinforcement reports the original
+    // frozen width rather than any current scale.
+    assert(Observation(reinforced, PL::InteractionKind::level_reinforced)
+               .level.zoneHalfWidth == 2.0);
+}
+
+void TestAdaptiveDeterminismChronologyAndIdentityIsolation()
+{
+    const PLC::AdaptiveConfiguration configuration{1, 3, 1.0,
+        PLC::ScaleTiming::pivot_time, 8, 20, 3, 900s};
+    const std::vector<PL::CompletedBar> bars{
+        Bar(0, 3, 1, 2), Bar(1, 9, 3, 5), Bar(2, 4, 2, 3),
+        Bar(3, 5, 1, 3), Bar(4, 9.5, 2, 5), Bar(5, 4, 1, 2)};
+    const auto replay = [&] {
+        PLC::AdaptiveWidthResearchDetector detector{"eurusdrmp", configuration};
+        PLC::PrecedingRangeScale scale{3};
+        std::vector<std::string> result;
+        for (const PL::CompletedBar& bar : bars)
+        {
+            const auto observations = AddAdaptive(detector, scale, bar);
+            assert(std::is_sorted(observations.begin(), observations.end(),
+                [](const PLC::AdaptiveObservation& left,
+                   const PLC::AdaptiveObservation& right) {
+                    return left.level.identity != right.level.identity
+                        ? left.level.identity < right.level.identity
+                        : static_cast<int>(left.kind) < static_cast<int>(right.kind);
+                }));
+            for (const auto& observation : observations)
+                result.push_back(std::to_string(static_cast<int>(observation.kind)) + ":" +
+                                 observation.level.identity + ":" +
+                                 PL::CanonicalDouble(observation.level.zoneHalfWidth));
+        }
+        return result;
+    };
+    assert(replay() == replay());
+    const std::string adaptiveIdentity =
+        PLC::CanonicalAdaptiveConfigurationIdentity(configuration);
+    assert(adaptiveIdentity.find("causal-price-level/v1") == std::string::npos);
+    assert(adaptiveIdentity.find("id=causal-price-level") == std::string::npos);
+    assert(adaptiveIdentity.find(PLC::kAdaptiveStudyContract) != std::string::npos);
+
+    PLC::AdaptiveWidthResearchDetector detector{"eurusdrmp", configuration};
+    PLC::PrecedingRangeScale scale{3};
+    (void)AddAdaptive(detector, scale, bars[0]);
+    bool rejected = false;
+    try { (void)AddAdaptive(detector, scale, bars[0]); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    assert(rejected);
+}
+
+void TestAdaptiveAgeBoundaryCapacityAndCensoring()
+{
+    // The phase-5B contract measures lifetime from availability (confirmation)
+    // and preserves the v1 boundary: A + maxAgeBars remains active; expiration
+    // is emitted at A + maxAgeBars + 1 before that bar's interactions.
+    const PLC::AdaptiveConfiguration ageOne{1, 3, 0.0, PLC::ScaleTiming::pivot_time,
+        8, 1, 3, 900s};
+    PLC::AdaptiveWidthResearchDetector expiry{"eurusdrmp", ageOne};
+    PLC::PrecedingRangeScale expiryScale{3};
+    (void)AddAdaptive(expiry, expiryScale, Bar(0, 3, 1, 2));
+    (void)AddAdaptive(expiry, expiryScale, Bar(1, 9, 3, 5));
+    const auto established = AddAdaptive(expiry, expiryScale, Bar(2, 4, 2, 3));
+    assert(Observation(established, PL::InteractionKind::level_established).level.availableBar == 2);
+    const auto stillActive = AddAdaptive(expiry, expiryScale, Bar(3, 5, 1, 3));
+    assert(std::none_of(stillActive.begin(), stillActive.end(), [](const auto& observation) {
+        return observation.kind == PL::InteractionKind::level_expired;
+    }));
+    const auto expired = AddAdaptive(expiry, expiryScale, Bar(4, 2, 0, 1));
+    assert(Observation(expired, PL::InteractionKind::level_expired).level.availableBar == 2);
+    // A level present in the final active census is right-censored by the
+    // harness; it is not represented by an ended-level observation.
+    PLC::AdaptiveWidthResearchDetector censored{"eurusdrmp", ageOne};
+    PLC::PrecedingRangeScale censoredScale{3};
+    (void)AddAdaptive(censored, censoredScale, Bar(0, 3, 1, 2));
+    (void)AddAdaptive(censored, censoredScale, Bar(1, 9, 3, 5));
+    const PLC::AdaptiveUpdate finalUpdate = censored.AddCompletedBar(
+        Bar(2, 4, 2, 3), censoredScale.BeforeCurrentBar());
+    assert(finalUpdate.activeLevels.size() == 1);
+    assert(std::none_of(finalUpdate.observations.begin(), finalUpdate.observations.end(),
+        [](const auto& observation) { return observation.kind == PL::InteractionKind::level_expired; }));
+
+    const PLC::AdaptiveConfiguration capacityOne{1, 3, 0.0, PLC::ScaleTiming::pivot_time,
+        1, 20, 3, 900s};
+    PLC::AdaptiveWidthResearchDetector capacity{"eurusdrmp", capacityOne};
+    PLC::PrecedingRangeScale capacityScale{3};
+    const std::vector<PL::CompletedBar> bars{
+        Bar(0, 3, 1, 2), Bar(1, 9, 3, 5), Bar(2, 4, 2, 3),
+        Bar(3, 5, 1, 3), Bar(4, 9.5, 2, 5), Bar(5, 4, 1, 2)};
+    std::vector<PLC::AdaptiveObservation> capacityObservations;
+    for (const PL::CompletedBar& bar : bars)
+        capacityObservations = AddAdaptive(capacity, capacityScale, bar);
+    assert(Observation(capacityObservations, PL::InteractionKind::level_evicted).kind ==
+           PL::InteractionKind::level_evicted);
+    assert(std::none_of(capacityObservations.begin(), capacityObservations.end(),
+        [](const auto& observation) { return observation.kind == PL::InteractionKind::level_expired; }));
+}
+
+void TestAdaptiveAgeDoesNotChangePivotDetection()
+{
+    const std::vector<PL::CompletedBar> bars{
+        Bar(0, 3, 1, 2), Bar(1, 9, 3, 5), Bar(2, 4, 2, 3),
+        Bar(3, 5, 1, 3), Bar(4, 9.5, 2, 5), Bar(5, 4, 1, 2),
+        Bar(6, 8, 2, 5), Bar(7, 3, 0, 1)};
+    const auto pivotOutcomes = [&](std::size_t age) {
+        PLC::AdaptiveWidthResearchDetector detector{"eurusdrmp", {1, 3, 0.0,
+            PLC::ScaleTiming::pivot_time, 16, age, 3, 900s}};
+        PLC::PrecedingRangeScale scale{3};
+        std::size_t result = 0;
+        for (const PL::CompletedBar& bar : bars)
+        {
+            for (const PLC::AdaptiveObservation& observation : AddAdaptive(detector, scale, bar))
+                if (observation.kind == PL::InteractionKind::level_established ||
+                    observation.kind == PL::InteractionKind::level_reinforced)
+                    ++result;
+        }
+        return result;
+    };
+    assert(pivotOutcomes(1) == pivotOutcomes(20));
+}
+
+void TestAdaptiveResearchDoesNotChangeV1Replay()
+{
+    const std::vector<PL::CompletedBar> bars{
+        Bar(0, 3, 1, 2), Bar(1, 9, 3, 5), Bar(2, 4, 2, 3),
+        Bar(3, 5, 1, 3), Bar(4, 9.5, 2, 5), Bar(5, 4, 1, 2)};
+    const PL::Configuration v1{1, 0.5, 8, 20, 3, 900s};
+    const auto v1Replay = [&] {
+        PL::CausalPriceLevelEngine engine{"eurusdrmp", v1};
+        std::vector<std::string> result;
+        for (const PL::CompletedBar& bar : bars)
+            result.push_back(engine.AddCompletedBar(bar).CanonicalRepresentation());
+        return result;
+    };
+    const auto before = v1Replay();
+    PLC::AdaptiveWidthResearchDetector research{"eurusdrmp", {1, 3, 1.0,
+        PLC::ScaleTiming::pivot_time, 8, 20, 3, 900s}};
+    PLC::PrecedingRangeScale scale{3};
+    for (const PL::CompletedBar& bar : bars)
+        (void)AddAdaptive(research, scale, bar);
+    assert(before == v1Replay());
+    assert(PL::CanonicalConfigurationIdentity(v1).find("id=causal-price-level") !=
+           std::string::npos);
+}
 } // namespace
 
 int main()
@@ -155,5 +346,10 @@ int main()
     TestScaleUsesPrecedingRangesOnly();
     TestPivotScaleTimeAndDeterminism();
     TestChronologicalValidation();
+    TestAdaptiveScaleBoundariesAndFrozenWidth();
+    TestAdaptiveDeterminismChronologyAndIdentityIsolation();
+    TestAdaptiveAgeBoundaryCapacityAndCensoring();
+    TestAdaptiveAgeDoesNotChangePivotDetection();
+    TestAdaptiveResearchDoesNotChangeV1Replay();
     std::cout << "PriceLevelCharacterizationTests passed\n";
 }
