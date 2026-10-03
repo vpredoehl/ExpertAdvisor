@@ -94,3 +94,60 @@ EA_PRICE_LEVEL_SOURCE_ID="$(git rev-parse HEAD)" \
 The output directory must not exist. Successful results publish atomically;
 inspect `manifest.txt`, all three candidate CSVs, and the Phase 5C summary
 before making any later bounded-memory decision.
+
+## Authoritative historical result
+
+The authoritative bounds-confirmation run used all 28 symbols over
+`[2010-01-01, 2026-01-01)`, processing 11,050,517 completed 15-minute bars.
+The source Git identity was
+`0ea8314bd4ce01d8ca55c8a7c693381805993dc6`.
+
+The active-level bound is resolved at `maxActiveLevels=48`. A cap of 32
+produced 86 capacity evictions across 18 of 28 symbols
+(`0.0077824413` evictions per 1,000 bars). Caps of 48 and 64 produced zero
+capacity evictions. With either nonbinding cap, the maximum observed active
+population was 37, so 48 retains 11 levels of headroom above the historical
+maximum. The 48- and 64-level configurations produced identical establishment,
+reinforcement, age-expiration, and right-censoring counts.
+
+The retained-evidence bound is resolved at `maxRetainedPivotEvidence=32`.
+Evidence caps of 8, 16, and 32 saturated 27.1862%, 3.89128%, and 0.0357958%
+of reinforcement events respectively. At cap 32, 623 of 1,740,429
+reinforcement events encountered already-saturated retained evidence, and
+210 ended levels reached the retained-evidence cap.
+
+The cap-32 evidence tail does not reveal material concentration requiring a
+larger bound. The highest whole-history symbol saturation fraction was
+EURCHF at 0.135656%. Across symbol/year rows, 127 had nonzero saturation;
+the largest observed annual fraction was EURUSD 2016 at 0.556539%
+(22 saturated reinforcements of 3,953), followed by EURCHF 2012 at
+0.530839%. Evidence-saturation counts were identical across active caps
+32, 48, and 64.
+
+Phase 5C therefore closes with the following bounded-state engineering
+parameters:
+
+- `maxActiveLevels=48`
+- `maxRetainedPivotEvidence=32`
+
+These are engineering bounds, not outcome-optimized parameters. No target,
+future return, profitability, prediction-quality, or model-performance data
+was used to select them.
+
+Together with the preceding characterization studies, the resulting
+production-contract candidate is:
+
+- pivot radius: `3`;
+- scale statistic: median preceding completed-bar `high-low`;
+- scale lookback: `64`;
+- scale multiplier: `1`;
+- scale timing: `pivot_time`;
+- maximum age: `512` bars;
+- maximum active levels: `48`;
+- maximum retained pivot evidence: `32`; and
+- completed-bar duration: `900` seconds.
+
+This closes empirical characterization of the provisional core and bounded
+state. A subsequent implementation phase may define an explicit
+`causal-price-level/v2`; this study does not itself change the production
+detector definition.
