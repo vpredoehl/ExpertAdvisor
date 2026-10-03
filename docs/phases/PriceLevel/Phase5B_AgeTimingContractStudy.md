@@ -107,3 +107,86 @@ After it completes:
 2. Return the manifest and the CSV summaries to ChatGPT/CEE.
 3. Only then perform the Phase 5B interpretation and any freeze-decision
    tranche. No production radius, timing, age, or cap is selected here.
+
+## Completed study results
+
+The primary all-history run completed over the authoritative 28-symbol
+universe for `[2010-01-01, 2026-01-01)`. It processed 11,050,517 completed
+15-minute bars in 444.295 seconds. The manifest reported
+`read_only=true`, `target_column_used=false`, 24 candidate configurations,
+and source Git identity
+`7bf233d010b205896ef1ca9dfd597c295acec06a`.
+
+The aggregate and cross-symbol results do not identify a natural level
+lifetime. At maximum ages 256, 512, and 1024, no tested configuration had a
+capacity eviction, yet essentially all levels that could be observed through
+their terminal age ended by forced age expiration. Median establishment-year
+age-expiration fraction was 1.000 for every radius/timing combination at
+those ages. `levels_other_terminated` was zero.
+
+Increasing maximum age materially changes detector structure rather than
+approaching an evident plateau. For radius 3 with pivot-time scaling, aggregate
+establishments per 1000 bars changed from 35.881 at age 256, to 26.301 at
+512, to 19.178 at 1024, while reinforcement fraction increased from 0.805,
+to 0.857, to 0.896 and retests per 1000 bars increased from 9.154, to
+10.722, to 12.120. Active-population p50 increased from 9, to 13, to 19.
+The same monotonic behavior was present for radius 4 and for confirmation-time
+scaling.
+
+The cross-symbol and calendar-year analyses confirm that this behavior is not
+an aggregate artifact. Establishment and reinforcement distributions are
+comparatively tight across symbols, and the same age progression persists
+across the 2010-2025 calendar-year aggregates.
+
+Age 2048 is no longer a clean age-only observation under the fixed
+`maxActiveLevels=64` study bound. Radius 3 encountered capacity evictions in
+16 of 28 symbols and 11 calendar years. Radius 4 encountered capacity
+evictions in 7 of 28 symbols, with capacity eviction present in 6
+confirmation-time calendar years and 7 pivot-time calendar years. The 4096
+rows are still more strongly capacity-confounded. Consequently, extending
+the age sweep with the same active-level cap would increasingly characterize
+the capacity-eviction policy rather than unconstrained level age.
+
+The Phase 5B conclusion is therefore that `maxAgeBars` is detector memory and
+a first-class detector semantic, not a natural lifetime inferred from market
+structure. The current detector has no endogenous level-death mechanism:
+absent age expiration, capacity eviction, or end-window censoring, an
+established level persists.
+
+Pivot-time and confirmation-time scaling remain structurally close throughout
+the full-history study. Because no material structural advantage for
+confirmation-time was observed, `pivot_time` is the preferred contract
+semantics: the frozen width is derived from information available before the
+originating pivot bar rather than incorporating bars occurring after that
+pivot. This is a semantic selection, not an optimization on interaction count.
+
+Radii 3 and 4 are both structurally stable. Radius 4 is consistently more
+selective, but this characterization provides no outcome-based criterion by
+which lower structural density should be preferred. Radius 3 therefore remains
+the provisional candidate carried forward from Phase 5A; Phase 5B does not
+claim that radius 3 is empirically optimal.
+
+For subsequent bounded-state confirmation, age 512 is the provisional
+engineering candidate. It is entirely free of capacity eviction in this study
+and keeps the active population substantially below the 64-level bound.
+Selection of 512 is a bounded-memory design choice, not a discovered natural
+lifetime or profitability optimum.
+
+The resulting provisional adaptive detector core carried into the next
+research tranche is:
+
+- pivot radius: 3
+- causal scale: median of the preceding 64 completed-bar `high-low` ranges
+- scale multiplier: 1
+- scale timing: `pivot_time`
+- maximum age: 512 bars
+- completed-bar duration: 900 seconds
+- established width remains permanently frozen
+- reinforcement remains constrained to the existing frozen zone
+
+`maxActiveLevels=64` and `maxRetainedPivotEvidence=32` remain study bounds,
+not yet independently frozen contract values. A subsequent bounds-confirmation
+study should vary only those bounds while holding the provisional detector core
+fixed. It must characterize capacity/evidence truncation rather than optimize
+market outcomes or profitability.
+
