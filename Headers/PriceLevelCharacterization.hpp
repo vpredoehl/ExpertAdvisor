@@ -7,6 +7,7 @@
 #include "CausalPriceLevelEngine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -301,6 +302,8 @@ inline constexpr const char* kAdaptiveStudyContract =
     "price-level-adaptive-width-study-v1";
 inline constexpr const char* kAgeTimingStudyContract =
     "price-level-phase5b-age-timing-study-v1";
+inline constexpr const char* kBoundsConfirmationStudyContract =
+    "price-level-phase5c-bounds-confirmation-study-v1";
 
 enum class ScaleTiming { pivot_time, confirmation_time };
 
@@ -336,6 +339,26 @@ inline void ValidateAdaptiveConfiguration(const AdaptiveConfiguration& value)
     {
         throw std::invalid_argument("PRICE_LEVEL_ADAPTIVE_CONFIGURATION_INVALID");
     }
+}
+
+// Phase 5C varies only bounded-state limits.  Keeping the grid beside the
+// research detector makes both the CLI and focused replay tests use the exact
+// same fixed provisional core.
+inline std::array<AdaptiveConfiguration, 9> Phase5CBoundsConfirmationConfigurations()
+{
+    constexpr std::array<std::size_t, 3> activeCaps{32, 48, 64};
+    constexpr std::array<std::size_t, 3> evidenceCaps{8, 16, 32};
+    std::array<AdaptiveConfiguration, 9> result{};
+    std::size_t index = 0;
+    for (const std::size_t maxActive : activeCaps)
+    {
+        for (const std::size_t maxEvidence : evidenceCaps)
+        {
+            result[index++] = {3, 64, 1.0, ScaleTiming::pivot_time, maxActive,
+                               512, maxEvidence, std::chrono::seconds{900}};
+        }
+    }
+    return result;
 }
 
 inline std::string CanonicalAdaptiveConfigurationIdentity(
@@ -381,6 +404,10 @@ struct AdaptiveObservation final
 struct AdaptiveUpdate final
 {
     std::vector<AdaptiveObservation> observations;
+    // Counted before bounded active-state or retained-evidence policies are
+    // applied.  This is a test-only seam proving those policies cannot alter
+    // the upstream strict-pivot decision.
+    std::size_t strictPivotsConfirmed = 0;
     std::size_t activeLevelCount = 0;
     // A research-only end-of-bar census.  It lets the characterization
     // harness distinguish levels still active at the requested window end
@@ -424,7 +451,7 @@ public:
         AdaptiveUpdate result;
         Expire(currentBar, result.observations);
         if (currentBar > 0) ObserveInteractions(currentBar, result.observations);
-        ConfirmLatestPivots(currentBar, result.observations);
+        ConfirmLatestPivots(currentBar, result.strictPivotsConfirmed, result.observations);
         std::sort(result.observations.begin(), result.observations.end(),
             [](const AdaptiveObservation& left, const AdaptiveObservation& right) {
                 if (left.level.identity != right.level.identity)
@@ -530,18 +557,24 @@ private:
         }
     }
 
-    void ConfirmLatestPivots(std::size_t currentBar,
+    void ConfirmLatestPivots(std::size_t currentBar, std::size_t& strictPivotsConfirmed,
                              std::vector<AdaptiveObservation>& observations)
     {
         const std::size_t radius = configuration_.pivotRadiusBars;
         if (bars_.size() < radius * 2 + 1) return;
         const std::size_t pivotOffset = bars_.size() - 1 - radius;
         if (IsStrict(pivotOffset, PivotKind::high))
+        {
+            ++strictPivotsConfirmed;
             AddPivot(currentBar, pivotOffset, PivotKind::high, bars_[pivotOffset].bar.high,
                      observations);
+        }
         if (IsStrict(pivotOffset, PivotKind::low))
+        {
+            ++strictPivotsConfirmed;
             AddPivot(currentBar, pivotOffset, PivotKind::low, bars_[pivotOffset].bar.low,
                      observations);
+        }
     }
 
     void AddPivot(std::size_t currentBar, std::size_t pivotOffset, PivotKind kind,

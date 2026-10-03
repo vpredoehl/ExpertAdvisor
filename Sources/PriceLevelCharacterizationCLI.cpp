@@ -64,6 +64,7 @@ struct Options final
     std::optional<PL::Configuration> v1Candidate;
     bool adaptiveStudy = false;
     bool ageTimingStudy = false;
+    bool boundsConfirmationStudy = false;
     std::vector<std::size_t> adaptiveLookbacks{32, 64, 128};
     std::vector<double> adaptiveMultipliers{0.5, 1.0, 2.0};
     std::vector<double> fixedControlWidths{0.0005, 0.05};
@@ -188,6 +189,7 @@ Options ParseOptions(int argc, const char* const argv[])
         else if (option == "--v1-candidate") result.v1Candidate = ParseV1Candidate(require());
         else if (option == "--adaptive-study") result.adaptiveStudy = true;
         else if (option == "--age-timing-study") result.ageTimingStudy = true;
+        else if (option == "--bounds-confirmation-study") result.boundsConfirmationStudy = true;
         else if (option == "--adaptive-lookbacks") result.adaptiveLookbacks = ParseSizes(require());
         else if (option == "--adaptive-multipliers") result.adaptiveMultipliers = ParseDoubles(require());
         else if (option == "--fixed-control-widths") result.fixedControlWidths = ParseDoubles(require());
@@ -197,7 +199,8 @@ Options ParseOptions(int argc, const char* const argv[])
                       << "--output-dir DIRECTORY [--symbols a,b] [--pivot-radii 1,2,3,4,6,8] "
                       << "[--scale-lookbacks 32,96,384] "
                       << "[--v1-candidate radius,width,max_active,max_age,max_evidence] "
-                      << "[--adaptive-study|--age-timing-study] [--adaptive-lookbacks 32,64,128] "
+                      << "[--adaptive-study|--age-timing-study|--bounds-confirmation-study] "
+                      << "[--adaptive-lookbacks 32,64,128] "
                       << "[--adaptive-multipliers 0.5,1,2] "
                       << "[--fixed-control-widths 0.0005,0.05] "
                       << "[--connection CONNECTION]\n";
@@ -210,7 +213,8 @@ Options ParseOptions(int argc, const char* const argv[])
     if (!(result.start < result.end))
         throw std::invalid_argument("PRICE_LEVEL_CLI_START_MUST_PRECEDE_END");
     if (result.symbols.empty()) throw std::invalid_argument("PRICE_LEVEL_CLI_SYMBOLS_EMPTY");
-    if (result.adaptiveStudy && result.ageTimingStudy)
+    if (static_cast<int>(result.adaptiveStudy) + static_cast<int>(result.ageTimingStudy) +
+            static_cast<int>(result.boundsConfirmationStudy) > 1)
         throw std::invalid_argument("PRICE_LEVEL_CLI_STUDY_MODES_MUTUALLY_EXCLUSIVE");
     return result;
 }
@@ -698,6 +702,33 @@ void WriteAgeCurveSummary(std::ostream& out, std::vector<AgeCurveRow> rows)
     }
 }
 
+void WriteBoundsConfirmationSummary(std::ostream& out,
+                                    const CandidateDescriptor& candidate,
+                                    const StudyAccumulator& metrics,
+                                    const LifecycleSlice& lifecycle,
+                                    std::size_t symbolsProcessed,
+                                    std::size_t symbolsWithCapacityEviction)
+{
+    const auto interaction = [&metrics](PL::InteractionKind kind) {
+        return metrics.interactions[static_cast<std::size_t>(kind)];
+    };
+    const std::uint64_t reinforcements = interaction(PL::InteractionKind::level_reinforced);
+    const double activeP50 = metrics.activeCounts.count ? metrics.activeCounts.Quantile(0.5) : 0.0;
+    const double activeP90 = metrics.activeCounts.count ? metrics.activeCounts.Quantile(0.9) : 0.0;
+    const double activeMax = metrics.activeCounts.count ? metrics.activeCounts.maximum : 0.0;
+    out << candidate.maxActive << ',' << candidate.maxEvidence << ',' << metrics.bars << ','
+        << metrics.candidatePivots << ',' << lifecycle.established << ','
+        << lifecycle.reinforced << ',' << lifecycle.ageExpired << ','
+        << lifecycle.capacityEvicted << ',' << lifecycle.rightCensored << ','
+        << RatePerThousand(lifecycle.capacityEvicted, metrics.bars) << ','
+        << symbolsWithCapacityEviction << ','
+        << Fraction(symbolsWithCapacityEviction, symbolsProcessed) << ','
+        << metrics.evidenceSaturatedReinforcements << ',' << reinforcements << ','
+        << Fraction(metrics.evidenceSaturatedReinforcements, reinforcements) << ','
+        << metrics.saturatedEndedLevels << ',' << activeP50 << ',' << activeP90 << ','
+        << activeMax << '\n';
+}
+
 int Run(const Options& options)
 {
     const std::filesystem::path incompleteOutput =
@@ -713,19 +744,31 @@ int Run(const Options& options)
     std::ofstream studyFile(incompleteOutput / "candidate_detector_metrics.csv");
     std::ofstream lifecycleFile(incompleteOutput / "candidate_lifecycle_metrics.csv");
     std::ofstream ageCurveFile(incompleteOutput / "age_curve_summary.csv");
-    if (!pivotFile || !scaleFile || !detectorFile || !studyFile || !lifecycleFile || !ageCurveFile)
+    std::optional<std::ofstream> boundsSummaryFile;
+    if (options.boundsConfirmationStudy)
+        boundsSummaryFile.emplace(incompleteOutput / "bounds_confirmation_summary.csv");
+    if (!pivotFile || !scaleFile || !detectorFile || !studyFile || !lifecycleFile || !ageCurveFile ||
+        (boundsSummaryFile && !*boundsSummaryFile))
         throw std::runtime_error("PRICE_LEVEL_OUTPUT_OPEN_FAILED");
     pivotFile << "scope,symbol,radius,bars,strict_pivot_highs,strict_pivot_lows,total_pivots,pivots_per_100_bars\n";
     scaleFile << "scope,symbol,year,pivot_radius,lookback,timing,statistic,count,retained_sample_size,mean,min,p50,p90,max\n";
     detectorFile << "scope,symbol,year,level_established,level_reinforced,touch,cross_up,cross_down,retest,role_reversal,level_expired,level_evicted,ended_levels,saturated_ended_levels,active_count_samples,active_count_sample_size,active_count_mean,active_count_min,active_count_p50,active_count_p90,active_count_max,lifetime_samples,lifetime_sample_size,lifetime_mean,lifetime_min,lifetime_p50,lifetime_p90,lifetime_max,pivot_observation_samples,pivot_observation_sample_size,pivot_observation_mean,pivot_observation_min,pivot_observation_p50,pivot_observation_p90,pivot_observation_max\n";
     studyFile << "scope,symbol,year,family,configuration_identity,pivot_radius,scale_lookback,scale_multiplier,scale_timing,fixed_zone_half_width,max_active_levels,max_age_bars,max_retained_pivot_evidence,bars,candidate_pivots,level_established,level_reinforced,touch,cross_up,cross_down,retest,role_reversal,level_expired,level_evicted,evidence_saturated_reinforcements,ended_levels,saturated_ended_levels,active_samples,active_retained_sample_size,active_mean,active_min,active_p50,active_p90,active_max,lifetime_samples,lifetime_retained_sample_size,lifetime_mean,lifetime_min,lifetime_p50,lifetime_p90,lifetime_max,retest_latency_samples,retest_latency_retained_sample_size,retest_latency_mean,retest_latency_min,retest_latency_p50,retest_latency_p90,retest_latency_max,pivots_per_ended_level_samples,pivots_per_ended_level_retained_sample_size,pivots_per_ended_level_mean,pivots_per_ended_level_min,pivots_per_ended_level_p50,pivots_per_ended_level_p90,pivots_per_ended_level_max\n";
     lifecycleFile << "scope,symbol,establishment_year,configuration_identity,pivot_radius,scale_lookback,scale_multiplier,scale_timing,max_active_levels,max_age_bars,max_retained_pivot_evidence,levels_established,levels_reinforced,levels_age_expired,levels_capacity_evicted,levels_other_terminated,levels_right_censored_end_of_requested_window,age_expiration_fraction_of_established,observed_survived_128_bars,observed_survived_128_fraction,observed_survived_256_bars,observed_survived_256_fraction,observed_survived_512_bars,observed_survived_512_fraction,observed_survived_1024_bars,observed_survived_1024_fraction,observed_survived_2048_bars,observed_survived_2048_fraction,observed_survived_4096_bars,observed_survived_4096_fraction,ended_lifetime_samples,ended_lifetime_retained_sample_size,ended_lifetime_mean,ended_lifetime_min,ended_lifetime_p50,ended_lifetime_p90,ended_lifetime_max,censored_lifetime_samples,censored_lifetime_retained_sample_size,censored_lifetime_mean,censored_lifetime_min,censored_lifetime_p50,censored_lifetime_p90,censored_lifetime_max\n";
+    if (boundsSummaryFile)
+        *boundsSummaryFile << "max_active_levels,max_retained_pivot_evidence,bars,"
+            "candidate_pivots,levels_established,levels_reinforced,levels_age_expired,"
+            "levels_capacity_evicted,levels_right_censored,capacity_evictions_per_1000_bars,"
+            "symbols_with_capacity_eviction,symbol_fraction_with_capacity_eviction,"
+            "evidence_saturated_reinforcements,evidence_saturation_reinforcement_denominator,"
+            "evidence_saturation_fraction,saturated_ended_levels,active_p50,active_p90,active_max\n";
     pivotFile << std::setprecision(17);
     scaleFile << std::setprecision(17);
     detectorFile << std::setprecision(17);
     studyFile << std::setprecision(17);
     lifecycleFile << std::setprecision(17);
     ageCurveFile << std::setprecision(17);
+    if (boundsSummaryFile) *boundsSummaryFile << std::setprecision(17);
 
     constexpr std::array<std::size_t, 3> kPhase5AStudyRadii{2, 3, 4};
     constexpr std::array<std::size_t, 2> kAgeTimingStudyRadii{3, 4};
@@ -788,11 +831,26 @@ int Run(const Options& options)
             }
         }
     }
+    else if (options.boundsConfirmationStudy)
+    {
+        for (const PLC::AdaptiveConfiguration& adaptive :
+             PLC::Phase5CBoundsConfirmationConfigurations())
+        {
+            studyCandidates.push_back({"adaptive_width_research_bounds_confirmation",
+                PLC::CanonicalAdaptiveConfigurationIdentity(adaptive),
+                adaptive.pivotRadiusBars, adaptive.scaleLookbackBars,
+                adaptive.scaleMultiplier,
+                std::string{PLC::CanonicalScaleTiming(adaptive.scaleTiming)}, 0.0,
+                adaptive.maxActiveLevels, adaptive.maxAgeBars,
+                adaptive.maxRetainedPivotEvidence});
+        }
+    }
     std::vector<StudyAccumulator> aggregateStudy;
     aggregateStudy.reserve(studyCandidates.size());
     for (const CandidateDescriptor& candidate : studyCandidates)
         aggregateStudy.emplace_back(candidate.maxEvidence);
     std::vector<LifecycleAccumulator> aggregateLifecycles(studyCandidates.size());
+    std::vector<std::size_t> symbolsWithCapacityEviction(studyCandidates.size());
 
     const auto started = std::chrono::steady_clock::now();
     std::vector<PLC::PivotCounts> aggregatePivot(options.radii.size());
@@ -813,8 +871,11 @@ int Run(const Options& options)
     {
         std::vector<std::size_t> allScaleLookbacks = options.scaleLookbacks;
         if (options.adaptiveStudy || options.ageTimingStudy)
+        {
             allScaleLookbacks.insert(allScaleLookbacks.end(), options.adaptiveLookbacks.begin(),
                                      options.adaptiveLookbacks.end());
+        }
+        else if (options.boundsConfirmationStudy) allScaleLookbacks.push_back(64);
         std::sort(allScaleLookbacks.begin(), allScaleLookbacks.end());
         allScaleLookbacks.erase(std::unique(allScaleLookbacks.begin(), allScaleLookbacks.end()),
                                 allScaleLookbacks.end());
@@ -853,7 +914,8 @@ int Run(const Options& options)
         {
             auto runner = std::make_unique<CandidateRunner>(candidate);
             if (candidate.family == "adaptive_width_research" ||
-                candidate.family == "adaptive_width_research_age_timing")
+                candidate.family == "adaptive_width_research_age_timing" ||
+                candidate.family == "adaptive_width_research_bounds_confirmation")
             {
                 const PLC::AdaptiveConfiguration adaptive{candidate.radius, candidate.lookback,
                     candidate.multiplier,
@@ -921,7 +983,7 @@ int Run(const Options& options)
                     candidate.all.AddAdaptive(barIndex, update);
                     yearMetrics->second.AddAdaptive(barIndex, update);
                     aggregateStudy[candidateIndex].AddAdaptive(barIndex, update);
-                    if (options.ageTimingStudy)
+                    if (options.ageTimingStudy || options.boundsConfirmationStudy)
                     {
                         candidate.lifecycle.Add(barIndex, year, update);
                         aggregateLifecycles[candidateIndex].Add(barIndex, year, update);
@@ -984,7 +1046,7 @@ int Run(const Options& options)
             WriteStudy(studyFile, "symbol", symbol, 0, candidate->descriptor, candidate->all);
             for (const auto& [year, metrics] : candidate->byYear)
                 WriteStudy(studyFile, "symbol", symbol, year, candidate->descriptor, metrics);
-            if (options.ageTimingStudy)
+            if (options.ageTimingStudy || options.boundsConfirmationStudy)
             {
                 candidate->lifecycle.RightCensorEndOfWindow(candidate->finalActiveLevels,
                                                             barIndex - 1);
@@ -995,13 +1057,15 @@ int Run(const Options& options)
                                    lifecycle);
             }
         }
-        if (options.ageTimingStudy)
+        if (options.ageTimingStudy || options.boundsConfirmationStudy)
         {
             for (std::size_t candidateIndex = 0; candidateIndex < candidateRunners.size();
                  ++candidateIndex)
             {
                 aggregateLifecycles[candidateIndex].RightCensorEndOfWindow(
                     candidateRunners[candidateIndex]->finalActiveLevels, barIndex - 1);
+                if (candidateRunners[candidateIndex]->lifecycle.all().capacityEvicted > 0)
+                    ++symbolsWithCapacityEviction[candidateIndex];
             }
         }
         std::cout << "PRICE_LEVEL_CHARACTERIZATION_SYMBOL symbol=" << symbol << ",bars=" << barIndex << '\n';
@@ -1048,13 +1112,24 @@ int Run(const Options& options)
         }
         WriteAgeCurveSummary(ageCurveFile, std::move(ageCurveRows));
     }
+    if (options.boundsConfirmationStudy)
+    {
+        for (std::size_t index = 0; index < studyCandidates.size(); ++index)
+            WriteBoundsConfirmationSummary(*boundsSummaryFile, studyCandidates[index],
+                                           aggregateStudy[index],
+                                           aggregateLifecycles[index].all(),
+                                           options.symbols.size(),
+                                           symbolsWithCapacityEviction[index]);
+    }
 
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
     std::ofstream manifest(incompleteOutput / "manifest.txt");
     const char* sourceIdentity = std::getenv("EA_PRICE_LEVEL_SOURCE_ID");
-    manifest << "study_contract=" << (options.ageTimingStudy ? PLC::kAgeTimingStudyContract :
-                                        PLC::kStudyContract) << '\n'
+    manifest << "study_contract=" << (options.boundsConfirmationStudy
+                    ? PLC::kBoundsConfirmationStudyContract
+                    : (options.ageTimingStudy ? PLC::kAgeTimingStudyContract :
+                                               PLC::kStudyContract)) << '\n'
              << "source_contract=" << EA::CanonicalMarketData::kAbsoluteHalfOpenContractVersion << '\n'
              << "source_git_identity=" << (sourceIdentity && *sourceIdentity ? sourceIdentity : "not_supplied") << '\n'
              << "read_only=true\n"
@@ -1067,15 +1142,18 @@ int Run(const Options& options)
     if (options.v1Candidate) manifest << PL::CanonicalConfigurationIdentity(*options.v1Candidate);
     else manifest << "not_requested";
     manifest << '\n'
-             << "adaptive_width_detector=" << ((options.adaptiveStudy || options.ageTimingStudy)
+             << "adaptive_width_detector=" << ((options.adaptiveStudy || options.ageTimingStudy ||
+                                                   options.boundsConfirmationStudy)
                  ? "isolated_research_only" : "not_requested") << '\n'
              << "scale_semantics=preceding_completed_high_low_ranges;startup_uses_available_predecessor_prefix\n"
              << "pivot_scale_time=before_originating_pivot_bar\n"
              << "confirmation_scale_time=before_confirmation_bar\n"
              << "quantiles=exact_when_count_at_most_65536;otherwise_deterministic_hash_ranked_sample\n"
              << "candidate_configurations=" << studyCandidates.size() << '\n'
-             << "candidate_pivot_radii=" << (options.ageTimingStudy ? "3,4" :
+             << "candidate_pivot_radii=" << (options.boundsConfirmationStudy ? "3" :
+                 (options.ageTimingStudy ? "3,4" :
                  (options.adaptiveStudy ? "2,3,4" : "not_requested"))
+             )
              << '\n'
              << "adaptive_merge_rule=candidate_pivot_merges_only_when_inside_existing_frozen_zone;nearest_anchor_then_identity;candidate_width_used_only_for_new_level\n"
              << "adaptive_width_freezing=established_level_width_never_changes\n"
@@ -1084,6 +1162,18 @@ int Run(const Options& options)
              << "age_timing_primary_grid=" << (options.ageTimingStudy
                  ? "radius=3,4;lookback=64;multiplier=1;timing=pivot_time,confirmation_time;max_age=128,256,512,1024,2048,4096;max_active=64;max_evidence=32;bar_duration_seconds=900"
                  : "not_requested") << '\n';
+    if (options.boundsConfirmationStudy)
+    {
+        manifest << "bounds_confirmation_fixed_provisional_core="
+                 << "pivot_radius=3;scale_statistic=median_preceding_completed_bar_high_low;"
+                    "scale_lookback=64;scale_multiplier=1;scale_timing=pivot_time;"
+                    "max_age=512;bar_duration_seconds=900\n"
+                 << "bounds_confirmation_active_cap_grid=32,48,64\n"
+                 << "bounds_confirmation_evidence_cap_grid=8,16,32\n"
+                 << "bounds_confirmation_evidence_saturation_denominator="
+                    "level_reinforced_events;fraction=evidence_saturated_reinforcements_"
+                    "divided_by_level_reinforced_events\n";
+    }
     manifest.close();
     pivotFile.close();
     scaleFile.close();
@@ -1091,6 +1181,7 @@ int Run(const Options& options)
     studyFile.close();
     lifecycleFile.close();
     ageCurveFile.close();
+    if (boundsSummaryFile) boundsSummaryFile->close();
     std::filesystem::rename(incompleteOutput, options.output);
     std::cout << "PRICE_LEVEL_CHARACTERIZATION_COMPLETE bars=" << aggregateBars
               << ",wall_clock_seconds=" << elapsed << ",output=" << options.output.string() << '\n';
