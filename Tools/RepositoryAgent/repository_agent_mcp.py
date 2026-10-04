@@ -9,7 +9,7 @@ from typing import Any
 from .codex_interface import CodexRepositoryInterface
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.3.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.4.0"}
 
 TOOLS = [
     {
@@ -229,6 +229,22 @@ TOOLS = [
         },
     },
     {
+        "name": "investigate_relationship_claim",
+        "description": "Select bounded direct caller-to-callee source ranges server-side from the structural index, then semantically verify only that exact reread evidence. Qwen cannot search, select ranges, or navigate the repository.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "claim": {"type": "string"},
+                "caller": {"type": "string"},
+                "callee": {"type": "string"},
+            },
+            "required": ["topic_id", "topic", "claim", "caller", "callee"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "verified_claims",
         "description": "Read claim-verification ledger records with optional status/topic/claim filters.",
         "inputSchema": {
@@ -278,6 +294,23 @@ class StdioMCPServer:
     def _error(req_id: Any, code: int, message: str) -> dict[str, Any]:
         return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
+    @staticmethod
+    def _validate_tool_arguments(tool: dict[str, Any], arguments: dict[str, Any]) -> None:
+        """Enforce the advertised closed tool schemas before dispatching.
+
+        The interface remains responsible for operation-specific semantic
+        validation; this prevents unadvertised fields from altering dispatch.
+        """
+        schema = tool["inputSchema"]
+        properties = schema.get("properties", {})
+        if schema.get("additionalProperties") is False:
+            unexpected = sorted(set(arguments) - set(properties))
+            if unexpected:
+                raise ValueError(f"unexpected tool arguments: {', '.join(unexpected)}")
+        missing = [name for name in schema.get("required", []) if name not in arguments]
+        if missing:
+            raise ValueError(f"missing required tool arguments: {', '.join(missing)}")
+
     def _handle_request(self, msg: dict[str, Any]) -> dict[str, Any] | None:
         method = msg.get("method")
         req_id = msg.get("id")
@@ -313,6 +346,8 @@ class StdioMCPServer:
                     "isError": True,
                 })
             try:
+                tool = next(tool for tool in TOOLS if tool["name"] == name)
+                self._validate_tool_arguments(tool, arguments)
                 result = self.iface.dispatch({"op": name, **arguments})
                 return self._result(req_id, {
                     "content": [{

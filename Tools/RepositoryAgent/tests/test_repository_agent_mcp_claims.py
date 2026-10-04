@@ -12,8 +12,8 @@ from ..repository_agent_mcp import SERVER_INFO, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.3.0"
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim"} <= names
+    assert SERVER_INFO["version"]=="1.4.0"
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim"} <= names
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")
@@ -28,6 +28,11 @@ def main():
     assert schema["properties"]["ranges"]["minItems"]==2
     assert schema["properties"]["ranges"]["maxItems"]==8
     assert schema["properties"]["ranges"]["items"]["additionalProperties"] is False
+    relationship=next(x for x in TOOLS if x["name"]=="investigate_relationship_claim")
+    relationship_schema=relationship["inputSchema"]
+    assert relationship_schema["additionalProperties"] is False
+    assert set(relationship_schema["required"]) == {"topic_id","topic","claim","caller","callee"}
+    assert set(relationship_schema["properties"]) == {"topic_id","topic","claim","caller","callee"}
     print("test_repository_agent_mcp_claims: PASS")
 
 if __name__ == "__main__": main()

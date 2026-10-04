@@ -32,11 +32,21 @@ def main() -> None:
     assert payload["read_only"] is True
     assert "repository_write" in payload["forbidden_capabilities"]
     assert "shell" in payload["forbidden_capabilities"]
+    assert "investigate_relationship_claim" in payload["operations"]
     bad = server._handle_request({
         "jsonrpc":"2.0","id":4,"method":"tools/call",
         "params":{"name":"shell","arguments":{"command":"pwd"}}
     })
     assert bad["result"]["isError"] is True
+    closed = server._handle_request({
+        "jsonrpc":"2.0","id":5,"method":"tools/call",
+        "params":{"name":"investigate_relationship_claim","arguments":{
+            "topic_id":"t","topic":"topic","claim":"claim",
+            "caller":"caller","callee":"callee","query":"forbidden"
+        }}
+    })
+    assert closed["result"]["isError"] is True
+    assert "unexpected tool arguments" in closed["result"]["content"][0]["text"]
     assert server._handle_request({
         "jsonrpc":"2.0","method":"notifications/initialized","params":{}
     }) is None

@@ -20,6 +20,9 @@ from .evidence import VerifiedEvidenceLedger
 from .repository_index import RepositoryIndex
 
 
+RELATIONSHIP_CONTEXT_RADIUS = 12
+
+
 class CodexRepositoryInterface:
     def __init__(self, *, ledger_path: str | None = None, claim_ledger_path: str | None = None,
                  claim_runtime: LazyClaimVerifierRuntime | None = None):
@@ -53,6 +56,7 @@ class CodexRepositoryInterface:
                 "trace_calls", "source_excerpt", "ledger_records",
                 "verify_source_claim", "verify_source_bundle_claim", "verified_claims",
                 "investigate_source_claim", "investigate_source_bundle_claim",
+                "investigate_relationship_claim",
             ],
             "forbidden_capabilities": [
                 "shell", "repository_write", "git_mutation", "database",
@@ -72,6 +76,25 @@ class CodexRepositoryInterface:
         if not value:
             raise ValueError(f"{name} is required")
         return value
+
+    @staticmethod
+    def _required_string(request: dict[str, Any], name: str) -> str:
+        value = request.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        return value.strip()
+
+    @staticmethod
+    def _require_exact_fields(request: dict[str, Any], allowed: set[str]) -> None:
+        unexpected = sorted(set(request) - allowed)
+        if unexpected:
+            raise ValueError(f"unexpected request fields: {', '.join(unexpected)}")
+
+    @staticmethod
+    def _edge_field(edge: Any, name: str) -> Any:
+        if isinstance(edge, dict):
+            return edge.get(name)
+        return getattr(edge, name, None)
 
     def _claim_item(self, spec: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(spec, dict):
@@ -204,6 +227,7 @@ class CodexRepositoryInterface:
         if op == "verified_claims": return self._verified_claims(request)
         if op == "investigate_source_claim": return self._investigate_source_claim(request)
         if op == "investigate_source_bundle_claim": return self._investigate_source_bundle_claim(request)
+        if op == "investigate_relationship_claim": return self._investigate_relationship_claim(request)
         raise ValueError(f"unsupported operation: {op!r}")
 
     def _verify_source_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -319,6 +343,208 @@ class CodexRepositoryInterface:
             },
         }
         return {"manifest": manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
+
+    def _select_relationship_ranges(self, caller: str, callee: str) -> tuple[dict[str, Any], list[dict[str, int | str]]]:
+        """Select bounded relationship evidence from structural navigation only.
+
+        The index is deliberately not evidence: each selected range is later read
+        again by the existing claim-investigation path before any semantic call.
+        """
+        raw_edges = self._idx().relationship(caller, callee)
+        edges: dict[tuple[str, int, str, str], tuple[str, int]] = {}
+        valid_edge_count = 0
+        invalid_edge_count = 0
+        qualified_mismatch_edge_count = 0
+        for edge in raw_edges:
+            file = self._edge_field(edge, "file")
+            line = self._edge_field(edge, "line")
+            edge_caller = self._edge_field(edge, "caller")
+            edge_callee = self._edge_field(edge, "callee")
+            try:
+                if isinstance(line, bool):
+                    raise ValueError
+                normalized_line = int(line)
+            except (TypeError, ValueError):
+                invalid_edge_count += 1
+                continue
+            if not isinstance(file, str) or not file or normalized_line < 1:
+                invalid_edge_count += 1
+                continue
+            normalized_caller = "" if edge_caller is None else str(edge_caller)
+            normalized_callee = "" if edge_callee is None else str(edge_callee)
+            if "::" in callee and normalized_callee != callee:
+                qualified_mismatch_edge_count += 1
+                continue
+            valid_edge_count += 1
+            key = (file, normalized_line, normalized_caller, normalized_callee)
+            edges[key] = (file, normalized_line)
+
+        direct_edges = sorted(edges)
+        manifest: dict[str, Any] = {
+            "schema_version": 1,
+            "mode": "direct_relationship_range_selection",
+            "caller": caller,
+            "callee": callee,
+            "context_radius": RELATIONSHIP_CONTEXT_RADIUS,
+            "raw_direct_edge_count": len(raw_edges),
+            "direct_edge_count": len(direct_edges),
+            "candidate_range_count": 0,
+            "effective_range_count": 0,
+            "normalization": {
+                "invalid_direct_edge_count": invalid_edge_count,
+                "qualified_mismatch_edge_count": qualified_mismatch_edge_count,
+                "duplicate_direct_edge_count": valid_edge_count - len(direct_edges),
+                "merged_range_count": 0,
+                "unmergeable_overlapping_range_count": 0,
+                "maximum_merged_range_lines": 500,
+            },
+            "selected_ranges": [],
+            "route": "not_run",
+            "selection_status": "no_direct_edge",
+        }
+        if invalid_edge_count:
+            manifest["selection_status"] = "invalid_direct_edge"
+            return manifest, []
+        if not direct_edges:
+            return manifest, []
+
+        candidates: list[dict[str, Any]] = []
+        for file, line, _, _ in direct_edges:
+            start = max(1, line - RELATIONSHIP_CONTEXT_RADIUS)
+            end = line + RELATIONSHIP_CONTEXT_RADIUS
+            boundary = self._idx().function_for_line(file, line)
+            function_key: tuple[str, str, int, int] | None = None
+            if boundary is not None:
+                try:
+                    function_start = int(boundary.start_line)
+                    function_end = int(boundary.end_line)
+                    function_name = str(boundary.name)
+                    function_file = str(boundary.file)
+                except (AttributeError, TypeError, ValueError):
+                    manifest["selection_status"] = "invalid_function_boundary"
+                    return manifest, []
+                if function_start < 1 or function_end < function_start:
+                    manifest["selection_status"] = "invalid_function_boundary"
+                    return manifest, []
+                start = max(start, function_start)
+                end = min(end, function_end)
+                function_key = (
+                    function_file, function_name, function_start, function_end
+                )
+            if start < 1 or end < start or end - start + 1 > 500:
+                manifest["selection_status"] = "invalid_candidate_range"
+                return manifest, []
+            candidates.append({
+                "file": file,
+                "start": start,
+                "end": end,
+                "_function_key": function_key,
+            })
+
+        candidates.sort(key=lambda item: (str(item["file"]), int(item["start"]), int(item["end"])))
+        manifest["candidate_range_count"] = len(candidates)
+        effective: list[dict[str, int | str]] = []
+        merged_range_count = 0
+        for candidate in candidates:
+            if effective:
+                previous = effective[-1]
+                same_function = (
+                    candidate["_function_key"] == previous["_function_key"]
+                )
+                same_or_touching = (
+                    candidate["file"] == previous["file"]
+                    and int(candidate["start"]) <= int(previous["end"]) + 1
+                )
+                mergeable = same_or_touching and same_function
+                merged_size = int(candidate["end"]) - int(previous["start"]) + 1
+                if mergeable and merged_size <= 500:
+                    previous["end"] = max(int(previous["end"]), int(candidate["end"]))
+                    merged_range_count += 1
+                    continue
+                overlaps = (
+                    candidate["file"] == previous["file"]
+                    and int(candidate["start"]) <= int(previous["end"])
+                )
+                if overlaps:
+                    # MultiRange forbids overlapping evidence.  Same-function
+                    # overlap can reach here only when its union exceeds 500
+                    # lines; different-function overlap is never merged.
+                    manifest["normalization"]["unmergeable_overlapping_range_count"] = 1
+                    manifest["selection_status"] = (
+                        "overlapping_ranges_exceed_limit"
+                        if same_function
+                        else "cross_function_overlap"
+                    )
+                    return manifest, []
+            effective.append(dict(candidate))
+
+        public_effective = [
+            {
+                "file": str(item["file"]),
+                "start": int(item["start"]),
+                "end": int(item["end"]),
+            }
+            for item in effective
+        ]
+        manifest["effective_range_count"] = len(public_effective)
+        manifest["normalization"]["merged_range_count"] = merged_range_count
+        manifest["selected_ranges"] = public_effective
+        if not public_effective:
+            manifest["selection_status"] = "no_effective_range"
+        elif len(public_effective) > MAX_BUNDLE_RANGES:
+            manifest["selection_status"] = "too_many_ranges"
+        else:
+            manifest["selection_status"] = "selected"
+            manifest["route"] = (
+                "single_range" if len(public_effective) == 1 else "multi_range"
+            )
+        return manifest, public_effective
+
+    @staticmethod
+    def _relationship_selection_not_run(manifest: dict[str, Any]) -> dict[str, Any]:
+        status = str(manifest["selection_status"])
+        return {
+            "selection_manifest": manifest,
+            "verification": {
+                "status": "not_run",
+                "reason": status,
+                "model_turn_count": 0,
+                "ledger_hit": False,
+                "repository_read_count": 0,
+            },
+            "answer": f"No relationship evidence was selected: {status}.",
+        }
+
+    def _investigate_relationship_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Verify a direct relationship using only server-selected source ranges."""
+        self._require_exact_fields(
+            request, {"op", "topic_id", "topic", "claim", "caller", "callee"}
+        )
+        topic_id = self._required_string(request, "topic_id")
+        topic = self._required_string(request, "topic")
+        claim = self._required_string(request, "claim")
+        caller = self._required_string(request, "caller")
+        callee = self._required_string(request, "callee")
+        selection_manifest, ranges = self._select_relationship_ranges(caller, callee)
+        if selection_manifest["selection_status"] != "selected":
+            return self._relationship_selection_not_run(selection_manifest)
+
+        verification_request: dict[str, Any] = {
+            "topic_id": topic_id,
+            "topic": topic,
+            "claim": claim,
+        }
+        if len(ranges) == 1:
+            verification_request.update(ranges[0])
+            verification = self._investigate_source_claim(verification_request)
+        else:
+            verification_request["ranges"] = ranges
+            verification = self._investigate_source_bundle_claim(verification_request)
+        return {
+            "selection_manifest": selection_manifest,
+            "verification": verification,
+            "answer": verification["answer"],
+        }
 
     def _verified_claims(self, request: dict[str, Any]) -> dict[str, Any]:
         ledger = self._claim_ledger()
