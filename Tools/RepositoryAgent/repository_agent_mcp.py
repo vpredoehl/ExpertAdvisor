@@ -9,7 +9,7 @@ from typing import Any
 from .codex_interface import CodexRepositoryInterface
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.5.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.6.0"}
 
 TOOLS = [
     {
@@ -265,6 +265,34 @@ TOOLS = [
         },
     },
     {
+        "name": "investigate_relationship_set_claim",
+        "description": "Structurally validate a caller-supplied set of 2-5 explicit direct relationships, then semantically verify only globally normalized server-selected exact reread evidence. Qwen cannot discover relationships, search, select ranges, or navigate the repository.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "claim": {"type": "string"},
+                "relationships": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 5,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "caller": {"type": "string"},
+                            "callee": {"type": "string"},
+                        },
+                        "required": ["caller", "callee"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["topic_id", "topic", "claim", "relationships"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "verified_claims",
         "description": "Read claim-verification ledger records with optional status/topic/claim filters.",
         "inputSchema": {
@@ -315,6 +343,46 @@ class StdioMCPServer:
         return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
     @staticmethod
+    def _validate_schema(value: Any, schema: dict[str, Any], *, location: str) -> None:
+        """Enforce the closed subset of JSON Schema advertised by MCP tools."""
+        expected_type = schema.get("type")
+        if expected_type == "object":
+            if not isinstance(value, dict):
+                raise ValueError(f"{location} must be an object")
+            properties = schema.get("properties", {})
+            if schema.get("additionalProperties") is False:
+                unexpected = sorted(set(value) - set(properties))
+                if unexpected:
+                    raise ValueError(f"unexpected {location} fields: {', '.join(unexpected)}")
+            missing = [name for name in schema.get("required", []) if name not in value]
+            if missing:
+                raise ValueError(f"missing required {location} fields: {', '.join(missing)}")
+            for name, item_schema in properties.items():
+                if name in value:
+                    StdioMCPServer._validate_schema(
+                        value[name], item_schema, location=f"{location}.{name}"
+                    )
+            return
+        if expected_type == "array":
+            if not isinstance(value, list):
+                raise ValueError(f"{location} must be an array")
+            minimum = schema.get("minItems")
+            maximum = schema.get("maxItems")
+            if minimum is not None and len(value) < minimum:
+                raise ValueError(f"{location} must contain at least {minimum} items")
+            if maximum is not None and len(value) > maximum:
+                raise ValueError(f"{location} must contain at most {maximum} items")
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict):
+                for index, item in enumerate(value):
+                    StdioMCPServer._validate_schema(item, item_schema, location=f"{location}[{index}]")
+            return
+        if expected_type == "string" and not isinstance(value, str):
+            raise ValueError(f"{location} must be a string")
+        if expected_type == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError(f"{location} must be an integer")
+
+    @staticmethod
     def _validate_tool_arguments(tool: dict[str, Any], arguments: dict[str, Any]) -> None:
         """Enforce the advertised closed tool schemas before dispatching.
 
@@ -330,6 +398,7 @@ class StdioMCPServer:
         missing = [name for name in schema.get("required", []) if name not in arguments]
         if missing:
             raise ValueError(f"missing required tool arguments: {', '.join(missing)}")
+        StdioMCPServer._validate_schema(arguments, schema, location="tool arguments")
 
     def _handle_request(self, msg: dict[str, Any]) -> dict[str, Any] | None:
         method = msg.get("method")

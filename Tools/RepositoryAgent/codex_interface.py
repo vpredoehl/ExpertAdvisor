@@ -57,6 +57,7 @@ class CodexRepositoryInterface:
                 "verify_source_claim", "verify_source_bundle_claim", "verified_claims",
                 "investigate_source_claim", "investigate_source_bundle_claim",
                 "investigate_relationship_claim", "investigate_relationship_chain_claim",
+                "investigate_relationship_set_claim",
             ],
             "forbidden_capabilities": [
                 "shell", "repository_write", "git_mutation", "database",
@@ -229,6 +230,7 @@ class CodexRepositoryInterface:
         if op == "investigate_source_bundle_claim": return self._investigate_source_bundle_claim(request)
         if op == "investigate_relationship_claim": return self._investigate_relationship_claim(request)
         if op == "investigate_relationship_chain_claim": return self._investigate_relationship_chain_claim(request)
+        if op == "investigate_relationship_set_claim": return self._investigate_relationship_set_claim(request)
         raise ValueError(f"unsupported operation: {op!r}")
 
     def _verify_source_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -711,6 +713,134 @@ class CodexRepositoryInterface:
         manifest["selection_status"] = normalized["selection_status"]
         if normalized["selection_status"] != "selected":
             return self._chain_selection_not_run(manifest)
+        manifest["route"] = "single_range" if len(ranges) == 1 else "multi_range"
+
+        verification_request: dict[str, Any] = {
+            "topic_id": topic_id,
+            "topic": topic,
+            "claim": claim,
+        }
+        if len(ranges) == 1:
+            verification_request.update(ranges[0])
+            verification = self._investigate_source_claim(verification_request)
+        else:
+            verification_request["ranges"] = ranges
+            verification = self._investigate_source_bundle_claim(verification_request)
+        return {
+            "selection_manifest": manifest,
+            "verification": verification,
+            "answer": verification["answer"],
+        }
+
+    def _required_relationship_set(self, request: dict[str, Any]) -> list[tuple[str, str]]:
+        """Validate explicit direct relationships without deriving any new ones."""
+        relationships = request.get("relationships")
+        if not isinstance(relationships, list):
+            raise ValueError("relationships must be an array")
+        if not 2 <= len(relationships) <= 5:
+            raise ValueError("relationships must contain 2-5 relationship objects")
+        normalized: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for relationship in relationships:
+            if not isinstance(relationship, dict):
+                raise ValueError("relationship entries must be objects")
+            self._require_exact_fields(relationship, {"caller", "callee"})
+            caller = self._required_string(relationship, "caller")
+            callee = self._required_string(relationship, "callee")
+            pair = (caller, callee)
+            if pair in seen:
+                raise ValueError("relationships must not contain duplicate caller/callee pairs")
+            seen.add(pair)
+            normalized.append(pair)
+        return normalized
+
+    @staticmethod
+    def _relationship_set_entry_manifest(
+        relationship_index: int, caller: str, callee: str, direct: dict[str, Any],
+        candidates: list[dict[str, Any]] | None = None,
+        candidate_status: str | None = None,
+    ) -> dict[str, Any]:
+        public_candidates = [] if candidates is None else [
+            {"file": str(item["file"]), "start": int(item["start"]), "end": int(item["end"])}
+            for item in candidates
+        ]
+        return {
+            "relationship_index": relationship_index,
+            "caller": caller,
+            "callee": callee,
+            "raw_direct_edge_count": direct["raw_direct_edge_count"],
+            "direct_edge_count": direct["direct_edge_count"],
+            "candidate_range_count": len(public_candidates),
+            "candidate_ranges": public_candidates,
+            "normalization": {
+                **direct["normalization"],
+                **CodexRepositoryInterface._relationship_normalization_template(),
+            },
+            "selection_status": candidate_status or str(direct["selection_status"]),
+        }
+
+    def _investigate_relationship_set_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Verify a bounded caller-supplied set of direct relationships.
+
+        This deliberately performs no traversal or relationship discovery.  All
+        structural assertions must select before any source reread is allowed.
+        """
+        self._require_exact_fields(
+            request, {"op", "topic_id", "topic", "claim", "relationships"}
+        )
+        topic_id = self._required_string(request, "topic_id")
+        topic = self._required_string(request, "topic")
+        claim = self._required_string(request, "claim")
+        relationships = self._required_relationship_set(request)
+        manifest: dict[str, Any] = {
+            "schema_version": 1,
+            "mode": "explicit_relationship_set_range_selection",
+            "context_radius": RELATIONSHIP_CONTEXT_RADIUS,
+            "relationship_count": len(relationships),
+            "relationships": [],
+            "candidate_range_count": 0,
+            "effective_range_count": 0,
+            "normalization": self._relationship_normalization_template(),
+            "selected_ranges": [],
+            "route": "not_run",
+            "selection_status": "not_run",
+        }
+        candidates: list[dict[str, Any]] = []
+        first_failure: str | None = None
+        # Complete the structural pass for every caller-supplied pair before
+        # entering either source verifier, even if an earlier pair failed.
+        for relationship_index, (caller, callee) in enumerate(relationships):
+            direct, direct_edges = self._relationship_direct_edges(caller, callee)
+            if direct["selection_status"] != "selected":
+                manifest["relationships"].append(self._relationship_set_entry_manifest(
+                    relationship_index, caller, callee, direct
+                ))
+                if first_failure is None:
+                    first_failure = str(direct["selection_status"])
+                continue
+            candidate_status, relationship_candidates = self._relationship_candidate_ranges(direct_edges)
+            manifest["relationships"].append(self._relationship_set_entry_manifest(
+                relationship_index, caller, callee, direct, relationship_candidates,
+                candidate_status,
+            ))
+            if candidate_status != "selected":
+                if first_failure is None:
+                    first_failure = candidate_status
+            else:
+                candidates.extend(relationship_candidates)
+
+        if first_failure is not None:
+            manifest["selection_status"] = first_failure
+            return self._relationship_selection_not_run(manifest)
+
+        manifest["candidate_range_count"] = len(candidates)
+        normalized, ranges = self._normalize_relationship_ranges(candidates)
+        manifest["normalization"].update(normalized["normalization"])
+        manifest["effective_range_count"] = len(ranges)
+        manifest["selected_ranges"] = ranges
+        manifest["selection_status"] = normalized["selection_status"]
+        if manifest["selection_status"] != "selected":
+            return self._relationship_selection_not_run(manifest)
         manifest["route"] = "single_range" if len(ranges) == 1 else "multi_range"
 
         verification_request: dict[str, Any] = {

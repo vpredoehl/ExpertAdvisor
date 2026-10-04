@@ -12,8 +12,8 @@ from ..repository_agent_mcp import SERVER_INFO, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.5.0"
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim"} <= names
+    assert SERVER_INFO["version"]=="1.6.0"
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim"} <= names
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")
@@ -40,6 +40,18 @@ def main():
     assert set(chain_schema["properties"]) == {"topic_id","topic","claim","path"}
     assert chain_schema["properties"]["path"] == {
         "type":"array", "minItems":3, "maxItems":5, "items":{"type":"string"}
+    }
+    relationship_set=next(x for x in TOOLS if x["name"]=="investigate_relationship_set_claim")
+    set_schema=relationship_set["inputSchema"]
+    assert set_schema["additionalProperties"] is False
+    assert set(set_schema["required"]) == {"topic_id","topic","claim","relationships"}
+    relationships=set_schema["properties"]["relationships"]
+    assert relationships["minItems"]==2 and relationships["maxItems"]==5
+    assert relationships["items"] == {
+        "type":"object",
+        "properties":{"caller":{"type":"string"},"callee":{"type":"string"}},
+        "required":["caller","callee"],
+        "additionalProperties":False,
     }
     print("test_repository_agent_mcp_claims: PASS")
 

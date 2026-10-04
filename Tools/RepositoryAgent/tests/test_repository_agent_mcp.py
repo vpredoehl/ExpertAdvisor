@@ -34,6 +34,7 @@ def main() -> None:
     assert "shell" in payload["forbidden_capabilities"]
     assert "investigate_relationship_claim" in payload["operations"]
     assert "investigate_relationship_chain_claim" in payload["operations"]
+    assert "investigate_relationship_set_claim" in payload["operations"]
     bad = server._handle_request({
         "jsonrpc":"2.0","id":4,"method":"tools/call",
         "params":{"name":"shell","arguments":{"command":"pwd"}}
@@ -65,6 +66,38 @@ def main() -> None:
     })
     assert missing_path["result"]["isError"] is True
     assert "missing required tool arguments: path" in missing_path["result"]["content"][0]["text"]
+    set_closed = server._handle_request({
+        "jsonrpc":"2.0","id":8,"method":"tools/call",
+        "params":{"name":"investigate_relationship_set_claim","arguments":{
+            "topic_id":"t","topic":"topic","claim":"claim",
+            "relationships":[
+                {"caller":"A","callee":"B","extra":"forbidden"},
+                {"caller":"C","callee":"D"},
+            ]
+        }}
+    })
+    assert set_closed["result"]["isError"] is True
+    assert "unexpected tool arguments.relationships[0] fields: extra" in set_closed["result"]["content"][0]["text"]
+    set_top_closed = server._handle_request({
+        "jsonrpc":"2.0","id":9,"method":"tools/call",
+        "params":{"name":"investigate_relationship_set_claim","arguments":{
+            "topic_id":"t","topic":"topic","claim":"claim",
+            "relationships":[{"caller":"A","callee":"B"},{"caller":"C","callee":"D"}],
+            "query":"forbidden"
+        }}
+    })
+    assert set_top_closed["result"]["isError"] is True
+    assert "unexpected tool arguments: query" in set_top_closed["result"]["content"][0]["text"]
+    for request_id, relationships in ((10, [{"caller":"A","callee":"B"}]),
+                                      (11, [{"caller":str(n),"callee":"B"} for n in range(6)])):
+        count_error = server._handle_request({
+            "jsonrpc":"2.0","id":request_id,"method":"tools/call",
+            "params":{"name":"investigate_relationship_set_claim","arguments":{
+                "topic_id":"t","topic":"topic","claim":"claim","relationships":relationships
+            }}
+        })
+        assert count_error["result"]["isError"] is True
+        assert "tool arguments.relationships must contain" in count_error["result"]["content"][0]["text"]
     assert server._handle_request({
         "jsonrpc":"2.0","method":"notifications/initialized","params":{}
     }) is None
