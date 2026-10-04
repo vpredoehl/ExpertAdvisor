@@ -9,7 +9,7 @@ from typing import Any
 from .codex_interface import CodexRepositoryInterface
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.4.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.5.0"}
 
 TOOLS = [
     {
@@ -241,6 +241,26 @@ TOOLS = [
                 "callee": {"type": "string"},
             },
             "required": ["topic_id", "topic", "claim", "caller", "callee"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "investigate_relationship_chain_claim",
+        "description": "Structurally validate every adjacent hop of a caller-supplied acyclic 3-5 symbol direct-call chain, then semantically verify only the server-selected exact reread evidence. Repeated symbols are rejected; Qwen cannot discover paths, search, select ranges, or navigate the repository.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "claim": {"type": "string"},
+                "path": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 5,
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["topic_id", "topic", "claim", "path"],
             "additionalProperties": False,
         },
     },

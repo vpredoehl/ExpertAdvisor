@@ -56,7 +56,7 @@ class CodexRepositoryInterface:
                 "trace_calls", "source_excerpt", "ledger_records",
                 "verify_source_claim", "verify_source_bundle_claim", "verified_claims",
                 "investigate_source_claim", "investigate_source_bundle_claim",
-                "investigate_relationship_claim",
+                "investigate_relationship_claim", "investigate_relationship_chain_claim",
             ],
             "forbidden_capabilities": [
                 "shell", "repository_write", "git_mutation", "database",
@@ -228,6 +228,7 @@ class CodexRepositoryInterface:
         if op == "investigate_source_claim": return self._investigate_source_claim(request)
         if op == "investigate_source_bundle_claim": return self._investigate_source_bundle_claim(request)
         if op == "investigate_relationship_claim": return self._investigate_relationship_claim(request)
+        if op == "investigate_relationship_chain_claim": return self._investigate_relationship_chain_claim(request)
         raise ValueError(f"unsupported operation: {op!r}")
 
     def _verify_source_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -344,12 +345,8 @@ class CodexRepositoryInterface:
         }
         return {"manifest": manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
 
-    def _select_relationship_ranges(self, caller: str, callee: str) -> tuple[dict[str, Any], list[dict[str, int | str]]]:
-        """Select bounded relationship evidence from structural navigation only.
-
-        The index is deliberately not evidence: each selected range is later read
-        again by the existing claim-investigation path before any semantic call.
-        """
+    def _relationship_direct_edges(self, caller: str, callee: str) -> tuple[dict[str, Any], list[tuple[str, int, str, str]]]:
+        """Validate and canonically select direct structural edges for one hop."""
         raw_edges = self._idx().relationship(caller, callee)
         edges: dict[tuple[str, int, str, str], tuple[str, int]] = {}
         valid_edge_count = 0
@@ -380,34 +377,28 @@ class CodexRepositoryInterface:
             edges[key] = (file, normalized_line)
 
         direct_edges = sorted(edges)
-        manifest: dict[str, Any] = {
-            "schema_version": 1,
-            "mode": "direct_relationship_range_selection",
-            "caller": caller,
-            "callee": callee,
-            "context_radius": RELATIONSHIP_CONTEXT_RADIUS,
-            "raw_direct_edge_count": len(raw_edges),
-            "direct_edge_count": len(direct_edges),
-            "candidate_range_count": 0,
-            "effective_range_count": 0,
-            "normalization": {
-                "invalid_direct_edge_count": invalid_edge_count,
-                "qualified_mismatch_edge_count": qualified_mismatch_edge_count,
-                "duplicate_direct_edge_count": valid_edge_count - len(direct_edges),
-                "merged_range_count": 0,
-                "unmergeable_overlapping_range_count": 0,
-                "maximum_merged_range_lines": 500,
-            },
-            "selected_ranges": [],
-            "route": "not_run",
-            "selection_status": "no_direct_edge",
+        normalization = {
+            "invalid_direct_edge_count": invalid_edge_count,
+            "qualified_mismatch_edge_count": qualified_mismatch_edge_count,
+            "duplicate_direct_edge_count": valid_edge_count - len(direct_edges),
         }
         if invalid_edge_count:
-            manifest["selection_status"] = "invalid_direct_edge"
-            return manifest, []
-        if not direct_edges:
-            return manifest, []
+            status = "invalid_direct_edge"
+        elif not direct_edges:
+            status = "no_direct_edge"
+        else:
+            status = "selected"
+        return ({
+            "raw_direct_edge_count": len(raw_edges),
+            "direct_edge_count": len(direct_edges),
+            "normalization": normalization,
+            "selection_status": status,
+        }, direct_edges)
 
+    def _relationship_candidate_ranges(
+        self, direct_edges: list[tuple[str, int, str, str]]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Construct function-clipped public evidence candidates for direct edges."""
         candidates: list[dict[str, Any]] = []
         for file, line, _, _ in direct_edges:
             start = max(1, line - RELATIONSHIP_CONTEXT_RADIUS)
@@ -421,19 +412,16 @@ class CodexRepositoryInterface:
                     function_name = str(boundary.name)
                     function_file = str(boundary.file)
                 except (AttributeError, TypeError, ValueError):
-                    manifest["selection_status"] = "invalid_function_boundary"
-                    return manifest, []
+                    return "invalid_function_boundary", []
                 if function_start < 1 or function_end < function_start:
-                    manifest["selection_status"] = "invalid_function_boundary"
-                    return manifest, []
+                    return "invalid_function_boundary", []
                 start = max(start, function_start)
                 end = min(end, function_end)
                 function_key = (
                     function_file, function_name, function_start, function_end
                 )
             if start < 1 or end < start or end - start + 1 > 500:
-                manifest["selection_status"] = "invalid_candidate_range"
-                return manifest, []
+                return "invalid_candidate_range", []
             candidates.append({
                 "file": file,
                 "start": start,
@@ -442,10 +430,49 @@ class CodexRepositoryInterface:
             })
 
         candidates.sort(key=lambda item: (str(item["file"]), int(item["start"]), int(item["end"])))
-        manifest["candidate_range_count"] = len(candidates)
-        effective: list[dict[str, int | str]] = []
-        merged_range_count = 0
+        return "selected", candidates
+
+    @staticmethod
+    def _relationship_normalization_template() -> dict[str, int]:
+        return {
+            "duplicate_candidate_range_count": 0,
+            "merged_range_count": 0,
+            "unmergeable_overlapping_range_count": 0,
+            "maximum_merged_range_lines": 500,
+        }
+
+    def _normalize_relationship_ranges(
+        self, candidates: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any], list[dict[str, int | str]]]:
+        """Globally deduplicate and function-safely normalize candidates.
+
+        Function identity is retained only while selecting ranges.  It is never
+        emitted to, or passed through to, the claim verifier.
+        """
+        candidates = sorted(
+            candidates,
+            key=lambda item: (
+                str(item["file"]), int(item["start"]), int(item["end"]),
+                repr(item["_function_key"]),
+            ),
+        )
+        unique_candidates: list[dict[str, Any]] = []
+        exact_ranges: set[tuple[str, int, int]] = set()
+        exact_duplicate_count = 0
         for candidate in candidates:
+            physical_range = (
+                str(candidate["file"]), int(candidate["start"]), int(candidate["end"])
+            )
+            if physical_range in exact_ranges:
+                exact_duplicate_count += 1
+                continue
+            exact_ranges.add(physical_range)
+            unique_candidates.append(candidate)
+
+        effective: list[dict[str, int | str]] = []
+        merged_range_count = exact_duplicate_count
+        normalization = self._relationship_normalization_template()
+        for candidate in unique_candidates:
             if effective:
                 previous = effective[-1]
                 same_function = (
@@ -469,13 +496,13 @@ class CodexRepositoryInterface:
                     # MultiRange forbids overlapping evidence.  Same-function
                     # overlap can reach here only when its union exceeds 500
                     # lines; different-function overlap is never merged.
-                    manifest["normalization"]["unmergeable_overlapping_range_count"] = 1
-                    manifest["selection_status"] = (
+                    normalization["unmergeable_overlapping_range_count"] = 1
+                    status = (
                         "overlapping_ranges_exceed_limit"
                         if same_function
                         else "cross_function_overlap"
                     )
-                    return manifest, []
+                    return {"selection_status": status, "normalization": normalization}, []
             effective.append(dict(candidate))
 
         public_effective = [
@@ -486,18 +513,55 @@ class CodexRepositoryInterface:
             }
             for item in effective
         ]
-        manifest["effective_range_count"] = len(public_effective)
-        manifest["normalization"]["merged_range_count"] = merged_range_count
-        manifest["selected_ranges"] = public_effective
+        normalization["merged_range_count"] = merged_range_count
+        normalization["duplicate_candidate_range_count"] = exact_duplicate_count
         if not public_effective:
-            manifest["selection_status"] = "no_effective_range"
+            status = "no_effective_range"
         elif len(public_effective) > MAX_BUNDLE_RANGES:
-            manifest["selection_status"] = "too_many_ranges"
+            status = "too_many_ranges"
         else:
-            manifest["selection_status"] = "selected"
-            manifest["route"] = (
-                "single_range" if len(public_effective) == 1 else "multi_range"
-            )
+            status = "selected"
+        return {"selection_status": status, "normalization": normalization}, public_effective
+
+    def _select_relationship_ranges(self, caller: str, callee: str) -> tuple[dict[str, Any], list[dict[str, int | str]]]:
+        """Select bounded relationship evidence from structural navigation only.
+
+        The index is deliberately not evidence: each selected range is later read
+        again by the existing claim-investigation path before any semantic call.
+        """
+        direct, direct_edges = self._relationship_direct_edges(caller, callee)
+        manifest: dict[str, Any] = {
+            "schema_version": 1,
+            "mode": "direct_relationship_range_selection",
+            "caller": caller,
+            "callee": callee,
+            "context_radius": RELATIONSHIP_CONTEXT_RADIUS,
+            "raw_direct_edge_count": direct["raw_direct_edge_count"],
+            "direct_edge_count": direct["direct_edge_count"],
+            "candidate_range_count": 0,
+            "effective_range_count": 0,
+            "normalization": {
+                **direct["normalization"],
+                **self._relationship_normalization_template(),
+            },
+            "selected_ranges": [],
+            "route": "not_run",
+            "selection_status": direct["selection_status"],
+        }
+        if direct["selection_status"] != "selected":
+            return manifest, []
+        candidate_status, candidates = self._relationship_candidate_ranges(direct_edges)
+        if candidate_status != "selected":
+            manifest["selection_status"] = candidate_status
+            return manifest, []
+        manifest["candidate_range_count"] = len(candidates)
+        normalized, public_effective = self._normalize_relationship_ranges(candidates)
+        manifest["normalization"].update(normalized["normalization"])
+        manifest["selection_status"] = normalized["selection_status"]
+        manifest["effective_range_count"] = len(public_effective)
+        manifest["selected_ranges"] = public_effective
+        if manifest["selection_status"] == "selected":
+            manifest["route"] = "single_range" if len(public_effective) == 1 else "multi_range"
         return manifest, public_effective
 
     @staticmethod
@@ -542,6 +606,126 @@ class CodexRepositoryInterface:
             verification = self._investigate_source_bundle_claim(verification_request)
         return {
             "selection_manifest": selection_manifest,
+            "verification": verification,
+            "answer": verification["answer"],
+        }
+
+    def _required_relationship_chain_path(self, request: dict[str, Any]) -> list[str]:
+        """Validate an explicit acyclic chain; this operation never discovers one."""
+        path = request.get("path")
+        if not isinstance(path, list):
+            raise ValueError("path must be an array")
+        if not 3 <= len(path) <= 5:
+            raise ValueError("path must contain 3-5 symbols")
+        normalized: list[str] = []
+        for symbol in path:
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ValueError("path members must be non-empty strings")
+            normalized.append(symbol.strip())
+        # Cycles make a caller-supplied chain ambiguous and add no supported
+        # investigation use case, so they are rejected before index access.
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("path must not repeat a symbol")
+        return normalized
+
+    @staticmethod
+    def _chain_hop_manifest(
+        hop_index: int, caller: str, callee: str, direct: dict[str, Any],
+        candidates: list[dict[str, Any]] | None = None,
+        candidate_status: str | None = None,
+    ) -> dict[str, Any]:
+        public_candidates = [] if candidates is None else [
+            {"file": str(item["file"]), "start": int(item["start"]), "end": int(item["end"])}
+            for item in candidates
+        ]
+        status = candidate_status or str(direct["selection_status"])
+        return {
+            "hop_index": hop_index,
+            "caller": caller,
+            "callee": callee,
+            "raw_direct_edge_count": direct["raw_direct_edge_count"],
+            "direct_edge_count": direct["direct_edge_count"],
+            "candidate_range_count": len(public_candidates),
+            "candidate_ranges": public_candidates,
+            "normalization": {
+                **direct["normalization"],
+                **CodexRepositoryInterface._relationship_normalization_template(),
+            },
+            "selection_status": status,
+        }
+
+    def _chain_selection_not_run(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        return self._relationship_selection_not_run(manifest)
+
+    def _investigate_relationship_chain_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Verify a caller-supplied short direct-call chain without path discovery."""
+        self._require_exact_fields(request, {"op", "topic_id", "topic", "claim", "path"})
+        topic_id = self._required_string(request, "topic_id")
+        topic = self._required_string(request, "topic")
+        claim = self._required_string(request, "claim")
+        path = self._required_relationship_chain_path(request)
+        manifest: dict[str, Any] = {
+            "schema_version": 1,
+            "mode": "explicit_relationship_chain_range_selection",
+            "context_radius": RELATIONSHIP_CONTEXT_RADIUS,
+            "path": path,
+            "hop_count": len(path) - 1,
+            "hops": [],
+            "candidate_range_count": 0,
+            "effective_range_count": 0,
+            "normalization": self._relationship_normalization_template(),
+            "selected_ranges": [],
+            "route": "not_run",
+            "selection_status": "not_run",
+        }
+        candidates: list[dict[str, Any]] = []
+        first_failure: str | None = None
+        for hop_index, (caller, callee) in enumerate(zip(path, path[1:])):
+            direct, direct_edges = self._relationship_direct_edges(caller, callee)
+            if direct["selection_status"] != "selected":
+                manifest["hops"].append(self._chain_hop_manifest(hop_index, caller, callee, direct))
+                if first_failure is None:
+                    first_failure = str(direct["selection_status"])
+                continue
+            candidate_status, hop_candidates = self._relationship_candidate_ranges(direct_edges)
+            hop = self._chain_hop_manifest(
+                hop_index, caller, callee, direct, hop_candidates,
+                candidate_status,
+            )
+            manifest["hops"].append(hop)
+            if candidate_status != "selected":
+                if first_failure is None:
+                    first_failure = candidate_status
+            else:
+                candidates.extend(hop_candidates)
+
+        if first_failure is not None:
+            manifest["selection_status"] = first_failure
+            return self._chain_selection_not_run(manifest)
+
+        manifest["candidate_range_count"] = len(candidates)
+        normalized, ranges = self._normalize_relationship_ranges(candidates)
+        manifest["normalization"].update(normalized["normalization"])
+        manifest["effective_range_count"] = len(ranges)
+        manifest["selected_ranges"] = ranges
+        manifest["selection_status"] = normalized["selection_status"]
+        if normalized["selection_status"] != "selected":
+            return self._chain_selection_not_run(manifest)
+        manifest["route"] = "single_range" if len(ranges) == 1 else "multi_range"
+
+        verification_request: dict[str, Any] = {
+            "topic_id": topic_id,
+            "topic": topic,
+            "claim": claim,
+        }
+        if len(ranges) == 1:
+            verification_request.update(ranges[0])
+            verification = self._investigate_source_claim(verification_request)
+        else:
+            verification_request["ranges"] = ranges
+            verification = self._investigate_source_bundle_claim(verification_request)
+        return {
+            "selection_manifest": manifest,
             "verification": verification,
             "answer": verification["answer"],
         }

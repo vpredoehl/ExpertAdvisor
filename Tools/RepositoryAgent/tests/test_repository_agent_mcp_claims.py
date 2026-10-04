@@ -12,8 +12,8 @@ from ..repository_agent_mcp import SERVER_INFO, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.4.0"
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim"} <= names
+    assert SERVER_INFO["version"]=="1.5.0"
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim"} <= names
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")
@@ -33,6 +33,14 @@ def main():
     assert relationship_schema["additionalProperties"] is False
     assert set(relationship_schema["required"]) == {"topic_id","topic","claim","caller","callee"}
     assert set(relationship_schema["properties"]) == {"topic_id","topic","claim","caller","callee"}
+    chain=next(x for x in TOOLS if x["name"]=="investigate_relationship_chain_claim")
+    chain_schema=chain["inputSchema"]
+    assert chain_schema["additionalProperties"] is False
+    assert set(chain_schema["required"]) == {"topic_id","topic","claim","path"}
+    assert set(chain_schema["properties"]) == {"topic_id","topic","claim","path"}
+    assert chain_schema["properties"]["path"] == {
+        "type":"array", "minItems":3, "maxItems":5, "items":{"type":"string"}
+    }
     print("test_repository_agent_mcp_claims: PASS")
 
 if __name__ == "__main__": main()

@@ -33,6 +33,7 @@ def main() -> None:
     assert "repository_write" in payload["forbidden_capabilities"]
     assert "shell" in payload["forbidden_capabilities"]
     assert "investigate_relationship_claim" in payload["operations"]
+    assert "investigate_relationship_chain_claim" in payload["operations"]
     bad = server._handle_request({
         "jsonrpc":"2.0","id":4,"method":"tools/call",
         "params":{"name":"shell","arguments":{"command":"pwd"}}
@@ -47,6 +48,23 @@ def main() -> None:
     })
     assert closed["result"]["isError"] is True
     assert "unexpected tool arguments" in closed["result"]["content"][0]["text"]
+    chain_closed = server._handle_request({
+        "jsonrpc":"2.0","id":6,"method":"tools/call",
+        "params":{"name":"investigate_relationship_chain_claim","arguments":{
+            "topic_id":"t","topic":"topic","claim":"claim",
+            "path":["A","B","C"],"caller":"forbidden"
+        }}
+    })
+    assert chain_closed["result"]["isError"] is True
+    assert "unexpected tool arguments" in chain_closed["result"]["content"][0]["text"]
+    missing_path = server._handle_request({
+        "jsonrpc":"2.0","id":7,"method":"tools/call",
+        "params":{"name":"investigate_relationship_chain_claim","arguments":{
+            "topic_id":"t","topic":"topic","claim":"claim"
+        }}
+    })
+    assert missing_path["result"]["isError"] is True
+    assert "missing required tool arguments: path" in missing_path["result"]["content"][0]["text"]
     assert server._handle_request({
         "jsonrpc":"2.0","method":"notifications/initialized","params":{}
     }) is None
