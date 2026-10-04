@@ -23,6 +23,8 @@ multi-range source bundle directly establishes the proposed claim.
 Rules:
 - Use only the supplied source. Do not use outside knowledge.
 - Do not infer missing call-chain, data-flow, control-flow, aliasing, or runtime links.
+- Directly visible syntactic relationships are evidence, not missing-link inference. For example, if the supplied source visibly assigns a call result to a local variable and visibly passes that same local variable to later calls, that data-flow handoff is directly established by the source.
+- Do not assume two differently named expressions, aliases, objects, calls, or values are identical unless the supplied source directly establishes that relationship.
 - Symbol names, filenames, comments, logs, and structural-index metadata alone do not prove semantics.
 - A multi-range bundle may establish a connected path only when the visible source establishes each required handoff.
 - Judge the proposed claim as written. If it is broader than the source, reject it rather than silently weakening it.

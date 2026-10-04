@@ -10,6 +10,12 @@ try:
     assert verdict["supports"] is True
     assert verdict["establishes"] == "visible handoff"
 
+    # The verifier prompt must distinguish visible lexical data flow from
+    # prohibited inference of a missing link.
+    assert "Directly visible syntactic relationships are evidence" in v.CLAIM_VERIFY_SYSTEM
+    assert "assigns a call result to a local variable" in v.CLAIM_VERIFY_SYSTEM
+    assert "passes that same local variable to later calls" in v.CLAIM_VERIFY_SYSTEM
+
     # Bundle bounds are deterministic and do not invoke the model.
     one = v.verify_source_bundle_claim_semantics(None, None, "topic", "x", [item])
     assert one["supports"] is False and "2-8" in one["reason"]
