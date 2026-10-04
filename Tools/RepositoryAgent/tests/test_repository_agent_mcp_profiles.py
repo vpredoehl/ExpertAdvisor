@@ -62,26 +62,42 @@ def main() -> None:
     assisted_names = listed_names(assisted, 3)
     assert assisted_names == list(TOOL_PROFILES["codex_assisted"])
     assert assisted_names == [
+        "discover_catalog_targets",
         "investigate_source_claim", "investigate_source_bundle_claim",
         "investigate_relationship_claim", "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim", "investigate_symbol",
         "investigate_subsystem",
     ]
-    for hidden in ("list_files", "source_excerpt", "resolve_symbol", "function_for_line"):
+    for hidden in ("list_files", "source_excerpt", "resolve_symbol", "function_for_line", "search"):
         assert hidden not in assisted_names
         rejected = call(assisted, 4, hidden, {})
         assert rejected["result"]["isError"] is True
         assert rejected["result"]["content"][0]["text"] == f"unsupported tool: {hidden}"
 
     assisted.iface = RecordingInterface()
+    discovery = call(assisted, 5, "discover_catalog_targets", {
+        "scope": "SchedulerCore", "query_groups": [["checkpoint", "analysis"]],
+    })
+    assert discovery["result"]["isError"] is False
+    assert assisted.iface.requests == [{
+        "op": "discover_catalog_targets", "scope": "SchedulerCore",
+        "query_groups": [["checkpoint", "analysis"]],
+    }]
+    for field, value in (("source", True), ("excerpt", True), ("content", True),
+                         ("path", "../../..."), ("arbitrary", "value")):
+        closed_discovery = call(assisted, 5, "discover_catalog_targets", {
+            "scope": "SchedulerCore", "query_groups": [["checkpoint"]], field: value,
+        })
+        assert closed_discovery["result"]["isError"] is True
+        assert f"unexpected tool arguments: {field}" in closed_discovery["result"]["content"][0]["text"]
     bounded = call(assisted, 5, "investigate_symbol", {
         "topic_id": "profile-test", "topic": "MCP profile", "symbol": "Demo::symbol",
     })
     assert bounded["result"]["isError"] is False
-    assert assisted.iface.requests == [{
+    assert assisted.iface.requests[-1] == {
         "op": "investigate_symbol", "topic_id": "profile-test",
         "topic": "MCP profile", "symbol": "Demo::symbol",
-    }]
+    }
 
     # Request fields cannot elevate the process-selected profile.
     assert listed_names(assisted, 6, {"profile": "full"}) == assisted_names

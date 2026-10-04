@@ -9,7 +9,7 @@ import sys
 from typing import Any
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.10.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.11.0"}
 PROFILE_ENVIRONMENT_VARIABLE = "EXPERTADVISOR_REPOSITORY_AGENT_MCP_PROFILE"
 DEFAULT_TOOL_PROFILE = "full"
 
@@ -295,6 +295,25 @@ TOOLS = [
         },
     },
     {
+        "name": "discover_catalog_targets",
+        "description": "Return non-evidentiary canonical file and function identities from one bounded indexed directory scope. This deterministic catalog operation never returns source text, line contents, semantic conclusions, or search matches; use a bounded investigation before making repository-derived behavioral claims.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "minLength": 1},
+                "query_groups": {
+                    "type": "array", "minItems": 1, "maxItems": 4,
+                    "items": {
+                        "type": "array", "minItems": 1, "maxItems": 4,
+                        "items": {"type": "string", "minLength": 3, "maxLength": 32},
+                    },
+                },
+            },
+            "required": ["scope", "query_groups"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "investigate_symbol",
         "description": "Resolve one exact indexed symbol and run a bounded server-owned source investigation. The server selects and rereads all evidence; Qwen cannot select files, ranges, or relationships.",
         "inputSchema": {
@@ -352,6 +371,7 @@ TOOLS = [
 TOOL_PROFILES: dict[str, tuple[str, ...]] = {
     "full": tuple(tool["name"] for tool in TOOLS),
     "codex_assisted": (
+        "discover_catalog_targets",
         "investigate_source_claim",
         "investigate_source_bundle_claim",
         "investigate_relationship_claim",
@@ -462,6 +482,9 @@ class StdioMCPServer:
             minimum = schema.get("minLength")
             if minimum is not None and len(value) < minimum:
                 raise ValueError(f"{location} must contain at least {minimum} characters")
+            maximum = schema.get("maxLength")
+            if maximum is not None and len(value) > maximum:
+                raise ValueError(f"{location} must contain at most {maximum} characters")
         if expected_type == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
             raise ValueError(f"{location} must be an integer")
 

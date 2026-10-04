@@ -18,7 +18,7 @@ from expertadvisor_agent import list_files, read_file, search
 from .claim_evidence import VerifiedClaimLedger, source_hash
 from .claim_verifier import LazyClaimVerifierRuntime, MAX_BUNDLE_RANGES
 from .evidence import VerifiedEvidenceLedger
-from .repository_index import RepositoryIndex
+from .repository_index import FunctionBoundary, RepositoryIndex
 
 
 RELATIONSHIP_CONTEXT_RADIUS = 12
@@ -38,6 +38,21 @@ MAX_SUBSYSTEM_SELECTED_SYMBOLS = 12
 MAX_SUBSYSTEM_SELECTED_RELATIONSHIPS = 24
 MAX_SUBSYSTEM_EVIDENCE_RANGES = MAX_BUNDLE_RANGES
 MAX_SUBSYSTEM_EVIDENCE_LINES = 1200
+
+# Catalog discovery is deliberately smaller than subsystem investigation.  It
+# is a deterministic target selector, never a substitute for source evidence.
+# Scope resolution examines catalog paths only.  These caps bound the
+# directory-tree materialization algorithm, not a particular project folder.
+MAX_DISCOVERY_CATALOG_FILES = 100_000
+MAX_DISCOVERY_CATALOG_DIRECTORIES = 200_000
+# Query matching is separately bounded before candidates are returned.  This
+# is deliberately larger than either final candidate class cap so it limits a
+# broad metadata query even when its matches span both classes.
+MAX_DISCOVERY_MATCHED_CATALOG_ITEMS = 48
+MAX_DISCOVERY_CANDIDATE_FILES = 16
+MAX_DISCOVERY_CANDIDATE_SYMBOLS = 16
+MAX_DISCOVERY_TOTAL_CANDIDATES = 24
+MAX_DISCOVERY_QUERY_TERMS = 4
 
 
 class CodexRepositoryInterface:
@@ -75,6 +90,7 @@ class CodexRepositoryInterface:
                 "investigate_source_claim", "investigate_source_bundle_claim",
                 "investigate_relationship_claim", "investigate_relationship_chain_claim",
                 "investigate_relationship_set_claim",
+                "discover_catalog_targets",
                 "investigate_symbol",
                 "investigate_subsystem",
             ],
@@ -250,9 +266,205 @@ class CodexRepositoryInterface:
         if op == "investigate_relationship_claim": return self._investigate_relationship_claim(request)
         if op == "investigate_relationship_chain_claim": return self._investigate_relationship_chain_claim(request)
         if op == "investigate_relationship_set_claim": return self._investigate_relationship_set_claim(request)
+        if op == "discover_catalog_targets": return self._discover_catalog_targets(request)
         if op == "investigate_symbol": return self._investigate_symbol(request)
         if op == "investigate_subsystem": return self._investigate_subsystem(request)
         raise ValueError(f"unsupported operation: {op!r}")
+
+    @staticmethod
+    def _discovery_scope(value: str) -> str:
+        """Validate a logical directory selector without permitting traversal."""
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ValueError("scope must be a non-empty normalized directory selector")
+        path = Path(value)
+        if (path.is_absolute() or not path.parts or path.as_posix() != value or "\x00" in value
+                or "\\" in value or any(part in {"", ".", ".."} for part in path.parts)):
+            raise ValueError("scope must be a normalized repository-relative directory selector")
+        return value
+
+    @staticmethod
+    def _discovery_query_groups(value: Any) -> list[list[str]]:
+        if not isinstance(value, list) or not 1 <= len(value) <= MAX_DISCOVERY_QUERY_TERMS:
+            raise ValueError(f"query_groups must contain 1-{MAX_DISCOVERY_QUERY_TERMS} groups")
+        groups: list[tuple[str, ...]] = []
+        for group in value:
+            if not isinstance(group, list) or not 1 <= len(group) <= MAX_DISCOVERY_QUERY_TERMS:
+                raise ValueError(f"each query_groups entry must contain 1-{MAX_DISCOVERY_QUERY_TERMS} identifier terms")
+            terms: list[str] = []
+            for term in group:
+                if (not isinstance(term, str) or term != term.strip()
+                        or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{2,31}", term)):
+                    raise ValueError("each query_groups term must be a 3-32 character identifier term")
+                normalized = term.casefold()
+                if normalized in terms:
+                    raise ValueError("query_groups terms must not contain duplicates")
+                terms.append(normalized)
+            canonical = tuple(sorted(terms))
+            if canonical in groups:
+                raise ValueError("query_groups must not contain duplicate groups")
+            groups.append(canonical)
+        return [list(group) for group in sorted(groups)]
+
+    @staticmethod
+    def _catalog_tokens(value: str) -> set[str]:
+        """Split only catalog identities; no source text is inspected here."""
+        expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+        return {
+            token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", expanded)
+        }
+
+    def _resolve_discovery_scope(self, requested: str) -> tuple[str, list[str]]:
+        """Resolve an exact directory or unique directory basename from index paths."""
+        try:
+            files = sorted({str(file) for file in self._idx().files})
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("repository catalog is unavailable") from exc
+        if len(files) > MAX_DISCOVERY_CATALOG_FILES:
+            raise ValueError("repository catalog exceeds the maximum indexed file count")
+        directories: set[str] = set()
+        for file in files:
+            path = Path(file)
+            if path.is_absolute() or not path.parent.parts:
+                raise ValueError("repository catalog contains malformed file metadata")
+            for depth in range(1, len(path.parts)):
+                directories.add(Path(*path.parts[:depth]).as_posix())
+                if len(directories) > MAX_DISCOVERY_CATALOG_DIRECTORIES:
+                    raise ValueError("repository catalog exceeds the maximum indexed directory count")
+        if requested in directories:
+            matches = [requested]
+        else:
+            matches = sorted(directory for directory in directories if Path(directory).name == requested)
+        if not matches:
+            raise ValueError("discovery scope was not found in repository catalog")
+        if len(matches) != 1:
+            raise ValueError("discovery scope is ambiguous in repository catalog")
+        resolved = matches[0]
+        # The directory itself is the complete logical boundary.  Descendant
+        # directories are separate scopes and are never pulled in implicitly.
+        scoped_files = [
+            file for file in files
+            if Path(file).parent.as_posix() == resolved
+        ]
+        if not scoped_files:
+            raise ValueError("discovery scope contains no indexed source files")
+        return resolved, scoped_files
+
+    def _discover_catalog_targets(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Return a bounded, non-evidentiary catalog view from structural metadata.
+
+        No source range is selected or reread, no relationship is followed, and
+        no semantic verifier is initialized.  This only helps select a later
+        bounded investigation target.
+        """
+        self._require_exact_fields(request, {"op", "scope", "query_groups"})
+        requested_scope = self._discovery_scope(request.get("scope"))
+        scope, scoped_files = self._resolve_discovery_scope(requested_scope)
+        # Validate and apply groups only after the catalog scope is resolved.
+        query_groups = self._discovery_query_groups(request.get("query_groups"))
+
+        def matches_any_group(tokens: set[str]) -> bool:
+            return any(set(group) <= tokens for group in query_groups)
+
+        matched_files = [
+            file for file in scoped_files
+            if matches_any_group(self._catalog_tokens(Path(file).stem))
+        ]
+
+        try:
+            boundaries = list(self._idx().functions)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("repository catalog function metadata is unavailable") from exc
+        scoped_file_set = set(scoped_files)
+        matched_symbol_extents: list[tuple[str, str, int, int]] = []
+        for boundary in boundaries:
+            if not isinstance(boundary, FunctionBoundary):
+                raise ValueError("repository catalog contains non-function definition metadata")
+            try:
+                file, name = str(boundary.file), str(boundary.name)
+                start, end = int(boundary.start_line), int(boundary.end_line)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("repository catalog contains malformed function metadata") from exc
+            if file not in scoped_file_set:
+                continue
+            if not name or start < 1 or end < start:
+                raise ValueError("repository catalog contains malformed function metadata")
+            if matches_any_group(self._catalog_tokens(name)):
+                matched_symbol_extents.append((file, name, start, end))
+        matched_symbol_extents.sort()
+        if any(left == right for left, right in zip(matched_symbol_extents, matched_symbol_extents[1:])):
+            raise ValueError("repository catalog contains duplicate function definition metadata")
+
+        # Function names can legitimately be overloaded inside one file.  Do
+        # not disclose source positions; instead retain deterministic ordinal
+        # ownership within the canonical container so each indexed definition
+        # remains distinguishable in catalog output.
+        matched_symbols: list[dict[str, Any]] = []
+        offset = 0
+        while offset < len(matched_symbol_extents):
+            file, name, _, _ = matched_symbol_extents[offset]
+            end_offset = offset + 1
+            while (end_offset < len(matched_symbol_extents)
+                   and matched_symbol_extents[end_offset][:2] == (file, name)):
+                end_offset += 1
+            definition_count = end_offset - offset
+            for ordinal in range(definition_count):
+                matched_symbols.append({
+                    "identity": name,
+                    "kind": "function_definition",
+                    "container_file": file,
+                    "container_ordinal": ordinal + 1,
+                    "container_definition_count": definition_count,
+                })
+            offset = end_offset
+        matched_total = len(matched_files) + len(matched_symbols)
+        if matched_total > MAX_DISCOVERY_MATCHED_CATALOG_ITEMS:
+            raise ValueError("discovery matched catalog population cap exceeded")
+
+        # There is no ranking or truncation step: every admitted metadata
+        # match becomes a candidate only after the match-population admission.
+        file_candidates = matched_files
+        symbol_rows = matched_symbols
+        if len(file_candidates) > MAX_DISCOVERY_CANDIDATE_FILES:
+            raise ValueError("discovery candidate file cap exceeded")
+        if len(symbol_rows) > MAX_DISCOVERY_CANDIDATE_SYMBOLS:
+            raise ValueError("discovery candidate symbol cap exceeded")
+        total = len(file_candidates) + len(symbol_rows)
+        if total > MAX_DISCOVERY_TOTAL_CANDIDATES:
+            raise ValueError("discovery total candidate cap exceeded")
+
+        return {
+            "schema_version": 1,
+            "mode": "bounded_catalog_discovery",
+            "evidentiary_status": "non_evidentiary",
+            "required_follow_up": (
+                "Use an existing bounded investigation operation before making "
+                "repository-derived behavioral claims."
+            ),
+            "resolved_scope": scope,
+            "scope_direct_file_count": len(scoped_files),
+            "query_groups": query_groups,
+            "matched_catalog_counts": {
+                "files": len(matched_files), "symbols": len(matched_symbols),
+                "total": matched_total,
+            },
+            "candidates": {
+                "files": file_candidates,
+                "symbols": [
+                    symbol for symbol in symbol_rows
+                ],
+            },
+            "candidate_counts": {
+                "files": len(file_candidates), "symbols": len(symbol_rows), "total": total,
+            },
+            "caps": {
+                "catalog_files": MAX_DISCOVERY_CATALOG_FILES,
+                "catalog_directories": MAX_DISCOVERY_CATALOG_DIRECTORIES,
+                "matched_catalog_items": MAX_DISCOVERY_MATCHED_CATALOG_ITEMS,
+                "candidate_files": MAX_DISCOVERY_CANDIDATE_FILES,
+                "candidate_symbols": MAX_DISCOVERY_CANDIDATE_SYMBOLS,
+                "total_candidates": MAX_DISCOVERY_TOTAL_CANDIDATES,
+            },
+        }
 
     def _verify_source_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         topic_id = self._required_text(request, "topic_id")

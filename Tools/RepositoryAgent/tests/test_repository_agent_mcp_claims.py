@@ -12,14 +12,27 @@ from ..repository_agent_mcp import SERVER_INFO, TOOL_PROFILES, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.10.0"
+    assert SERVER_INFO["version"]=="1.11.0"
     assert list(TOOL_PROFILES["full"]) == [item["name"] for item in TOOLS]
     assert TOOL_PROFILES["codex_assisted"] == (
+        "discover_catalog_targets",
         "investigate_source_claim", "investigate_source_bundle_claim",
         "investigate_relationship_claim", "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim", "investigate_symbol", "investigate_subsystem",
     )
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","discover_catalog_targets","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
+    discovery=next(x for x in TOOLS if x["name"]=="discover_catalog_targets")
+    discovery_schema=discovery["inputSchema"]
+    assert discovery_schema["additionalProperties"] is False
+    assert set(discovery_schema["required"]) == {"scope", "query_groups"}
+    assert set(discovery_schema["properties"]) == {"scope", "query_groups"}
+    assert discovery_schema["properties"]["query_groups"] == {
+        "type":"array", "minItems":1, "maxItems":4,
+        "items":{
+            "type":"array", "minItems":1, "maxItems":4,
+            "items":{"type":"string", "minLength":3, "maxLength":32},
+        },
+    }
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")

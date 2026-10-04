@@ -35,6 +35,7 @@ def main() -> None:
     assert "investigate_relationship_claim" in payload["operations"]
     assert "investigate_relationship_chain_claim" in payload["operations"]
     assert "investigate_relationship_set_claim" in payload["operations"]
+    assert "discover_catalog_targets" in payload["operations"]
     assert "investigate_symbol" in payload["operations"]
     assert "investigate_subsystem" in payload["operations"]
     bad = server._handle_request({
