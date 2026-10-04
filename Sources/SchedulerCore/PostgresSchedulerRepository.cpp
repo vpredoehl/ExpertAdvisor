@@ -507,22 +507,26 @@ PostgresSchedulerRepository::loadPreemptionVictim(
     int candidatePriorityRank)
 {
     const pqxx::result rows = transaction_.exec(
-        "SELECT e.experiment_id,e.scheduler_priority,"
+        "SELECT e.experiment_id,e.scheduler_priority,e.phase,"
         "e.active_scheduler_worker_attempt_id "
         "FROM experiment e "
         "JOIN experiment_scheduler_worker_attempt a "
         "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
-        "WHERE e.status='running' AND e.phase=$1 "
+        "WHERE e.status='running' AND ("
+        " $1='any' OR e.phase=$1 OR "
+        " ($1 LIKE 'any:%' AND e.phase<>substring($1 from 5))) "
         "AND a.worker_kind='experiment' "
-        "AND a.lifecycle_phase=$1 AND a.capacity_class=$1 "
+        "AND a.lifecycle_phase=e.phase AND a.capacity_class=e.phase "
         "AND a.lifecycle_state IN ('spawned','running','observed') "
         "AND e.cancellation_request_id IS NULL "
         "AND e.cancel_after_checkpoint_epoch IS NULL "
         "AND e.stop_after_checkpoint_epoch IS NULL "
         "AND e.worker_global_pause_request_id IS NULL "
         "AND e.worker_control_state='running' "
-        "AND CASE e.scheduler_priority WHEN 'high' THEN 0 "
-        "WHEN 'normal' THEN 1 ELSE 2 END > $2 "
+        "AND (CASE e.scheduler_priority WHEN 'high' THEN 0 "
+        "WHEN 'normal' THEN 1 ELSE 2 END > $2 OR "
+        "($1 LIKE 'any:%' AND CASE e.scheduler_priority "
+        "WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END=$2)) "
         "ORDER BY CASE e.scheduler_priority WHEN 'low' THEN 0 "
         "WHEN 'normal' THEN 1 ELSE 2 END,"
         "e.worker_started_at DESC NULLS LAST,e.experiment_id DESC LIMIT 1;",
@@ -532,7 +536,8 @@ PostgresSchedulerRepository::loadPreemptionVictim(
     return PreemptionVictimRecord{
         rows[0][0].as<long long>(),
         rows[0][1].as<std::string>(),
-        rows[0][2].as<long long>()};
+        rows[0][2].as<std::string>(),
+        rows[0][3].as<long long>()};
 }
 
 WorkerAttemptReservationResult

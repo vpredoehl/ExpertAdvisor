@@ -2462,9 +2462,10 @@ bool PreemptOneLowerPriorityWorker(
     const SchedulerOptions& options,
     const ExperimentRow& candidate,
     const std::string& phase,
-    int maximumCapacity)
+    int maximumCapacity,
+    bool coordinated = false)
 {
-    if (phase != "train" && phase != "infer")
+    if (phase != "train" && phase != "infer" && phase != "analyze")
         return false;
 
     pqxx::connection connection{LstmDbConnectionString()};
@@ -2494,14 +2495,14 @@ bool PreemptOneLowerPriorityWorker(
         transaction.commit();
         return false;
     }
-    if (services.admission.capacityUsed(phase) < maximumCapacity)
+    if (!coordinated && services.admission.capacityUsed(phase) < maximumCapacity)
     {
         transaction.commit();
         return false;
     }
 
     const auto victim = services.admission.selectPreemptionVictim(
-        phase, candidate.schedulerPriority);
+        coordinated ? "any:" + phase : phase, candidate.schedulerPriority);
     if (!victim)
     {
         std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
@@ -2520,21 +2521,22 @@ bool PreemptOneLowerPriorityWorker(
         victim->experimentId;
     const std::string victimPriority =
         victim->priority;
+    const std::string victimPhase = victim->phase;
     const long long workerAttemptId =
         victim->workerAttemptId;
     EA::SchedulerOwnership::ExactAttemptExpectation expected;
     expected.workerAttemptId = workerAttemptId;
     expected.experimentId = victimExperimentId;
     expected.workerKind = "experiment";
-    expected.lifecyclePhase = phase;
-    expected.capacityClass = phase;
+    expected.lifecyclePhase = victimPhase;
+    expected.capacityClass = victimPhase;
     expected.requireSignalable = true;
     expected.requireCompleteProcessIdentity = true;
     const auto exact =
         EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
             transaction, expected, true);
     if (!exact || exact->lifecycleStatus != "running" ||
-        exact->lifecycleRowPhase != phase ||
+        exact->lifecycleRowPhase != victimPhase ||
         exact->lifecycleState == "stopped")
     {
         std::cout << "SCHEDULER_PREEMPTION_DEFERRED"
@@ -2559,23 +2561,26 @@ bool PreemptOneLowerPriorityWorker(
         pqxx::params{victimExperimentId, workerAttemptId});
     if (reverified.size() != 1 ||
         reverified[0][0].as<std::string>() != "running" ||
-        reverified[0][1].as<std::string>() != phase ||
-        !EA::SchedulerCore::CanPreempt(
-            candidate.schedulerPriority,
-            reverified[0][2].as<std::string>()) ||
+        reverified[0][1].as<std::string>() != victimPhase ||
+        ((!coordinated && !EA::SchedulerCore::CanPreempt(
+             candidate.schedulerPriority,
+             reverified[0][2].as<std::string>())) ||
+         (coordinated && EA::SchedulerCore::PriorityRank(
+             candidate.schedulerPriority) > EA::SchedulerCore::PriorityRank(
+             reverified[0][2].as<std::string>()))) ||
         !reverified[0][3].is_null() ||
         !reverified[0][4].is_null() ||
         !reverified[0][5].is_null() ||
         !reverified[0][6].is_null() ||
         reverified[0][7].as<std::string>() != "running" ||
-        services.admission.capacityUsed(phase) < maximumCapacity)
+        (!coordinated && services.admission.capacityUsed(phase) < maximumCapacity))
     {
         transaction.commit();
         return false;
     }
 
     const auto inferAttemptHasAuthoritativeResult = [&] {
-        if (phase != "infer")
+        if (victimPhase != "infer")
             return false;
         const auto victimExperiment = LoadExperimentCheckpointIdentity(
             transaction, victimExperimentId);
@@ -2684,7 +2689,7 @@ bool PreemptOneLowerPriorityWorker(
             "RETURNING experiment_id;",
             pqxx::params{
                 victimExperimentId,
-                phase,
+                victimPhase,
                 victimPriority,
                 workerAttemptId});
         EA::SchedulerOwnership::RequireAffectedExactlyOne(
@@ -2724,6 +2729,42 @@ bool PreemptOneLowerPriorityWorker(
               << ",victim_order=lowest_priority_then_newest_worker_started_at_then_experiment_id"
               << std::endl;
     return true;
+}
+
+// A phase/capacity slot is not an isolation boundary: train, infer and
+// analyze workers share the execution host.  Once the cycle planner chooses
+// a class, drain every pause-safe experiment worker outside that class before
+// allowing the normal admission path to resume or launch the winner.
+int PreemptLosingWorkersForWinningClass(
+    const SchedulerOptions& options,
+    int winningPriorityRank,
+    const std::string& winningPhase)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadOnly(transaction);
+    const pqxx::result candidate = transaction.exec(
+        "SELECT experiment_id,scheduler_priority,scheduler_resume_origin "
+        "FROM experiment WHERE status='pending' AND phase=$1 "
+        "AND CASE scheduler_priority WHEN 'high' THEN 0 "
+        "WHEN 'normal' THEN 1 ELSE 2 END=$2 "
+        "ORDER BY updated_at,experiment_id LIMIT 1;",
+        pqxx::params{winningPhase, winningPriorityRank});
+    transaction.commit();
+    if (candidate.empty())
+        return 0;
+
+    ExperimentRow winner;
+    winner.experimentId = candidate[0][0].as<long long>();
+    winner.schedulerPriority = candidate[0][1].as<std::string>();
+    winner.schedulerResumeOrigin = candidate[0][2].as<std::string>();
+    int paused = 0;
+    while (PreemptOneLowerPriorityWorker(
+        options, winner, winningPhase, 0, true))
+    {
+        ++paused;
+    }
+    return paused;
 }
 
 StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
@@ -10751,8 +10792,35 @@ int RunSchedulerOnce(const SchedulerOptions& options,
             preparation.trainAdmissionAllowed = plan.allowed[0];
             preparation.inferAdmissionAllowed = plan.allowed[1];
             preparation.analyzeAdmissionAllowed = plan.allowed[2];
+            w.commit();
+
+            // The admission plan is a single authoritative decision for this
+            // poll.  Drain every managed worker outside that class first, then
+            // take a fresh snapshot; the fresh plan keeps all admissions
+            // closed if any losing worker could not safely relinquish.
+            if (plan.selected && plan.selectedPriorityRank && !options.dryRun)
+            {
+                (void)PreemptLosingWorkersForWinningClass(
+                    options,
+                    *plan.selectedPriorityRank,
+                    std::string{SchedulerPhaseName(*plan.selected)});
+                pqxx::connection refreshedConnection{LstmDbConnectionString()};
+                pqxx::work refreshed{refreshedConnection};
+                SetTransactionReadWrite(refreshed);
+                RequireAndRefreshSchedulerAuthority(refreshed, options);
+                const auto refreshedPlan =
+                    LoadPhaseAdmissionPlan(refreshed, options, logState);
+                cycleOptions.orderedPhaseAdmission = refreshedPlan.ordered;
+                cycleOptions.globalAdmissionPriorityRank =
+                    refreshedPlan.selectedPriorityRank;
+                preparation.trainAdmissionAllowed = refreshedPlan.allowed[0];
+                preparation.inferAdmissionAllowed = refreshedPlan.allowed[1];
+                preparation.analyzeAdmissionAllowed = refreshedPlan.allowed[2];
+                refreshed.commit();
+            }
         }
-        w.commit();
+        else
+            w.commit();
         preparation.ready = true;
         return preparation;
     };

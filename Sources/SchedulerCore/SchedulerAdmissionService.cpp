@@ -68,7 +68,15 @@ SchedulerAdmissionService::selectPreemptionVictim(
     std::string_view phase,
     std::string_view candidatePriority)
 {
-    if (phase != "train" && phase != "infer")
+    const bool ordinaryPhase = phase == "train" || phase == "infer";
+    // Coordinated phase preemption deliberately queries across every losing
+    // phase.  This selector is internal-only and is accepted only for one of
+    // the three canonical winner phases; all ordinary callers retain the
+    // previous train/infer restriction.
+    const bool coordinatedPhaseSelector =
+        phase == "any:train" || phase == "any:infer" ||
+        phase == "any:analyze";
+    if (!ordinaryPhase && !coordinatedPhaseSelector)
         return std::nullopt;
     return repository_.loadPreemptionVictim(
         phase, PriorityRank(candidatePriority));

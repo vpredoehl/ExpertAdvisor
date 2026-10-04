@@ -71,6 +71,7 @@ struct PreemptionVictimRecord
 {
     long long experimentId = -1;
     std::string priority;
+    std::string phase;
     long long workerAttemptId = -1;
 };
 

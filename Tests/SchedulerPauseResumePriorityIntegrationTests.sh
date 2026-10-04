@@ -84,9 +84,15 @@ read -r -a pqxx_compile_flags <<<"$(pkg-config --cflags libpqxx)"
 read -r -a pqxx_link_flags <<<"$(pkg-config --libs libpqxx)"
 "${CXX:-clang++}" -std=c++20 -O0 -g \
     -Wno-deprecated-declarations -Wno-c++23-attribute-extensions \
-    -I"${repo_root}/Headers" "${pqxx_compile_flags[@]}" \
+    -I"${repo_root}/Headers" -I"${repo_root}/Sources" \
+    "${pqxx_compile_flags[@]}" \
     "${repo_root}/Tests/GlobalExperimentControlProcessTests.cpp" \
     "${repo_root}/Sources/GlobalExperimentControl.cpp" \
+    "${repo_root}/Sources/CheckpointPolicy.cpp" \
+    "${repo_root}/Sources/SchedulerCore/CheckpointEvaluationService.cpp" \
+    "${repo_root}/Sources/SchedulerCore/PostgresSchedulerRepository.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerRepository.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerPolicy.cpp" \
     "${repo_root}/Sources/SchedulerCore/SchedulerOperationalObservation.cpp" \
     "${pqxx_link_flags[@]}" -o "${process_binary}"
 

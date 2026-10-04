@@ -68,7 +68,8 @@ for migration in \
     071_resume_input_width_expansion.sql \
     078_operator_forced_final_inference_rerun.sql \
     086_scheduler_pause_resume_priority.sql \
-    093_scheduler_priority_preemption.sql; do
+    093_scheduler_priority_preemption.sql \
+    099_scheduler_phase_priority.sql; do
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
         -f "${repo_root}/Database/migrations/${migration}"
 done
@@ -90,9 +91,15 @@ read -r -a pqxx_compile_flags <<<"$(pkg-config --cflags libpqxx)"
 read -r -a pqxx_link_flags <<<"$(pkg-config --libs libpqxx)"
 "${CXX:-clang++}" -std=c++20 -O0 -g \
     -Wno-deprecated-declarations -Wno-c++23-attribute-extensions \
-    -I"${repo_root}/Headers" "${pqxx_compile_flags[@]}" \
+    -I"${repo_root}/Headers" -I"${repo_root}/Sources" \
+    "${pqxx_compile_flags[@]}" \
     "${repo_root}/Tests/GlobalExperimentControlProcessTests.cpp" \
     "${repo_root}/Sources/GlobalExperimentControl.cpp" \
+    "${repo_root}/Sources/CheckpointPolicy.cpp" \
+    "${repo_root}/Sources/SchedulerCore/CheckpointEvaluationService.cpp" \
+    "${repo_root}/Sources/SchedulerCore/PostgresSchedulerRepository.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerRepository.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerPolicy.cpp" \
     "${repo_root}/Sources/SchedulerCore/SchedulerOperationalObservation.cpp" \
     "${pqxx_link_flags[@]}" -o "${process_binary}"
 
@@ -363,6 +370,43 @@ assert_no_equal_preemption 994050 high
 assert_no_equal_preemption 994060 normal
 assert_no_equal_preemption 994070 low
 assert_no_equal_preemption 994075 high infer
+
+# A scheduler handoff does not rewrite historical launch ownership.  Once the
+# current owner has positively reconciled both exact workers, coordinated
+# normal/infer preemption must pause both inherited low/train workers before
+# admitting the winner.
+launch_and_persist 994320 9994320 train running low none \
+    '2026-03-02 12:00:00+00'
+launch_and_persist 994321 9994321 train running low none \
+    '2026-03-02 12:00:01+00'
+launch_and_persist 994322 9994322 infer pending normal operator \
+    '2026-03-02 12:00:02+00' 77 7
+attach_infer_model 994322 >/dev/null
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+UPDATE experiment_scheduler_worker_attempt
+SET scheduler_invocation_id='scheduler:handoff-a',
+    scheduler_fencing_token=193,
+    ownership_origin='scheduler_launch',
+    observed_by_scheduler_invocation_id='scheduler:handoff-b',
+    lifecycle_state='observed',
+    reconciliation_result='valid_process_observed',
+    diagnostic='live_worker_observed_without_relaunch'
+WHERE worker_attempt_id IN (9994320,9994321);
+SQL
+run_scheduler 2 1 "${test_dir}/handoff-exclusive.out" \
+    --phase-priority=train:infer:analyze
+test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||resume_requested::text||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 994320 AND 994322")" = \
+    '994320:pending:true:preemption,994321:pending:true:preemption,994322:running:false:none'
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994320,9994321) AND lifecycle_state='stopped'")" = 2
+first_admission_line="$(rg -n 'SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=994322' "${test_dir}/handoff-exclusive.out" | cut -d: -f1)"
+for victim in 994320 994321; do
+    victim_line="$(rg -n "SCHEDULER_PRIORITY_PREEMPTED,candidate_experiment_id=994322.*victim_experiment_id=${victim}" "${test_dir}/handoff-exclusive.out" | cut -d: -f1)"
+    test -n "${victim_line}"
+    test "${victim_line}" -lt "${first_admission_line}"
+done
+wait_for_state "${worker_pids[0]}" T
+wait_for_state "${worker_pids[1]}" T
+retire_all
 
 # A registry-selected high-priority layout-6 candidate uses the ordinary infer
 # slot and preempts a low-priority layout-7 worker without a per-layout flag.

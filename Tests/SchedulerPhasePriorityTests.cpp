@@ -77,6 +77,41 @@ int main()
     plan = PlanSchedulerPhases({}, demand);
     assert((plan.allowed == std::array<bool,3>{true,false,true}));
     assert(plan.selectedPriorityRank == 0);
+
+    // One globally winning class owns execution.  A normal infer candidate
+    // must wait for both low train workers (not merely one infer "slot") to
+    // relinquish execution, then the low train class becomes resumable once
+    // the normal work drains.
+    demand = {{{true,true,2,2},{true,true,0,1},{true,false,0,std::nullopt}}};
+    plan = PlanSchedulerPhases(policy, demand);
+    assert(plan.selected == SchedulerPhase::Infer);
+    assert(plan.selectedPriorityRank == 1);
+    assert(plan.draining);
+    assert((plan.allowed == std::array<bool,3>{false,false,false}));
+    demand[0].activeWorkers = 0;
+    plan = PlanSchedulerPhases(policy, demand);
+    assert((plan.allowed == std::array<bool,3>{false,true,false}));
+    demand[1].eligiblePending = false;
+    plan = PlanSchedulerPhases(policy, demand);
+    assert(plan.selected == SchedulerPhase::Train);
+    assert((plan.allowed == std::array<bool,3>{true,false,false}));
+
+    // Phase precedence is exclusive within the winning priority tier.
+    demand = {{{true,true,0,1},{true,true,1,1},{true,false,0,std::nullopt}}};
+    plan = PlanSchedulerPhases(policy, demand);
+    assert(plan.selected == SchedulerPhase::Train);
+    assert(plan.selectedPriorityRank == 1);
+    assert(plan.draining);
+    demand[1].activeWorkers = 0;
+    assert((PlanSchedulerPhases(policy, demand).allowed ==
+            std::array<bool,3>{true,false,false}));
+
+    // Ineligible high-ranked rows do not contribute a priority rank and
+    // therefore cannot starve a runnable lower-ranked class.
+    demand = {{{true,true,0,2},{true,false,0,0},{true,false,0,std::nullopt}}};
+    plan = PlanSchedulerPhases(policy, demand);
+    assert(plan.selected == SchedulerPhase::Train);
+    assert(plan.selectedPriorityRank == 2);
     std::array<SchedulerPhase,3> phases{SchedulerPhase::Train,SchedulerPhase::Infer,SchedulerPhase::Analyze};
     int permutations = 0;
     do {

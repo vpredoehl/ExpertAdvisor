@@ -42,7 +42,10 @@ int main(int argc, const char* argv[])
         service.set(SchedulerPhasePriority::Parse("infer:analyze:train"));
         transaction.commit();
     }
-    std::array<SchedulerPhaseDemand,3> demand{{{true,true,1},{true,true,0},{true,true,0}}};
+    std::array<SchedulerPhaseDemand,3> demand{{
+        {true,true,1,std::nullopt},
+        {true,true,0,std::nullopt},
+        {true,true,0,std::nullopt}}};
     const auto livePlan = PlanSchedulerPhases(load(), demand);
     assert(livePlan.selected == SchedulerPhase::Infer && livePlan.draining);
     {

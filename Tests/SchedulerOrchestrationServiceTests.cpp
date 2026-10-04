@@ -19,6 +19,7 @@ public:
     int used = 0;
     std::optional<EA::SchedulerCore::PreemptionVictimRecord> victim;
     int observedCandidateRank = -1;
+    std::string observedVictimPhase;
 
     std::vector<EA::SchedulerCore::PendingSchedulerExperimentRecord>
     loadPendingExperiments(std::string_view, bool) override
@@ -43,8 +44,10 @@ public:
     }
 
     std::optional<EA::SchedulerCore::PreemptionVictimRecord>
-    loadPreemptionVictim(std::string_view, int candidateRank) override
+    loadPreemptionVictim(
+        std::string_view phase, int candidateRank) override
     {
+        observedVictimPhase = phase;
         observedCandidateRank = candidateRank;
         return victim;
     }
@@ -170,7 +173,7 @@ int main()
     high.schedulerPriority = "high";
     repository.pending.push_back(high);
     repository.used = 1;
-    repository.victim = PreemptionVictimRecord{7, "low", 70};
+    repository.victim = PreemptionVictimRecord{7, "low", "train", 70};
     SchedulerAdmissionService admission{repository};
     const auto phase = admission.loadPhase("train", 2);
     assert(phase.candidates.size() == 1);
@@ -181,7 +184,13 @@ int main()
     const auto victim = admission.selectPreemptionVictim("train", "high");
     assert(victim && victim->experimentId == 7);
     assert(repository.observedCandidateRank == 0);
+    const auto coordinatedVictim =
+        admission.selectPreemptionVictim("any:infer", "normal");
+    assert(coordinatedVictim && coordinatedVictim->experimentId == 7);
+    assert(repository.observedCandidateRank == 1);
+    assert(repository.observedVictimPhase == "any:infer");
     assert(!admission.selectPreemptionVictim("analyze", "high"));
+    assert(!admission.selectPreemptionVictim("any:unknown", "high"));
 
     const auto stopped = PlanAttemptObservation(
         {true, true, true, true, true});
