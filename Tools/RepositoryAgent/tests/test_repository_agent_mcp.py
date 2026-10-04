@@ -36,6 +36,7 @@ def main() -> None:
     assert "investigate_relationship_chain_claim" in payload["operations"]
     assert "investigate_relationship_set_claim" in payload["operations"]
     assert "investigate_symbol" in payload["operations"]
+    assert "investigate_subsystem" in payload["operations"]
     bad = server._handle_request({
         "jsonrpc":"2.0","id":4,"method":"tools/call",
         "params":{"name":"shell","arguments":{"command":"pwd"}}
@@ -105,6 +106,22 @@ def main() -> None:
     })
     assert symbol_empty["result"]["isError"] is True
     assert "must contain at least 1 characters" in symbol_empty["result"]["content"][0]["text"]
+    subsystem_closed = server._handle_request({
+        "jsonrpc":"2.0","id":14,"method":"tools/call",
+        "params":{"name":"investigate_subsystem","arguments":{
+            "topic_id":"t","topic":"topic","subsystem":"Sources/SchedulerCore","symbol":"forbidden"
+        }}
+    })
+    assert subsystem_closed["result"]["isError"] is True
+    assert "unexpected tool arguments: symbol" in subsystem_closed["result"]["content"][0]["text"]
+    subsystem_missing_files = server._handle_request({
+        "jsonrpc":"2.0","id":15,"method":"tools/call",
+        "params":{"name":"investigate_subsystem","arguments":{
+            "topic_id":"t","topic":"topic","subsystem":"Sources/SchedulerCore"
+        }}
+    })
+    assert subsystem_missing_files["result"]["isError"] is True
+    assert "missing required tool arguments: files" in subsystem_missing_files["result"]["content"][0]["text"]
     for request_id, relationships in ((10, [{"caller":"A","callee":"B"}]),
                                       (11, [{"caller":str(n),"callee":"B"} for n in range(6)])):
         count_error = server._handle_request({

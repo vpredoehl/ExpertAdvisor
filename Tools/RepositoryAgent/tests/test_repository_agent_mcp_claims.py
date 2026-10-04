@@ -12,8 +12,8 @@ from ..repository_agent_mcp import SERVER_INFO, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.7.0"
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol"} <= names
+    assert SERVER_INFO["version"]=="1.9.0"
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")
@@ -59,6 +59,16 @@ def main():
     assert set(symbol_schema["required"]) == {"topic_id","topic","symbol"}
     assert set(symbol_schema["properties"]) == {"topic_id","topic","symbol"}
     assert all(item["minLength"] == 1 for item in symbol_schema["properties"].values())
+    subsystem=next(x for x in TOOLS if x["name"]=="investigate_subsystem")
+    subsystem_schema=subsystem["inputSchema"]
+    assert subsystem_schema["additionalProperties"] is False
+    assert set(subsystem_schema["required"]) == {"topic_id","topic","subsystem","files"}
+    assert set(subsystem_schema["properties"]) == {"topic_id","topic","subsystem","files"}
+    assert all(subsystem_schema["properties"][key]["minLength"] == 1 for key in ("topic_id", "topic", "subsystem"))
+    assert subsystem_schema["properties"]["files"] == {
+        "type":"array", "minItems":1, "maxItems":16,
+        "items":{"type":"string", "minLength":1},
+    }
     print("test_repository_agent_mcp_claims: PASS")
 
 if __name__ == "__main__": main()

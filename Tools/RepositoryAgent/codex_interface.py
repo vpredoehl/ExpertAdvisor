@@ -11,6 +11,7 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from expertadvisor_agent import list_files, read_file, search
@@ -25,6 +26,18 @@ RELATIONSHIP_CONTEXT_RADIUS = 12
 # operation fails closed once the exact resolved symbol has more direct,
 # independently attributable relationships than can be safely packaged.
 MAX_SYMBOL_DIRECT_RELATIONSHIPS = 16
+# Subsystem investigation is intentionally a small, deterministic view of a
+# directory tree, not a license to explore it.  Every limit is an admission
+# limit: exceeding one returns no evidence and invokes no semantic model.
+MAX_SUBSYSTEM_INVENTORY_SYMBOLS = 512
+# A subsystem request is intended to name a deliberately reviewed, small
+# source slice.  Sixteen files is enough for a modest implementation unit but
+# prevents this operation from becoming a directory or repository inventory.
+MAX_SUBSYSTEM_FILES = 16
+MAX_SUBSYSTEM_SELECTED_SYMBOLS = 12
+MAX_SUBSYSTEM_SELECTED_RELATIONSHIPS = 24
+MAX_SUBSYSTEM_EVIDENCE_RANGES = MAX_BUNDLE_RANGES
+MAX_SUBSYSTEM_EVIDENCE_LINES = 1200
 
 
 class CodexRepositoryInterface:
@@ -63,6 +76,7 @@ class CodexRepositoryInterface:
                 "investigate_relationship_claim", "investigate_relationship_chain_claim",
                 "investigate_relationship_set_claim",
                 "investigate_symbol",
+                "investigate_subsystem",
             ],
             "forbidden_capabilities": [
                 "shell", "repository_write", "git_mutation", "database",
@@ -237,6 +251,7 @@ class CodexRepositoryInterface:
         if op == "investigate_relationship_chain_claim": return self._investigate_relationship_chain_claim(request)
         if op == "investigate_relationship_set_claim": return self._investigate_relationship_set_claim(request)
         if op == "investigate_symbol": return self._investigate_symbol(request)
+        if op == "investigate_subsystem": return self._investigate_subsystem(request)
         raise ValueError(f"unsupported operation: {op!r}")
 
     def _verify_source_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1175,6 +1190,318 @@ class CodexRepositoryInterface:
             "verification": verification,
             "answer": verification["answer"],
         }
+
+    @staticmethod
+    def _subsystem_root(value: str) -> str:
+        """Accept only a normalized, repository-relative directory root."""
+        path = Path(value)
+        if (
+            path.is_absolute() or path.as_posix() != value or "\x00" in value
+            or "\\" in value or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError("subsystem must be a repository-relative normalized directory root")
+        return value.rstrip("/")
+
+    @staticmethod
+    def _path_in_file_set(file: str, admitted_files: set[str]) -> bool:
+        return file in admitted_files
+
+    def _subsystem_exact_file_listing(self, file: str) -> list[str]:
+        """List one exact repository path without discovering a directory tree."""
+        return RepositoryIndex._normalize_listing(list_files(file))
+
+    def _subsystem_files(self, subsystem: str, raw_files: Any) -> list[str]:
+        """Validate and canonically order an explicit, non-recursive file set.
+
+        File existence is checked through the repository file-list capability,
+        never by a source read.  Passing an exact file path gives no directory
+        traversal or search fallback to this operation.
+        """
+        if not isinstance(raw_files, list) or not raw_files:
+            raise ValueError("files must be a non-empty array")
+        if len(raw_files) > MAX_SUBSYSTEM_FILES:
+            raise ValueError(
+                f"files must contain at most {MAX_SUBSYSTEM_FILES} entries"
+            )
+        admitted: list[str] = []
+        seen: set[str] = set()
+        for value in raw_files:
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError("each files entry must be a non-empty normalized relative path")
+            path = Path(value)
+            if (
+                path.is_absolute() or path.as_posix() != value or "\x00" in value
+                or "\\" in value or any(part in {"", ".", ".."} for part in path.parts)
+            ):
+                raise ValueError("files entries must be normalized paths relative to subsystem")
+            file = f"{subsystem}/{value}"
+            if not file.startswith(subsystem + "/"):
+                raise ValueError("files entry escapes subsystem")
+            if file in seen:
+                raise ValueError("duplicate files entry")
+            try:
+                listing = self._subsystem_exact_file_listing(file)
+            except Exception as exc:
+                raise ValueError("files entry could not be validated") from exc
+            if file not in listing:
+                # This covers nonexistent paths, directories, disallowed paths,
+                # and any listing that cannot attest to this exact source file.
+                raise ValueError("files entry must name an existing source file within subsystem")
+            seen.add(file)
+            admitted.append(file)
+        return sorted(admitted)
+
+    @staticmethod
+    def _subsystem_topic_tokens(topic: str) -> set[str]:
+        # This is an intentionally mechanical selector, not a semantic search:
+        # it cannot read source or discover paths, and Qwen never influences it.
+        return {
+            token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", topic)
+            if len(token) >= 3
+        }
+
+    @staticmethod
+    def _subsystem_symbol_tokens(symbol: str) -> set[str]:
+        expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", symbol)
+        return {
+            token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", expanded)
+            if len(token) >= 3
+        }
+
+    def _subsystem_inventory(self, admitted_files: set[str]) -> tuple[str, list[Any], dict[str, Any]]:
+        """Inventory only complete indexed function extents in the admitted files."""
+        try:
+            functions = list(self._idx().functions)
+        except (AttributeError, TypeError, ValueError):
+            return "malformed_subsystem_inventory", [], {}
+        inventory = []
+        for boundary in functions:
+            try:
+                file = str(boundary.file)
+                name = str(boundary.name)
+                start, end = int(boundary.start_line), int(boundary.end_line)
+            except (AttributeError, TypeError, ValueError):
+                return "malformed_subsystem_inventory", [], {}
+            if not self._path_in_file_set(file, admitted_files):
+                continue
+            if not name or start < 1 or end < start:
+                return "malformed_subsystem_inventory", [], {}
+            try:
+                enclosing = self._idx().function_for_line(file, start)
+            except (AttributeError, TypeError, ValueError):
+                return "malformed_subsystem_inventory", [], {}
+            if enclosing != boundary:
+                return "malformed_subsystem_inventory", [], {}
+            inventory.append(boundary)
+        inventory.sort(key=lambda b: (str(b.file), int(b.start_line), int(b.end_line), str(b.name)))
+        if len(inventory) > MAX_SUBSYSTEM_INVENTORY_SYMBOLS:
+            return "subsystem_inventory_over_limit", [], {"inventory_count": len(inventory)}
+        if not inventory:
+            return "no_subsystem_symbols", [], {"inventory_count": 0}
+        names = [str(boundary.name) for boundary in inventory]
+        duplicate_count = len(names) - len(set(names))
+        # Duplicate short/heuristic names elsewhere in a large directory do not
+        # make an otherwise exact topic match unusable.  They remain accounted
+        # for, and become fail-closed only if the selection would admit one.
+        return "selected", inventory, {
+            "inventory_count": len(inventory),
+            "ambiguous_inventory_symbol_count": duplicate_count,
+        }
+
+    def _subsystem_selected_symbols(self, topic: str, inventory: list[Any]) -> tuple[str, list[Any]]:
+        tokens = self._subsystem_topic_tokens(topic)
+        scored = []
+        for boundary in inventory:
+            score = len(tokens & self._subsystem_symbol_tokens(str(boundary.name)))
+            if score:
+                scored.append((score, str(boundary.file), int(boundary.start_line), str(boundary.name), boundary))
+        if not scored:
+            return "no_topic_matched_symbols", []
+        scored.sort(key=lambda row: (-row[0], row[1], row[2], row[3]))
+        # Select only the strongest deterministic lexical-match tier.  This is
+        # a declared selection rule, not a truncation of weaker matches, and
+        # keeps a broad directory inventory from becoming an evidence dump.
+        highest_score = scored[0][0]
+        selected_rows = [row for row in scored if row[0] == highest_score]
+        if len(selected_rows) > MAX_SUBSYSTEM_SELECTED_SYMBOLS:
+            return "too_many_topic_matched_symbols", []
+        selected = [row[-1] for row in selected_rows]
+        names = [str(row.name) for row in selected]
+        if len(set(names)) != len(names):
+            return "ambiguous_topic_matched_symbols", []
+        if any(int(row.end_line) - int(row.start_line) + 1 > 500 for row in selected):
+            return "selected_symbol_extent_over_limit", []
+        return "selected", selected
+
+    def _subsystem_relationships(
+        self, selected: list[Any], inventory: list[Any], admitted_files: set[str],
+    ) -> tuple[str, list[dict[str, Any]], dict[str, int]]:
+        """Admit only direct edges whose site and endpoint extents are admitted."""
+        by_name: dict[str, list[Any]] = {}
+        for boundary in inventory:
+            by_name.setdefault(str(boundary.name), []).append(boundary)
+        inventory_by_name = {
+            name: boundaries[0] for name, boundaries in by_name.items()
+            if len(boundaries) == 1
+        }
+        selected_names = {str(boundary.name) for boundary in selected}
+        admitted: dict[tuple[str, int, str, str], dict[str, Any]] = {}
+        raw_count = invalid_count = outside_count = unattributed_count = 0
+        for name in sorted(selected_names):
+            try:
+                incoming = list(self._idx().callers_of(name))
+                outgoing = list(self._idx().callees_of(name))
+            except (AttributeError, TypeError, ValueError):
+                return "malformed_subsystem_relationship", [], {"raw_relationship_count": raw_count, "invalid_relationship_count": 1, "unattributed_relationship_count": unattributed_count, "external_relationship_count": outside_count, "admitted_relationship_count": 0}
+            for direction, sites in (("incoming", incoming), ("outgoing", outgoing)):
+                for site in sites:
+                    raw_count += 1
+                    file = self._edge_field(site, "file")
+                    line = self._edge_field(site, "line")
+                    caller = self._edge_field(site, "caller")
+                    callee = self._edge_field(site, "callee")
+                    try:
+                        if isinstance(line, bool): raise ValueError
+                        line = int(line)
+                    except (TypeError, ValueError):
+                        invalid_count += 1
+                        continue
+                    if not isinstance(file, str) or not file or line < 1:
+                        invalid_count += 1
+                        continue
+                    if not isinstance(caller, str) or not caller or not isinstance(callee, str) or not callee:
+                        # Lightweight indexing can surface a declaration-like
+                        # call with no enclosing function.  It is neither
+                        # evidence nor an edge to follow, so exclude it rather
+                        # than treating unrelated index noise as evidence.
+                        unattributed_count += 1
+                        continue
+                    if (direction == "incoming" and callee != name) or (direction == "outgoing" and caller != name):
+                        invalid_count += 1
+                        continue
+                    if not self._path_in_file_set(file, admitted_files):
+                        outside_count += 1
+                        continue
+                    caller_boundary = inventory_by_name.get(caller)
+                    callee_boundary = inventory_by_name.get(callee)
+                    if (
+                        caller_boundary is None or callee_boundary is None
+                        or not self._path_in_file_set(str(caller_boundary.file), admitted_files)
+                        or not self._path_in_file_set(str(callee_boundary.file), admitted_files)
+                    ):
+                        outside_count += 1
+                        continue
+                    try:
+                        site_boundary = self._idx().function_for_line(file, line)
+                    except (AttributeError, TypeError, ValueError):
+                        invalid_count += 1
+                        continue
+                    if site_boundary != caller_boundary:
+                        invalid_count += 1
+                        continue
+                    key = (file, line, caller, callee)
+                    row = admitted.setdefault(key, {"file": file, "line": line, "caller": caller, "callee": callee, "directions": []})
+                    row["directions"].append(direction)
+        rows = []
+        for key in sorted(admitted):
+            row = admitted[key]
+            row["directions"] = sorted(set(row["directions"]))
+            rows.append(row)
+        accounting = {"raw_relationship_count": raw_count, "invalid_relationship_count": invalid_count, "unattributed_relationship_count": unattributed_count, "external_relationship_count": outside_count, "admitted_relationship_count": len(rows), "maximum_admitted_relationships": MAX_SUBSYSTEM_SELECTED_RELATIONSHIPS}
+        if invalid_count:
+            return "malformed_subsystem_relationship", [], accounting
+        if len(rows) > MAX_SUBSYSTEM_SELECTED_RELATIONSHIPS:
+            return "too_many_subsystem_relationships", [], accounting
+        return "selected", rows, accounting
+
+    @staticmethod
+    def _subsystem_semantic_request(subsystem: str, files: list[str]) -> str:
+        return (
+            "Explain only the source-visible behavior relevant to the supplied topic "
+            f"within directory-root subsystem {subsystem!r} and admitted files {files!r}, using only the supplied "
+            "server-selected evidence. Do not infer unseen files, symbols, runtime "
+            "behavior, transitive effects, external relationships, database state, or "
+            "other repository content."
+        )
+
+    def _subsystem_selection_not_run(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        status = str(manifest["selection_status"])
+        return {"selection_manifest": manifest, "verification": {"status": "not_run", "reason": status, "model_turn_count": 0, "ledger_hit": False, "repository_read_count": 0}, "answer": f"No subsystem evidence was selected: {status}."}
+
+    def _investigate_subsystem(self, request: dict[str, Any]) -> dict[str, Any]:
+        self._require_exact_fields(request, {"op", "topic_id", "topic", "subsystem", "files"})
+        topic_id = self._required_string(request, "topic_id")
+        topic = self._required_string(request, "topic")
+        subsystem = self._subsystem_root(self._required_string(request, "subsystem"))
+        files = self._subsystem_files(subsystem, request.get("files"))
+        admitted_files = set(files)
+        manifest: dict[str, Any] = {
+            "schema_version": 2, "mode": "bounded_subsystem_investigation_selection",
+            "subsystem": subsystem, "files": files, "admitted_file_count": len(files),
+            "maximum_files": MAX_SUBSYSTEM_FILES, "inventory_count": 0,
+            "ambiguous_inventory_symbol_count": 0,
+            "maximum_inventory_symbols": MAX_SUBSYSTEM_INVENTORY_SYMBOLS,
+            "maximum_selected_symbols": MAX_SUBSYSTEM_SELECTED_SYMBOLS,
+            "maximum_selected_relationships": MAX_SUBSYSTEM_SELECTED_RELATIONSHIPS,
+            "maximum_evidence_ranges": MAX_SUBSYSTEM_EVIDENCE_RANGES,
+            "maximum_evidence_lines": MAX_SUBSYSTEM_EVIDENCE_LINES,
+            "selected_symbols": [], "relationships": [], "relationship_accounting": {},
+            "candidate_range_count": 0, "effective_range_count": 0, "effective_evidence_lines": 0,
+            "normalization": self._relationship_normalization_template(), "selected_ranges": [],
+            "route": "not_run", "selection_status": "not_run",
+        }
+        inventory_status, inventory, inventory_meta = self._subsystem_inventory(admitted_files)
+        manifest.update(inventory_meta)
+        if inventory_status != "selected":
+            manifest["selection_status"] = inventory_status
+            return self._subsystem_selection_not_run(manifest)
+        selected_status, selected = self._subsystem_selected_symbols(topic, inventory)
+        if selected_status != "selected":
+            manifest["selection_status"] = selected_status
+            return self._subsystem_selection_not_run(manifest)
+        manifest["selected_symbols"] = [self._symbol_extent_public(boundary) | {"symbol": str(boundary.name)} for boundary in selected]
+        relationship_status, relationships, accounting = self._subsystem_relationships(selected, inventory, admitted_files)
+        manifest["relationship_accounting"] = accounting
+        manifest["relationships"] = relationships
+        if relationship_status != "selected":
+            manifest["selection_status"] = relationship_status
+            return self._subsystem_selection_not_run(manifest)
+        candidates = [{**self._symbol_extent_public(boundary), "_function_key": (str(boundary.file), str(boundary.name), int(boundary.start_line), int(boundary.end_line))} for boundary in selected]
+        relationship_edges = [(row["file"], row["line"], row["caller"], row["callee"]) for row in relationships]
+        edge_status, edge_candidates = self._relationship_candidate_ranges(relationship_edges)
+        if edge_status != "selected":
+            manifest["selection_status"] = edge_status
+            return self._subsystem_selection_not_run(manifest)
+        candidates.extend(edge_candidates)
+        manifest["candidate_range_count"] = len(candidates)
+        normalized, ranges = self._normalize_relationship_ranges(candidates)
+        manifest["normalization"].update(normalized["normalization"])
+        manifest["effective_range_count"] = len(ranges)
+        manifest["selected_ranges"] = ranges
+        manifest["selection_status"] = normalized["selection_status"]
+        if manifest["selection_status"] != "selected":
+            return self._subsystem_selection_not_run(manifest)
+        lines = sum(int(row["end"]) - int(row["start"]) + 1 for row in ranges)
+        manifest["effective_evidence_lines"] = lines
+        if len(ranges) > MAX_SUBSYSTEM_EVIDENCE_RANGES:
+            manifest["selection_status"] = "too_many_subsystem_ranges"
+            return self._subsystem_selection_not_run(manifest)
+        if lines > MAX_SUBSYSTEM_EVIDENCE_LINES:
+            manifest["selection_status"] = "too_many_subsystem_evidence_lines"
+            return self._subsystem_selection_not_run(manifest)
+        manifest["route"] = "single_range" if len(ranges) == 1 else "multi_range"
+        items = [self._claim_item(source_range) for source_range in ranges]
+        semantic_request = self._subsystem_semantic_request(subsystem, files)
+        ledger = self._claim_ledger()
+        verdict = ledger.lookup_subsystem_investigation(topic_id, topic, subsystem, files, semantic_request, items)
+        if verdict is None:
+            raw_verdict = self._claim_verifier().verify_claim(topic, semantic_request, items[0]) if len(items) == 1 else self._claim_verifier().verify_bundle_claim(topic, semantic_request, items)
+            verdict = self._validate_verdict(raw_verdict)
+            ledger.record_subsystem_investigation_decision(topic_id, topic, subsystem, files, semantic_request, items, verdict)
+        ledger_hit = verdict.get("ledger_hit") is True
+        semantic_manifest = {"schema_version": 2, "mode": "subsystem_investigation_semantic_verification", "topic_id": topic_id, "topic": topic, "subsystem": subsystem, "files": files, "semantic_request": semantic_request, "evidence": [{"file": item["file"], "start": item["start"], "end": item["end"], "source_sha256": source_hash(item["excerpt"])} for item in items], "verification": {"supports": verdict.get("supports") is True, "ledger_hit": ledger_hit, "model_turns": int(verdict.get("model_turns", 0))}, "metrics": {"requested_range_count": len(ranges), "effective_range_count": len(items), "effective_evidence_lines": lines, "repository_read_count": len(items), "unrelated_topic_count": 0, "model_turn_count": int(verdict.get("model_turns", 0)), "ledger_hit": ledger_hit}}
+        verification = {"manifest": semantic_manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
+        return {"selection_manifest": manifest, "verification": verification, "answer": verification["answer"]}
 
     def _verified_claims(self, request: dict[str, Any]) -> dict[str, Any]:
         ledger = self._claim_ledger()

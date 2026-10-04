@@ -66,6 +66,10 @@ class VerifiedClaimLedger:
         # caller-proposed claims.  A controller must never be able to create a
         # claim-ledger entry that aliases a server-owned symbol explanation.
         self.symbol_investigation_records: dict[str, dict] = {}
+        # Subsystem investigations have their own identity namespace.  In
+        # particular, a symbol result must never be reused for a broader
+        # directory-root investigation merely because some evidence overlaps.
+        self.subsystem_investigation_records: dict[str, dict] = {}
         self._load()
 
     @staticmethod
@@ -165,6 +169,33 @@ class VerifiedClaimLedger:
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def _subsystem_investigation_identity(
+        cls, topic_id, topic, subsystem, files, semantic_request, members,
+    ) -> dict:
+        return {
+            "operation": "investigate_subsystem",
+            "topic_id": str(topic_id),
+            "topic_sha256": hashlib.sha256(
+                normalize_claim(str(topic)).encode("utf-8")
+            ).hexdigest(),
+            "subsystem": str(subsystem),
+            "files": list(files),
+            "semantic_request_sha256": hashlib.sha256(
+                normalize_claim(str(semantic_request)).encode("utf-8")
+            ).hexdigest(),
+            "members": members,
+            **cls._verification_identity(),
+        }
+
+    @classmethod
+    def _subsystem_investigation_key(cls, *args) -> str:
+        canonical = json.dumps(
+            cls._subsystem_investigation_identity(*args),
+            sort_keys=True, separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def _load(self) -> None:
         try:
             obj = json.loads(self.path.read_text())
@@ -177,6 +208,7 @@ class VerifiedClaimLedger:
         records = obj.get("records", {})
         bundles = obj.get("bundle_records", {})
         symbol_investigations = obj.get("symbol_investigation_records", {})
+        subsystem_investigations = obj.get("subsystem_investigation_records", {})
         if isinstance(records, dict):
             self.records = {str(k): v for k, v in records.items() if isinstance(v, dict)}
         if isinstance(bundles, dict):
@@ -184,6 +216,11 @@ class VerifiedClaimLedger:
         if isinstance(symbol_investigations, dict):
             self.symbol_investigation_records = {
                 str(k): v for k, v in symbol_investigations.items()
+                if isinstance(v, dict)
+            }
+        if isinstance(subsystem_investigations, dict):
+            self.subsystem_investigation_records = {
+                str(k): v for k, v in subsystem_investigations.items()
                 if isinstance(v, dict)
             }
 
@@ -194,6 +231,7 @@ class VerifiedClaimLedger:
             "records": self.records,
             "bundle_records": self.bundle_records,
             "symbol_investigation_records": self.symbol_investigation_records,
+            "subsystem_investigation_records": self.subsystem_investigation_records,
         }
         tmp = self.path.with_name(self.path.name + ".tmp")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +395,48 @@ class VerifiedClaimLedger:
                 str(verdict.get("establishes", "")).strip()
                 if status == CLAIM_ACCEPTED else ""
             ),
+            "reason": str(verdict.get("reason", "")).strip(),
+            "status": status,
+        }
+        self._save()
+
+    def lookup_subsystem_investigation(
+        self, topic_id, topic, subsystem, files, semantic_request, candidates,
+    ):
+        members = self._bundle_members(candidates)
+        args = (topic_id, topic, subsystem, files, semantic_request, members)
+        key = self._subsystem_investigation_key(*args)
+        record = self.subsystem_investigation_records.get(key)
+        expected = self._subsystem_investigation_identity(*args)
+        if (
+            not isinstance(record, dict)
+            or not self._record_identity_matches(record)
+            or any(record.get(name) != value for name, value in expected.items())
+        ):
+            return None
+        return self._cached(record)
+
+    def record_subsystem_investigation_decision(
+        self, topic_id, topic, subsystem, files, semantic_request, candidates, verdict,
+    ) -> None:
+        members = self._bundle_members(candidates)
+        args = (topic_id, topic, subsystem, files, semantic_request, members)
+        key = self._subsystem_investigation_key(*args)
+        status = self._status(verdict)
+        existing = self.subsystem_investigation_records.get(key)
+        if (
+            isinstance(existing, dict)
+            and existing.get("status") == CLAIM_ACCEPTED
+            and status in {CLAIM_INDETERMINATE, CLAIM_VERIFIER_ERROR}
+        ):
+            return
+        identity = self._subsystem_investigation_identity(*args)
+        self.subsystem_investigation_records[key] = {
+            **identity,
+            "topic": normalize_claim(str(topic)),
+            "semantic_request": normalize_claim(str(semantic_request)),
+            "establishes": str(verdict.get("establishes", "")).strip()
+            if status == CLAIM_ACCEPTED else "",
             "reason": str(verdict.get("reason", "")).strip(),
             "status": status,
         }

@@ -9,7 +9,7 @@ from typing import Any
 from .codex_interface import CodexRepositoryInterface
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.7.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.9.0"}
 
 TOOLS = [
     {
@@ -303,6 +303,24 @@ TOOLS = [
                 "symbol": {"type": "string", "minLength": 1},
             },
             "required": ["topic_id", "topic", "symbol"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "investigate_subsystem",
+        "description": "Investigate one explicit repository-relative directory root and required bounded file set using deterministic structural inventory and server-selected exact reread evidence. File entries are normalized relative paths under subsystem; Qwen cannot search, select paths, symbols, relationships, or evidence.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string", "minLength": 1},
+                "topic": {"type": "string", "minLength": 1},
+                "subsystem": {"type": "string", "minLength": 1},
+                "files": {
+                    "type": "array", "minItems": 1, "maxItems": 16,
+                    "items": {"type": "string", "minLength": 1},
+                },
+            },
+            "required": ["topic_id", "topic", "subsystem", "files"],
             "additionalProperties": False,
         },
     },
