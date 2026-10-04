@@ -3904,11 +3904,12 @@ CheckpointEvalRow RowToCheckpointEval(const pqxx::row& row)
     eval.experiment.lastModelId = eval.checkpointModelId;
     eval.experiment.resumeModelId = OptionalLongLongCell(row, 20);
     eval.experiment.trainLogPath = OptionalStringCell(row, 21);
-    eval.inferStartedEpoch = row[22].is_null() ? 0.0 : row[22].as<double>();
+    eval.experiment.schedulerPriority = row[22].as<std::string>();
+    eval.inferStartedEpoch = row[23].is_null() ? 0.0 : row[23].as<double>();
     eval.experiment.inferLogPath = eval.inferLogPath;
     eval.experiment.analysisLogPath = eval.analysisLogPath;
-    if (row.size() > 23 && !row[23].is_null())
-        eval.cancellationRequestId = row[23].as<long long>();
+    if (row.size() > 24 && !row[24].is_null())
+        eval.cancellationRequestId = row[24].as<long long>();
     return eval;
 }
 
@@ -3924,7 +3925,7 @@ std::vector<CheckpointEvalRow> LoadCheckpointEvalRows(pqxx::work& w,
         "e.experiment_id, e.symbol, e.prediction_horizon, e.c_next_threshold, "
         "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         "e.train_start::text, e.train_end::text, e.infer_start::text, e.infer_end::text, "
-        "e.resume_model_id, e.train_log_path, "
+        "e.resume_model_id, e.train_log_path, e.scheduler_priority, "
         "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision, "
         "ce.cancellation_request_id "
         "FROM experiment_checkpoint_eval ce "
@@ -9755,6 +9756,14 @@ ClaimCheckpointAnalysis(
     std::vector<CheckpointEvalRow> pending =
         LoadCheckpointEvalRows(
             transaction, "pending", "analyze");
+    if (options.globalAdmissionPriorityRank)
+    {
+        std::erase_if(pending, [&](const CheckpointEvalRow& eval) {
+            return EA::SchedulerCore::PriorityRank(
+                eval.experiment.schedulerPriority) !=
+                *options.globalAdmissionPriorityRank;
+        });
+    }
     if (pending.empty())
     {
         transaction.commit();
@@ -10115,6 +10124,14 @@ int RunFinalExperimentPhase(
 
             jobs = LoadPendingExperiments(
                 services.admission, phaseName, cancellation);
+            if (options.globalAdmissionPriorityRank)
+            {
+                std::erase_if(jobs, [&](const ExperimentRow& job) {
+                    return EA::SchedulerCore::PriorityRank(
+                        job.schedulerPriority) !=
+                        *options.globalAdmissionPriorityRank;
+                });
+            }
             const int used = services.admission.capacityUsed(phaseName);
             transaction.commit();
 
@@ -10503,6 +10520,14 @@ int RunCheckpointEvalInferJobs(
         {
             jobs = LoadCheckpointEvalRows(
                 transaction, "pending", "infer");
+            if (options.globalAdmissionPriorityRank)
+            {
+                std::erase_if(jobs, [&](const CheckpointEvalRow& eval) {
+                    return EA::SchedulerCore::PriorityRank(
+                        eval.experiment.schedulerPriority) !=
+                        *options.globalAdmissionPriorityRank;
+                });
+            }
         }
         transaction.commit();
     }
@@ -10604,7 +10629,9 @@ EA::SchedulerCore::SchedulerPhaseAdmissionPlan LoadPhaseAdmissionPlan(
     SchedulerServiceComposition services{transaction};
     const std::array<int, 3> limits{
         options.maxTrainProcs, options.maxInferProcs, options.maxAnalyzeProcs};
-    if (!policy.concurrent)
+    // Global scheduler priority is enforced even when phases otherwise admit
+    // concurrently; ordered policies additionally use their persisted phase
+    // order to break priority ties.
     {
         for (std::size_t index = 0; index < demand.size(); ++index)
         {
@@ -10625,7 +10652,13 @@ EA::SchedulerCore::SchedulerPhaseAdmissionPlan LoadPhaseAdmissionPlan(
                 if (!SemanticWorkerPreflight(options, job.experimentId,
                         modelId, phase, logState, options.schedulerVerbose)) continue;
                 state.eligiblePending = true;
-                break;
+                const int priorityRank =
+                    EA::SchedulerCore::PriorityRank(job.schedulerPriority);
+                if (!state.highestEligiblePriorityRank ||
+                    priorityRank < *state.highestEligiblePriorityRank)
+                {
+                    state.highestEligiblePriorityRank = priorityRank;
+                }
             }
             if (state.eligiblePending || phase == "train") continue;
             for (const auto& eval : LoadCheckpointEvalRows(transaction, "pending", phase))
@@ -10642,7 +10675,13 @@ EA::SchedulerCore::SchedulerPhaseAdmissionPlan LoadPhaseAdmissionPlan(
                 if (!SemanticWorkerPreflight(options, eval.experiment.experimentId,
                         eval.checkpointModelId, phase, logState, options.schedulerVerbose)) continue;
                 state.eligiblePending = true;
-                break;
+                const int priorityRank = EA::SchedulerCore::PriorityRank(
+                    eval.experiment.schedulerPriority);
+                if (!state.highestEligiblePriorityRank ||
+                    priorityRank < *state.highestEligiblePriorityRank)
+                {
+                    state.highestEligiblePriorityRank = priorityRank;
+                }
             }
         }
     }
@@ -10707,6 +10746,8 @@ int RunSchedulerOnce(const SchedulerOptions& options,
         {
             const auto plan = LoadPhaseAdmissionPlan(w, options, logState);
             cycleOptions.orderedPhaseAdmission = plan.ordered;
+            cycleOptions.globalAdmissionPriorityRank =
+                plan.selectedPriorityRank;
             preparation.trainAdmissionAllowed = plan.allowed[0];
             preparation.inferAdmissionAllowed = plan.allowed[1];
             preparation.analyzeAdmissionAllowed = plan.allowed[2];

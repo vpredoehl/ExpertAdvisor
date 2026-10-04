@@ -12,6 +12,7 @@ struct SchedulerOptions
 {
     std::optional<EA::SchedulerCore::SchedulerPhasePriority> dryRunPhasePriority;
     bool orderedPhaseAdmission = false;
+    std::optional<int> globalAdmissionPriorityRank;
     bool modelInfo = false;
     bool compactStatus = false;
     bool createEconomicCalendarSnapshot = false;

@@ -68,30 +68,61 @@ struct SchedulerPhaseDemand
     bool enabled = false;
     bool eligiblePending = false;
     int activeWorkers = 0;
+    // Lowest numeric scheduler-priority rank among eligible pending work.
+    std::optional<int> highestEligiblePriorityRank;
 };
 
 struct SchedulerPhaseAdmissionPlan
 {
     std::array<bool, 3> allowed{true, true, true};
     std::optional<SchedulerPhase> selected;
+    std::optional<int> selectedPriorityRank;
     bool draining = false;
     bool ordered = false;
 };
 
-// Phase precedence controls admission only. Existing job ordering and
-// same-phase preemption remain in FinalExperimentDispatchService.
+// Scheduler priority controls admission across all phases. Persisted phase
+// precedence is the tie-breaker among work at that same priority. Existing
+// same-phase preemption remains in FinalExperimentDispatchService.
 inline SchedulerPhaseAdmissionPlan PlanSchedulerPhases(
     const SchedulerPhasePriority& policy,
     const std::array<SchedulerPhaseDemand, 3>& demand)
 {
     SchedulerPhaseAdmissionPlan plan;
-    if (policy.concurrent) return plan;
+    for (const auto& state : demand)
+    {
+        if (!state.enabled || !state.eligiblePending ||
+            !state.highestEligiblePriorityRank)
+            continue;
+        if (!plan.selectedPriorityRank ||
+            *state.highestEligiblePriorityRank < *plan.selectedPriorityRank)
+            plan.selectedPriorityRank = state.highestEligiblePriorityRank;
+    }
+
+    if (policy.concurrent)
+    {
+        if (!plan.selectedPriorityRank)
+            return plan;
+        plan.allowed.fill(false);
+        for (std::size_t index = 0; index < demand.size(); ++index)
+        {
+            const auto& state = demand[index];
+            plan.allowed[index] = state.enabled && state.eligiblePending &&
+                state.highestEligiblePriorityRank == plan.selectedPriorityRank;
+        }
+        return plan;
+    }
     plan.ordered = true;
     plan.allowed.fill(false);
     for (const auto phase : policy.order)
     {
         const auto& state = demand[static_cast<std::size_t>(phase)];
-        if (state.enabled && (state.eligiblePending || state.activeWorkers > 0))
+        const bool selectedPriorityPending = state.enabled &&
+            state.eligiblePending &&
+            state.highestEligiblePriorityRank == plan.selectedPriorityRank;
+        if (selectedPriorityPending ||
+            (!plan.selectedPriorityRank && state.enabled &&
+             state.activeWorkers > 0))
         {
             plan.selected = phase;
             break;
