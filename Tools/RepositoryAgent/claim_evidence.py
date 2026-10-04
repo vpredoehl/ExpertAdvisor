@@ -62,6 +62,10 @@ class VerifiedClaimLedger:
         self.path = Path(path)
         self.records: dict[str, dict] = {}
         self.bundle_records: dict[str, dict] = {}
+        # Symbol investigations intentionally have a separate namespace from
+        # caller-proposed claims.  A controller must never be able to create a
+        # claim-ledger entry that aliases a server-owned symbol explanation.
+        self.symbol_investigation_records: dict[str, dict] = {}
         self._load()
 
     @staticmethod
@@ -126,6 +130,41 @@ class VerifiedClaimLedger:
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def _symbol_investigation_identity(
+        cls, topic_id, topic, requested_symbol, resolved_symbol,
+        semantic_request, members,
+    ) -> dict:
+        """Return the complete disjoint identity for symbol investigation.
+
+        Topic text is included here because it is part of the semantic prompt.
+        This is deliberately stricter than the historical claim ledger, whose
+        identity contract is preserved unchanged above.
+        """
+        normalized_topic = normalize_claim(str(topic))
+        normalized_request = normalize_claim(str(semantic_request))
+        return {
+            "operation": "investigate_symbol",
+            "topic_id": str(topic_id),
+            "topic_sha256": hashlib.sha256(normalized_topic.encode("utf-8")).hexdigest(),
+            "requested_symbol": str(requested_symbol),
+            "resolved_symbol": str(resolved_symbol),
+            "semantic_request_sha256": hashlib.sha256(
+                normalized_request.encode("utf-8")
+            ).hexdigest(),
+            "members": members,
+            **cls._verification_identity(),
+        }
+
+    @classmethod
+    def _symbol_investigation_key(cls, *args) -> str:
+        canonical = json.dumps(
+            cls._symbol_investigation_identity(*args),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def _load(self) -> None:
         try:
             obj = json.loads(self.path.read_text())
@@ -137,10 +176,16 @@ class VerifiedClaimLedger:
             return
         records = obj.get("records", {})
         bundles = obj.get("bundle_records", {})
+        symbol_investigations = obj.get("symbol_investigation_records", {})
         if isinstance(records, dict):
             self.records = {str(k): v for k, v in records.items() if isinstance(v, dict)}
         if isinstance(bundles, dict):
             self.bundle_records = {str(k): v for k, v in bundles.items() if isinstance(v, dict)}
+        if isinstance(symbol_investigations, dict):
+            self.symbol_investigation_records = {
+                str(k): v for k, v in symbol_investigations.items()
+                if isinstance(v, dict)
+            }
 
     def _save(self) -> None:
         payload = {
@@ -148,6 +193,7 @@ class VerifiedClaimLedger:
             "verification_identity": self._verification_identity(),
             "records": self.records,
             "bundle_records": self.bundle_records,
+            "symbol_investigation_records": self.symbol_investigation_records,
         }
         tmp = self.path.with_name(self.path.name + ".tmp")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -261,5 +307,57 @@ class VerifiedClaimLedger:
             "reason": str(verdict.get("reason", "")).strip(),
             "status": status,
             **self._verification_identity(),
+        }
+        self._save()
+
+    def lookup_symbol_investigation(
+        self, topic_id, topic, requested_symbol, resolved_symbol,
+        semantic_request, candidates,
+    ):
+        members = self._bundle_members(candidates)
+        args = (
+            topic_id, topic, requested_symbol, resolved_symbol,
+            semantic_request, members,
+        )
+        key = self._symbol_investigation_key(*args)
+        record = self.symbol_investigation_records.get(key)
+        expected = self._symbol_investigation_identity(*args)
+        if (
+            not isinstance(record, dict)
+            or not self._record_identity_matches(record)
+            or any(record.get(name) != value for name, value in expected.items())
+        ):
+            return None
+        return self._cached(record)
+
+    def record_symbol_investigation_decision(
+        self, topic_id, topic, requested_symbol, resolved_symbol,
+        semantic_request, candidates, verdict,
+    ) -> None:
+        members = self._bundle_members(candidates)
+        args = (
+            topic_id, topic, requested_symbol, resolved_symbol,
+            semantic_request, members,
+        )
+        key = self._symbol_investigation_key(*args)
+        status = self._status(verdict)
+        existing = self.symbol_investigation_records.get(key)
+        if (
+            isinstance(existing, dict)
+            and existing.get("status") == CLAIM_ACCEPTED
+            and status in {CLAIM_INDETERMINATE, CLAIM_VERIFIER_ERROR}
+        ):
+            return
+        identity = self._symbol_investigation_identity(*args)
+        self.symbol_investigation_records[key] = {
+            **identity,
+            "topic": normalize_claim(str(topic)),
+            "semantic_request": normalize_claim(str(semantic_request)),
+            "establishes": (
+                str(verdict.get("establishes", "")).strip()
+                if status == CLAIM_ACCEPTED else ""
+            ),
+            "reason": str(verdict.get("reason", "")).strip(),
+            "status": status,
         }
         self._save()

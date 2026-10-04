@@ -12,8 +12,8 @@ from ..repository_agent_mcp import SERVER_INFO, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.6.0"
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim"} <= names
+    assert SERVER_INFO["version"]=="1.7.0"
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol"} <= names
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")
@@ -53,6 +53,12 @@ def main():
         "required":["caller","callee"],
         "additionalProperties":False,
     }
+    symbol=next(x for x in TOOLS if x["name"]=="investigate_symbol")
+    symbol_schema=symbol["inputSchema"]
+    assert symbol_schema["additionalProperties"] is False
+    assert set(symbol_schema["required"]) == {"topic_id","topic","symbol"}
+    assert set(symbol_schema["properties"]) == {"topic_id","topic","symbol"}
+    assert all(item["minLength"] == 1 for item in symbol_schema["properties"].values())
     print("test_repository_agent_mcp_claims: PASS")
 
 if __name__ == "__main__": main()

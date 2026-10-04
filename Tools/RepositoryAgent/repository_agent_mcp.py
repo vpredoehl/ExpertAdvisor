@@ -9,7 +9,7 @@ from typing import Any
 from .codex_interface import CodexRepositoryInterface
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.6.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.7.0"}
 
 TOOLS = [
     {
@@ -293,6 +293,20 @@ TOOLS = [
         },
     },
     {
+        "name": "investigate_symbol",
+        "description": "Resolve one exact indexed symbol and run a bounded server-owned source investigation. The server selects and rereads all evidence; Qwen cannot select files, ranges, or relationships.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string", "minLength": 1},
+                "topic": {"type": "string", "minLength": 1},
+                "symbol": {"type": "string", "minLength": 1},
+            },
+            "required": ["topic_id", "topic", "symbol"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "verified_claims",
         "description": "Read claim-verification ledger records with optional status/topic/claim filters.",
         "inputSchema": {
@@ -377,8 +391,12 @@ class StdioMCPServer:
                 for index, item in enumerate(value):
                     StdioMCPServer._validate_schema(item, item_schema, location=f"{location}[{index}]")
             return
-        if expected_type == "string" and not isinstance(value, str):
-            raise ValueError(f"{location} must be a string")
+        if expected_type == "string":
+            if not isinstance(value, str):
+                raise ValueError(f"{location} must be a string")
+            minimum = schema.get("minLength")
+            if minimum is not None and len(value) < minimum:
+                raise ValueError(f"{location} must contain at least {minimum} characters")
         if expected_type == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
             raise ValueError(f"{location} must be an integer")
 

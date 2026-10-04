@@ -21,6 +21,10 @@ from .repository_index import RepositoryIndex
 
 
 RELATIONSHIP_CONTEXT_RADIUS = 12
+# This is a structural admission limit, not a semantic ranking budget.  The
+# operation fails closed once the exact resolved symbol has more direct,
+# independently attributable relationships than can be safely packaged.
+MAX_SYMBOL_DIRECT_RELATIONSHIPS = 16
 
 
 class CodexRepositoryInterface:
@@ -58,6 +62,7 @@ class CodexRepositoryInterface:
                 "investigate_source_claim", "investigate_source_bundle_claim",
                 "investigate_relationship_claim", "investigate_relationship_chain_claim",
                 "investigate_relationship_set_claim",
+                "investigate_symbol",
             ],
             "forbidden_capabilities": [
                 "shell", "repository_write", "git_mutation", "database",
@@ -231,6 +236,7 @@ class CodexRepositoryInterface:
         if op == "investigate_relationship_claim": return self._investigate_relationship_claim(request)
         if op == "investigate_relationship_chain_claim": return self._investigate_relationship_chain_claim(request)
         if op == "investigate_relationship_set_claim": return self._investigate_relationship_set_claim(request)
+        if op == "investigate_symbol": return self._investigate_symbol(request)
         raise ValueError(f"unsupported operation: {op!r}")
 
     def _verify_source_claim_result(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -854,6 +860,316 @@ class CodexRepositoryInterface:
         else:
             verification_request["ranges"] = ranges
             verification = self._investigate_source_bundle_claim(verification_request)
+        return {
+            "selection_manifest": manifest,
+            "verification": verification,
+            "answer": verification["answer"],
+        }
+
+    @staticmethod
+    def _symbol_extent_public(boundary: Any) -> dict[str, int | str]:
+        return {
+            "file": str(boundary.file),
+            "start": int(boundary.start_line),
+            "end": int(boundary.end_line),
+        }
+
+    def _resolve_symbol_extent(
+        self, requested_symbol: str,
+    ) -> tuple[str, str | None, Any | None]:
+        """Resolve exactly one indexed definition and validate its function extent.
+
+        This intentionally uses no lexical search and no short-name fallback.
+        An indexed occurrence that cannot be tied exactly to its enclosing
+        function is unusable as evidence and therefore fails closed.
+        """
+        try:
+            definitions = list(self._idx().find_definitions(requested_symbol))
+        except (AttributeError, TypeError, ValueError):
+            return "malformed_symbol_resolution", None, None
+        if not definitions:
+            return "missing_symbol", None, None
+        if len(definitions) != 1:
+            return "ambiguous_symbol", None, None
+        definition = definitions[0]
+        file = self._edge_field(definition, "file")
+        line = self._edge_field(definition, "line")
+        occurrence_symbol = self._edge_field(definition, "symbol")
+        canonical = self._edge_field(definition, "function")
+        try:
+            if isinstance(line, bool):
+                raise ValueError
+            line = int(line)
+        except (TypeError, ValueError):
+            return "malformed_symbol_definition", None, None
+        if (
+            not isinstance(file, str) or not file or line < 1
+            or not isinstance(occurrence_symbol, str) or occurrence_symbol != requested_symbol
+            or not isinstance(canonical, str) or not canonical.strip()
+        ):
+            return "malformed_symbol_definition", None, None
+        path = Path(file)
+        if (
+            path.is_absolute() or path.as_posix() != file or "\x00" in file or "\\" in file
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            return "malformed_symbol_definition", None, None
+        canonical = canonical.strip()
+        if "::" in requested_symbol and canonical != requested_symbol:
+            return "malformed_symbol_definition", None, None
+        try:
+            boundary = self._idx().function_for_line(file, line)
+        except (AttributeError, TypeError, ValueError):
+            return "malformed_symbol_extent", None, None
+        if boundary is None:
+            return "malformed_symbol_extent", None, None
+        try:
+            if isinstance(boundary.start_line, bool) or isinstance(boundary.end_line, bool):
+                raise ValueError
+            boundary_file = str(boundary.file)
+            boundary_name = str(boundary.name)
+            start = int(boundary.start_line)
+            end = int(boundary.end_line)
+        except (AttributeError, TypeError, ValueError):
+            return "malformed_symbol_extent", None, None
+        if (
+            boundary_file != file or boundary_name != canonical
+            or start < 1 or end < start or line != start
+        ):
+            return "malformed_symbol_extent", None, None
+        if end - start + 1 > 500:
+            return "symbol_extent_over_limit", canonical, boundary
+        return "selected", canonical, boundary
+
+    def _symbol_direct_relationships(
+        self, canonical_symbol: str,
+    ) -> tuple[str, list[dict[str, Any]], dict[str, int]]:
+        """Select only direct index records exactly attributable to this symbol.
+
+        Incoming and outgoing call records are both admitted only when their
+        indexed endpoint equals the canonical symbol.  A source spelling with a
+        matching short name is deliberately not treated as the same endpoint.
+        """
+        try:
+            incoming = list(self._idx().callers_of(canonical_symbol))
+            outgoing = list(self._idx().callees_of(canonical_symbol))
+        except (AttributeError, TypeError, ValueError):
+            return "malformed_direct_relationship", [], {
+                "raw_direct_relationship_count": 0,
+                "invalid_direct_relationship_count": 1,
+                "unattributed_direct_relationship_count": 0,
+                "duplicate_direct_relationship_count": 0,
+                "valid_direct_relationship_count": 0,
+            }
+        raw_count = len(incoming) + len(outgoing)
+        invalid_count = 0
+        unattributed_count = 0
+        relationships: dict[tuple[str, int, str, str], dict[str, Any]] = {}
+        for direction, sites in (("incoming", incoming), ("outgoing", outgoing)):
+            for site in sites:
+                file = self._edge_field(site, "file")
+                line = self._edge_field(site, "line")
+                caller = self._edge_field(site, "caller")
+                callee = self._edge_field(site, "callee")
+                try:
+                    if isinstance(line, bool):
+                        raise ValueError
+                    line = int(line)
+                except (TypeError, ValueError):
+                    invalid_count += 1
+                    continue
+                if (
+                    not isinstance(file, str) or not file or line < 1
+                    or not isinstance(caller, str) or not caller
+                    or not isinstance(callee, str) or not callee
+                ):
+                    invalid_count += 1
+                    continue
+                if (
+                    (direction == "incoming" and callee != canonical_symbol)
+                    or (direction == "outgoing" and caller != canonical_symbol)
+                ):
+                    unattributed_count += 1
+                    continue
+                key = (file, line, caller, callee)
+                row = relationships.setdefault(key, {
+                    "caller": caller,
+                    "callee": callee,
+                    "file": file,
+                    "line": line,
+                    "directions": [],
+                })
+                row["directions"].append(direction)
+        admitted = []
+        for key in sorted(relationships):
+            row = relationships[key]
+            row["directions"] = sorted(set(row["directions"]))
+            admitted.append(row)
+        accounting = {
+            "raw_direct_relationship_count": raw_count,
+            "invalid_direct_relationship_count": invalid_count,
+            "unattributed_direct_relationship_count": unattributed_count,
+            "duplicate_direct_relationship_count": raw_count - invalid_count - unattributed_count - len(admitted),
+            "valid_direct_relationship_count": len(admitted),
+        }
+        if invalid_count:
+            return "malformed_direct_relationship", [], accounting
+        if len(admitted) > MAX_SYMBOL_DIRECT_RELATIONSHIPS:
+            return "too_many_direct_relationships", [], accounting
+        return "selected", admitted, accounting
+
+    @staticmethod
+    def _symbol_semantic_request(requested_symbol: str, resolved_symbol: str) -> str:
+        return (
+            "Explain, using only the supplied evidence, the narrow source-visible "
+            f"responsibility or behavior of resolved symbol {resolved_symbol!r} "
+            f"(requested as {requested_symbol!r}) and any represented direct "
+            "source-visible interactions. Do not infer unseen implementation, "
+            "runtime behavior, transitive effects, unrepresented callers or "
+            "callees, database state, scheduler state, or other repository content."
+        )
+
+    def _symbol_selection_not_run(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        status = str(manifest["selection_status"])
+        return {
+            "selection_manifest": manifest,
+            "verification": {
+                "status": "not_run",
+                "reason": status,
+                "model_turn_count": 0,
+                "ledger_hit": False,
+                "repository_read_count": 0,
+            },
+            "answer": f"No symbol evidence was selected: {status}.",
+        }
+
+    def _investigate_symbol(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Investigate one exact indexed symbol with server-owned evidence only."""
+        self._require_exact_fields(request, {"op", "topic_id", "topic", "symbol"})
+        topic_id = self._required_string(request, "topic_id")
+        topic = self._required_string(request, "topic")
+        requested_symbol = self._required_string(request, "symbol")
+        manifest: dict[str, Any] = {
+            "schema_version": 1,
+            "mode": "bounded_symbol_investigation_selection",
+            "requested_symbol": requested_symbol,
+            "resolved_canonical_symbol": None,
+            "resolution_status": "not_run",
+            "definition_source_extent": None,
+            "direct_structural_relationship_count": 0,
+            "direct_relationship_accounting": {
+                "raw_direct_relationship_count": 0,
+                "invalid_direct_relationship_count": 0,
+                "unattributed_direct_relationship_count": 0,
+                "duplicate_direct_relationship_count": 0,
+                "valid_direct_relationship_count": 0,
+                "maximum_admitted_direct_relationships": MAX_SYMBOL_DIRECT_RELATIONSHIPS,
+            },
+            "admitted_direct_relationships": [],
+            "candidate_range_count": 0,
+            "effective_range_count": 0,
+            "normalization": self._relationship_normalization_template(),
+            "selected_ranges": [],
+            "route": "not_run",
+            "selection_status": "not_run",
+        }
+        resolution_status, canonical, boundary = self._resolve_symbol_extent(requested_symbol)
+        manifest["resolution_status"] = resolution_status
+        manifest["resolved_canonical_symbol"] = canonical
+        if boundary is not None:
+            manifest["definition_source_extent"] = self._symbol_extent_public(boundary)
+        if resolution_status != "selected":
+            manifest["selection_status"] = resolution_status
+            return self._symbol_selection_not_run(manifest)
+
+        assert canonical is not None and boundary is not None
+        relationship_status, admitted, accounting = self._symbol_direct_relationships(canonical)
+        manifest["direct_relationship_accounting"].update(accounting)
+        manifest["direct_structural_relationship_count"] = int(
+            accounting["valid_direct_relationship_count"]
+        )
+        manifest["admitted_direct_relationships"] = admitted
+        if relationship_status != "selected":
+            manifest["selection_status"] = relationship_status
+            return self._symbol_selection_not_run(manifest)
+
+        function_key = (
+            str(boundary.file), str(boundary.name),
+            int(boundary.start_line), int(boundary.end_line),
+        )
+        candidates: list[dict[str, Any]] = [{
+            **self._symbol_extent_public(boundary),
+            "_function_key": function_key,
+        }]
+        direct_edges = [
+            (row["file"], row["line"], row["caller"], row["callee"])
+            for row in admitted
+        ]
+        candidate_status, direct_candidates = self._relationship_candidate_ranges(direct_edges)
+        if candidate_status != "selected":
+            manifest["selection_status"] = candidate_status
+            return self._symbol_selection_not_run(manifest)
+        candidates.extend(direct_candidates)
+        manifest["candidate_range_count"] = len(candidates)
+        normalized, ranges = self._normalize_relationship_ranges(candidates)
+        manifest["normalization"].update(normalized["normalization"])
+        manifest["effective_range_count"] = len(ranges)
+        manifest["selected_ranges"] = ranges
+        manifest["selection_status"] = normalized["selection_status"]
+        if manifest["selection_status"] != "selected":
+            return self._symbol_selection_not_run(manifest)
+        manifest["route"] = "single_range" if len(ranges) == 1 else "multi_range"
+
+        # All selected ranges are independently reread before ledger lookup so
+        # a cache hit can never validate stale index content.
+        items = [self._claim_item(source_range) for source_range in ranges]
+        semantic_request = self._symbol_semantic_request(requested_symbol, canonical)
+        ledger = self._claim_ledger()
+        verdict = ledger.lookup_symbol_investigation(
+            topic_id, topic, requested_symbol, canonical, semantic_request, items
+        )
+        if verdict is None:
+            if len(items) == 1:
+                raw_verdict = self._claim_verifier().verify_claim(topic, semantic_request, items[0])
+            else:
+                raw_verdict = self._claim_verifier().verify_bundle_claim(topic, semantic_request, items)
+            verdict = self._validate_verdict(raw_verdict)
+            ledger.record_symbol_investigation_decision(
+                topic_id, topic, requested_symbol, canonical, semantic_request, items, verdict
+            )
+        ledger_hit = verdict.get("ledger_hit") is True
+        semantic_manifest = {
+            "schema_version": 1,
+            "mode": "symbol_investigation_semantic_verification",
+            "topic_id": topic_id,
+            "topic": topic,
+            "requested_symbol": requested_symbol,
+            "resolved_canonical_symbol": canonical,
+            "semantic_request": semantic_request,
+            "evidence": [
+                {"file": item["file"], "start": item["start"], "end": item["end"],
+                 "source_sha256": source_hash(item["excerpt"])}
+                for item in items
+            ],
+            "verification": {
+                "supports": verdict.get("supports") is True,
+                "ledger_hit": ledger_hit,
+                "model_turns": int(verdict.get("model_turns", 0)),
+            },
+            "metrics": {
+                "requested_range_count": len(ranges),
+                "effective_range_count": len(items),
+                "repository_read_count": len(items),
+                "unrelated_topic_count": 0,
+                "model_turn_count": int(verdict.get("model_turns", 0)),
+                "ledger_hit": ledger_hit,
+            },
+        }
+        verification = {
+            "manifest": semantic_manifest,
+            "answer": self._render_claim_answer(verdict),
+            "verdict": verdict,
+        }
         return {
             "selection_manifest": manifest,
             "verification": verification,

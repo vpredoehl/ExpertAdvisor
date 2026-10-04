@@ -35,6 +35,7 @@ def main() -> None:
     assert "investigate_relationship_claim" in payload["operations"]
     assert "investigate_relationship_chain_claim" in payload["operations"]
     assert "investigate_relationship_set_claim" in payload["operations"]
+    assert "investigate_symbol" in payload["operations"]
     bad = server._handle_request({
         "jsonrpc":"2.0","id":4,"method":"tools/call",
         "params":{"name":"shell","arguments":{"command":"pwd"}}
@@ -88,6 +89,22 @@ def main() -> None:
     })
     assert set_top_closed["result"]["isError"] is True
     assert "unexpected tool arguments: query" in set_top_closed["result"]["content"][0]["text"]
+    symbol_closed = server._handle_request({
+        "jsonrpc":"2.0","id":12,"method":"tools/call",
+        "params":{"name":"investigate_symbol","arguments":{
+            "topic_id":"t","topic":"topic","symbol":"Demo::f","claim":"forbidden"
+        }}
+    })
+    assert symbol_closed["result"]["isError"] is True
+    assert "unexpected tool arguments: claim" in symbol_closed["result"]["content"][0]["text"]
+    symbol_empty = server._handle_request({
+        "jsonrpc":"2.0","id":13,"method":"tools/call",
+        "params":{"name":"investigate_symbol","arguments":{
+            "topic_id":"t","topic":"topic","symbol":""
+        }}
+    })
+    assert symbol_empty["result"]["isError"] is True
+    assert "must contain at least 1 characters" in symbol_empty["result"]["content"][0]["text"]
     for request_id, relationships in ((10, [{"caller":"A","callee":"B"}]),
                                       (11, [{"caller":str(n),"callee":"B"} for n in range(6)])):
         count_error = server._handle_request({
