@@ -8,11 +8,17 @@ stub.search=lambda pattern,max_results=100: ""
 stub.read_file=lambda name,start=1,end=200: "stub source"
 sys.modules.setdefault("expertadvisor_agent",stub)
 
-from ..repository_agent_mcp import SERVER_INFO, TOOLS
+from ..repository_agent_mcp import SERVER_INFO, TOOL_PROFILES, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.9.0"
+    assert SERVER_INFO["version"]=="1.10.0"
+    assert list(TOOL_PROFILES["full"]) == [item["name"] for item in TOOLS]
+    assert TOOL_PROFILES["codex_assisted"] == (
+        "investigate_source_claim", "investigate_source_bundle_claim",
+        "investigate_relationship_claim", "investigate_relationship_chain_claim",
+        "investigate_relationship_set_claim", "investigate_symbol", "investigate_subsystem",
+    )
     assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]

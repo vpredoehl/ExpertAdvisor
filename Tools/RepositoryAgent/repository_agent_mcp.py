@@ -2,14 +2,16 @@
 """Dependency-free stdio MCP adapter for the repository-read-only RepositoryAgent interface."""
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sys
 from typing import Any
 
-from .codex_interface import CodexRepositoryInterface
-
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.9.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.10.0"}
+PROFILE_ENVIRONMENT_VARIABLE = "EXPERTADVISOR_REPOSITORY_AGENT_MCP_PROFILE"
+DEFAULT_TOOL_PROFILE = "full"
 
 TOOLS = [
     {
@@ -340,9 +342,54 @@ TOOLS = [
     },
 ]
 
+# This is the sole MCP admission policy.  The active profile is selected once
+# when the stdio server starts; both tools/list and tools/call consult the same
+# selected tuple, so a client cannot use an unadvertised operation by calling it
+# directly.  The assisted profile contains only planning-facing investigation
+# workflows.  Their lower-level verification helpers remain in the full
+# development/debugging profile because the investigation workflows add the
+# deterministic manifests and server-owned evidence-selection boundary.
+TOOL_PROFILES: dict[str, tuple[str, ...]] = {
+    "full": tuple(tool["name"] for tool in TOOLS),
+    "codex_assisted": (
+        "investigate_source_claim",
+        "investigate_source_bundle_claim",
+        "investigate_relationship_claim",
+        "investigate_relationship_chain_claim",
+        "investigate_relationship_set_claim",
+        "investigate_symbol",
+        "investigate_subsystem",
+    ),
+}
+_TOOLS_BY_NAME = {tool["name"]: tool for tool in TOOLS}
+_UNKNOWN_PROFILE_TOOLS = {
+    profile: sorted(set(names) - set(_TOOLS_BY_NAME))
+    for profile, names in TOOL_PROFILES.items()
+    if set(names) - set(_TOOLS_BY_NAME)
+}
+if _UNKNOWN_PROFILE_TOOLS:
+    raise RuntimeError(f"MCP tool profile contains unknown tools: {_UNKNOWN_PROFILE_TOOLS}")
+
+
+def resolve_tool_profile(profile: str | None = None) -> str:
+    """Resolve and validate the immutable MCP profile selected at startup."""
+    selected = profile
+    if selected is None:
+        selected = os.environ.get(PROFILE_ENVIRONMENT_VARIABLE, DEFAULT_TOOL_PROFILE)
+    if not isinstance(selected, str) or selected not in TOOL_PROFILES:
+        allowed = ", ".join(sorted(TOOL_PROFILES))
+        raise ValueError(f"invalid MCP tool profile {selected!r}; expected one of: {allowed}")
+    return selected
+
 
 class StdioMCPServer:
-    def __init__(self) -> None:
+    def __init__(self, *, profile: str | None = None) -> None:
+        self.tool_profile = resolve_tool_profile(profile)
+        self._tools = tuple(_TOOLS_BY_NAME[name] for name in TOOL_PROFILES[self.tool_profile])
+        self._tools_by_name = {tool["name"]: tool for tool in self._tools}
+        # Validate profile admission before importing the runtime dependency, so
+        # an invalid startup profile always fails closed at this boundary.
+        from .codex_interface import CodexRepositoryInterface
         self.iface = CodexRepositoryInterface()
 
     @staticmethod
@@ -455,7 +502,7 @@ class StdioMCPServer:
             return self._result(req_id, {})
 
         if method == "tools/list":
-            return self._result(req_id, {"tools": TOOLS})
+            return self._result(req_id, {"tools": list(self._tools)})
 
         if method == "tools/call":
             params = msg.get("params") or {}
@@ -465,13 +512,13 @@ class StdioMCPServer:
             arguments = params.get("arguments") or {}
             if not isinstance(arguments, dict):
                 return self._error(req_id, -32602, "tool arguments must be an object")
-            if name not in {tool["name"] for tool in TOOLS}:
+            tool = self._tools_by_name.get(name)
+            if tool is None:
                 return self._result(req_id, {
                     "content": [{"type": "text", "text": f"unsupported tool: {name}"}],
                     "isError": True,
                 })
             try:
-                tool = next(tool for tool in TOOLS if tool["name"] == name)
                 self._validate_tool_arguments(tool, arguments)
                 result = self.iface.dispatch({"op": name, **arguments})
                 return self._result(req_id, {
@@ -511,7 +558,20 @@ class StdioMCPServer:
 
 
 def main() -> int:
-    return StdioMCPServer().run()
+    parser = argparse.ArgumentParser(
+        description="RepositoryAgent stdio MCP server with a startup-fixed tool profile."
+    )
+    parser.add_argument(
+        "--profile",
+        help=("MCP tool profile (full or codex_assisted). Defaults to "
+              f"${PROFILE_ENVIRONMENT_VARIABLE} or {DEFAULT_TOOL_PROFILE}."),
+    )
+    args = parser.parse_args()
+    try:
+        return StdioMCPServer(profile=args.profile).run()
+    except ValueError as exc:
+        print(f"repository_agent_mcp: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
