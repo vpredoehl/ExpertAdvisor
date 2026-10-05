@@ -8,6 +8,7 @@ a shell, access the database, run builds/tests, or mutate Git.
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -54,6 +55,14 @@ MAX_DISCOVERY_CANDIDATE_SYMBOLS = 16
 MAX_DISCOVERY_TOTAL_CANDIDATES = 24
 MAX_DISCOVERY_QUERY_TERMS = 4
 
+# Relationship-path discovery is intentionally a very small metadata-only
+# graph walk.  These are admission limits, not truncation limits: exceeding
+# any one raises an error and returns no path result.
+MAX_RELATIONSHIP_PATH_HOPS = 4
+MAX_RELATIONSHIP_PATH_VISITED_NODES = 64
+MAX_RELATIONSHIP_PATH_EXAMINED_EDGES = 512
+MAX_RELATIONSHIP_PATH_RESULTS = 4
+
 
 class CodexRepositoryInterface:
     def __init__(self, *, ledger_path: str | None = None, claim_ledger_path: str | None = None,
@@ -91,6 +100,7 @@ class CodexRepositoryInterface:
                 "investigate_relationship_claim", "investigate_relationship_chain_claim",
                 "investigate_relationship_set_claim",
                 "discover_catalog_targets",
+                "discover_relationship_paths",
                 "investigate_symbol",
                 "investigate_subsystem",
             ],
@@ -267,6 +277,7 @@ class CodexRepositoryInterface:
         if op == "investigate_relationship_chain_claim": return self._investigate_relationship_chain_claim(request)
         if op == "investigate_relationship_set_claim": return self._investigate_relationship_set_claim(request)
         if op == "discover_catalog_targets": return self._discover_catalog_targets(request)
+        if op == "discover_relationship_paths": return self._discover_relationship_paths(request)
         if op == "investigate_symbol": return self._investigate_symbol(request)
         if op == "investigate_subsystem": return self._investigate_subsystem(request)
         raise ValueError(f"unsupported operation: {op!r}")
@@ -463,6 +474,169 @@ class CodexRepositoryInterface:
                 "candidate_files": MAX_DISCOVERY_CANDIDATE_FILES,
                 "candidate_symbols": MAX_DISCOVERY_CANDIDATE_SYMBOLS,
                 "total_candidates": MAX_DISCOVERY_TOTAL_CANDIDATES,
+            },
+        }
+
+    @staticmethod
+    def _relationship_path_max_hops(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("max_hops must be an integer")
+        if not 1 <= value <= MAX_RELATIONSHIP_PATH_HOPS:
+            raise ValueError(
+                f"max_hops must be between 1 and {MAX_RELATIONSHIP_PATH_HOPS}"
+            )
+        return value
+
+    def _discover_relationship_paths(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Discover bounded shortest structural paths without reading source.
+
+        Function boundaries and call sites are index metadata, not evidence.
+        In particular, an unqualified call site only contributes an edge when
+        its short name identifies exactly one indexed function globally.
+        """
+        self._require_exact_fields(request, {"op", "scope", "from", "to", "max_hops"})
+        requested_scope = self._discovery_scope(request.get("scope"))
+        from_requested = self._required_string(request, "from")
+        to_requested = self._required_string(request, "to")
+        max_hops = self._relationship_path_max_hops(request.get("max_hops"))
+        scope, scoped_files = self._resolve_discovery_scope(requested_scope)
+        scoped_file_set = set(scoped_files)
+        try:
+            boundaries = list(self._idx().functions)
+            calls_by_caller = self._idx().calls_by_caller
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("repository relationship metadata is unavailable") from exc
+        if not isinstance(calls_by_caller, dict):
+            raise ValueError("repository relationship metadata is malformed")
+
+        by_identity: dict[str, list[FunctionBoundary]] = {}
+        by_short_name: dict[str, list[FunctionBoundary]] = {}
+        for boundary in boundaries:
+            if not isinstance(boundary, FunctionBoundary):
+                raise ValueError("repository relationship metadata contains non-function definitions")
+            try:
+                name, file = str(boundary.name), str(boundary.file)
+                start, end = int(boundary.start_line), int(boundary.end_line)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("repository relationship metadata contains malformed function definitions") from exc
+            if not name or not file or start < 1 or end < start:
+                raise ValueError("repository relationship metadata contains malformed function definitions")
+            by_identity.setdefault(name, []).append(boundary)
+            by_short_name.setdefault(name.split("::")[-1], []).append(boundary)
+
+        def unique_endpoint(requested: str) -> str:
+            exact = by_identity.get(requested, [])
+            candidates = exact if exact else (
+                by_short_name.get(requested, []) if "::" not in requested else []
+            )
+            if not candidates:
+                raise ValueError("relationship path endpoint was not found")
+            if len(candidates) != 1:
+                raise ValueError("relationship path endpoint is ambiguous")
+            boundary = candidates[0]
+            if boundary.file not in scoped_file_set:
+                raise ValueError("relationship path endpoint is outside resolved scope")
+            return boundary.name
+
+        start = unique_endpoint(from_requested)
+        target = unique_endpoint(to_requested)
+        if start == target:
+            raise ValueError("relationship path endpoints must be distinct")
+
+        examined_edges = 0
+        visited_nodes = {start}
+        distances: dict[str, int] = {start: 0}
+        parents: dict[str, set[str]] = {}
+        queue = deque([start])
+
+        def scoped_unique_callees(caller: str) -> list[str]:
+            nonlocal examined_edges
+            raw_sites = calls_by_caller.get(caller, [])
+            if not isinstance(raw_sites, list):
+                raise ValueError("repository relationship metadata contains malformed call adjacency")
+            resolved: set[str] = set()
+            for site in raw_sites:
+                examined_edges += 1
+                if examined_edges > MAX_RELATIONSHIP_PATH_EXAMINED_EDGES:
+                    raise ValueError("relationship path examined-edge cap exceeded")
+                try:
+                    site_caller, site_callee, site_file = str(site.caller), str(site.callee), str(site.file)
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError("repository relationship metadata contains malformed call edge") from exc
+                # The index has short-name convenience aliases; never use them
+                # as graph edges, and never let an out-of-scope edge enter.
+                if site_caller != caller or site_file not in scoped_file_set or not site_callee:
+                    continue
+                if "::" in site_callee:
+                    candidates = by_identity.get(site_callee, [])
+                else:
+                    candidates = by_short_name.get(site_callee, [])
+                # A short textual call may not pick an arbitrary qualified
+                # definition.  Duplicated full identities are also excluded.
+                if len(candidates) != 1:
+                    continue
+                callee = candidates[0]
+                if callee.file in scoped_file_set:
+                    resolved.add(callee.name)
+            return sorted(resolved)
+
+        while queue:
+            caller = queue.popleft()
+            depth = distances[caller]
+            if depth >= max_hops:
+                continue
+            # Once a shortest target depth is known, nodes at that depth have
+            # no role in another shortest path; all earlier levels still run.
+            if target in distances and depth >= distances[target]:
+                continue
+            for callee in scoped_unique_callees(caller):
+                next_depth = depth + 1
+                known_depth = distances.get(callee)
+                if known_depth is None:
+                    if len(visited_nodes) >= MAX_RELATIONSHIP_PATH_VISITED_NODES:
+                        raise ValueError("relationship path visited-node cap exceeded")
+                    visited_nodes.add(callee)
+                    distances[callee] = next_depth
+                    parents[callee] = {caller}
+                    queue.append(callee)
+                elif known_depth == next_depth:
+                    parents.setdefault(callee, set()).add(caller)
+
+        paths: list[list[str]] = []
+        if target in distances:
+            def materialize(node: str) -> list[list[str]]:
+                if node == start:
+                    return [[start]]
+                rows: list[list[str]] = []
+                for parent in sorted(parents.get(node, ())):
+                    for prefix in materialize(parent):
+                        rows.append(prefix + [node])
+                        if len(rows) > MAX_RELATIONSHIP_PATH_RESULTS:
+                            raise ValueError("relationship path result cap exceeded")
+                return rows
+            paths = sorted(materialize(target))
+            if len(paths) > MAX_RELATIONSHIP_PATH_RESULTS:
+                raise ValueError("relationship path result cap exceeded")
+
+        return {
+            "schema_version": 1,
+            "mode": "bounded_relationship_path_discovery",
+            "evidentiary_status": "non_evidentiary",
+            "required_follow_up": (
+                "Use investigate_relationship_chain_claim or another bounded evidentiary "
+                "investigation before making repository-derived behavioral claims."
+            ),
+            "resolved_scope": scope,
+            "from": start,
+            "to": target,
+            "max_hops": max_hops,
+            "paths": paths,
+            "path_count": len(paths),
+            "caps": {
+                "max_hops": MAX_RELATIONSHIP_PATH_HOPS,
+                "visited_nodes": MAX_RELATIONSHIP_PATH_VISITED_NODES,
+                "examined_edges": MAX_RELATIONSHIP_PATH_EXAMINED_EDGES,
+                "returned_paths": MAX_RELATIONSHIP_PATH_RESULTS,
             },
         }
 

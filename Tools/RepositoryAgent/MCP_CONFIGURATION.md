@@ -15,6 +15,7 @@ workflows.
 operations:
 
 - `discover_catalog_targets`
+- `discover_relationship_paths`
 - `investigate_source_claim`
 - `investigate_source_bundle_claim`
 - `investigate_relationship_claim`
@@ -44,6 +45,18 @@ It accepts any resolved direct directory within catalog safety limits, then
 rejects without truncating more than 48 query-matched metadata items, more
 than 16 candidate files, more than 16 candidate symbols, or more than 24 total
 candidates. A later `investigate_*` call remains required for behavioral claims.
+
+`discover_relationship_paths` is a deterministic, metadata-only shortest-path
+selector. It accepts one normalized direct-directory scope, exact or uniquely
+resolvable function endpoints, and a required 1–4 hop bound. It returns only
+canonical indexed function identities, never source text, source locations,
+semantic conclusions, or evidence. Traversal is fail-closed before returning a
+result if it would exceed 64 visited nodes, 512 examined call edges, or four
+returned shortest paths; it never truncates. Nodes and edges must remain in the
+resolved direct scope, descendant directories are excluded, and ambiguous
+unqualified call-site names do not create edges. A returned path is not
+evidence: use `investigate_relationship_chain_claim` or another bounded
+evidentiary investigation before making behavioral claims.
 
 ## Startup selection
 

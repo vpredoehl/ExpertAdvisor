@@ -12,15 +12,15 @@ from ..repository_agent_mcp import SERVER_INFO, TOOL_PROFILES, TOOLS
 
 def main():
     names={x["name"] for x in TOOLS}
-    assert SERVER_INFO["version"]=="1.11.0"
+    assert SERVER_INFO["version"]=="1.12.0"
     assert list(TOOL_PROFILES["full"]) == [item["name"] for item in TOOLS]
     assert TOOL_PROFILES["codex_assisted"] == (
-        "discover_catalog_targets",
+        "discover_catalog_targets", "discover_relationship_paths",
         "investigate_source_claim", "investigate_source_bundle_claim",
         "investigate_relationship_claim", "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim", "investigate_symbol", "investigate_subsystem",
     )
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","discover_catalog_targets","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","discover_catalog_targets","discover_relationship_paths","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
     discovery=next(x for x in TOOLS if x["name"]=="discover_catalog_targets")
     discovery_schema=discovery["inputSchema"]
     assert discovery_schema["additionalProperties"] is False
@@ -32,6 +32,15 @@ def main():
             "type":"array", "minItems":1, "maxItems":4,
             "items":{"type":"string", "minLength":3, "maxLength":32},
         },
+    }
+    paths=next(x for x in TOOLS if x["name"]=="discover_relationship_paths")
+    path_schema=paths["inputSchema"]
+    assert path_schema["additionalProperties"] is False
+    assert set(path_schema["required"]) == {"scope","from","to","max_hops"}
+    assert path_schema["properties"] == {
+        "scope":{"type":"string","minLength":1}, "from":{"type":"string","minLength":1},
+        "to":{"type":"string","minLength":1},
+        "max_hops":{"type":"integer","minimum":1,"maximum":4},
     }
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]

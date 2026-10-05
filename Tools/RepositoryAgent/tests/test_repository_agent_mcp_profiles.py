@@ -62,7 +62,7 @@ def main() -> None:
     assisted_names = listed_names(assisted, 3)
     assert assisted_names == list(TOOL_PROFILES["codex_assisted"])
     assert assisted_names == [
-        "discover_catalog_targets",
+        "discover_catalog_targets", "discover_relationship_paths",
         "investigate_source_claim", "investigate_source_bundle_claim",
         "investigate_relationship_claim", "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim", "investigate_symbol",
@@ -83,6 +83,14 @@ def main() -> None:
         "op": "discover_catalog_targets", "scope": "SchedulerCore",
         "query_groups": [["checkpoint", "analysis"]],
     }]
+    paths = call(assisted, 5, "discover_relationship_paths", {
+        "scope": "SchedulerCore", "from": "A", "to": "B", "max_hops": 1,
+    })
+    assert paths["result"]["isError"] is False
+    assert assisted.iface.requests[-1] == {
+        "op": "discover_relationship_paths", "scope": "SchedulerCore",
+        "from": "A", "to": "B", "max_hops": 1,
+    }
     for field, value in (("source", True), ("excerpt", True), ("content", True),
                          ("path", "../../..."), ("arbitrary", "value")):
         closed_discovery = call(assisted, 5, "discover_catalog_targets", {

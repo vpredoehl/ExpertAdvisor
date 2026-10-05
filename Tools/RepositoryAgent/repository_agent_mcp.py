@@ -9,7 +9,7 @@ import sys
 from typing import Any
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.11.0"}
+SERVER_INFO = {"name": "expertadvisor-repository-agent", "version": "1.12.0"}
 PROFILE_ENVIRONMENT_VARIABLE = "EXPERTADVISOR_REPOSITORY_AGENT_MCP_PROFILE"
 DEFAULT_TOOL_PROFILE = "full"
 
@@ -314,6 +314,21 @@ TOOLS = [
         },
     },
     {
+        "name": "discover_relationship_paths",
+        "description": "Return deterministic shortest structural call paths within one direct indexed directory scope. This metadata-only operation returns no source text or behavioral evidence; use investigate_relationship_chain_claim or another bounded evidentiary investigation before behavioral claims.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "minLength": 1},
+                "from": {"type": "string", "minLength": 1},
+                "to": {"type": "string", "minLength": 1},
+                "max_hops": {"type": "integer", "minimum": 1, "maximum": 4},
+            },
+            "required": ["scope", "from", "to", "max_hops"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "investigate_symbol",
         "description": "Resolve one exact indexed symbol and run a bounded server-owned source investigation. The server selects and rereads all evidence; Qwen cannot select files, ranges, or relationships.",
         "inputSchema": {
@@ -372,6 +387,7 @@ TOOL_PROFILES: dict[str, tuple[str, ...]] = {
     "full": tuple(tool["name"] for tool in TOOLS),
     "codex_assisted": (
         "discover_catalog_targets",
+        "discover_relationship_paths",
         "investigate_source_claim",
         "investigate_source_bundle_claim",
         "investigate_relationship_claim",
