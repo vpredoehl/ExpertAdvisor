@@ -71,6 +71,12 @@ void AddEntry(std::vector<std::string>& values, const EntryExcursion& entry)
     values.push_back(Optional(entry.maximumAdverseExcursion));
     values.push_back(Optional(entry.maximumFavorableExcursionABRanges));
     values.push_back(Optional(entry.maximumAdverseExcursionABRanges));
+    values.push_back(Optional(entry.preDHighestHigh));
+    values.push_back(Optional(entry.preDLowestLow));
+    values.push_back(Optional(entry.preDMaximumFavorableExcursion));
+    values.push_back(Optional(entry.preDMaximumAdverseExcursion));
+    values.push_back(Optional(entry.preDMaximumFavorableExcursionABRanges));
+    values.push_back(Optional(entry.preDMaximumAdverseExcursionABRanges));
 }
 
 void AddLevelHeader(std::vector<std::string>& values, std::string_view name)
@@ -92,7 +98,7 @@ void AddEntryHeader(std::vector<std::string>& values, std::string_view name)
                                "bars_b_to_entry", "bars_retracement_to_entry",
                                "bars_entry_to_d", "bars_entry_to_a_penetration",
                                "bars_entry_to_a_close_beyond", "highest_high", "lowest_low",
-                               "mfe_raw", "mae_raw", "mfe_ab_ranges", "mae_ab_ranges"})
+                               "mfe_raw", "mae_raw", "mfe_ab_ranges", "mae_ab_ranges", "pre_d_highest_high", "pre_d_lowest_low", "pre_d_mfe_raw", "pre_d_mae_raw", "pre_d_mfe_ab_ranges", "pre_d_mae_ab_ranges"})
         values.push_back(prefix + "_" + suffix);
 }
 

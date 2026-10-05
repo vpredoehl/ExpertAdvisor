@@ -218,25 +218,98 @@ static void TestIndependentDHypothesesAndEntryExcursion()
     assert(!entry.maximumFavorableExcursionABRanges);
     assert(!entry.maximumAdverseExcursionABRanges);
 
+    // D was already reached on the entry candle for the 1.272 hypothesis.
+    // Later candles are post-exit and must not create excursion measurements.
     const auto postEntry = C(900, 1.1280, 1.1400, 1.1200, 1.1350);
     d1272.AddCompletedBar(8, postEntry);
     d1618.AddCompletedBar(8, postEntry);
 
     const auto& measured = d1272.GetRecord().directionalClose0382;
-    assert(measured.highestHigh &&
-           std::abs(*measured.highestHigh - 1.1400) < 1e-12);
-    assert(measured.lowestLow &&
-           std::abs(*measured.lowestLow - 1.1200) < 1e-12);
-    assert(measured.maximumFavorableExcursion &&
-           std::abs(*measured.maximumFavorableExcursion - 0.0120) < 1e-12);
-    assert(measured.maximumAdverseExcursion &&
-           std::abs(*measured.maximumAdverseExcursion - 0.0080) < 1e-12);
-    assert(measured.maximumFavorableExcursionABRanges &&
-           std::abs(*measured.maximumFavorableExcursionABRanges - 0.12) <
+    assert(!measured.highestHigh);
+    assert(!measured.lowestLow);
+    assert(!measured.maximumFavorableExcursion);
+    assert(!measured.maximumAdverseExcursion);
+    assert(!measured.maximumFavorableExcursionABRanges);
+    assert(!measured.maximumAdverseExcursionABRanges);
+}
+
+static void TestExcursionStopsAtLaterD()
+{
+    Fib::Tracker tracker(UpAB(), 1.1618);
+
+    tracker.AddCompletedBar(
+        6, C(700, 1.0700, 1.0750, 1.0600, 1.0650));
+    tracker.AddCompletedBar(
+        7, C(800, 1.0650, 1.0900, 1.0640, 1.0800));
+
+    const auto& entered = tracker.GetRecord().directionalClose0382;
+    assert(entered.entry && entered.entry->bar == 7);
+    assert(!entered.barsEntryToD);
+    assert(!entered.maximumFavorableExcursion);
+    assert(!entered.maximumAdverseExcursion);
+
+    // First post-entry candle.
+    tracker.AddCompletedBar(
+        8, C(900, 1.0800, 1.1200, 1.0700, 1.1100));
+
+    // D candle: include its high/low.
+    tracker.AddCompletedBar(
+        9, C(1000, 1.1100, 1.1700, 1.0750, 1.1650));
+
+    const auto& atD = tracker.GetRecord().directionalClose0382;
+    assert(atD.barsEntryToD == std::optional<std::size_t>{2});
+    assert(atD.highestHigh &&
+           std::abs(*atD.highestHigh - 1.1700) < 1e-12);
+    assert(atD.lowestLow &&
+           std::abs(*atD.lowestLow - 1.0700) < 1e-12);
+    assert(atD.maximumFavorableExcursion &&
+           std::abs(*atD.maximumFavorableExcursion - 0.0900) < 1e-12);
+    assert(atD.maximumAdverseExcursion &&
+           std::abs(*atD.maximumAdverseExcursion - 0.0100) < 1e-12);
+    assert(atD.maximumFavorableExcursionABRanges &&
+           std::abs(*atD.maximumFavorableExcursionABRanges - 0.90) < 1e-12);
+    assert(atD.maximumAdverseExcursionABRanges &&
+           std::abs(*atD.maximumAdverseExcursionABRanges - 0.10) < 1e-12);
+
+    // The pre-D snapshot excludes the D candle and therefore retains only
+    // bar 8's excursion. Comparing it with the target-bounded fields above
+    // identifies stop/D same-candle ambiguity without rerunning detection.
+    assert(atD.preDHighestHigh &&
+           std::abs(*atD.preDHighestHigh - 1.1200) < 1e-12);
+    assert(atD.preDLowestLow &&
+           std::abs(*atD.preDLowestLow - 1.0700) < 1e-12);
+    assert(atD.preDMaximumFavorableExcursion &&
+           std::abs(*atD.preDMaximumFavorableExcursion - 0.0400) < 1e-12);
+    assert(atD.preDMaximumAdverseExcursion &&
+           std::abs(*atD.preDMaximumAdverseExcursion - 0.0100) < 1e-12);
+    assert(atD.preDMaximumFavorableExcursionABRanges &&
+           std::abs(*atD.preDMaximumFavorableExcursionABRanges - 0.40) <
                1e-12);
-    assert(measured.maximumAdverseExcursionABRanges &&
-           std::abs(*measured.maximumAdverseExcursionABRanges - 0.08) <
+    assert(atD.preDMaximumAdverseExcursionABRanges &&
+           std::abs(*atD.preDMaximumAdverseExcursionABRanges - 0.10) <
                1e-12);
+
+    // Extreme post-D candle must not contaminate the completed trade.
+    tracker.AddCompletedBar(
+        10, C(1100, 1.1650, 1.3000, 0.9000, 1.0000));
+
+    const auto& afterD = tracker.GetRecord().directionalClose0382;
+    assert(afterD.highestHigh &&
+           std::abs(*afterD.highestHigh - 1.1700) < 1e-12);
+    assert(afterD.lowestLow &&
+           std::abs(*afterD.lowestLow - 1.0700) < 1e-12);
+    assert(afterD.maximumFavorableExcursion &&
+           std::abs(*afterD.maximumFavorableExcursion - 0.0900) < 1e-12);
+    assert(afterD.maximumAdverseExcursion &&
+           std::abs(*afterD.maximumAdverseExcursion - 0.0100) < 1e-12);
+    assert(afterD.preDHighestHigh &&
+           std::abs(*afterD.preDHighestHigh - 1.1200) < 1e-12);
+    assert(afterD.preDLowestLow &&
+           std::abs(*afterD.preDLowestLow - 1.0700) < 1e-12);
+    assert(afterD.preDMaximumFavorableExcursion &&
+           std::abs(*afterD.preDMaximumFavorableExcursion - 0.0400) < 1e-12);
+    assert(afterD.preDMaximumAdverseExcursion &&
+           std::abs(*afterD.preDMaximumAdverseExcursion - 0.0100) < 1e-12);
 }
 
 static void TestMultipleIndependentCandidatesSurviveLongPaths()
@@ -297,6 +370,7 @@ int main()
     TestDownDirectionSymmetry();
     TestRightCensoring();
     TestIndependentDHypothesesAndEntryExcursion();
+    TestExcursionStopsAtLaterD();
     TestMultipleIndependentCandidatesSurviveLongPaths();
     TestRetainedStateSurvivesActualTG3Pruning();
 

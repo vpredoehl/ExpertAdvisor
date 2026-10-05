@@ -1091,7 +1091,12 @@ private:
         pendingObservations_.push_back({eventSequence, observationPosition});
         const auto inserted = pendingObservationsBySequence_.emplace(
             eventSequence, std::prev(pendingObservations_.end()));
-        assert(inserted.second);
+        if (!inserted.second)
+        {
+            pendingObservations_.pop_back();
+            throw std::logic_error(
+                "duplicate pending observation event sequence");
+        }
     }
 
     void RemovePendingObservation(

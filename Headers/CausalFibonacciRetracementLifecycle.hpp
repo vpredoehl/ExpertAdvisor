@@ -63,6 +63,17 @@ struct EntryExcursion
     std::optional<double> maximumAdverseExcursion;
     std::optional<double> maximumFavorableExcursionABRanges;
     std::optional<double> maximumAdverseExcursionABRanges;
+
+    // Snapshot of the completed post-entry path strictly before the D candle.
+    // These fields let offline stop sweeps distinguish a stop crossed before D
+    // from a stop crossed on the same OHLC candle as D, where intrabar ordering
+    // is unknowable.
+    std::optional<double> preDHighestHigh;
+    std::optional<double> preDLowestLow;
+    std::optional<double> preDMaximumFavorableExcursion;
+    std::optional<double> preDMaximumAdverseExcursion;
+    std::optional<double> preDMaximumFavorableExcursionABRanges;
+    std::optional<double> preDMaximumAdverseExcursionABRanges;
 };
 
 struct Record
@@ -380,6 +391,31 @@ private:
         // inventing intrabar ordering on the confirmation candle.
         if (!excursion.entry.has_value() || bar <= excursion.entry->bar)
             return;
+
+        // Excursion statistics are trade-path measurements for this tracker's
+        // D hypothesis. Once D has been reached, later candles are post-exit
+        // and must not alter MFE/MAE. Include the D candle itself because the
+        // trade remains active until the target is reached.
+        if (record_.firstDReached.has_value() &&
+            bar > record_.firstDReached->bar)
+            return;
+
+        // Snapshot the path before consuming the D candle itself. The normal
+        // excursion fields below intentionally include the D candle.
+        if (record_.firstDReached.has_value() &&
+            bar == record_.firstDReached->bar)
+        {
+            excursion.preDHighestHigh = excursion.highestHigh;
+            excursion.preDLowestLow = excursion.lowestLow;
+            excursion.preDMaximumFavorableExcursion =
+                excursion.maximumFavorableExcursion;
+            excursion.preDMaximumAdverseExcursion =
+                excursion.maximumAdverseExcursion;
+            excursion.preDMaximumFavorableExcursionABRanges =
+                excursion.maximumFavorableExcursionABRanges;
+            excursion.preDMaximumAdverseExcursionABRanges =
+                excursion.maximumAdverseExcursionABRanges;
+        }
 
         excursion.highestHigh = !excursion.highestHigh.has_value()
             ? candle.high : std::max(*excursion.highestHigh, candle.high);
