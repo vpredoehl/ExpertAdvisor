@@ -329,6 +329,20 @@ TOOLS = [
         },
     },
     {
+        "name": "list_catalog_children",
+        "description": "Return one deterministic, metadata-only page of direct indexed catalog child scopes and source files. This operation never returns source text, excerpts, search results, or semantic conclusions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "minLength": 1},
+                "cursor": {"type": "string", "minLength": 1},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 32},
+            },
+            "required": ["scope"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "discover_relationship_paths",
         "description": "Return deterministic shortest structural call paths within one direct indexed directory scope. This metadata-only operation returns no source text or behavioral evidence; use investigate_relationship_chain_claim or another bounded evidentiary investigation before behavioral claims.",
         "inputSchema": {
@@ -416,6 +430,7 @@ TOOLS = [
 TOOL_PROFILES: dict[str, tuple[str, ...]] = {
     "full": tuple(tool["name"] for tool in TOOLS),
     "codex_assisted": (
+        "list_catalog_children",
         "discover_catalog_targets",
         "discover_relationship_paths",
         "discover_operation_relationship_paths",

@@ -62,6 +62,7 @@ def main() -> None:
     assisted_names = listed_names(assisted, 3)
     assert assisted_names == list(TOOL_PROFILES["codex_assisted"])
     assert assisted_names == [
+        "list_catalog_children",
         "discover_catalog_targets", "discover_relationship_paths",
         "discover_operation_relationship_paths",
         "investigate_source_claim", "investigate_source_bundle_claim",
@@ -77,14 +78,17 @@ def main() -> None:
         assert rejected["result"]["content"][0]["text"] == f"unsupported tool: {hidden}"
 
     assisted.iface = RecordingInterface()
+    children = call(assisted, 5, "list_catalog_children", {"scope": "SchedulerCore"})
+    assert children["result"]["isError"] is False
+    assert assisted.iface.requests == [{"op": "list_catalog_children", "scope": "SchedulerCore"}]
     discovery = call(assisted, 5, "discover_catalog_targets", {
         "scope": "SchedulerCore", "query_groups": [["checkpoint", "analysis"]],
     })
     assert discovery["result"]["isError"] is False
-    assert assisted.iface.requests == [{
+    assert assisted.iface.requests[-1] == {
         "op": "discover_catalog_targets", "scope": "SchedulerCore",
         "query_groups": [["checkpoint", "analysis"]],
-    }]
+    }
     paths = call(assisted, 5, "discover_relationship_paths", {
         "scope": "SchedulerCore", "from": "A", "to": "B", "max_hops": 1,
     })

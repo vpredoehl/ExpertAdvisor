@@ -36,6 +36,7 @@ def main() -> None:
     assert "investigate_relationship_chain_claim" in payload["operations"]
     assert "investigate_relationship_set_claim" in payload["operations"]
     assert "discover_catalog_targets" in payload["operations"]
+    assert "list_catalog_children" in payload["operations"]
     assert "discover_relationship_paths" in payload["operations"]
     assert "investigate_symbol" in payload["operations"]
     assert "investigate_subsystem" in payload["operations"]

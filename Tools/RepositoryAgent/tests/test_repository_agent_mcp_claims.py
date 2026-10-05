@@ -15,6 +15,7 @@ def main():
     assert SERVER_INFO["version"]=="1.12.0"
     assert list(TOOL_PROFILES["full"]) == [item["name"] for item in TOOLS]
     assert TOOL_PROFILES["codex_assisted"] == (
+        "list_catalog_children",
         "discover_catalog_targets", "discover_relationship_paths",
         "discover_operation_relationship_paths",
         "investigate_source_claim", "investigate_source_bundle_claim",
@@ -22,7 +23,18 @@ def main():
         "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim", "investigate_symbol", "investigate_subsystem",
     )
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","discover_catalog_targets","discover_relationship_paths","discover_operation_relationship_paths","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_operation_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","list_catalog_children","discover_catalog_targets","discover_relationship_paths","discover_operation_relationship_paths","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_operation_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
+    children=next(x for x in TOOLS if x["name"]=="list_catalog_children")
+    assert children["inputSchema"] == {
+        "type":"object",
+        "properties":{
+            "scope":{"type":"string","minLength":1},
+            "cursor":{"type":"string","minLength":1},
+            "limit":{"type":"integer","minimum":1,"maximum":32},
+        },
+        "required":["scope"],
+        "additionalProperties":False,
+    }
     discovery=next(x for x in TOOLS if x["name"]=="discover_catalog_targets")
     discovery_schema=discovery["inputSchema"]
     assert discovery_schema["additionalProperties"] is False

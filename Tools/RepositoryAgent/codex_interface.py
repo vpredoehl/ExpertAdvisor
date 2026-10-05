@@ -8,11 +8,15 @@ a shell, access the database, run builds/tests, or mutate Git.
 from __future__ import annotations
 
 import argparse
+import base64
 from collections import deque
 from dataclasses import asdict
+import hashlib
+import hmac
 import json
 from pathlib import Path
 import re
+import secrets
 from typing import Any
 
 from expertadvisor_agent import list_files, read_file, search
@@ -54,6 +58,11 @@ MAX_DISCOVERY_CANDIDATE_FILES = 16
 MAX_DISCOVERY_CANDIDATE_SYMBOLS = 16
 MAX_DISCOVERY_TOTAL_CANDIDATES = 24
 MAX_DISCOVERY_QUERY_TERMS = 4
+# Catalog navigation returns only immediate indexed metadata children.  This is
+# deliberately independent of query discovery: it lets an assisted caller
+# reach a narrow scope without turning catalog navigation into broad search.
+MAX_CATALOG_CHILDREN_PAGE = 32
+DEFAULT_CATALOG_CHILDREN_PAGE = 16
 
 # Relationship-path discovery is intentionally a very small metadata-only
 # graph walk.  These are admission limits, not truncation limits: exceeding
@@ -71,6 +80,10 @@ class CodexRepositoryInterface:
         self._ledger_path = ledger_path
         self._claim_ledger_path = claim_ledger_path
         self._claim_runtime = claim_runtime
+        # Cursor authentication is process-local.  A cursor is a capability
+        # for one deterministic pagination session, not a reusable catalog
+        # locator across server instances.
+        self._catalog_cursor_secret = secrets.token_bytes(32)
 
     def _idx(self) -> RepositoryIndex:
         if self._index is None:
@@ -101,6 +114,7 @@ class CodexRepositoryInterface:
                 "investigate_relationship_set_claim",
                 "investigate_operation_relationship_claim",
                 "discover_catalog_targets",
+                "list_catalog_children",
                 "discover_relationship_paths",
                 "discover_operation_relationship_paths",
                 "investigate_symbol",
@@ -280,6 +294,7 @@ class CodexRepositoryInterface:
         if op == "investigate_relationship_set_claim": return self._investigate_relationship_set_claim(request)
         if op == "investigate_operation_relationship_claim": return self._investigate_operation_relationship_claim(request)
         if op == "discover_catalog_targets": return self._discover_catalog_targets(request)
+        if op == "list_catalog_children": return self._list_catalog_children(request)
         if op == "discover_relationship_paths": return self._discover_relationship_paths(request)
         if op == "discover_operation_relationship_paths": return self._discover_operation_relationship_paths(request)
         if op == "investigate_symbol": return self._investigate_symbol(request)
@@ -328,19 +343,26 @@ class CodexRepositoryInterface:
             token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", expanded)
         }
 
-    def _resolve_discovery_scope(self, requested: str) -> tuple[str, list[str]]:
-        """Resolve an exact directory or unique directory basename from index paths."""
+    def _catalog_files(self) -> list[str]:
+        """Return canonical indexed paths without reading repository source."""
         try:
             files = sorted({str(file) for file in self._idx().files})
         except (AttributeError, TypeError, ValueError) as exc:
             raise ValueError("repository catalog is unavailable") from exc
         if len(files) > MAX_DISCOVERY_CATALOG_FILES:
             raise ValueError("repository catalog exceeds the maximum indexed file count")
-        directories: set[str] = set()
         for file in files:
             path = Path(file)
             if path.is_absolute() or not path.parent.parts:
                 raise ValueError("repository catalog contains malformed file metadata")
+        return files
+
+    def _resolve_discovery_scope(self, requested: str) -> tuple[str, list[str]]:
+        """Resolve an exact directory or unique directory basename from index paths."""
+        files = self._catalog_files()
+        directories: set[str] = set()
+        for file in files:
+            path = Path(file)
             for depth in range(1, len(path.parts)):
                 directories.add(Path(*path.parts[:depth]).as_posix())
                 if len(directories) > MAX_DISCOVERY_CATALOG_DIRECTORIES:
@@ -363,6 +385,111 @@ class CodexRepositoryInterface:
         if not scoped_files:
             raise ValueError("discovery scope contains no indexed source files")
         return resolved, scoped_files
+
+    @staticmethod
+    def _catalog_children_limit(value: Any) -> int:
+        if value is None:
+            return DEFAULT_CATALOG_CHILDREN_PAGE
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("limit must be an integer")
+        if not 1 <= value <= MAX_CATALOG_CHILDREN_PAGE:
+            raise ValueError(
+                f"limit must be between 1 and {MAX_CATALOG_CHILDREN_PAGE}"
+            )
+        return value
+
+    @staticmethod
+    def _catalog_identity(files: list[str]) -> str:
+        """Fingerprint only canonical catalog metadata for cursor coherence."""
+        encoded = json.dumps(files, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _encode_catalog_cursor(self, *, scope: str, catalog_identity: str, offset: int) -> str:
+        payload = {
+            "catalog_identity": catalog_identity,
+            "offset": offset,
+            "scope": scope,
+            "version": 1,
+        }
+        encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        signature = hmac.new(self._catalog_cursor_secret, encoded, hashlib.sha256).digest()
+        return (
+            base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+            + "."
+            + base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+        )
+
+    def _decode_catalog_cursor(self, value: Any, *, scope: str,
+                               catalog_identity: str, child_count: int) -> int:
+        if not isinstance(value, str) or not value:
+            raise ValueError("cursor must be a non-empty catalog cursor")
+        try:
+            encoded_part, signature_part = value.split(".", 1)
+            padded_payload = encoded_part + "=" * (-len(encoded_part) % 4)
+            padded_signature = signature_part + "=" * (-len(signature_part) % 4)
+            encoded = base64.urlsafe_b64decode(padded_payload.encode("ascii"))
+            signature = base64.urlsafe_b64decode(padded_signature.encode("ascii"))
+            expected = hmac.new(self._catalog_cursor_secret, encoded, hashlib.sha256).digest()
+            payload = json.loads(encoded.decode("utf-8"))
+        except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("cursor is malformed or unknown") from exc
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("cursor is malformed or unknown")
+        if not isinstance(payload, dict) or set(payload) != {
+            "catalog_identity", "offset", "scope", "version",
+        }:
+            raise ValueError("cursor is malformed or unknown")
+        if (payload["version"] != 1 or payload["scope"] != scope
+                or payload["catalog_identity"] != catalog_identity):
+            raise ValueError("cursor is stale or incompatible")
+        offset = payload["offset"]
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 < offset < child_count:
+            raise ValueError("cursor is malformed or unknown")
+        return offset
+
+    def _list_catalog_children(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Return one authenticated, metadata-only page of direct catalog children."""
+        self._require_exact_fields(request, {"op", "scope", "cursor", "limit"})
+        requested_scope = self._discovery_scope(request.get("scope"))
+        scope, scoped_files = self._resolve_discovery_scope(requested_scope)
+        files = self._catalog_files()
+        scope_path = Path(scope)
+        child_scopes: set[str] = set()
+        for file in files:
+            path = Path(file)
+            try:
+                relative = path.relative_to(scope_path)
+            except ValueError:
+                continue
+            if len(relative.parts) > 1:
+                child_scopes.add((scope_path / relative.parts[0]).as_posix())
+        children = (
+            [("scope", value) for value in sorted(child_scopes)]
+            + [("source_file", value) for value in sorted(scoped_files)]
+        )
+        catalog_identity = self._catalog_identity(files)
+        limit = self._catalog_children_limit(request.get("limit"))
+        offset = 0 if "cursor" not in request else self._decode_catalog_cursor(
+            request["cursor"], scope=scope, catalog_identity=catalog_identity,
+            child_count=len(children),
+        )
+        page = children[offset:offset + limit]
+        next_offset = offset + len(page)
+        return {
+            "schema_version": 1,
+            "mode": "bounded_catalog_children",
+            "evidentiary_status": "non_evidentiary",
+            "resolved_scope": scope,
+            "catalog_identity": catalog_identity,
+            "limit": limit,
+            "total_child_count": len(children),
+            "children": [{"kind": kind, "identity": identity} for kind, identity in page],
+            "next_cursor": (
+                self._encode_catalog_cursor(
+                    scope=scope, catalog_identity=catalog_identity, offset=next_offset,
+                ) if next_offset < len(children) else None
+            ),
+        }
 
     def _discover_catalog_targets(self, request: dict[str, Any]) -> dict[str, Any]:
         """Return a bounded, non-evidentiary catalog view from structural metadata.
