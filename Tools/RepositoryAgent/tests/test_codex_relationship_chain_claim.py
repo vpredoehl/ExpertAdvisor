@@ -14,6 +14,7 @@ stub.read_file = lambda name, start=1, end=200: "stub source"
 sys.modules.setdefault("expertadvisor_agent", stub)
 
 from ..codex_interface import CodexRepositoryInterface
+from ..claim_evidence import VerifiedClaimLedger
 from ..repository_index import CallSite, FunctionBoundary
 
 
@@ -29,6 +30,11 @@ class FakeRuntime:
     def verify_bundle_claim(self, topic, claim, items):
         self.calls.append(("bundle", items))
         return {"supports": True, "establishes": "bundle evidence establishes claim",
+                "reason": "test", "model_turns": 1}
+
+    def verify_relationship_bundle_claim(self, topic, claim, relationships):
+        self.calls.append(("relationship", relationships))
+        return {"supports": True, "establishes": "relationship evidence establishes claim",
                 "reason": "test", "model_turns": 1}
 
 
@@ -92,8 +98,8 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
 
-        # Every hop is structural before the source is reread. Two effective
-        # ranges use the existing bundle verifier, never a chain-specific one.
+        # Every hop is structural before the source is reread. The verifier gets
+        # each caller/callee paired only with server-selected reread evidence.
         runtime = FakeRuntime()
         index = FakeIndex({
             ("A", "B"): [edge("Sources/A.cpp", 30, "A", "B")],
@@ -110,9 +116,41 @@ def main():
             {"file": "Sources/B.cpp", "start": 48, "end": 72},
         ]
         assert manifest["route"] == "multi_range"
-        assert result["verification"]["manifest"]["mode"] == "targeted_source_bundle_claim"
-        assert runtime.calls[0][0] == "bundle"
+        assert result["verification"]["manifest"]["mode"] == "relationship_aware_claim"
+        assert runtime.calls[0][0] == "relationship"
+        checked = runtime.calls[0][1]
+        assert [(item["caller"], item["callee"]) for item in checked] == [("A", "B"), ("B", "C")]
+        assert [(item["file"], item["start"], item["end"]) for item in checked[0]["evidence"]] == [("Sources/A.cpp", 18, 42)]
+        assert [(item["file"], item["start"], item["end"]) for item in checked[1]["evidence"]] == [("Sources/B.cpp", 48, 72)]
         assert iface.claim_reads == [("Sources/A.cpp", 18, 42), ("Sources/B.cpp", 48, 72)]
+
+        # A relationship-aware ledger hit is keyed separately from a generic
+        # bundle decision, avoids a second verifier call, and still rereads all
+        # exact source ranges before lookup.
+        repeat = iface.dispatch(request())
+        assert repeat["verification"]["verdict"]["bundle_ledger_hit"] is True
+        assert len(runtime.calls) == 1
+        assert iface.claim_reads == [
+            ("Sources/A.cpp", 18, 42), ("Sources/B.cpp", 48, 72),
+            ("Sources/A.cpp", 18, 42), ("Sources/B.cpp", 48, 72),
+        ]
+
+        # A generic rejected bundle with identical source cannot alias the
+        # relationship-aware ledger identity.
+        generic_runtime = FakeRuntime()
+        generic_iface = make(index, generic_runtime, root, "generic-rejected")
+        generic_ledger = VerifiedClaimLedger(root / "generic-rejected.json")
+        generic_items = [
+            {"file": "Sources/A.cpp", "start": 18, "end": 42,
+             "excerpt": "Sources/A.cpp:18-42: independently reread source"},
+            {"file": "Sources/B.cpp", "start": 48, "end": 72,
+             "excerpt": "Sources/B.cpp:48-72: independently reread source"},
+        ]
+        generic_ledger.record_bundle_decision("chain-topic", request()["claim"], generic_items,
+                                              {"supports": False, "establishes": "", "reason": "old generic rejection"})
+        generic_result = generic_iface.dispatch(request())
+        assert generic_result["verification"]["verdict"]["supports"] is True
+        assert generic_runtime.calls[0][0] == "relationship"
 
         # A missing later hop fails the complete chain before evidence rereads.
         runtime = FakeRuntime()
@@ -204,7 +242,7 @@ def main():
         ]
         assert result["selection_manifest"]["normalization"]["duplicate_candidate_range_count"] == 1
         assert result["selection_manifest"]["route"] == "single_range"
-        assert runtime.calls[0][0] == "single"
+        assert runtime.calls[0][0] == "relationship"
 
         # Same-function candidates merge, while touching different functions do not.
         same_file = "Sources/Merged.cpp"

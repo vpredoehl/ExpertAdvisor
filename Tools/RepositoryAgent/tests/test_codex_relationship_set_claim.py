@@ -38,6 +38,10 @@ class FakeRuntime:
         self.calls.append(("bundle", items))
         return self._verdict()
 
+    def verify_relationship_bundle_claim(self, topic, claim, relationships):
+        self.calls.append(("relationship", relationships))
+        return self._verdict()
+
 
 class FakeIndex:
     def __init__(self, edges, boundaries=None):
@@ -105,7 +109,7 @@ def main():
         root = Path(td)
 
         # Basic fan-out retains caller-supplied relationship provenance while
-        # routing two selected ranges through the existing bundle verifier.
+        # the server pairs every selected relationship with its exact evidence.
         runtime = FakeRuntime()
         index = FakeIndex({
             ("A", "B"): [edge("Sources/A.cpp", 30, "A", "B")],
@@ -119,8 +123,12 @@ def main():
         assert [(item["relationship_index"], item["caller"], item["callee"])
                 for item in manifest["relationships"]] == [(0, "A", "B"), (1, "A", "C")]
         assert manifest["route"] == "multi_range"
-        assert result["verification"]["manifest"]["mode"] == "targeted_source_bundle_claim"
-        assert runtime.calls[0][0] == "bundle"
+        assert result["verification"]["manifest"]["mode"] == "relationship_aware_claim"
+        assert runtime.calls[0][0] == "relationship"
+        checked = runtime.calls[0][1]
+        assert [(item["caller"], item["callee"]) for item in checked] == [("A", "B"), ("A", "C")]
+        assert [(item["file"], item["start"], item["end"]) for item in checked[0]["evidence"]] == [("Sources/A.cpp", 18, 42)]
+        assert [(item["file"], item["start"], item["end"]) for item in checked[1]["evidence"]] == [("Sources/C.cpp", 48, 72)]
         assert iface.claim_reads == [("Sources/A.cpp", 18, 42), ("Sources/C.cpp", 48, 72)]
 
         # Fan-in is equally valid; the set is not required to be a chain.
@@ -133,7 +141,7 @@ def main():
             {"caller": "B", "callee": "D"}, {"caller": "C", "callee": "D"},
         ], topic_id="fan-in"))
         assert result["selection_manifest"]["selection_status"] == "selected"
-        assert runtime.calls[0][0] == "bundle"
+        assert runtime.calls[0][0] == "relationship"
 
         # Three-way fan-out is supported without deriving any relationships.
         runtime = FakeRuntime()
@@ -209,7 +217,7 @@ def main():
         assert all(item["candidate_range_count"] == 1 for item in manifest["relationships"])
         assert manifest["selected_ranges"] == [{"file": shared, "start": 28, "end": 52}]
         assert manifest["normalization"]["duplicate_candidate_range_count"] == 1
-        assert manifest["route"] == "single_range" and runtime.calls[0][0] == "single"
+        assert manifest["route"] == "single_range" and runtime.calls[0][0] == "relationship"
 
         # Same-function overlap/touching merges; distinct-function touching
         # windows remain distinct evidence items.

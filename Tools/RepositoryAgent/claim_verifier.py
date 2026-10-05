@@ -38,6 +38,41 @@ Return exactly one JSON object and no markdown:
 }
 """
 
+# This is intentionally a separate mode, rather than a relaxation of the
+# ordinary bundle verifier.  The controller supplies this only after it has
+# selected and reread every direct indexed relationship evidence range.
+RELATIONSHIP_CLAIM_VERIFY_SYSTEM = r"""
+You are an independent source-claim verifier for an explicitly admitted set of
+direct caller-to-callee relationships.
+
+Judge only whether the exact supplied source ranges directly establish the
+proposed claim and every listed direct relationship.
+
+Rules:
+- Use only the supplied exact source ranges. Structural-index metadata alone is
+  not semantic evidence.
+- Verify every listed caller->callee call independently from its associated
+  exact source range(s).
+- A directly syntactically visible call is sufficient to establish that one
+  direct structural relationship.
+- All listed relationships must be source-visible for the complete chain/set
+  claim to be supported. Do not infer missing edges.
+- Do not require an additional data-flow or control-flow handoff between
+  separate direct call edges merely because they form a call chain.
+- Do not infer that an unqualified callee identifies a particular qualified
+  implementation unless the supplied relationship identity and source directly
+  establish that identity.
+- Judge the proposed claim as written. If it is broader than the exact source,
+  reject it rather than silently weakening it.
+
+Return exactly one JSON object and no markdown:
+{
+  "supports": true | false,
+  "establishes": "precise source-grounded statement, or empty if unsupported",
+  "reason": "brief explanation"
+}
+"""
+
 
 def _topic_text(topic) -> str:
     if isinstance(topic, dict):
@@ -155,6 +190,51 @@ def verify_source_bundle_claim_semantics(model, tokenizer, topic, claim, items):
     )
 
 
+def verify_relationship_bundle_claim_semantics(model, tokenizer, topic, claim, relationships):
+    """Verify controller-owned direct-edge/evidence associations.
+
+    Unlike an ordinary bundle, one effective reread range may prove more than
+    one admitted edge.  The associations are rendered by the server, never
+    accepted from an MCP request.
+    """
+    if not relationships or len(relationships) > 5:
+        return {"supports": False, "establishes": "", "reason": "relationship bundle unavailable", "model_turns": 0}
+    blocks = []
+    for index, relationship in enumerate(relationships, start=1):
+        evidence = relationship.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            return {"supports": False, "establishes": "", "reason": "relationship evidence unavailable", "model_turns": 0}
+        ranges = []
+        for item in evidence:
+            ranges.append(
+                f"RANGE {item['file']}:{int(item['start'])}-{int(item['end'])}\n{item['excerpt']}"
+            )
+        blocks.append(
+            f"RELATIONSHIP {index}: {relationship['caller']} -> {relationship['callee']}\n"
+            "ASSOCIATED EXACT SOURCE RANGE(S):\n" + "\n\n".join(ranges)
+        )
+    messages = [
+        {"role": "system", "content": RELATIONSHIP_CLAIM_VERIFY_SYSTEM},
+        {"role": "user", "content": (
+            f"TOPIC: {_topic_text(topic)}\n\nPROPOSED CLAIM:\n{str(claim).strip()}\n\n"
+            "SERVER-SELECTED RELATIONSHIP EVIDENCE:\n" + "\n\n".join(blocks)
+            + "\n\nReturn the claim verification JSON now."
+        )},
+    ]
+    model_turns = 1
+    raw = run_generation(model, tokenizer, messages, max_tokens=360)
+    obj = extract_json_object(raw)
+    if not isinstance(obj, dict):
+        retry = messages + [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": "Return exactly one complete valid JSON object matching the requested schema."},
+        ]
+        model_turns += 1
+        raw = run_generation(model, tokenizer, retry, max_tokens=360)
+        obj = extract_json_object(raw)
+    return _finish_verdict(obj, "relationship claim verifier did not return valid JSON after one retry", model_turns=model_turns)
+
+
 class LazyClaimVerifierRuntime:
     """Lazy, reusable MLX runtime. stdout is never available to corrupt MCP framing."""
 
@@ -188,4 +268,11 @@ class LazyClaimVerifierRuntime:
         with contextlib.redirect_stdout(sys.stderr):
             return verify_source_bundle_claim_semantics(
                 self.model, self.tokenizer, topic, claim, items
+            )
+
+    def verify_relationship_bundle_claim(self, topic, claim, relationships):
+        self._ensure_loaded()
+        with contextlib.redirect_stdout(sys.stderr):
+            return verify_relationship_bundle_claim_semantics(
+                self.model, self.tokenizer, topic, claim, relationships
             )

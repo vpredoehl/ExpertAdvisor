@@ -754,6 +754,75 @@ class CodexRepositoryInterface:
         }
         return {"manifest": manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
 
+    def _investigate_relationship_bundle_claim(
+        self, topic_id: str, topic: str, claim: str,
+        ranges: list[dict[str, int | str]],
+        admitted_relationships: list[tuple[str, str, list[dict[str, Any]]]],
+    ) -> dict[str, Any]:
+        """Reread selected ranges and verify server-built direct-edge mappings.
+
+        This internal-only path deliberately has no request schema.  Its mapping
+        is constructed from direct indexed edges and normalized effective ranges,
+        so an MCP caller cannot attach an edge to an arbitrary excerpt.
+        """
+        # Relationship evidence may normalize to one range while still proving
+        # several independently admitted direct edges.  The relationship
+        # selector already enforced the same 500-line/non-overlap/cap rules.
+        if not 1 <= len(ranges) <= MAX_BUNDLE_RANGES:
+            raise ValueError("relationship evidence requires 1-8 source ranges")
+        items = [self._claim_item(spec) for spec in ranges]
+        items.sort(key=lambda item: (item["file"], item["start"], item["end"]))
+        requested_count = len(items)
+        relationship_items: list[dict[str, Any]] = []
+        ledger_relationships: list[dict[str, Any]] = []
+        for caller, callee, candidates in admitted_relationships:
+            evidence = []
+            for candidate in candidates:
+                matching = [item for item in items if (
+                    item["file"] == candidate["file"]
+                    and int(item["start"]) <= int(candidate["start"])
+                    and int(item["end"]) >= int(candidate["end"])
+                )]
+                if len(matching) != 1:
+                    # This can only be an internal normalization violation; do
+                    # not initialize a verifier if the source association is
+                    # not exact and unambiguous.
+                    return {
+                        "manifest": {"schema_version": 1, "mode": "relationship_aware_claim", "evidence": [], "relationships": []},
+                        "answer": "Not established by the supplied source: relationship evidence mapping was unavailable.",
+                        "verdict": {"supports": False, "establishes": "", "reason": "relationship evidence mapping was unavailable", "model_turns": 0, "verifier_error": True},
+                    }
+                if matching[0] not in evidence:
+                    evidence.append(matching[0])
+            evidence.sort(key=lambda item: (item["file"], item["start"], item["end"]))
+            relationship_items.append({"caller": caller, "callee": callee, "evidence": evidence})
+            ledger_relationships.append({
+                "caller": caller, "callee": callee,
+                "evidence": [{"file": item["file"], "start": item["start"], "end": item["end"], "source_sha256": source_hash(item["excerpt"])} for item in evidence],
+            })
+        ledger = self._claim_ledger()
+        cached = ledger.lookup_relationship_bundle(topic_id, claim, ledger_relationships)
+        if cached is None:
+            verdict = self._validate_verdict(
+                self._claim_verifier().verify_relationship_bundle_claim(topic, claim, relationship_items)
+            )
+            ledger.record_relationship_bundle_decision(topic_id, claim, ledger_relationships, verdict)
+        else:
+            verdict = cached
+        ledger_hit = verdict.get("bundle_ledger_hit") is True
+        manifest = {
+            "schema_version": 1,
+            "mode": "relationship_aware_claim",
+            "topic_id": topic_id,
+            "topic": topic,
+            "claim": claim,
+            "evidence": [{"file": item["file"], "start": item["start"], "end": item["end"], "source_sha256": source_hash(item["excerpt"])} for item in items],
+            "relationships": ledger_relationships,
+            "verification": {"supports": verdict.get("supports") is True, "ledger_hit": ledger_hit, "model_turns": int(verdict.get("model_turns", 0))},
+            "metrics": {"requested_range_count": requested_count, "effective_range_count": len(items), "repository_read_count": len(items), "unrelated_topic_count": 0, "model_turn_count": int(verdict.get("model_turns", 0)), "ledger_hit": ledger_hit},
+        }
+        return {"manifest": manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
+
     def _relationship_direct_edges(self, caller: str, callee: str) -> tuple[dict[str, Any], list[tuple[str, int, str, str]]]:
         """Validate and canonically select direct structural edges for one hop."""
         raw_edges = self._idx().relationship(caller, callee)
@@ -1088,6 +1157,7 @@ class CodexRepositoryInterface:
             "selection_status": "not_run",
         }
         candidates: list[dict[str, Any]] = []
+        admitted_relationships: list[tuple[str, str, list[dict[str, Any]]]] = []
         first_failure: str | None = None
         for hop_index, (caller, callee) in enumerate(zip(path, path[1:])):
             direct, direct_edges = self._relationship_direct_edges(caller, callee)
@@ -1107,6 +1177,7 @@ class CodexRepositoryInterface:
                     first_failure = candidate_status
             else:
                 candidates.extend(hop_candidates)
+                admitted_relationships.append((caller, callee, hop_candidates))
 
         if first_failure is not None:
             manifest["selection_status"] = first_failure
@@ -1122,17 +1193,9 @@ class CodexRepositoryInterface:
             return self._chain_selection_not_run(manifest)
         manifest["route"] = "single_range" if len(ranges) == 1 else "multi_range"
 
-        verification_request: dict[str, Any] = {
-            "topic_id": topic_id,
-            "topic": topic,
-            "claim": claim,
-        }
-        if len(ranges) == 1:
-            verification_request.update(ranges[0])
-            verification = self._investigate_source_claim(verification_request)
-        else:
-            verification_request["ranges"] = ranges
-            verification = self._investigate_source_bundle_claim(verification_request)
+        verification = self._investigate_relationship_bundle_claim(
+            topic_id, topic, claim, ranges, admitted_relationships
+        )
         return {
             "selection_manifest": manifest,
             "verification": verification,
@@ -1213,6 +1276,7 @@ class CodexRepositoryInterface:
             "selection_status": "not_run",
         }
         candidates: list[dict[str, Any]] = []
+        admitted_relationships: list[tuple[str, str, list[dict[str, Any]]]] = []
         first_failure: str | None = None
         # Complete the structural pass for every caller-supplied pair before
         # entering either source verifier, even if an earlier pair failed.
@@ -1235,6 +1299,7 @@ class CodexRepositoryInterface:
                     first_failure = candidate_status
             else:
                 candidates.extend(relationship_candidates)
+                admitted_relationships.append((caller, callee, relationship_candidates))
 
         if first_failure is not None:
             manifest["selection_status"] = first_failure
@@ -1250,17 +1315,9 @@ class CodexRepositoryInterface:
             return self._relationship_selection_not_run(manifest)
         manifest["route"] = "single_range" if len(ranges) == 1 else "multi_range"
 
-        verification_request: dict[str, Any] = {
-            "topic_id": topic_id,
-            "topic": topic,
-            "claim": claim,
-        }
-        if len(ranges) == 1:
-            verification_request.update(ranges[0])
-            verification = self._investigate_source_claim(verification_request)
-        else:
-            verification_request["ranges"] = ranges
-            verification = self._investigate_source_bundle_claim(verification_request)
+        verification = self._investigate_relationship_bundle_claim(
+            topic_id, topic, claim, ranges, admitted_relationships
+        )
         return {
             "selection_manifest": manifest,
             "verification": verification,

@@ -62,6 +62,7 @@ class VerifiedClaimLedger:
         self.path = Path(path)
         self.records: dict[str, dict] = {}
         self.bundle_records: dict[str, dict] = {}
+        self.relationship_bundle_records: dict[str, dict] = {}
         # Symbol investigations intentionally have a separate namespace from
         # caller-proposed claims.  A controller must never be able to create a
         # claim-ledger entry that aliases a server-owned symbol explanation.
@@ -132,6 +133,21 @@ class VerifiedClaimLedger:
             sort_keys=True,
             separators=(",", ":"),
         )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _relationship_bundle_identity(cls, topic_id, claim, relationships) -> dict:
+        return {
+            "operation": "relationship_bundle_claim",
+            "topic_id": str(topic_id),
+            "claim_sha256": claim_hash(claim),
+            "relationships": relationships,
+            **cls._verification_identity(),
+        }
+
+    @classmethod
+    def _relationship_bundle_key(cls, topic_id, claim, relationships) -> str:
+        canonical = json.dumps(cls._relationship_bundle_identity(topic_id, claim, relationships), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @classmethod
@@ -207,12 +223,15 @@ class VerifiedClaimLedger:
             return
         records = obj.get("records", {})
         bundles = obj.get("bundle_records", {})
+        relationship_bundles = obj.get("relationship_bundle_records", {})
         symbol_investigations = obj.get("symbol_investigation_records", {})
         subsystem_investigations = obj.get("subsystem_investigation_records", {})
         if isinstance(records, dict):
             self.records = {str(k): v for k, v in records.items() if isinstance(v, dict)}
         if isinstance(bundles, dict):
             self.bundle_records = {str(k): v for k, v in bundles.items() if isinstance(v, dict)}
+        if isinstance(relationship_bundles, dict):
+            self.relationship_bundle_records = {str(k): v for k, v in relationship_bundles.items() if isinstance(v, dict)}
         if isinstance(symbol_investigations, dict):
             self.symbol_investigation_records = {
                 str(k): v for k, v in symbol_investigations.items()
@@ -230,6 +249,7 @@ class VerifiedClaimLedger:
             "verification_identity": self._verification_identity(),
             "records": self.records,
             "bundle_records": self.bundle_records,
+            "relationship_bundle_records": self.relationship_bundle_records,
             "symbol_investigation_records": self.symbol_investigation_records,
             "subsystem_investigation_records": self.subsystem_investigation_records,
         }
@@ -345,6 +365,32 @@ class VerifiedClaimLedger:
             "reason": str(verdict.get("reason", "")).strip(),
             "status": status,
             **self._verification_identity(),
+        }
+        self._save()
+
+    def lookup_relationship_bundle(self, topic_id, claim, relationships):
+        key = self._relationship_bundle_key(topic_id, claim, relationships)
+        record = self.relationship_bundle_records.get(key)
+        expected = self._relationship_bundle_identity(topic_id, claim, relationships)
+        if not isinstance(record, dict) or not self._record_identity_matches(record):
+            return None
+        if any(record.get(name) != value for name, value in expected.items()):
+            return None
+        return self._cached(record, bundle=True)
+
+    def record_relationship_bundle_decision(self, topic_id, claim, relationships, verdict) -> None:
+        key = self._relationship_bundle_key(topic_id, claim, relationships)
+        status = self._status(verdict)
+        existing = self.relationship_bundle_records.get(key)
+        if isinstance(existing, dict) and existing.get("status") == CLAIM_ACCEPTED and status in {CLAIM_INDETERMINATE, CLAIM_VERIFIER_ERROR}:
+            return
+        identity = self._relationship_bundle_identity(topic_id, claim, relationships)
+        self.relationship_bundle_records[key] = {
+            **identity,
+            "claim": normalize_claim(claim),
+            "establishes": str(verdict.get("establishes", "")).strip() if status == CLAIM_ACCEPTED else "",
+            "reason": str(verdict.get("reason", "")).strip(),
+            "status": status,
         }
         self._save()
 

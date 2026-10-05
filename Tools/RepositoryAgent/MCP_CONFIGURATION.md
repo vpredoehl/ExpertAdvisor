@@ -33,6 +33,16 @@ retain their deterministic manifests, server-owned evidence selection where
 applicable, exact rereads, evidence identities, and ledger behavior. The
 lower-level primitives remain available in `full` for development/debugging.
 
+Relationship-chain and relationship-set investigations use a relationship-aware
+semantic-verification request after structural selection. The server associates
+each admitted `caller -> callee` identity with only the normalized exact source
+range(s) it selected and reread for that direct call. The verifier must confirm
+each direct source-visible call independently; it does not require an inferred
+data-flow/control-flow handoff between separate chain edges. These association
+records are server-owned, appear in the bounded investigation manifest, and are
+included in a distinct claim-ledger identity, so generic bundle decisions cannot
+be reused for relationship-aware verification.
+
 `discover_catalog_targets` is a deterministic, index-metadata-only catalog
 selector. It requires one normalized directory scope (or an unambiguous
 directory basename) and 1–4 canonicalized identifier-term groups (1–4 terms
