@@ -359,8 +359,65 @@ static void TestRetainedStateSurvivesActualTG3Pruning()
     assert(retained.GetRecord().retracement0382.reached);
 }
 
+
+
+static void TestDTerminatesLaterLifecycleEvolution()
+{
+    const auto ab = UpAB();
+    Fib::Tracker tracker(ab, 1.1600);
+
+    // Begin at availability, matching the tracker's normal causal lifetime.
+    tracker.AddCompletedBar(
+        ab.identity.availabilityBar,
+        C(ab.identity.availabilityTimestamp,
+          1.1000, 1.1100, 1.0900, 1.1000));
+
+    const std::size_t dBar = ab.identity.availabilityBar + 1;
+    tracker.AddCompletedBar(
+        dBar, C(800, 1.1500, 1.1700, 1.1450, 1.1650));
+
+    const Fib::Record& atD = tracker.GetRecord();
+    assert(atD.firstDReached);
+    assert(atD.firstDReached->bar == dBar);
+
+    // These post-D candles would otherwise traverse the retracement/A region.
+    // They must advance stream validation only, without evolving lifecycle.
+    tracker.AddCompletedBar(
+        dBar + 1, C(900, 1.0400, 1.0500, 0.9900, 1.0000));
+    tracker.AddCompletedBar(
+        dBar + 2, C(1000, 1.0500, 1.0700, 0.9800, 1.0600));
+
+    const Fib::Record& afterD = tracker.GetRecord();
+    assert(afterD.firstDReached);
+    assert(afterD.firstDReached->bar == dBar);
+
+    for (const Fib::LevelState* level : {&afterD.retracement0382,
+                                         &afterD.retracement0500,
+                                         &afterD.retracement0618})
+    {
+        assert(!level->reached);
+        assert(!level->firstDirectionalClose);
+        assert(!level->firstDirectionalBreak);
+        assert(!level->firstCloseBackThroughLevel);
+    }
+
+    assert(!afterD.directionalClose0382.entry);
+    assert(!afterD.directionalBreak0382.entry);
+    assert(!afterD.closeBackThrough0382.entry);
+    assert(!afterD.directionalClose0500.entry);
+    assert(!afterD.directionalBreak0500.entry);
+    assert(!afterD.closeBackThrough0500.entry);
+    assert(!afterD.directionalClose0618.entry);
+    assert(!afterD.directionalBreak0618.entry);
+    assert(!afterD.closeBackThrough0618.entry);
+
+    assert(!afterD.firstAPenetration);
+    assert(!afterD.firstCloseBeyondA);
+}
+
 int main()
 {
+    TestDTerminatesLaterLifecycleEvolution();
     TestRetracementPrices();
     TestProgressiveRetracementAndRally();
     TestAllRetracementsAndNoSameBarConfirmation();

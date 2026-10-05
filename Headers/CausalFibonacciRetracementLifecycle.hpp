@@ -164,6 +164,15 @@ public:
         if (candle.timestamp < identity.availabilityTimestamp)
             return;
 
+        // D is terminal for this D-specific lifecycle candidate. Keep
+        // accepting consecutive bars for stream validation, but freeze all
+        // lifecycle state after the completed candle that first reached D.
+        // The D candle itself is still processed, preserving same-candle
+        // coincidences as ambiguous completed-bar observations.
+        if (record_.firstDReached.has_value() &&
+            bar > record_.firstDReached->bar)
+            return;
+
         ObserveStructuralEvents(bar, candle);
 
         ObserveLevel(record_.retracement0382, bar, candle);
