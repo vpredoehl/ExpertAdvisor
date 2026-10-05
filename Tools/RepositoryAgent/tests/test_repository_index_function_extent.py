@@ -24,6 +24,36 @@ int Demo::recursive(int value)
         return recursive(value - 1);
     return value;
 }
+
+int RunSchedulerOnce()
+{
+    return 0;
+}
+
+int RunCheckpointEvalAnalyzeJobs()
+{
+    return 0;
+}
+
+int RunScheduler()
+{
+    SchedulerOperations operations;
+    operations.runCycle = [&] { return RunSchedulerOnce(); };
+    operations.runCheckpointAnalysis = [&] {
+        return RunCheckpointEvalAnalyzeJobs();
+    };
+    return 0;
+}
+
+int SchedulerCycleService::runOnce()
+{
+    return operations_.runCheckpointAnalysis();
+}
+
+int RunProductionSchedulerDaemon()
+{
+    return RunScheduler();
+}
 """
 
 def main():
@@ -74,6 +104,26 @@ def main():
         assert [(x.line, x.caller, x.callee) for x in recursive_edges] == [
             (18, "Demo::recursive", "recursive")
         ], recursive_edges
+
+        # The real SchedulerCore operation-field pattern is indexed as an
+        # operation binding, never as a direct lexical-owner relationship.
+        callback_edges = idx.callees_of("RunScheduler")
+        assert [(x.callee, x.relationship_kind) for x in callback_edges] == [
+            ("RunSchedulerOnce", "operation_binding"),
+            ("RunCheckpointEvalAnalyzeJobs", "operation_binding"),
+        ], callback_edges
+        assert idx.relationship("RunScheduler", "RunSchedulerOnce") == []
+        assert idx.relationship("RunScheduler", "RunCheckpointEvalAnalyzeJobs") == []
+        operation_invocations = idx.callees_of("SchedulerCycleService::runOnce")
+        assert [(x.callee, x.relationship_kind, x.operation) for x in operation_invocations] == [
+            ("operations_.runCheckpointAnalysis", "operation_invocation", "operations_.runCheckpointAnalysis")
+        ], operation_invocations
+        direct_scheduler_edge = idx.relationship(
+            "RunProductionSchedulerDaemon", "RunScheduler"
+        )
+        assert [(x.callee, x.relationship_kind) for x in direct_scheduler_edge] == [
+            ("RunScheduler", "direct_invocation")
+        ], direct_scheduler_edge
 
         print("REPOSITORY INDEX FUNCTION EXTENT TEST: PASS")
     finally:

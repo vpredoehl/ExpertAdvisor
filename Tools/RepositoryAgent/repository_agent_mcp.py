@@ -247,6 +247,21 @@ TOOLS = [
         },
     },
     {
+        "name": "investigate_operation_relationship_claim",
+        "description": "Select and verify one server-indexed scheduler operation binding or operation invocation. An operation binding is never reported as a direct call, and an invocation identifies the operation field rather than guessing its bound target.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"}, "topic": {"type": "string"},
+                "claim": {"type": "string"}, "caller": {"type": "string"},
+                "callee": {"type": "string"},
+                "relationship_kind": {"type": "string", "enum": ["operation_binding", "operation_invocation"]},
+            },
+            "required": ["topic_id", "topic", "claim", "caller", "callee", "relationship_kind"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "investigate_relationship_chain_claim",
         "description": "Structurally validate every adjacent hop of a caller-supplied acyclic 3-5 symbol direct-call chain, then semantically verify only the server-selected exact reread evidence. Repeated symbols are rejected; Qwen cannot discover paths, search, select ranges, or navigate the repository.",
         "inputSchema": {
@@ -329,6 +344,21 @@ TOOLS = [
         },
     },
     {
+        "name": "discover_operation_relationship_paths",
+        "description": "Return deterministic, metadata-only operation bindings or one-hop operation-field invocations within one direct directory scope. This never reports either relationship as a direct call and does not infer runtime timing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "minLength": 1}, "from": {"type": "string", "minLength": 1},
+                "to": {"type": "string", "minLength": 1},
+                "max_hops": {"type": "integer", "minimum": 1, "maximum": 4},
+                "relationship_kind": {"type": "string", "enum": ["operation_binding", "operation_invocation"]},
+            },
+            "required": ["scope", "from", "to", "max_hops", "relationship_kind"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "investigate_symbol",
         "description": "Resolve one exact indexed symbol and run a bounded server-owned source investigation. The server selects and rereads all evidence; Qwen cannot select files, ranges, or relationships.",
         "inputSchema": {
@@ -388,9 +418,11 @@ TOOL_PROFILES: dict[str, tuple[str, ...]] = {
     "codex_assisted": (
         "discover_catalog_targets",
         "discover_relationship_paths",
+        "discover_operation_relationship_paths",
         "investigate_source_claim",
         "investigate_source_bundle_claim",
         "investigate_relationship_claim",
+        "investigate_operation_relationship_claim",
         "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim",
         "investigate_symbol",

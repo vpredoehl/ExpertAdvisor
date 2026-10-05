@@ -99,8 +99,10 @@ class CodexRepositoryInterface:
                 "investigate_source_claim", "investigate_source_bundle_claim",
                 "investigate_relationship_claim", "investigate_relationship_chain_claim",
                 "investigate_relationship_set_claim",
+                "investigate_operation_relationship_claim",
                 "discover_catalog_targets",
                 "discover_relationship_paths",
+                "discover_operation_relationship_paths",
                 "investigate_symbol",
                 "investigate_subsystem",
             ],
@@ -276,8 +278,10 @@ class CodexRepositoryInterface:
         if op == "investigate_relationship_claim": return self._investigate_relationship_claim(request)
         if op == "investigate_relationship_chain_claim": return self._investigate_relationship_chain_claim(request)
         if op == "investigate_relationship_set_claim": return self._investigate_relationship_set_claim(request)
+        if op == "investigate_operation_relationship_claim": return self._investigate_operation_relationship_claim(request)
         if op == "discover_catalog_targets": return self._discover_catalog_targets(request)
         if op == "discover_relationship_paths": return self._discover_relationship_paths(request)
+        if op == "discover_operation_relationship_paths": return self._discover_operation_relationship_paths(request)
         if op == "investigate_symbol": return self._investigate_symbol(request)
         if op == "investigate_subsystem": return self._investigate_subsystem(request)
         raise ValueError(f"unsupported operation: {op!r}")
@@ -487,14 +491,17 @@ class CodexRepositoryInterface:
             )
         return value
 
-    def _discover_relationship_paths(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _discover_relationship_paths(self, request: dict[str, Any], *, relationship_kind: str = "direct_invocation", mode: str = "bounded_relationship_path_discovery", allow_kind_field: bool = False) -> dict[str, Any]:
         """Discover bounded shortest structural paths without reading source.
 
         Function boundaries and call sites are index metadata, not evidence.
         In particular, an unqualified call site only contributes an edge when
         its short name identifies exactly one indexed function globally.
         """
-        self._require_exact_fields(request, {"op", "scope", "from", "to", "max_hops"})
+        expected_fields = {"op", "scope", "from", "to", "max_hops"}
+        if allow_kind_field:
+            expected_fields.add("relationship_kind")
+        self._require_exact_fields(request, expected_fields)
         requested_scope = self._discovery_scope(request.get("scope"))
         from_requested = self._required_string(request, "from")
         to_requested = self._required_string(request, "to")
@@ -563,6 +570,14 @@ class CodexRepositoryInterface:
                     site_caller, site_callee, site_file = str(site.caller), str(site.callee), str(site.file)
                 except (AttributeError, TypeError, ValueError) as exc:
                     raise ValueError("repository relationship metadata contains malformed call edge") from exc
+                # Callback bodies are structurally indexed for navigation, but
+                # their calls are not direct invocations by the lexical owner.
+                # Every RepositoryIndex-produced call site carries this
+                # metadata. Missing, malformed, or future kinds must not enter
+                # a reported direct-call path.
+                site_kind = getattr(site, "relationship_kind", None)
+                if site_kind != relationship_kind:
+                    continue
                 # The index has short-name convenience aliases; never use them
                 # as graph edges, and never let an out-of-scope edge enter.
                 if site_caller != caller or site_file not in scoped_file_set or not site_callee:
@@ -620,7 +635,7 @@ class CodexRepositoryInterface:
 
         return {
             "schema_version": 1,
-            "mode": "bounded_relationship_path_discovery",
+            "mode": mode,
             "evidentiary_status": "non_evidentiary",
             "required_follow_up": (
                 "Use investigate_relationship_chain_claim or another bounded evidentiary "
@@ -629,6 +644,87 @@ class CodexRepositoryInterface:
             "resolved_scope": scope,
             "from": start,
             "to": target,
+            "max_hops": max_hops,
+            "paths": paths,
+            "path_count": len(paths),
+            "caps": {
+                "max_hops": MAX_RELATIONSHIP_PATH_HOPS,
+                "visited_nodes": MAX_RELATIONSHIP_PATH_VISITED_NODES,
+                "examined_edges": MAX_RELATIONSHIP_PATH_EXAMINED_EDGES,
+                "returned_paths": MAX_RELATIONSHIP_PATH_RESULTS,
+            },
+        }
+
+    def _discover_operation_relationship_paths(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Discover only one explicit operation relationship category.
+
+        This does not alter the direct-call graph: operation binding is a
+        source-visible assignment of a one-call lambda, never an invocation.
+        Operation invocations use callable-field identities rather than guessed
+        function targets and therefore are not path-traversable.
+        """
+        self._require_exact_fields(request, {"op", "scope", "from", "to", "max_hops", "relationship_kind"})
+        kind = self._required_string(request, "relationship_kind")
+        if kind == "operation_invocation":
+            return self._discover_operation_invocation(request)
+        if kind != "operation_binding":
+            raise ValueError("relationship_kind must be operation_binding or operation_invocation for operation relationship path discovery")
+        # The direct routine owns all endpoint uniqueness, scope, cap, and
+        # materialization rules; this endpoint only changes the admitted kind.
+        return self._discover_relationship_paths(
+            request, relationship_kind=kind,
+            mode="bounded_operation_relationship_path_discovery",
+            allow_kind_field=True,
+        )
+
+    def _discover_operation_invocation(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Discover one field invocation without treating the field as a function.
+
+        Callable operation fields are deliberately not function definitions, so
+        they cannot use the multi-hop function graph.  This remains bounded
+        metadata-only discovery and returns the exact indexed field identity
+        which the operation-claim endpoint accepts unchanged.
+        """
+        requested_scope = self._discovery_scope(request.get("scope"))
+        caller = self._required_string(request, "from")
+        field = self._required_string(request, "to")
+        max_hops = self._relationship_path_max_hops(request.get("max_hops"))
+        if max_hops != 1:
+            raise ValueError("operation invocation discovery requires max_hops=1")
+        scope, scoped_files = self._resolve_discovery_scope(requested_scope)
+        scoped_file_set = set(scoped_files)
+        boundaries = list(self._idx().functions)
+        caller_definitions = [boundary for boundary in boundaries
+                              if boundary.name == caller]
+        if len(caller_definitions) != 1:
+            raise ValueError("operation invocation caller must identify exactly one function")
+        if caller_definitions[0].file not in scoped_file_set:
+            raise ValueError("operation invocation caller is outside resolved scope")
+        try:
+            raw_sites = self._idx().callees_of(caller)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("repository relationship metadata is unavailable") from exc
+        if not isinstance(raw_sites, list):
+            raise ValueError("repository relationship metadata is malformed")
+        if len(raw_sites) > MAX_RELATIONSHIP_PATH_EXAMINED_EDGES:
+            raise ValueError("relationship path examined-edge cap exceeded")
+        matching = [site for site in raw_sites
+                    if getattr(site, "relationship_kind", None) == "operation_invocation"
+                    and str(getattr(site, "caller", "")) == caller
+                    and str(getattr(site, "callee", "")) == field
+                    and str(getattr(site, "file", "")) in scoped_file_set]
+        paths = [[caller, field]] if matching else []
+        return {
+            "schema_version": 1,
+            "mode": "bounded_operation_relationship_path_discovery",
+            "evidentiary_status": "non_evidentiary",
+            "required_follow_up": (
+                "Use investigate_operation_relationship_claim before making "
+                "repository-derived behavioral claims."
+            ),
+            "resolved_scope": scope,
+            "from": caller,
+            "to": field,
             "max_hops": max_hops,
             "paths": paths,
             "path_count": len(paths),
@@ -823,9 +919,74 @@ class CodexRepositoryInterface:
         }
         return {"manifest": manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
 
-    def _relationship_direct_edges(self, caller: str, callee: str) -> tuple[dict[str, Any], list[tuple[str, int, str, str]]]:
+    @staticmethod
+    def _proof_source_hash(excerpt: str) -> str:
+        """Hash source as the index sees it, tolerating reader line prefixes."""
+        normalized = "\n".join(re.sub(r"^\s*\d+\s*(?::|\|)\s?", "", line)
+                               for line in str(excerpt).splitlines())
+        return source_hash(normalized)
+
+    def _investigate_positional_operation_binding_claim(
+        self, topic_id: str, topic: str, claim: str, proof: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Verify a positional binding from declaration plus whole initializer."""
+        required = {"relationship_kind", "caller", "callee", "operation", "aggregate_type",
+                    "aggregate_fields", "declaration", "initializer"}
+        if not isinstance(proof, dict) or not required <= set(proof):
+            return {"manifest": {"schema_version": 1, "mode": "positional_operation_binding_claim", "evidence": []},
+                    "answer": "Not established by the supplied source: positional operation proof was unavailable.",
+                    "verdict": {"supports": False, "establishes": "", "reason": "positional operation proof was unavailable", "model_turns": 0, "verifier_error": True}}
+        ranges = [proof["declaration"], proof["initializer"]]
+        if any(not isinstance(item, dict) for item in ranges):
+            raise ValueError("positional operation proof ranges are malformed")
+        items = [self._claim_item({key: item[key] for key in ("file", "start", "end")}) for item in ranges]
+        # The index selected exact source text.  A changed source must never be
+        # verified against stale structural slot provenance.
+        if any(self._proof_source_hash(item["excerpt"]) != spec.get("selection_source_sha256")
+               for item, spec in zip(items, ranges)):
+            return {"manifest": {"schema_version": 1, "mode": "positional_operation_binding_claim",
+                                 "evidence": [{"file": item["file"], "start": item["start"], "end": item["end"], "source_sha256": source_hash(item["excerpt"])} for item in items]},
+                    "answer": "Not established by the supplied source: positional operation source changed after structural selection.",
+                    "verdict": {"supports": False, "establishes": "", "reason": "positional operation source changed after structural selection", "model_turns": 0}}
+        relationship = {
+            "relationship_kind": proof["relationship_kind"], "caller": proof["caller"],
+            "callee": proof["callee"], "operation": proof["operation"],
+            "aggregate_type": proof["aggregate_type"], "aggregate_fields": list(proof["aggregate_fields"]),
+        }
+        relationship_for_verifier = {**relationship, "evidence": items}
+        ledger = self._claim_ledger()
+        verdict = ledger.lookup_positional_operation_binding(topic_id, claim, relationship, items)
+        if verdict is None:
+            verdict = self._validate_verdict(self._claim_verifier().verify_positional_operation_binding_claim(
+                topic, claim, relationship_for_verifier
+            ))
+            ledger.record_positional_operation_binding_decision(topic_id, claim, relationship, items, verdict)
+        ledger_hit = verdict.get("bundle_ledger_hit") is True
+        manifest = {
+            "schema_version": 1, "mode": "positional_operation_binding_claim",
+            "topic_id": topic_id, "topic": topic, "claim": claim,
+            "relationship": relationship,
+            "evidence": [{"file": item["file"], "start": item["start"], "end": item["end"],
+                          "source_sha256": source_hash(item["excerpt"])} for item in items],
+            "verification": {"supports": verdict.get("supports") is True, "ledger_hit": ledger_hit,
+                             "model_turns": int(verdict.get("model_turns", 0))},
+            "metrics": {"requested_range_count": 2, "effective_range_count": 2,
+                        "repository_read_count": 2, "unrelated_topic_count": 0,
+                        "model_turn_count": int(verdict.get("model_turns", 0)), "ledger_hit": ledger_hit},
+        }
+        return {"manifest": manifest, "answer": self._render_claim_answer(verdict), "verdict": verdict}
+
+    def _relationship_direct_edges(self, caller: str, callee: str, relationship_kind: str = "direct_invocation") -> tuple[dict[str, Any], list[tuple[str, int, str, str]]]:
         """Validate and canonically select direct structural edges for one hop."""
-        raw_edges = self._idx().relationship(caller, callee)
+        if relationship_kind == "direct_invocation":
+            raw_edges = self._idx().relationship(caller, callee)
+        else:
+            try:
+                raw_edges = [edge for edge in self._idx().callees_of(caller)
+                             if getattr(edge, "relationship_kind", None) == relationship_kind
+                             and str(getattr(edge, "callee", "")) == callee]
+            except (AttributeError, TypeError, ValueError):
+                raw_edges = []
         edges: dict[tuple[str, int, str, str], tuple[str, int]] = {}
         valid_edge_count = 0
         invalid_edge_count = 0
@@ -848,8 +1009,21 @@ class CodexRepositoryInterface:
             normalized_caller = "" if edge_caller is None else str(edge_caller)
             normalized_callee = "" if edge_callee is None else str(edge_callee)
             if "::" in callee and normalized_callee != callee:
-                qualified_mismatch_edge_count += 1
-                continue
+                # Discovery resolves an unqualified textual member call only
+                # when its short name denotes exactly one indexed definition.
+                # Claim selection must canonicalize by the same unique rule,
+                # rather than rejecting the discovery identity later.
+                if "::" not in normalized_callee:
+                    definitions = [boundary for boundary in self._idx().functions
+                                   if boundary.name.split("::")[-1] == normalized_callee]
+                    if len(definitions) == 1 and definitions[0].name == callee:
+                        normalized_callee = callee
+                    else:
+                        qualified_mismatch_edge_count += 1
+                        continue
+                else:
+                    qualified_mismatch_edge_count += 1
+                    continue
             valid_edge_count += 1
             key = (file, normalized_line, normalized_caller, normalized_callee)
             edges[key] = (file, normalized_line)
@@ -1001,13 +1175,13 @@ class CodexRepositoryInterface:
             status = "selected"
         return {"selection_status": status, "normalization": normalization}, public_effective
 
-    def _select_relationship_ranges(self, caller: str, callee: str) -> tuple[dict[str, Any], list[dict[str, int | str]]]:
+    def _select_relationship_ranges(self, caller: str, callee: str, relationship_kind: str = "direct_invocation") -> tuple[dict[str, Any], list[dict[str, int | str]]]:
         """Select bounded relationship evidence from structural navigation only.
 
         The index is deliberately not evidence: each selected range is later read
         again by the existing claim-investigation path before any semantic call.
         """
-        direct, direct_edges = self._relationship_direct_edges(caller, callee)
+        direct, direct_edges = self._relationship_direct_edges(caller, callee, relationship_kind)
         manifest: dict[str, Any] = {
             "schema_version": 1,
             "mode": "direct_relationship_range_selection",
@@ -1026,6 +1200,8 @@ class CodexRepositoryInterface:
             "route": "not_run",
             "selection_status": direct["selection_status"],
         }
+        if relationship_kind != "direct_invocation":
+            manifest["relationship_kind"] = relationship_kind
         if direct["selection_status"] != "selected":
             return manifest, []
         candidate_status, candidates = self._relationship_candidate_ranges(direct_edges)
@@ -1087,6 +1263,61 @@ class CodexRepositoryInterface:
             "verification": verification,
             "answer": verification["answer"],
         }
+
+    def _investigate_operation_relationship_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Verify one operation binding or invocation from server-selected ranges."""
+        self._require_exact_fields(
+            request, {"op", "topic_id", "topic", "claim", "caller", "callee", "relationship_kind"}
+        )
+        kind = self._required_string(request, "relationship_kind")
+        if kind not in {"operation_binding", "operation_invocation"}:
+            raise ValueError("relationship_kind must be operation_binding or operation_invocation")
+        topic_id = self._required_string(request, "topic_id")
+        topic = self._required_string(request, "topic")
+        claim = self._required_string(request, "claim")
+        caller = self._required_string(request, "caller")
+        callee = self._required_string(request, "callee")
+        selection_manifest, ranges = self._select_relationship_ranges(caller, callee, kind)
+        if selection_manifest["selection_status"] != "selected":
+            return self._relationship_selection_not_run(selection_manifest)
+        # Positional aggregate edges require source-visible declaration and
+        # initializer proof.  Named assignments and field invocations retain
+        # the established local-range behavior.
+        proof = None
+        if kind == "operation_binding":
+            proof_method = getattr(self._idx(), "positional_operation_binding_proof", None)
+            if callable(proof_method):
+                proof = proof_method(caller, callee)
+        if proof is not None:
+            proof_ranges = [proof["declaration"], proof["initializer"]]
+            selection_manifest.update({
+                "mode": "positional_operation_binding_range_selection",
+                "candidate_range_count": 2,
+                "effective_range_count": 2,
+                "selected_ranges": [
+                    {key: item[key] for key in ("file", "start", "end")}
+                    for item in proof_ranges
+                ],
+                "route": "positional_operation_binding_bundle",
+                "positional_operation_binding": {
+                    "operation": proof["operation"],
+                    "aggregate_type": proof["aggregate_type"],
+                    "aggregate_fields": list(proof["aggregate_fields"]),
+                },
+            })
+            verification = self._investigate_positional_operation_binding_claim(
+                topic_id, topic, claim, proof
+            )
+            return {"selection_manifest": selection_manifest, "verification": verification,
+                    "answer": verification["answer"]}
+        verification_request: dict[str, Any] = {"topic_id": topic_id, "topic": topic, "claim": claim}
+        if len(ranges) == 1:
+            verification_request.update(ranges[0])
+            verification = self._investigate_source_claim(verification_request)
+        else:
+            verification_request["ranges"] = ranges
+            verification = self._investigate_source_bundle_claim(verification_request)
+        return {"selection_manifest": selection_manifest, "verification": verification, "answer": verification["answer"]}
 
     def _required_relationship_chain_path(self, request: dict[str, Any]) -> list[str]:
         """Validate an explicit acyclic chain; this operation never discovers one."""

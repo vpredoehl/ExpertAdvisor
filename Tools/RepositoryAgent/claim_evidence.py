@@ -63,6 +63,9 @@ class VerifiedClaimLedger:
         self.records: dict[str, dict] = {}
         self.bundle_records: dict[str, dict] = {}
         self.relationship_bundle_records: dict[str, dict] = {}
+        # Positional aggregate bindings are deliberately disjoint from generic
+        # relationship bundles: their identity includes slot/schema proof.
+        self.positional_operation_binding_records: dict[str, dict] = {}
         # Symbol investigations intentionally have a separate namespace from
         # caller-proposed claims.  A controller must never be able to create a
         # claim-ledger entry that aliases a server-owned symbol explanation.
@@ -224,6 +227,7 @@ class VerifiedClaimLedger:
         records = obj.get("records", {})
         bundles = obj.get("bundle_records", {})
         relationship_bundles = obj.get("relationship_bundle_records", {})
+        positional_bindings = obj.get("positional_operation_binding_records", {})
         symbol_investigations = obj.get("symbol_investigation_records", {})
         subsystem_investigations = obj.get("subsystem_investigation_records", {})
         if isinstance(records, dict):
@@ -232,6 +236,10 @@ class VerifiedClaimLedger:
             self.bundle_records = {str(k): v for k, v in bundles.items() if isinstance(v, dict)}
         if isinstance(relationship_bundles, dict):
             self.relationship_bundle_records = {str(k): v for k, v in relationship_bundles.items() if isinstance(v, dict)}
+        if isinstance(positional_bindings, dict):
+            self.positional_operation_binding_records = {
+                str(k): v for k, v in positional_bindings.items() if isinstance(v, dict)
+            }
         if isinstance(symbol_investigations, dict):
             self.symbol_investigation_records = {
                 str(k): v for k, v in symbol_investigations.items()
@@ -250,6 +258,7 @@ class VerifiedClaimLedger:
             "records": self.records,
             "bundle_records": self.bundle_records,
             "relationship_bundle_records": self.relationship_bundle_records,
+            "positional_operation_binding_records": self.positional_operation_binding_records,
             "symbol_investigation_records": self.symbol_investigation_records,
             "subsystem_investigation_records": self.subsystem_investigation_records,
         }
@@ -387,6 +396,65 @@ class VerifiedClaimLedger:
         identity = self._relationship_bundle_identity(topic_id, claim, relationships)
         self.relationship_bundle_records[key] = {
             **identity,
+            "claim": normalize_claim(claim),
+            "establishes": str(verdict.get("establishes", "")).strip() if status == CLAIM_ACCEPTED else "",
+            "reason": str(verdict.get("reason", "")).strip(),
+            "status": status,
+        }
+        self._save()
+
+    @classmethod
+    def _positional_operation_binding_identity(
+        cls, topic_id, claim, relationship, members,
+    ) -> dict:
+        return {
+            "operation": "positional_operation_binding_claim",
+            "topic_id": str(topic_id),
+            "claim_sha256": claim_hash(claim),
+            "relationship_kind": str(relationship["relationship_kind"]),
+            "caller": str(relationship["caller"]),
+            "callee": str(relationship["callee"]),
+            "operation_field": str(relationship["operation"]),
+            "aggregate_type": str(relationship["aggregate_type"]),
+            "aggregate_fields": list(relationship["aggregate_fields"]),
+            "members": members,
+            **cls._verification_identity(),
+        }
+
+    @classmethod
+    def _positional_operation_binding_key(cls, *args) -> str:
+        return hashlib.sha256(json.dumps(
+            cls._positional_operation_binding_identity(*args),
+            sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+
+    def lookup_positional_operation_binding(self, topic_id, claim, relationship, candidates):
+        members = self._bundle_members(candidates)
+        args = (topic_id, claim, relationship, members)
+        record = self.positional_operation_binding_records.get(
+            self._positional_operation_binding_key(*args)
+        )
+        expected = self._positional_operation_binding_identity(*args)
+        if (
+            not isinstance(record, dict)
+            or not self._record_identity_matches(record)
+            or any(record.get(name) != value for name, value in expected.items())
+        ):
+            return None
+        return self._cached(record, bundle=True)
+
+    def record_positional_operation_binding_decision(
+        self, topic_id, claim, relationship, candidates, verdict,
+    ) -> None:
+        members = self._bundle_members(candidates)
+        args = (topic_id, claim, relationship, members)
+        key = self._positional_operation_binding_key(*args)
+        status = self._status(verdict)
+        existing = self.positional_operation_binding_records.get(key)
+        if isinstance(existing, dict) and existing.get("status") == CLAIM_ACCEPTED and status in {CLAIM_INDETERMINATE, CLAIM_VERIFIER_ERROR}:
+            return
+        self.positional_operation_binding_records[key] = {
+            **self._positional_operation_binding_identity(*args),
             "claim": normalize_claim(claim),
             "establishes": str(verdict.get("establishes", "")).strip() if status == CLAIM_ACCEPTED else "",
             "reason": str(verdict.get("reason", "")).strip(),

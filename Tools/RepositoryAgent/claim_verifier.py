@@ -235,6 +235,44 @@ def verify_relationship_bundle_claim_semantics(model, tokenizer, topic, claim, r
     return _finish_verdict(obj, "relationship claim verifier did not return valid JSON after one retry", model_turns=model_turns)
 
 
+def verify_positional_operation_binding_claim_semantics(model, tokenizer, topic, claim, relationship):
+    """Verify one positional aggregate binding with source-visible slot proof."""
+    required = {"relationship_kind", "caller", "callee", "operation", "aggregate_type", "aggregate_fields", "evidence"}
+    if not isinstance(relationship, dict) or not required <= set(relationship):
+        return {"supports": False, "establishes": "", "reason": "positional operation binding evidence unavailable", "model_turns": 0}
+    evidence = relationship["evidence"]
+    if not isinstance(evidence, list) or len(evidence) != 2:
+        return {"supports": False, "establishes": "", "reason": "positional operation binding requires declaration and initializer evidence", "model_turns": 0}
+    blocks = []
+    for item in evidence:
+        blocks.append(f"RANGE {item['file']}:{int(item['start'])}-{int(item['end'])}\n{item['excerpt']}")
+    messages = [
+        {"role": "system", "content": RELATIONSHIP_CLAIM_VERIFY_SYSTEM},
+        {"role": "user", "content": (
+            f"TOPIC: {_topic_text(topic)}\n\nPROPOSED CLAIM:\n{str(claim).strip()}\n\n"
+            "SERVER-SELECTED POSITIONAL OPERATION-BINDING IDENTITY:\n"
+            f"RELATIONSHIP KIND: {relationship['relationship_kind']}\n"
+            f"CALLER: {relationship['caller']}\nCALLEE: {relationship['callee']}\n"
+            f"OPERATION FIELD: {relationship['operation']}\n"
+            f"AGGREGATE TYPE: {relationship['aggregate_type']}\n"
+            f"DECLARED FIELD ORDER: {relationship['aggregate_fields']}\n\n"
+            "Use the source ranges—not this identity metadata—as semantic evidence. "
+            "The declaration range must visibly establish the listed field order, and the complete initializer range must visibly establish that the callable occupies the identified positional field.\n\n"
+            "SERVER-SELECTED RELATIONSHIP EVIDENCE:\n" + "\n\n".join(blocks)
+            + "\n\nReturn the claim verification JSON now."
+        )},
+    ]
+    model_turns = 1
+    raw = run_generation(model, tokenizer, messages, max_tokens=360)
+    obj = extract_json_object(raw)
+    if not isinstance(obj, dict):
+        retry = messages + [{"role": "assistant", "content": raw}, {"role": "user", "content": "Return exactly one complete valid JSON object matching the requested schema."}]
+        model_turns += 1
+        raw = run_generation(model, tokenizer, retry, max_tokens=360)
+        obj = extract_json_object(raw)
+    return _finish_verdict(obj, "positional operation binding verifier did not return valid JSON after one retry", model_turns=model_turns)
+
+
 class LazyClaimVerifierRuntime:
     """Lazy, reusable MLX runtime. stdout is never available to corrupt MCP framing."""
 
@@ -275,4 +313,11 @@ class LazyClaimVerifierRuntime:
         with contextlib.redirect_stdout(sys.stderr):
             return verify_relationship_bundle_claim_semantics(
                 self.model, self.tokenizer, topic, claim, relationships
+            )
+
+    def verify_positional_operation_binding_claim(self, topic, claim, relationship):
+        self._ensure_loaded()
+        with contextlib.redirect_stdout(sys.stderr):
+            return verify_positional_operation_binding_claim_semantics(
+                self.model, self.tokenizer, topic, claim, relationship
             )

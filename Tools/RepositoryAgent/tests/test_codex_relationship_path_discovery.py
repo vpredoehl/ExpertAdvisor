@@ -22,6 +22,9 @@ class FakeIndex:
         self.functions = functions
         self.calls_by_caller = calls
 
+    def callees_of(self, caller):
+        return list(self.calls_by_caller.get(caller, ()))
+
 
 class FakeInterface(CodexRepositoryInterface):
     def __init__(self, index):
@@ -38,6 +41,14 @@ def boundary(file, name, line=1):
 
 def edge(file, caller, callee, line=1):
     return CallSite(file, line, caller, callee)
+
+
+class LegacyCallSite:
+    def __init__(self, file, line, caller, callee):
+        self.file = file
+        self.line = line
+        self.caller = caller
+        self.callee = callee
 
 
 def request(**extra):
@@ -62,10 +73,14 @@ def make(names, calls, extra_files=()):
 
 def main():
     checkpoint = ["RunProductionSchedulerDaemon", "RunScheduler", "RunSchedulerOnce", "RunCheckpointEvalAnalyzeJobs"]
+    # The production scheduler binds both of these calls as operation
+    # callbacks.  They are real calls when the callback runs, but not direct
+    # RunScheduler/RunSchedulerOnce relationships and therefore must not form
+    # a direct-call discovery path through the lexical owner.
     checkpoint_calls = {
         checkpoint[0]: [edge("Sources/SchedulerCore/RunProductionSchedulerDaemon.cpp", checkpoint[0], checkpoint[1])],
-        checkpoint[1]: [edge("Sources/SchedulerCore/RunScheduler.cpp", checkpoint[1], checkpoint[2])],
-        checkpoint[2]: [edge("Sources/SchedulerCore/RunSchedulerOnce.cpp", checkpoint[2], checkpoint[3])],
+        checkpoint[1]: [CallSite("Sources/SchedulerCore/RunScheduler.cpp", 1, checkpoint[1], checkpoint[2], "callback_invocation")],
+        checkpoint[2]: [CallSite("Sources/SchedulerCore/RunSchedulerOnce.cpp", 1, checkpoint[2], checkpoint[3], "callback_invocation")],
     }
     result = make(checkpoint, checkpoint_calls).dispatch(request(
         **{"from": checkpoint[0], "to": checkpoint[3]}))
@@ -73,8 +88,29 @@ def main():
     assert result["evidentiary_status"] == "non_evidentiary"
     assert "investigate_relationship_chain_claim" in result["required_follow_up"]
     assert result["resolved_scope"] == "Sources/SchedulerCore"
-    assert result["paths"] == [checkpoint] and result["path_count"] == 1
+    assert result["paths"] == [] and result["path_count"] == 0
     assert result["caps"] == {"max_hops": 4, "visited_nodes": 64, "examined_edges": 512, "returned_paths": 4}
+    direct = make(checkpoint, checkpoint_calls).dispatch(request(
+        **{"from": checkpoint[0], "to": checkpoint[1], "max_hops": 1}))
+    assert direct["paths"] == [checkpoint[:2]]
+
+    # The same concrete SchedulerCore operation bindings are separately
+    # discoverable, metadata-only, and never change direct-call results.
+    operation_request = {
+        "op": "discover_operation_relationship_paths", "scope": "SchedulerCore",
+        "from": checkpoint[1], "to": checkpoint[3], "max_hops": 2,
+        "relationship_kind": "operation_binding",
+    }
+    operation_calls = {
+        checkpoint[1]: [CallSite("Sources/SchedulerCore/RunScheduler.cpp", 1, checkpoint[1], checkpoint[2], "operation_binding", "operations.runCycle")],
+        checkpoint[2]: [CallSite("Sources/SchedulerCore/RunSchedulerOnce.cpp", 1, checkpoint[2], checkpoint[3], "operation_binding", "operations.runCheckpointAnalysis")],
+    }
+    operation = make(checkpoint, operation_calls).dispatch(operation_request)
+    assert operation["mode"] == "bounded_operation_relationship_path_discovery"
+    assert operation["evidentiary_status"] == "non_evidentiary"
+    assert operation["paths"] == [checkpoint[1:]]
+    assert make(checkpoint, operation_calls).dispatch(request(
+        **{"from": checkpoint[1], "to": checkpoint[3], "max_hops": 2})) ["paths"] == []
 
     # Breadth-first traversal returns shortest paths only, in canonical order.
     names = ["A", "B", "C", "D", "Long"]
@@ -88,9 +124,16 @@ def main():
     assert equal["paths"] == [["A", "B", "D"], ["A", "C", "D"]]
     assert make(["A", "D"], {}).dispatch(request())["paths"] == []
 
+    # RepositoryIndex always records relationship_kind.  A legacy or malformed
+    # materialized edge without it cannot be promoted to a direct invocation.
+    missing_kind = make(["A", "D"], {
+        "A": [LegacyCallSite("Sources/SchedulerCore/A.cpp", 1, "A", "D")],
+    }).dispatch(request())
+    assert missing_kind["paths"] == []
+
     # Exact max-hop boundary, invalid values, and strict unknown fields.
     assert make(checkpoint, checkpoint_calls).dispatch(request(
-        **{"from": checkpoint[0], "to": checkpoint[3], "max_hops": 3}))["path_count"] == 1
+        **{"from": checkpoint[0], "to": checkpoint[3], "max_hops": 3}))["path_count"] == 0
     assert make(checkpoint, checkpoint_calls).dispatch(request(
         **{"from": checkpoint[0], "to": checkpoint[3], "max_hops": 2}))["paths"] == []
     for value in (0, 5, True, "3"):

@@ -63,8 +63,10 @@ def main() -> None:
     assert assisted_names == list(TOOL_PROFILES["codex_assisted"])
     assert assisted_names == [
         "discover_catalog_targets", "discover_relationship_paths",
+        "discover_operation_relationship_paths",
         "investigate_source_claim", "investigate_source_bundle_claim",
-        "investigate_relationship_claim", "investigate_relationship_chain_claim",
+        "investigate_relationship_claim", "investigate_operation_relationship_claim",
+        "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim", "investigate_symbol",
         "investigate_subsystem",
     ]

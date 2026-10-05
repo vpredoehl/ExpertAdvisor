@@ -16,11 +16,13 @@ def main():
     assert list(TOOL_PROFILES["full"]) == [item["name"] for item in TOOLS]
     assert TOOL_PROFILES["codex_assisted"] == (
         "discover_catalog_targets", "discover_relationship_paths",
+        "discover_operation_relationship_paths",
         "investigate_source_claim", "investigate_source_bundle_claim",
-        "investigate_relationship_claim", "investigate_relationship_chain_claim",
+        "investigate_relationship_claim", "investigate_operation_relationship_claim",
+        "investigate_relationship_chain_claim",
         "investigate_relationship_set_claim", "investigate_symbol", "investigate_subsystem",
     )
-    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","discover_catalog_targets","discover_relationship_paths","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
+    assert {"verify_source_claim","verify_source_bundle_claim","verified_claims","discover_catalog_targets","discover_relationship_paths","discover_operation_relationship_paths","investigate_source_claim","investigate_source_bundle_claim","investigate_relationship_claim","investigate_operation_relationship_claim","investigate_relationship_chain_claim","investigate_relationship_set_claim","investigate_symbol","investigate_subsystem"} <= names
     discovery=next(x for x in TOOLS if x["name"]=="discover_catalog_targets")
     discovery_schema=discovery["inputSchema"]
     assert discovery_schema["additionalProperties"] is False
@@ -42,6 +44,8 @@ def main():
         "to":{"type":"string","minLength":1},
         "max_hops":{"type":"integer","minimum":1,"maximum":4},
     }
+    operation_paths=next(x for x in TOOLS if x["name"]=="discover_operation_relationship_paths")
+    assert operation_paths["inputSchema"]["properties"]["relationship_kind"]["enum"] == ["operation_binding", "operation_invocation"]
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")
@@ -61,6 +65,8 @@ def main():
     assert relationship_schema["additionalProperties"] is False
     assert set(relationship_schema["required"]) == {"topic_id","topic","claim","caller","callee"}
     assert set(relationship_schema["properties"]) == {"topic_id","topic","claim","caller","callee"}
+    operation_relationship=next(x for x in TOOLS if x["name"]=="investigate_operation_relationship_claim")
+    assert operation_relationship["inputSchema"]["properties"]["relationship_kind"]["enum"] == ["operation_binding", "operation_invocation"]
     chain=next(x for x in TOOLS if x["name"]=="investigate_relationship_chain_claim")
     chain_schema=chain["inputSchema"]
     assert chain_schema["additionalProperties"] is False

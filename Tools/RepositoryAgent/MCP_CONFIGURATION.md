@@ -16,9 +16,11 @@ operations:
 
 - `discover_catalog_targets`
 - `discover_relationship_paths`
+- `discover_operation_relationship_paths`
 - `investigate_source_claim`
 - `investigate_source_bundle_claim`
 - `investigate_relationship_claim`
+- `investigate_operation_relationship_claim`
 - `investigate_relationship_chain_claim`
 - `investigate_relationship_set_claim`
 - `investigate_symbol`
@@ -67,6 +69,29 @@ resolved direct scope, descendant directories are excluded, and ambiguous
 unqualified call-site names do not create edges. A returned path is not
 evidence: use `investigate_relationship_chain_claim` or another bounded
 evidentiary investigation before making behavioral claims.
+
+`discover_operation_relationship_paths` is a separate metadata-only traversal
+for the deliberately narrow `operation_binding` category (assignment of a
+single-call lambda to an accepted operation field, or the declared positional
+slots of the production `CheckpointAnalysisOperations` aggregate) and one-hop
+`operation_invocation` discovery. It has the same scope and admission caps as
+direct path discovery, but never reports either relationship as a direct call
+and never establishes runtime execution.
+`investigate_operation_relationship_claim` independently rereads exact
+server-selected ranges for either an `operation_binding` or an
+`operation_invocation`. The latter names the invoked operation field (for
+example `operations_.runCheckpointAnalysis`) rather than guessing which bound
+function will run. A complete runtime bridge must therefore retain the
+binding and invocation as separate claims.
+
+For an admitted positional aggregate binding, investigation uses a distinct
+two-range relationship-aware proof: the aggregate declaration (field order)
+and the complete initializer (initializer position). Its ledger identity also
+contains the operation field and aggregate schema, so a decision for one slot
+cannot satisfy another. RepositoryAgent code is loaded from this worktree;
+`expertadvisor_agent` remains the configured read-only production-source root.
+Tests that need source-sensitive line assertions therefore supply an explicit
+reader fixture rather than assuming worktree line numbers are live MCP lines.
 
 ## Startup selection
 
