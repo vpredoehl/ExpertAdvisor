@@ -1,0 +1,15 @@
+{
+  "protocol_version": "causal-fibonacci-retracement-lifecycle-v1",
+  "symbol": "eurusdrmp",
+  "timeframe": "15m",
+  "configuration_path": "Scripts/tg4_analysis_config.frozen_v1.conf",
+  "configuration_fingerprint": "fnv1a64:bf809ce38a4a444a",
+  "baseline_commit": "04e7f3aab566d64c1699d2a304a94018e711b0e9",
+  "requested_range": "[2025-01-01T00:00:00Z,2026-01-01T00:00:00Z)",
+  "database_access": "read_only_repeatable_read",
+  "preflight_rows": 24896,
+  "streamed_rows": 24896,
+  "duplicate_timestamp_count": 0,
+  "observation_count": 12890,
+  "reproduction_command": "bash Scripts/run_causal_fibonacci_retracement_lifecycle_study.sh --output-dir Artifacts/causal-fibonacci-retracement-lifecycle-eurusd-2025 --symbol eurusdrmp --start 1735689600 --end 1767225600"
+}
