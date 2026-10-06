@@ -371,6 +371,26 @@ assert_no_equal_preemption 994060 normal
 assert_no_equal_preemption 994070 low
 assert_no_equal_preemption 994075 high infer
 
+# Ordered phase admission must enforce scheduler priority within the winning
+# phase: pending normal/train work displaces running low/train work.
+launch_and_persist 994300 9994300 train running low none '2026-03-02 11:00:00+00'
+launch_and_persist 994301 9994301 train running low none '2026-03-02 11:00:01+00'
+launch_and_persist 994302 9994302 train pending normal operator '2026-03-02 11:00:02+00'
+launch_and_persist 994303 9994303 train pending normal operator '2026-03-02 11:00:03+00'
+run_scheduler 2 0 "${test_dir}/ordered-same-phase-priority.out" --phase-priority=train:infer:analyze
+test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||resume_requested::text||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 994300 AND 994303")" = '994300:pending:true:preemption,994301:pending:true:preemption,994302:running:false:none,994303:running:false:none'
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994300,9994301) AND lifecycle_state='stopped'")" = 2
+preemption_count="$(grep -Ec 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99430[01]' "${test_dir}/ordered-same-phase-priority.out")"
+test "${preemption_count}" -eq 2
+first_admission_line="$(rg -n 'SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=99430[23]' "${test_dir}/ordered-same-phase-priority.out" | head -1 | cut -d: -f1)"
+last_preemption_line="$(rg -n 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99430[01]' "${test_dir}/ordered-same-phase-priority.out" | tail -1 | cut -d: -f1)"
+test -n "${first_admission_line}"
+test -n "${last_preemption_line}"
+test "${last_preemption_line}" -lt "${first_admission_line}"
+wait_for_state "${worker_pids[0]}" T
+wait_for_state "${worker_pids[1]}" T
+retire_all
+
 # A scheduler handoff does not rewrite historical launch ownership.  Once the
 # current owner has positively reconciled both exact workers, coordinated
 # normal/infer preemption must pause both inherited low/train workers before
