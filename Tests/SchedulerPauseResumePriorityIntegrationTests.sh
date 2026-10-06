@@ -3,6 +3,14 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:-${repo_root}/DerivedData/Development/PauseResumePriorityContinuation/Build/Products/Debug/LSTM_Release}"
+semantic_worker_registry="${LSTM_SEMANTIC_WORKER_REGISTRY:-${repo_root}/Builds/SemanticWorkers/registry.json}"
+
+read -r current_train_layout current_train_width < <(
+    /usr/bin/python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); w=[x for x in d["workers"] if x.get("worker_role")=="train" and x.get("worker_rule")=="current"]; assert len(w)==1, w; print(w[0]["semantic_layout"], w[0]["model_input_width"])' "${semantic_worker_registry}"
+)
+
+test -n "${current_train_layout}"
+test -n "${current_train_width}"
 test_db="ea_scheduler_pause_priority_${$}"
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/ea-scheduler-pause-priority.XXXXXX")"
 process_binary="${test_dir}/GlobalExperimentControlProcessTests"
@@ -104,11 +112,17 @@ run_cli() {
     LSTM_DB_NAME="${test_db}" "${scheduler_binary}" "$@"
 }
 
+run_scheduler() {
+    run_cli "$@" --analyze-worker="${process_binary}"
+}
+
 insert_pending() {
     local experiment_id="$1" phase="$2" priority="$3" updated="$4"
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
         -v experiment_id="${experiment_id}" -v phase="${phase}" \
-        -v priority="${priority}" -v updated="${updated}" <<'SQL'
+        -v priority="${priority}" -v updated="${updated}" \
+        -v current_train_width="${current_train_width}" \
+        -v current_train_layout="${current_train_layout}" <<'SQL'
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
@@ -118,7 +132,7 @@ INSERT INTO experiment(
 ) VALUES(
     :experiment_id,'priorityfixture',1,0.0008,1.0,1.0,2,1,
     '2020-01-01','2020-02-01','pending',:'phase',:'phase',
-    :experiment_id,:'priority',:'updated'::timestamptz,75,5
+    :experiment_id,:'priority',:'updated'::timestamptz,:current_train_width,:current_train_layout
 );
 SQL
 }
@@ -164,12 +178,12 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "DELETE FROM experiment WHERE experiment_id BETWEEN 860001 AND 860006"
 
 launch_worker() {
-    local experiment_id="$1" attempt_id="$2"
+    local experiment_id="$1" attempt_id="$2" phase="${3:-train}"
     local worker_link="${test_dir}/LSTM_Release_${experiment_id}"
     local ready="${test_dir}/${experiment_id}.ready"
     local identity="" pid="" pgid="" start="" executable="" command=""
     ln -sf "${process_binary}" "${worker_link}"
-    "${worker_link}" --managed-test-worker --self-session --train \
+    "${worker_link}" --managed-test-worker --self-session "--${phase}" \
         --scheduler-experiment-id="${experiment_id}" \
         --scheduler-worker-attempt-id="${attempt_id}" --ready-fd=9 \
         9>"${ready}" &
@@ -193,27 +207,32 @@ launch_worker() {
 }
 
 persist_worker() {
-    local index="$1" experiment_id="$2" attempt_id="$3"
+    local index="$1" experiment_id="$2" attempt_id="$3" phase="${4:-train}"
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
         -v experiment_id="${experiment_id}" -v attempt_id="${attempt_id}" \
         -v pid="${worker_pids[${index}]}" -v pgid="${worker_pgids[${index}]}" \
         -v start="${worker_starts[${index}]}" \
         -v executable="${worker_executables[${index}]}" \
-        -v command="${worker_commands[${index}]}" <<'SQL'
+        -v command="${worker_commands[${index}]}" \
+        -v phase="${phase}" \
+        -v current_train_width="${current_train_width}" \
+        -v current_train_layout="${current_train_layout}" <<'SQL'
 SELECT set_config('expertadvisor.scheduler_protocol_generation','52',false);
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
-    train_start,train_end,status,phase,current_operation,duplicate_nonce,
+    train_start,train_end,infer_start,infer_end,status,phase,
+    current_operation,duplicate_nonce,
     scheduler_priority,worker_pid,worker_process_group_id,
     worker_process_start_identity,worker_executable,worker_command_line,
     worker_control_state,model_input_width,
     model_input_semantic_layout_version
 ) VALUES(
     :experiment_id,'workerfixture',1,0.0008,1.0,1.0,2,1,
-    '2020-01-01','2020-02-01','running','train','train',
+    '2020-01-01','2020-02-01','2020-02-01','2020-03-01',
+    'running',:'phase',:'phase',
     :experiment_id,'low',:pid,:pgid,:'start',:'executable',:'command','running',
-    75,5
+    :current_train_width,:current_train_layout
 );
 INSERT INTO experiment_scheduler_worker_attempt(
     worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
@@ -223,21 +242,34 @@ INSERT INTO experiment_scheduler_worker_attempt(
     spawned_at,registered_at
 ) VALUES(
     :attempt_id,'pause-priority-'||:attempt_id,:experiment_id,'experiment',
-    'train','train','prior_scheduler_observed','running',
+    :'phase',:'phase','prior_scheduler_observed','running',
     :pid,:pgid,:'start',:'executable',:'command',
-    'experiment:'||:experiment_id||':train',clock_timestamp(),clock_timestamp()
+    'experiment:'||:experiment_id||':'||:'phase',
+    clock_timestamp(),clock_timestamp()
 );
 UPDATE experiment SET active_scheduler_worker_attempt_id=:attempt_id
 WHERE experiment_id=:experiment_id;
 SQL
 }
 
-launch_worker 861001 9861001
-persist_worker 0 861001 9861001
+attach_infer_model() {
+    local experiment_id="$1" model_id
+    model_id="$(psql -X -Atq -d "${test_db}" -c \
+        "INSERT INTO model(experiment_id,name,comment)
+         VALUES(${experiment_id},'pause-resume-infer-${experiment_id}',
+                'pause/resume inference fixture') RETURNING model_id")"
+    psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+        "UPDATE experiment SET last_model_id=${model_id}
+         WHERE experiment_id=${experiment_id}"
+}
+
+launch_worker 861001 9861001 infer
+persist_worker 0 861001 9861001 infer
+attach_infer_model 861001
 run_cli --scheduler-status >"${test_dir}/managed-running-status.out"
-grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,authoritative=1,detected=1,execution_state=running,lifecycle_status=running,attempt_state=running,identity_result=validated,executable_identity_match=1" \
+grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=infer,managed=1,authoritative=1,detected=0,execution_state=running,lifecycle_status=running,attempt_state=running,identity_result=validated,executable_identity_match=1" \
     "${test_dir}/managed-running-status.out"
-grep -q 'managed_train_workers=1.*managed_running_train_workers=1.*managed_paused_train_workers=0' \
+grep -q 'managed_infer_workers=1.*managed_running_infer_workers=1.*managed_paused_infer_workers=0' \
     "${test_dir}/managed-running-status.out"
 run_cli --pause-experiment=861001 --yes |
     grep -q 'new_status=paused,resume_requested=false,worker_state=stopped'
@@ -253,27 +285,28 @@ test "$(scalar "SELECT e.status||':'||e.resume_requested::text||':'||
         e.active_scheduler_worker_attempt_id WHERE e.experiment_id=861001")" = \
     "paused:false:stopped"
 test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt
-    WHERE capacity_class='train' AND lifecycle_state IN
+    WHERE capacity_class='infer' AND lifecycle_state IN
     ('reserved','spawned','running','observed','identity_ambiguous')")" = 0
 kill -0 "${worker_pids[0]}"
 run_cli --scheduler-status >"${test_dir}/managed-paused-status.out"
-grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,authoritative=1,detected=1,execution_state=stopped,lifecycle_status=paused,attempt_state=stopped,identity_result=validated,executable_identity_match=1" \
+grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=infer,managed=1,authoritative=1,detected=0,execution_state=stopped,lifecycle_status=paused,attempt_state=stopped,identity_result=validated,executable_identity_match=1" \
     "${test_dir}/managed-paused-status.out"
-grep -q 'managed_train_workers=1.*managed_running_train_workers=0.*managed_paused_train_workers=1' \
+grep -q 'managed_infer_workers=1.*managed_running_infer_workers=0.*managed_paused_infer_workers=1' \
     "${test_dir}/managed-paused-status.out"
 ! grep -q "SCHEDULER_STATUS_UNMANAGED_WORKER,pid=${worker_pids[0]}" \
     "${test_dir}/managed-paused-status.out"
 
-launch_worker 861002 9861002
-persist_worker 1 861002 9861002
+launch_worker 861002 9861002 infer
+persist_worker 1 861002 9861002 infer
+attach_infer_model 861002
 run_cli --resume-experiment=861001 --yes |
     grep -q 'queued_for_admission'
 run_cli --resume-experiment=861001 --yes |
     grep -q 'already_satisfied'
 [[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
 
-run_cli --schedule-experiments --scheduler-once \
-    --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
+run_scheduler --schedule-experiments --scheduler-once \
+    --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/full-capacity-logs" \
     >"${test_dir}/full-capacity.out"
 test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
@@ -322,8 +355,8 @@ test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
 # low-priority worker gets the next available slot without a duplicate launch.
 kill -TERM -- "-${worker_pgids[1]}"
 wait "${worker_pids[1]}" || true
-run_cli --schedule-experiments --scheduler-once \
-    --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
+run_scheduler --schedule-experiments --scheduler-once \
+    --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/resume-admission-logs" \
     >"${test_dir}/resume-admission.out"
 grep -q 'SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=861001' \
@@ -335,7 +368,7 @@ test "$(scalar "SELECT worker_pid FROM experiment
     WHERE experiment_id=861001")" = "${worker_pids[0]}"
 [[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" != T* ]]
 run_cli --scheduler-status >"${test_dir}/managed-resumed-status.out"
-grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,authoritative=1,detected=1,execution_state=running,lifecycle_status=running,attempt_state=running,identity_result=validated,executable_identity_match=1" \
+grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=infer,managed=1,authoritative=1,detected=0,execution_state=running,lifecycle_status=running,attempt_state=running,identity_result=validated,executable_identity_match=1" \
     "${test_dir}/managed-resumed-status.out"
 
 # Repeated pause is reconciliatory, and a scheduler restart observes one
@@ -343,8 +376,8 @@ grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,auth
 run_cli --pause-experiment=861001 --yes >/dev/null
 run_cli --pause-experiment=861001 --yes |
     grep -q 'worker_state=stopped'
-run_cli --schedule-experiments --scheduler-once --recover-orphans-only \
-    --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
+run_scheduler --schedule-experiments --scheduler-once --recover-orphans-only \
+    --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/stopped-restart-logs" \
     >"${test_dir}/stopped-restart.out"
 test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt
@@ -353,8 +386,8 @@ test "$(scalar "SELECT lifecycle_state FROM
     experiment_scheduler_worker_attempt WHERE experiment_id=861001")" = stopped
 
 run_cli --resume-experiment=861001 --yes >/dev/null
-run_cli --schedule-experiments --scheduler-once \
-    --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
+run_scheduler --schedule-experiments --scheduler-once \
+    --max-train-procs=0 --max-infer-procs=1 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/pre-global-admission-logs" \
     >"${test_dir}/pre-global-admission.out"
 test "$(scalar "SELECT status FROM experiment WHERE experiment_id=861001")" = \
@@ -401,7 +434,7 @@ grep -q 'expected_missing_train_workers=1' \
 ! grep -q "SCHEDULER_STATUS_UNMANAGED_WORKER,pid=${worker_pids[2]}" \
     "${test_dir}/paused-missing-status.out"
 run_cli --resume-experiment=861006 --yes >/dev/null
-run_cli --schedule-experiments --scheduler-once --recover-orphans-only \
+run_scheduler --schedule-experiments --scheduler-once --recover-orphans-only \
     --max-train-procs=0 --max-infer-procs=0 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/missing-reconcile-logs" \
     >"${test_dir}/missing-reconcile.out"
@@ -411,7 +444,7 @@ test "$(scalar "SELECT status||':'||resume_requested::text||':'||
 test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM
     experiment_scheduler_worker_attempt WHERE experiment_id=861006")" = \
     "abandoned:stopped_process_missing"
-run_cli --schedule-experiments --scheduler-once --dry-run \
+run_scheduler --schedule-experiments --scheduler-once --dry-run \
     --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/missing-fallback-logs" \
     >"${test_dir}/missing-fallback.out"

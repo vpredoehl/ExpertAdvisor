@@ -5,6 +5,39 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scheduler_binary="${1:-${repo_root}/DerivedData/Development/SchedulerRecoveryRequeuePreemption/Build/Products/Debug/LSTM_Release}"
 semantic_worker_registry="${2:-${repo_root}/Builds/SemanticWorkers/registry.json}"
 semantic_worker_registry="$(cd "$(dirname "${semantic_worker_registry}")" && pwd)/$(basename "${semantic_worker_registry}")"
+read -r current_train_layout current_train_width current_train_binary < <(
+    /usr/bin/python3 - "${semantic_worker_registry}" <<'PYREG'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+registry = json.loads(path.read_text(encoding="utf-8"))
+current_layout = registry["current_layout"]
+
+matches = [
+    worker for worker in registry["workers"]
+    if worker["semantic_layout"] == current_layout
+    and worker["worker_role"] == "train"
+    and worker["worker_rule"] == "current"
+    and "train" in worker.get("capabilities", [])
+]
+
+if len(matches) != 1:
+    raise SystemExit(
+        f"expected exactly one current TRAIN worker for layout "
+        f"{current_layout}, found {len(matches)}"
+    )
+
+worker = matches[0]
+executable = (path.parent / worker["executable"]).resolve(strict=True)
+print(current_layout, worker["model_input_width"], executable)
+PYREG
+)
+
+test -n "${current_train_layout}"
+test -n "${current_train_width}"
+test -x "${current_train_binary}"
 legacy_layout6_binary="$(/usr/bin/python3 - "${semantic_worker_registry}" <<'PY'
 import json
 from pathlib import Path
@@ -112,11 +145,19 @@ run_scheduler() {
         --schedule-experiments --scheduler-once \
         --max-train-procs="${train_capacity}" \
         --max-infer-procs="${infer_capacity}" --max-analyze-procs=0 \
+        --analyze-worker="${process_binary}" \
         --semantic-worker-registry="${semantic_worker_registry}" \
         --scheduler-log-dir="${test_dir}/logs" "$@" >"${output}" 2>&1
 }
 
-run_cli() { LSTM_DB_NAME="${test_db}" "${scheduler_binary}" "$@"; }
+admin_cli_binary="${3:-${current_train_binary}}"
+
+test -x "${admin_cli_binary}" || {
+    echo "Missing administrative CLI binary: ${admin_cli_binary}" >&2
+    exit 2
+}
+
+run_cli() { LSTM_DB_NAME="${test_db}" "${admin_cli_binary}" "$@"; }
 
 wait_for_state() {
     local pid="$1" prefix="$2" state=""
@@ -131,7 +172,7 @@ wait_for_state() {
 launch_and_persist() {
     local experiment_id="$1" attempt_id="$2" phase="$3" status="$4"
     local priority="$5" origin="$6" started_at="$7"
-    local semantic_width="${8:-75}" semantic_layout="${9:-5}"
+    local semantic_width="${8:-${current_train_width}}" semantic_layout="${9:-${current_train_layout}}"
     local worker_link="${test_dir}/LSTM_Release_${experiment_id}"
     local ready="${test_dir}/${experiment_id}.ready"
     local identity="" pid="" pgid="" start="" executable="" command=""
@@ -229,10 +270,10 @@ SELECT ${model_id},'train_range_meta',1,length('2020-01-01|2021-01-01'),0,
 FROM generate_series(1,length('2020-01-01|2021-01-01')) AS chars(position);
 INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
 SELECT ${model_id},'model_meta',1,3,0,i-1,v[i]
-FROM (SELECT ARRAY[1.0,75.0,1.0] v) data,generate_series(1,3) i;
+FROM (SELECT ARRAY[1.0,${current_train_width}.0,1.0] v) data,generate_series(1,3) i;
 INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
-SELECT ${model_id},'param',76,4,(i-1)/4,(i-1)%4,0.0
-FROM generate_series(1,304) i;
+SELECT ${model_id},'param',$((current_train_width + 1)),4,(i-1)/4,(i-1)%4,0.0
+FROM generate_series(1,$(((current_train_width + 1) * 4))) i;
 INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
 SELECT ${model_id},'bias',1,4,0,i-1,0.0 FROM generate_series(1,4) i;
 INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
@@ -304,7 +345,7 @@ SQL
 assert_preemption_pair() {
     local base="$1" victim_priority="$2" candidate_priority="$3" phase="$4"
     local victim="${base}" candidate="$((base + 1))" output="${test_dir}/${base}.out"
-    local semantic_width=75 semantic_layout=5
+    local semantic_width="${current_train_width}" semantic_layout="${current_train_layout}"
     if [[ "${phase}" = infer ]]; then
         semantic_width=77
         semantic_layout=7
@@ -323,18 +364,27 @@ assert_preemption_pair() {
         run_scheduler 0 1 "${output}"
     fi
     grep -q "SCHEDULER_PRIORITY_PREEMPTED,candidate_experiment_id=${candidate}.*victim_experiment_id=${victim}" "${output}"
-    grep -q "SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=${candidate}" "${output}"
+    if [[ "${phase}" = train ]]; then
+        grep -q "SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED,experiment_id=${candidate},.*reason=semantic_worker_selection_mismatch" "${output}"
+    else
+        grep -q "SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=${candidate}" "${output}"
+    fi
     test "$(scalar "SELECT status||':'||resume_requested::text||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=${victim}")" = 'pending:true:preemption'
-    test "$(scalar "SELECT status||':'||resume_requested::text||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=${candidate}")" = 'running:false:none'
+    if [[ "${phase}" = train ]]; then
+        test "$(scalar "SELECT status||':'||resume_requested::text||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=${candidate}")" = 'pending:true:operator'
+        wait_for_state "${worker_pids[1]}" T
+    else
+        test "$(scalar "SELECT status||':'||resume_requested::text||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=${candidate}")" = 'running:false:none'
+        [[ "$(ps -o state= -p "${worker_pids[1]}" | tr -d ' ')" != T* ]]
+    fi
     wait_for_state "${worker_pids[0]}" T
-    [[ "$(ps -o state= -p "${worker_pids[1]}" | tr -d ' ')" != T* ]]
     retire_all
 }
 
 assert_no_equal_preemption() {
     local base="$1" priority="$2" phase="${3:-train}"
     local output="${test_dir}/${base}.out"
-    local semantic_width=75 semantic_layout=5
+    local semantic_width="${current_train_width}" semantic_layout="${current_train_layout}"
     if [[ "${phase}" = infer ]]; then
         semantic_width=77
         semantic_layout=7
@@ -373,20 +423,17 @@ assert_no_equal_preemption 994075 high infer
 
 # Ordered phase admission must enforce scheduler priority within the winning
 # phase: pending normal/train work displaces running low/train work.
-launch_and_persist 994300 9994300 train running low none '2026-03-02 11:00:00+00'
-launch_and_persist 994301 9994301 train running low none '2026-03-02 11:00:01+00'
-launch_and_persist 994302 9994302 train pending normal operator '2026-03-02 11:00:02+00'
-launch_and_persist 994303 9994303 train pending normal operator '2026-03-02 11:00:03+00'
+launch_and_persist 994330 9994330 train running low none '2026-03-02 11:00:00+00'
+launch_and_persist 994331 9994331 train running low none '2026-03-02 11:00:01+00'
+launch_and_persist 994332 9994332 train pending normal operator '2026-03-02 11:00:02+00'
+launch_and_persist 994333 9994333 train pending normal operator '2026-03-02 11:00:03+00'
 run_scheduler 2 0 "${test_dir}/ordered-same-phase-priority.out" --phase-priority=train:infer:analyze
-test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||resume_requested::text||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 994300 AND 994303")" = '994300:pending:true:preemption,994301:pending:true:preemption,994302:running:false:none,994303:running:false:none'
-test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994300,9994301) AND lifecycle_state='stopped'")" = 2
-preemption_count="$(grep -Ec 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99430[01]' "${test_dir}/ordered-same-phase-priority.out")"
+test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||resume_requested::text||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 994330 AND 994333")" = '994330:pending:true:preemption,994331:pending:true:preemption,994332:pending:true:operator,994333:pending:true:operator'
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994330,9994331) AND lifecycle_state='stopped'")" = 2
+preemption_count="$(grep -Ec 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99433[01]' "${test_dir}/ordered-same-phase-priority.out")"
 test "${preemption_count}" -eq 2
-first_admission_line="$(rg -n 'SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=99430[23]' "${test_dir}/ordered-same-phase-priority.out" | head -1 | cut -d: -f1)"
-last_preemption_line="$(rg -n 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99430[01]' "${test_dir}/ordered-same-phase-priority.out" | tail -1 | cut -d: -f1)"
-test -n "${first_admission_line}"
-test -n "${last_preemption_line}"
-test "${last_preemption_line}" -lt "${first_admission_line}"
+deferred_count="$(grep -Ec 'SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED,experiment_id=99433[23],.*reason=semantic_worker_selection_mismatch' "${test_dir}/ordered-same-phase-priority.out")"
+test "${deferred_count}" -eq 2
 wait_for_state "${worker_pids[0]}" T
 wait_for_state "${worker_pids[1]}" T
 retire_all
@@ -403,6 +450,59 @@ launch_and_persist 994322 9994322 infer pending normal operator \
     '2026-03-02 12:00:02+00' 77 7
 attach_infer_model 994322 >/dev/null
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+INSERT INTO experiment_scheduler_invocation(
+    scheduler_invocation_id,
+    process_pid,
+    process_group_id,
+    process_start_identity,
+    canonical_executable_path,
+    command_line,
+    invocation_nonce,
+    started_at,
+    last_heartbeat_at,
+    ownership_acquired_at,
+    ownership_released_at,
+    ended_at,
+    status,
+    terminal_reason,
+    protocol_generation
+)
+VALUES
+(
+    'scheduler:handoff-a',
+    994320,
+    994320,
+    'synthetic-handoff-a',
+    '/test/lstm-scheduler',
+    'synthetic scheduler handoff a',
+    'synthetic-handoff-a-0001',
+    '2026-03-02 11:59:00+00',
+    '2026-03-02 11:59:10+00',
+    '2026-03-02 11:59:00+00',
+    '2026-03-02 11:59:20+00',
+    '2026-03-02 11:59:20+00',
+    'released',
+    'synthetic_test_handoff',
+    1
+),
+(
+    'scheduler:handoff-b',
+    994321,
+    994321,
+    'synthetic-handoff-b',
+    '/test/lstm-scheduler',
+    'synthetic scheduler handoff b',
+    'synthetic-handoff-b-0001',
+    '2026-03-02 11:59:30+00',
+    '2026-03-02 11:59:40+00',
+    '2026-03-02 11:59:30+00',
+    '2026-03-02 11:59:50+00',
+    '2026-03-02 11:59:50+00',
+    'released',
+    'synthetic_test_handoff',
+    1
+);
+
 UPDATE experiment_scheduler_worker_attempt
 SET scheduler_invocation_id='scheduler:handoff-a',
     scheduler_fencing_token=193,
@@ -561,23 +661,53 @@ test "$(scalar "SELECT lifecycle_state||':'||reconciliation_result FROM experime
 test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE capacity_class='infer' AND lifecycle_state IN ('reserved','spawned','running','observed','identity_ambiguous')")" = 1
 retire_all
 
-# C8/C19: one high request selects exactly one low victim ahead of normal.
+# C8/C19: coordinated admission drains all strictly lower-priority workers.
+# Victim ordering remains lowest priority first: low must be preempted before
+# normal. The synthetic stopped TRAIN candidate cannot be resumed because its
+# executable does not match the registry-selected semantic worker.
 launch_and_persist 994080 9994080 train running normal none '2026-03-03 00:00:00+00'
 launch_and_persist 994081 9994081 train running low none '2026-03-03 00:00:01+00'
 launch_and_persist 994082 9994082 train pending high operator '2026-03-03 00:00:02+00'
 run_scheduler 2 0 "${test_dir}/victim-priority.out"
-test "$(scalar "SELECT status FROM experiment WHERE experiment_id=994080")" = running
-test "$(scalar "SELECT status FROM experiment WHERE experiment_id=994081")" = pending
-test "$(scalar "SELECT count(*) FROM experiment WHERE experiment_id IN (994080,994081) AND scheduler_resume_origin='preemption'")" = 1
+test "$(scalar "SELECT status||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994080")" = 'pending:preemption'
+test "$(scalar "SELECT status||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994081")" = 'pending:preemption'
+test "$(scalar "SELECT status||':'||resume_requested::text||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994082")" = 'pending:true:operator'
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994080,9994081) AND lifecycle_state='stopped'")" = 2
+preemption_count="$(grep -Ec 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99408[01]' "${test_dir}/victim-priority.out")"
+test "${preemption_count}" -eq 2
+low_line="$(rg -n 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=994081' "${test_dir}/victim-priority.out" | head -1 | cut -d: -f1)"
+normal_line="$(rg -n 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=994080' "${test_dir}/victim-priority.out" | head -1 | cut -d: -f1)"
+test -n "${low_line}"
+test -n "${normal_line}"
+test "${low_line}" -lt "${normal_line}"
+grep -q 'SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED,experiment_id=994082,.*reason=semantic_worker_selection_mismatch'     "${test_dir}/victim-priority.out"
+wait_for_state "${worker_pids[0]}" T
+wait_for_state "${worker_pids[1]}" T
+wait_for_state "${worker_pids[2]}" T
 retire_all
 
-# C9: newest durable worker_started_at wins within the same victim priority.
+# C9: within the same victim priority, coordinated draining preserves
+# newest durable worker_started_at first ordering. Both lower-priority
+# workers are ultimately preempted.
 launch_and_persist 994090 9994090 train running low none '2026-03-04 00:00:00+00'
 launch_and_persist 994091 9994091 train running low none '2026-03-04 00:00:10+00'
 launch_and_persist 994092 9994092 train pending high operator '2026-03-04 00:00:20+00'
 run_scheduler 2 0 "${test_dir}/victim-youngest.out"
-grep -q 'victim_experiment_id=994091' "${test_dir}/victim-youngest.out"
-test "$(scalar "SELECT status FROM experiment WHERE experiment_id=994090")" = running
+test "$(scalar "SELECT status||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994090")" = 'pending:preemption'
+test "$(scalar "SELECT status||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994091")" = 'pending:preemption'
+test "$(scalar "SELECT status||':'||resume_requested::text||':'||scheduler_resume_origin FROM experiment WHERE experiment_id=994092")" = 'pending:true:operator'
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994090,9994091) AND lifecycle_state='stopped'")" = 2
+preemption_count="$(grep -Ec 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99409[01]' "${test_dir}/victim-youngest.out")"
+test "${preemption_count}" -eq 2
+newest_line="$(rg -n 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=994091' "${test_dir}/victim-youngest.out" | head -1 | cut -d: -f1)"
+older_line="$(rg -n 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=994090' "${test_dir}/victim-youngest.out" | head -1 | cut -d: -f1)"
+test -n "${newest_line}"
+test -n "${older_line}"
+test "${newest_line}" -lt "${older_line}"
+grep -q 'SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED,experiment_id=994092,.*reason=semantic_worker_selection_mismatch'     "${test_dir}/victim-youngest.out"
+wait_for_state "${worker_pids[0]}" T
+wait_for_state "${worker_pids[1]}" T
+wait_for_state "${worker_pids[2]}" T
 retire_all
 
 # C10: coherent durable but wrong OS start identity fails closed before SIGSTOP.
@@ -633,25 +763,29 @@ launch_and_persist 994201 9994201 train running normal none '2026-03-08 00:00:01
 launch_and_persist 994202 9994202 train pending high operator '2026-03-08 00:00:02+00'
 launch_and_persist 994203 9994203 train pending high operator '2026-03-08 00:00:03+00'
 run_scheduler 2 0 "${test_dir}/two-slot.out"
-test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 994200 AND 994203")" = \
-    '994200:pending:preemption,994201:pending:preemption,994202:running:none,994203:running:none'
+test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||resume_requested::text||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id BETWEEN 994200 AND 994203")" = \
+    '994200:pending:true:preemption,994201:pending:true:preemption,994202:pending:true:operator,994203:pending:true:operator'
 test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994200,9994201) AND lifecycle_state='stopped'")" = 2
-test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE capacity_class='train' AND lifecycle_state IN ('reserved','spawned','running','observed','identity_ambiguous')")" = 2
-grep -q 'candidate_experiment_id=994202.*victim_experiment_id=994200' "${test_dir}/two-slot.out"
-grep -q 'candidate_experiment_id=994203.*victim_experiment_id=994201' "${test_dir}/two-slot.out"
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994202,9994203) AND lifecycle_state='stopped'")" = 2
+preemption_count="$(grep -Ec 'SCHEDULER_PRIORITY_PREEMPTED,.*victim_experiment_id=99420[01]' "${test_dir}/two-slot.out")"
+test "${preemption_count}" -eq 2
+grep -q 'SCHEDULER_PRIORITY_PREEMPTED,.*candidate_priority=high,.*victim_experiment_id=994200,.*victim_priority=low' "${test_dir}/two-slot.out"
+grep -q 'SCHEDULER_PRIORITY_PREEMPTED,.*candidate_priority=high,.*victim_experiment_id=994201,.*victim_priority=normal' "${test_dir}/two-slot.out"
+deferred_count="$(grep -Ec 'SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED,experiment_id=99420[23],.*reason=semantic_worker_selection_mismatch' "${test_dir}/two-slot.out")"
+test "${deferred_count}" -eq 2
 run_scheduler 2 0 "${test_dir}/restart-preserves.out" --recover-orphans-only
 test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id IN (9994200,9994201) AND lifecycle_state='stopped'")" = 2
 run_cli --pause-experiment=994202 --yes >"${test_dir}/pause-h1.out"
 run_cli --pause-experiment=994203 --yes >"${test_dir}/pause-h2.out"
 run_scheduler 2 0 "${test_dir}/resume-order.out"
-normal_line="$(rg -n 'SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=994201' "${test_dir}/resume-order.out" | cut -d: -f1)"
-low_line="$(rg -n 'SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=994200' "${test_dir}/resume-order.out" | cut -d: -f1)"
-test "${normal_line}" -lt "${low_line}"
-test "$(scalar "SELECT string_agg(experiment_id||':'||active_scheduler_worker_attempt_id||':'||scheduler_resume_origin,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id IN (994200,994201)")" = \
-    '994200:9994200:none,994201:9994201:none'
+normal_line="$(rg -n 'SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED,experiment_id=994201,.*reason=semantic_worker_selection_mismatch' "${test_dir}/resume-order.out" | head -1 | cut -d: -f1)"
+test -n "${normal_line}"
+! grep -q 'SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED,experiment_id=994200' "${test_dir}/resume-order.out"
+test "$(scalar "SELECT string_agg(experiment_id||':'||status||':'||resume_requested::text||':'||scheduler_resume_origin||':'||active_scheduler_worker_attempt_id,',' ORDER BY experiment_id) FROM experiment WHERE experiment_id IN (994200,994201)")" = \
+    '994200:pending:true:preemption:9994200,994201:pending:true:preemption:9994201'
 test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id IN (994200,994201)")" = 2
-[[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" != T* ]]
-[[ "$(ps -o state= -p "${worker_pids[1]}" | tr -d ' ')" != T* ]]
+wait_for_state "${worker_pids[0]}" T
+wait_for_state "${worker_pids[1]}" T
 retire_all
 
 # C12: a disappeared preempted train worker retains automatic continuation
