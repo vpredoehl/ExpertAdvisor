@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 12;
+inline constexpr int kModelInputSemanticLayoutVersion = 13;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -37,7 +37,7 @@ struct ModelInputSemanticLayoutRegistryEntry
 // version as predecessor. A corrected interpretation at an existing width
 // instead branches from the newest genuinely compatible predecessor; old
 // entries and their fixed maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 12>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 13>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
@@ -58,6 +58,7 @@ inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 12>
         {10, kCausalPocketRecentObservationModelInputWidth, 9},
         {11, kFixedConfluenceTensorModelInputWidth, 10},
         {12, kCausalPriceLevelRawModelInputWidth, 11},
+        {13, kCausalFibonacciLifecycleModelInputWidth, 12},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -200,7 +201,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 91>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 135>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -305,6 +306,50 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 91>
         {priceLevelCrossDirectionNowCol, "cross_direction_now"},
         {priceLevelRetestNowCol, "retest_now"},
         {priceLevelRoleReversalNowCol, "role_reversal_now"},
+        {fibLifecycleUp0382ReachedCountLogCol, "fib_lifecycle_up_0382_reached_count_log"},
+        {fibLifecycleUp0382DirectionalCloseCountLogCol, "fib_lifecycle_up_0382_directional_close_count_log"},
+        {fibLifecycleUp0382DirectionalBreakCountLogCol, "fib_lifecycle_up_0382_directional_break_count_log"},
+        {fibLifecycleUp0382CloseBackThroughCountLogCol, "fib_lifecycle_up_0382_close_back_through_count_log"},
+        {fibLifecycleUp0382ReachedYoungestAgeLogCol, "fib_lifecycle_up_0382_youngest_reach_age_log1p"},
+        {fibLifecycleUp0382DirectionalCloseYoungestAgeLogCol, "fib_lifecycle_up_0382_youngest_directional_close_age_log1p"},
+        {fibLifecycleUp0500ReachedCountLogCol, "fib_lifecycle_up_0500_reached_count_log"},
+        {fibLifecycleUp0500DirectionalCloseCountLogCol, "fib_lifecycle_up_0500_directional_close_count_log"},
+        {fibLifecycleUp0500DirectionalBreakCountLogCol, "fib_lifecycle_up_0500_directional_break_count_log"},
+        {fibLifecycleUp0500CloseBackThroughCountLogCol, "fib_lifecycle_up_0500_close_back_through_count_log"},
+        {fibLifecycleUp0500ReachedYoungestAgeLogCol, "fib_lifecycle_up_0500_youngest_reach_age_log1p"},
+        {fibLifecycleUp0500DirectionalCloseYoungestAgeLogCol, "fib_lifecycle_up_0500_youngest_directional_close_age_log1p"},
+        {fibLifecycleUp0618ReachedCountLogCol, "fib_lifecycle_up_0618_reached_count_log"},
+        {fibLifecycleUp0618DirectionalCloseCountLogCol, "fib_lifecycle_up_0618_directional_close_count_log"},
+        {fibLifecycleUp0618DirectionalBreakCountLogCol, "fib_lifecycle_up_0618_directional_break_count_log"},
+        {fibLifecycleUp0618CloseBackThroughCountLogCol, "fib_lifecycle_up_0618_close_back_through_count_log"},
+        {fibLifecycleUp0618ReachedYoungestAgeLogCol, "fib_lifecycle_up_0618_youngest_reach_age_log1p"},
+        {fibLifecycleUp0618DirectionalCloseYoungestAgeLogCol, "fib_lifecycle_up_0618_youngest_directional_close_age_log1p"},
+        {fibLifecycleUpAPenetrationCountLogCol, "fib_lifecycle_up_a_penetration_count_log"},
+        {fibLifecycleUpACloseBeyondCountLogCol, "fib_lifecycle_up_a_close_beyond_count_log"},
+        {fibLifecycleUpAPenetrationYoungestAgeLogCol, "fib_lifecycle_up_youngest_a_penetration_age_log1p"},
+        {fibLifecycleUpACloseBeyondYoungestAgeLogCol, "fib_lifecycle_up_youngest_a_close_beyond_age_log1p"},
+        {fibLifecycleDown0382ReachedCountLogCol, "fib_lifecycle_down_0382_reached_count_log"},
+        {fibLifecycleDown0382DirectionalCloseCountLogCol, "fib_lifecycle_down_0382_directional_close_count_log"},
+        {fibLifecycleDown0382DirectionalBreakCountLogCol, "fib_lifecycle_down_0382_directional_break_count_log"},
+        {fibLifecycleDown0382CloseBackThroughCountLogCol, "fib_lifecycle_down_0382_close_back_through_count_log"},
+        {fibLifecycleDown0382ReachedYoungestAgeLogCol, "fib_lifecycle_down_0382_youngest_reach_age_log1p"},
+        {fibLifecycleDown0382DirectionalCloseYoungestAgeLogCol, "fib_lifecycle_down_0382_youngest_directional_close_age_log1p"},
+        {fibLifecycleDown0500ReachedCountLogCol, "fib_lifecycle_down_0500_reached_count_log"},
+        {fibLifecycleDown0500DirectionalCloseCountLogCol, "fib_lifecycle_down_0500_directional_close_count_log"},
+        {fibLifecycleDown0500DirectionalBreakCountLogCol, "fib_lifecycle_down_0500_directional_break_count_log"},
+        {fibLifecycleDown0500CloseBackThroughCountLogCol, "fib_lifecycle_down_0500_close_back_through_count_log"},
+        {fibLifecycleDown0500ReachedYoungestAgeLogCol, "fib_lifecycle_down_0500_youngest_reach_age_log1p"},
+        {fibLifecycleDown0500DirectionalCloseYoungestAgeLogCol, "fib_lifecycle_down_0500_youngest_directional_close_age_log1p"},
+        {fibLifecycleDown0618ReachedCountLogCol, "fib_lifecycle_down_0618_reached_count_log"},
+        {fibLifecycleDown0618DirectionalCloseCountLogCol, "fib_lifecycle_down_0618_directional_close_count_log"},
+        {fibLifecycleDown0618DirectionalBreakCountLogCol, "fib_lifecycle_down_0618_directional_break_count_log"},
+        {fibLifecycleDown0618CloseBackThroughCountLogCol, "fib_lifecycle_down_0618_close_back_through_count_log"},
+        {fibLifecycleDown0618ReachedYoungestAgeLogCol, "fib_lifecycle_down_0618_youngest_reach_age_log1p"},
+        {fibLifecycleDown0618DirectionalCloseYoungestAgeLogCol, "fib_lifecycle_down_0618_youngest_directional_close_age_log1p"},
+        {fibLifecycleDownAPenetrationCountLogCol, "fib_lifecycle_down_a_penetration_count_log"},
+        {fibLifecycleDownACloseBeyondCountLogCol, "fib_lifecycle_down_a_close_beyond_count_log"},
+        {fibLifecycleDownAPenetrationYoungestAgeLogCol, "fib_lifecycle_down_youngest_a_penetration_age_log1p"},
+        {fibLifecycleDownACloseBeyondYoungestAgeLogCol, "fib_lifecycle_down_youngest_a_close_beyond_age_log1p"},
     }};
 
 constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()

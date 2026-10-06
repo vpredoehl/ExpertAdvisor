@@ -245,8 +245,58 @@ inline constexpr std::size_t priceLevelRoleReversalNowCol =
     priceLevelRetestNowCol + 1;
 inline constexpr std::size_t causal_price_level_raw_feature_size =
     priceLevelRoleReversalNowCol + 1;
-inline constexpr std::size_t feature_size =
+// Layout 13 appends causal Fibonacci retracement-lifecycle state. Layout 12
+// columns remain byte-for-byte and semantically unchanged.
+inline constexpr std::size_t fibLifecycleFeatureStartCol =
     causal_price_level_raw_feature_size;
+inline constexpr std::size_t fibLifecycleUp0382ReachedCountLogCol = fibLifecycleFeatureStartCol;
+inline constexpr std::size_t fibLifecycleUp0382DirectionalCloseCountLogCol = fibLifecycleFeatureStartCol + 1;
+inline constexpr std::size_t fibLifecycleUp0382DirectionalBreakCountLogCol = fibLifecycleFeatureStartCol + 2;
+inline constexpr std::size_t fibLifecycleUp0382CloseBackThroughCountLogCol = fibLifecycleFeatureStartCol + 3;
+inline constexpr std::size_t fibLifecycleUp0382ReachedYoungestAgeLogCol = fibLifecycleFeatureStartCol + 4;
+inline constexpr std::size_t fibLifecycleUp0382DirectionalCloseYoungestAgeLogCol = fibLifecycleFeatureStartCol + 5;
+inline constexpr std::size_t fibLifecycleUp0500ReachedCountLogCol = fibLifecycleFeatureStartCol + 6;
+inline constexpr std::size_t fibLifecycleUp0500DirectionalCloseCountLogCol = fibLifecycleFeatureStartCol + 7;
+inline constexpr std::size_t fibLifecycleUp0500DirectionalBreakCountLogCol = fibLifecycleFeatureStartCol + 8;
+inline constexpr std::size_t fibLifecycleUp0500CloseBackThroughCountLogCol = fibLifecycleFeatureStartCol + 9;
+inline constexpr std::size_t fibLifecycleUp0500ReachedYoungestAgeLogCol = fibLifecycleFeatureStartCol + 10;
+inline constexpr std::size_t fibLifecycleUp0500DirectionalCloseYoungestAgeLogCol = fibLifecycleFeatureStartCol + 11;
+inline constexpr std::size_t fibLifecycleUp0618ReachedCountLogCol = fibLifecycleFeatureStartCol + 12;
+inline constexpr std::size_t fibLifecycleUp0618DirectionalCloseCountLogCol = fibLifecycleFeatureStartCol + 13;
+inline constexpr std::size_t fibLifecycleUp0618DirectionalBreakCountLogCol = fibLifecycleFeatureStartCol + 14;
+inline constexpr std::size_t fibLifecycleUp0618CloseBackThroughCountLogCol = fibLifecycleFeatureStartCol + 15;
+inline constexpr std::size_t fibLifecycleUp0618ReachedYoungestAgeLogCol = fibLifecycleFeatureStartCol + 16;
+inline constexpr std::size_t fibLifecycleUp0618DirectionalCloseYoungestAgeLogCol = fibLifecycleFeatureStartCol + 17;
+inline constexpr std::size_t fibLifecycleUpAPenetrationCountLogCol = fibLifecycleFeatureStartCol + 18;
+inline constexpr std::size_t fibLifecycleUpACloseBeyondCountLogCol = fibLifecycleFeatureStartCol + 19;
+inline constexpr std::size_t fibLifecycleUpAPenetrationYoungestAgeLogCol = fibLifecycleFeatureStartCol + 20;
+inline constexpr std::size_t fibLifecycleUpACloseBeyondYoungestAgeLogCol = fibLifecycleFeatureStartCol + 21;
+inline constexpr std::size_t fibLifecycleDown0382ReachedCountLogCol = fibLifecycleFeatureStartCol + 22;
+inline constexpr std::size_t fibLifecycleDown0382DirectionalCloseCountLogCol = fibLifecycleFeatureStartCol + 23;
+inline constexpr std::size_t fibLifecycleDown0382DirectionalBreakCountLogCol = fibLifecycleFeatureStartCol + 24;
+inline constexpr std::size_t fibLifecycleDown0382CloseBackThroughCountLogCol = fibLifecycleFeatureStartCol + 25;
+inline constexpr std::size_t fibLifecycleDown0382ReachedYoungestAgeLogCol = fibLifecycleFeatureStartCol + 26;
+inline constexpr std::size_t fibLifecycleDown0382DirectionalCloseYoungestAgeLogCol = fibLifecycleFeatureStartCol + 27;
+inline constexpr std::size_t fibLifecycleDown0500ReachedCountLogCol = fibLifecycleFeatureStartCol + 28;
+inline constexpr std::size_t fibLifecycleDown0500DirectionalCloseCountLogCol = fibLifecycleFeatureStartCol + 29;
+inline constexpr std::size_t fibLifecycleDown0500DirectionalBreakCountLogCol = fibLifecycleFeatureStartCol + 30;
+inline constexpr std::size_t fibLifecycleDown0500CloseBackThroughCountLogCol = fibLifecycleFeatureStartCol + 31;
+inline constexpr std::size_t fibLifecycleDown0500ReachedYoungestAgeLogCol = fibLifecycleFeatureStartCol + 32;
+inline constexpr std::size_t fibLifecycleDown0500DirectionalCloseYoungestAgeLogCol = fibLifecycleFeatureStartCol + 33;
+inline constexpr std::size_t fibLifecycleDown0618ReachedCountLogCol = fibLifecycleFeatureStartCol + 34;
+inline constexpr std::size_t fibLifecycleDown0618DirectionalCloseCountLogCol = fibLifecycleFeatureStartCol + 35;
+inline constexpr std::size_t fibLifecycleDown0618DirectionalBreakCountLogCol = fibLifecycleFeatureStartCol + 36;
+inline constexpr std::size_t fibLifecycleDown0618CloseBackThroughCountLogCol = fibLifecycleFeatureStartCol + 37;
+inline constexpr std::size_t fibLifecycleDown0618ReachedYoungestAgeLogCol = fibLifecycleFeatureStartCol + 38;
+inline constexpr std::size_t fibLifecycleDown0618DirectionalCloseYoungestAgeLogCol = fibLifecycleFeatureStartCol + 39;
+inline constexpr std::size_t fibLifecycleDownAPenetrationCountLogCol = fibLifecycleFeatureStartCol + 40;
+inline constexpr std::size_t fibLifecycleDownACloseBeyondCountLogCol = fibLifecycleFeatureStartCol + 41;
+inline constexpr std::size_t fibLifecycleDownAPenetrationYoungestAgeLogCol = fibLifecycleFeatureStartCol + 42;
+inline constexpr std::size_t fibLifecycleDownACloseBeyondYoungestAgeLogCol = fibLifecycleFeatureStartCol + 43;
+inline constexpr std::size_t causal_fibonacci_lifecycle_feature_size =
+    fibLifecycleFeatureStartCol + 44;
+inline constexpr std::size_t feature_size =
+    causal_fibonacci_lifecycle_feature_size;
 
 static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
@@ -284,6 +334,10 @@ static_assert(priceLevelRoleReversalNowCol == 122);
 static_assert(causal_price_level_raw_feature_size -
                   fixed_confluence_tensor_feature_size ==
               11);
-static_assert(feature_size == 123);
+static_assert(causal_price_level_raw_feature_size == 123);
+static_assert(fibLifecycleFeatureStartCol == 123);
+static_assert(causal_fibonacci_lifecycle_feature_size -
+                  causal_price_level_raw_feature_size == 44);
+static_assert(feature_size == 167);
 
 #endif /* FeatureLayout_hpp */

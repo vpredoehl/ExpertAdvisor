@@ -24,7 +24,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 71> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 115> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -109,6 +109,50 @@ inline constexpr std::array<AblatableFeature, 71> kAblatableFeatures{{
     {"cross_direction_now", priceLevelCrossDirectionNowCol},
     {"retest_now", priceLevelRetestNowCol},
     {"role_reversal_now", priceLevelRoleReversalNowCol},
+    {"fib_lifecycle_up_0382_reached_count_log", fibLifecycleUp0382ReachedCountLogCol},
+    {"fib_lifecycle_up_0382_directional_close_count_log", fibLifecycleUp0382DirectionalCloseCountLogCol},
+    {"fib_lifecycle_up_0382_directional_break_count_log", fibLifecycleUp0382DirectionalBreakCountLogCol},
+    {"fib_lifecycle_up_0382_close_back_through_count_log", fibLifecycleUp0382CloseBackThroughCountLogCol},
+    {"fib_lifecycle_up_0382_youngest_reach_age_log1p", fibLifecycleUp0382ReachedYoungestAgeLogCol},
+    {"fib_lifecycle_up_0382_youngest_directional_close_age_log1p", fibLifecycleUp0382DirectionalCloseYoungestAgeLogCol},
+    {"fib_lifecycle_up_0500_reached_count_log", fibLifecycleUp0500ReachedCountLogCol},
+    {"fib_lifecycle_up_0500_directional_close_count_log", fibLifecycleUp0500DirectionalCloseCountLogCol},
+    {"fib_lifecycle_up_0500_directional_break_count_log", fibLifecycleUp0500DirectionalBreakCountLogCol},
+    {"fib_lifecycle_up_0500_close_back_through_count_log", fibLifecycleUp0500CloseBackThroughCountLogCol},
+    {"fib_lifecycle_up_0500_youngest_reach_age_log1p", fibLifecycleUp0500ReachedYoungestAgeLogCol},
+    {"fib_lifecycle_up_0500_youngest_directional_close_age_log1p", fibLifecycleUp0500DirectionalCloseYoungestAgeLogCol},
+    {"fib_lifecycle_up_0618_reached_count_log", fibLifecycleUp0618ReachedCountLogCol},
+    {"fib_lifecycle_up_0618_directional_close_count_log", fibLifecycleUp0618DirectionalCloseCountLogCol},
+    {"fib_lifecycle_up_0618_directional_break_count_log", fibLifecycleUp0618DirectionalBreakCountLogCol},
+    {"fib_lifecycle_up_0618_close_back_through_count_log", fibLifecycleUp0618CloseBackThroughCountLogCol},
+    {"fib_lifecycle_up_0618_youngest_reach_age_log1p", fibLifecycleUp0618ReachedYoungestAgeLogCol},
+    {"fib_lifecycle_up_0618_youngest_directional_close_age_log1p", fibLifecycleUp0618DirectionalCloseYoungestAgeLogCol},
+    {"fib_lifecycle_up_a_penetration_count_log", fibLifecycleUpAPenetrationCountLogCol},
+    {"fib_lifecycle_up_a_close_beyond_count_log", fibLifecycleUpACloseBeyondCountLogCol},
+    {"fib_lifecycle_up_youngest_a_penetration_age_log1p", fibLifecycleUpAPenetrationYoungestAgeLogCol},
+    {"fib_lifecycle_up_youngest_a_close_beyond_age_log1p", fibLifecycleUpACloseBeyondYoungestAgeLogCol},
+    {"fib_lifecycle_down_0382_reached_count_log", fibLifecycleDown0382ReachedCountLogCol},
+    {"fib_lifecycle_down_0382_directional_close_count_log", fibLifecycleDown0382DirectionalCloseCountLogCol},
+    {"fib_lifecycle_down_0382_directional_break_count_log", fibLifecycleDown0382DirectionalBreakCountLogCol},
+    {"fib_lifecycle_down_0382_close_back_through_count_log", fibLifecycleDown0382CloseBackThroughCountLogCol},
+    {"fib_lifecycle_down_0382_youngest_reach_age_log1p", fibLifecycleDown0382ReachedYoungestAgeLogCol},
+    {"fib_lifecycle_down_0382_youngest_directional_close_age_log1p", fibLifecycleDown0382DirectionalCloseYoungestAgeLogCol},
+    {"fib_lifecycle_down_0500_reached_count_log", fibLifecycleDown0500ReachedCountLogCol},
+    {"fib_lifecycle_down_0500_directional_close_count_log", fibLifecycleDown0500DirectionalCloseCountLogCol},
+    {"fib_lifecycle_down_0500_directional_break_count_log", fibLifecycleDown0500DirectionalBreakCountLogCol},
+    {"fib_lifecycle_down_0500_close_back_through_count_log", fibLifecycleDown0500CloseBackThroughCountLogCol},
+    {"fib_lifecycle_down_0500_youngest_reach_age_log1p", fibLifecycleDown0500ReachedYoungestAgeLogCol},
+    {"fib_lifecycle_down_0500_youngest_directional_close_age_log1p", fibLifecycleDown0500DirectionalCloseYoungestAgeLogCol},
+    {"fib_lifecycle_down_0618_reached_count_log", fibLifecycleDown0618ReachedCountLogCol},
+    {"fib_lifecycle_down_0618_directional_close_count_log", fibLifecycleDown0618DirectionalCloseCountLogCol},
+    {"fib_lifecycle_down_0618_directional_break_count_log", fibLifecycleDown0618DirectionalBreakCountLogCol},
+    {"fib_lifecycle_down_0618_close_back_through_count_log", fibLifecycleDown0618CloseBackThroughCountLogCol},
+    {"fib_lifecycle_down_0618_youngest_reach_age_log1p", fibLifecycleDown0618ReachedYoungestAgeLogCol},
+    {"fib_lifecycle_down_0618_youngest_directional_close_age_log1p", fibLifecycleDown0618DirectionalCloseYoungestAgeLogCol},
+    {"fib_lifecycle_down_a_penetration_count_log", fibLifecycleDownAPenetrationCountLogCol},
+    {"fib_lifecycle_down_a_close_beyond_count_log", fibLifecycleDownACloseBeyondCountLogCol},
+    {"fib_lifecycle_down_youngest_a_penetration_age_log1p", fibLifecycleDownAPenetrationYoungestAgeLogCol},
+    {"fib_lifecycle_down_youngest_a_close_beyond_age_log1p", fibLifecycleDownACloseBeyondYoungestAgeLogCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -172,6 +216,52 @@ inline constexpr std::string_view kPriceLevelStructureAblationMaskText =
     "current_role,age_fraction,prior_evidence_saturation,touch_now,"
     "cross_direction_now,retest_now,role_reversal_now";
 
+inline constexpr std::string_view kCausalFibonacciLifecycleAblationMaskText =
+    "fib_lifecycle_up_0382_reached_count_log,"
+    "fib_lifecycle_up_0382_directional_close_count_log,"
+    "fib_lifecycle_up_0382_directional_break_count_log,"
+    "fib_lifecycle_up_0382_close_back_through_count_log,"
+    "fib_lifecycle_up_0382_youngest_reach_age_log1p,"
+    "fib_lifecycle_up_0382_youngest_directional_close_age_log1p,"
+    "fib_lifecycle_up_0500_reached_count_log,"
+    "fib_lifecycle_up_0500_directional_close_count_log,"
+    "fib_lifecycle_up_0500_directional_break_count_log,"
+    "fib_lifecycle_up_0500_close_back_through_count_log,"
+    "fib_lifecycle_up_0500_youngest_reach_age_log1p,"
+    "fib_lifecycle_up_0500_youngest_directional_close_age_log1p,"
+    "fib_lifecycle_up_0618_reached_count_log,"
+    "fib_lifecycle_up_0618_directional_close_count_log,"
+    "fib_lifecycle_up_0618_directional_break_count_log,"
+    "fib_lifecycle_up_0618_close_back_through_count_log,"
+    "fib_lifecycle_up_0618_youngest_reach_age_log1p,"
+    "fib_lifecycle_up_0618_youngest_directional_close_age_log1p,"
+    "fib_lifecycle_up_a_penetration_count_log,"
+    "fib_lifecycle_up_a_close_beyond_count_log,"
+    "fib_lifecycle_up_youngest_a_penetration_age_log1p,"
+    "fib_lifecycle_up_youngest_a_close_beyond_age_log1p,"
+    "fib_lifecycle_down_0382_reached_count_log,"
+    "fib_lifecycle_down_0382_directional_close_count_log,"
+    "fib_lifecycle_down_0382_directional_break_count_log,"
+    "fib_lifecycle_down_0382_close_back_through_count_log,"
+    "fib_lifecycle_down_0382_youngest_reach_age_log1p,"
+    "fib_lifecycle_down_0382_youngest_directional_close_age_log1p,"
+    "fib_lifecycle_down_0500_reached_count_log,"
+    "fib_lifecycle_down_0500_directional_close_count_log,"
+    "fib_lifecycle_down_0500_directional_break_count_log,"
+    "fib_lifecycle_down_0500_close_back_through_count_log,"
+    "fib_lifecycle_down_0500_youngest_reach_age_log1p,"
+    "fib_lifecycle_down_0500_youngest_directional_close_age_log1p,"
+    "fib_lifecycle_down_0618_reached_count_log,"
+    "fib_lifecycle_down_0618_directional_close_count_log,"
+    "fib_lifecycle_down_0618_directional_break_count_log,"
+    "fib_lifecycle_down_0618_close_back_through_count_log,"
+    "fib_lifecycle_down_0618_youngest_reach_age_log1p,"
+    "fib_lifecycle_down_0618_youngest_directional_close_age_log1p,"
+    "fib_lifecycle_down_a_penetration_count_log,"
+    "fib_lifecycle_down_a_close_beyond_count_log,"
+    "fib_lifecycle_down_youngest_a_penetration_age_log1p,"
+    "fib_lifecycle_down_youngest_a_close_beyond_age_log1p";
+
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.
 inline constexpr AblatableFeature kDirectionalEfficiencyFeature{
@@ -225,7 +315,7 @@ public:
     static FeatureAblationMask ParseForSemanticLayout(
         const std::string& text, int semanticLayoutVersion);
     static FeatureAblationResolution Resolve(
-        const std::string& requestedText, int semanticLayoutVersion = 12);
+        const std::string& requestedText, int semanticLayoutVersion = 13);
 
     bool empty() const { return columns_.empty(); }
     const std::vector<std::size_t>& tensorColumns() const { return columns_; }

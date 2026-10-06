@@ -44,7 +44,7 @@ struct Channel
     int introducedSemanticLayout;
 };
 
-inline constexpr std::array<Family, 5> kFamilies{{
+inline constexpr std::array<Family, 6> kFamilies{{
     {"tg_structure", 1, "tg4-production-pulse-v1",
      "completed canonical bar; never retrospectively rewritten"},
     // Layout 9 is retained as an immutable legacy producer. It composes the
@@ -61,12 +61,14 @@ inline constexpr std::array<Family, 5> kFamilies{{
      "completed canonical bar; no earlier than every selected component"},
     {"price_level_structure", 1, "causal-price-level/v2",
      "post-AddCompletedBar completed decision bar"},
+    {"fibonacci_lifecycle", 1, "causal-fibonacci-retracement-lifecycle-1272-d-v1",
+     "completed decision bar; retained independently until 1.272 D terminal"},
 }};
 
 // These identities describe actual layout-8 through layout-11 channels.
 // TG3's historical research confluence remains distinct from the generic
 // descriptive confluence family introduced by the fixed layout-11 projection.
-inline constexpr std::array<Channel, 50> kChannels{{
+inline constexpr std::array<Channel, 94> kChannels{{
     {"tg_structure.tg4.inner_break.any", "tg4_inner_break_any",
      "tg_structure", tg4InnerBreakAnyCol, 8},
     {"tg_structure.tg4.source_tg3.structurally_eligible",
@@ -192,6 +194,50 @@ inline constexpr std::array<Channel, 50> kChannels{{
      priceLevelRetestNowCol, 12},
     {"price_level_structure.role_reversal_now", "role_reversal_now", "price_level_structure",
      priceLevelRoleReversalNowCol, 12},
+    {"fibonacci_lifecycle.up.0382.reached_count_log", "fib_lifecycle_up_0382_reached_count_log", "fibonacci_lifecycle", fibLifecycleUp0382ReachedCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0382.directional_close_count_log", "fib_lifecycle_up_0382_directional_close_count_log", "fibonacci_lifecycle", fibLifecycleUp0382DirectionalCloseCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0382.directional_break_count_log", "fib_lifecycle_up_0382_directional_break_count_log", "fibonacci_lifecycle", fibLifecycleUp0382DirectionalBreakCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0382.close_back_through_count_log", "fib_lifecycle_up_0382_close_back_through_count_log", "fibonacci_lifecycle", fibLifecycleUp0382CloseBackThroughCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0382.youngest_reach_age_log1p", "fib_lifecycle_up_0382_youngest_reach_age_log1p", "fibonacci_lifecycle", fibLifecycleUp0382ReachedYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.up.0382.youngest_directional_close_age_log1p", "fib_lifecycle_up_0382_youngest_directional_close_age_log1p", "fibonacci_lifecycle", fibLifecycleUp0382DirectionalCloseYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.up.0500.reached_count_log", "fib_lifecycle_up_0500_reached_count_log", "fibonacci_lifecycle", fibLifecycleUp0500ReachedCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0500.directional_close_count_log", "fib_lifecycle_up_0500_directional_close_count_log", "fibonacci_lifecycle", fibLifecycleUp0500DirectionalCloseCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0500.directional_break_count_log", "fib_lifecycle_up_0500_directional_break_count_log", "fibonacci_lifecycle", fibLifecycleUp0500DirectionalBreakCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0500.close_back_through_count_log", "fib_lifecycle_up_0500_close_back_through_count_log", "fibonacci_lifecycle", fibLifecycleUp0500CloseBackThroughCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0500.youngest_reach_age_log1p", "fib_lifecycle_up_0500_youngest_reach_age_log1p", "fibonacci_lifecycle", fibLifecycleUp0500ReachedYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.up.0500.youngest_directional_close_age_log1p", "fib_lifecycle_up_0500_youngest_directional_close_age_log1p", "fibonacci_lifecycle", fibLifecycleUp0500DirectionalCloseYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.up.0618.reached_count_log", "fib_lifecycle_up_0618_reached_count_log", "fibonacci_lifecycle", fibLifecycleUp0618ReachedCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0618.directional_close_count_log", "fib_lifecycle_up_0618_directional_close_count_log", "fibonacci_lifecycle", fibLifecycleUp0618DirectionalCloseCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0618.directional_break_count_log", "fib_lifecycle_up_0618_directional_break_count_log", "fibonacci_lifecycle", fibLifecycleUp0618DirectionalBreakCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0618.close_back_through_count_log", "fib_lifecycle_up_0618_close_back_through_count_log", "fibonacci_lifecycle", fibLifecycleUp0618CloseBackThroughCountLogCol, 13},
+    {"fibonacci_lifecycle.up.0618.youngest_reach_age_log1p", "fib_lifecycle_up_0618_youngest_reach_age_log1p", "fibonacci_lifecycle", fibLifecycleUp0618ReachedYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.up.0618.youngest_directional_close_age_log1p", "fib_lifecycle_up_0618_youngest_directional_close_age_log1p", "fibonacci_lifecycle", fibLifecycleUp0618DirectionalCloseYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.up.a_penetration_count_log", "fib_lifecycle_up_a_penetration_count_log", "fibonacci_lifecycle", fibLifecycleUpAPenetrationCountLogCol, 13},
+    {"fibonacci_lifecycle.up.a_close_beyond_count_log", "fib_lifecycle_up_a_close_beyond_count_log", "fibonacci_lifecycle", fibLifecycleUpACloseBeyondCountLogCol, 13},
+    {"fibonacci_lifecycle.up.youngest_a_penetration_age_log1p", "fib_lifecycle_up_youngest_a_penetration_age_log1p", "fibonacci_lifecycle", fibLifecycleUpAPenetrationYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.up.youngest_a_close_beyond_age_log1p", "fib_lifecycle_up_youngest_a_close_beyond_age_log1p", "fibonacci_lifecycle", fibLifecycleUpACloseBeyondYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.0382.reached_count_log", "fib_lifecycle_down_0382_reached_count_log", "fibonacci_lifecycle", fibLifecycleDown0382ReachedCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0382.directional_close_count_log", "fib_lifecycle_down_0382_directional_close_count_log", "fibonacci_lifecycle", fibLifecycleDown0382DirectionalCloseCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0382.directional_break_count_log", "fib_lifecycle_down_0382_directional_break_count_log", "fibonacci_lifecycle", fibLifecycleDown0382DirectionalBreakCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0382.close_back_through_count_log", "fib_lifecycle_down_0382_close_back_through_count_log", "fibonacci_lifecycle", fibLifecycleDown0382CloseBackThroughCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0382.youngest_reach_age_log1p", "fib_lifecycle_down_0382_youngest_reach_age_log1p", "fibonacci_lifecycle", fibLifecycleDown0382ReachedYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.0382.youngest_directional_close_age_log1p", "fib_lifecycle_down_0382_youngest_directional_close_age_log1p", "fibonacci_lifecycle", fibLifecycleDown0382DirectionalCloseYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.0500.reached_count_log", "fib_lifecycle_down_0500_reached_count_log", "fibonacci_lifecycle", fibLifecycleDown0500ReachedCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0500.directional_close_count_log", "fib_lifecycle_down_0500_directional_close_count_log", "fibonacci_lifecycle", fibLifecycleDown0500DirectionalCloseCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0500.directional_break_count_log", "fib_lifecycle_down_0500_directional_break_count_log", "fibonacci_lifecycle", fibLifecycleDown0500DirectionalBreakCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0500.close_back_through_count_log", "fib_lifecycle_down_0500_close_back_through_count_log", "fibonacci_lifecycle", fibLifecycleDown0500CloseBackThroughCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0500.youngest_reach_age_log1p", "fib_lifecycle_down_0500_youngest_reach_age_log1p", "fibonacci_lifecycle", fibLifecycleDown0500ReachedYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.0500.youngest_directional_close_age_log1p", "fib_lifecycle_down_0500_youngest_directional_close_age_log1p", "fibonacci_lifecycle", fibLifecycleDown0500DirectionalCloseYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.0618.reached_count_log", "fib_lifecycle_down_0618_reached_count_log", "fibonacci_lifecycle", fibLifecycleDown0618ReachedCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0618.directional_close_count_log", "fib_lifecycle_down_0618_directional_close_count_log", "fibonacci_lifecycle", fibLifecycleDown0618DirectionalCloseCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0618.directional_break_count_log", "fib_lifecycle_down_0618_directional_break_count_log", "fibonacci_lifecycle", fibLifecycleDown0618DirectionalBreakCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0618.close_back_through_count_log", "fib_lifecycle_down_0618_close_back_through_count_log", "fibonacci_lifecycle", fibLifecycleDown0618CloseBackThroughCountLogCol, 13},
+    {"fibonacci_lifecycle.down.0618.youngest_reach_age_log1p", "fib_lifecycle_down_0618_youngest_reach_age_log1p", "fibonacci_lifecycle", fibLifecycleDown0618ReachedYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.0618.youngest_directional_close_age_log1p", "fib_lifecycle_down_0618_youngest_directional_close_age_log1p", "fibonacci_lifecycle", fibLifecycleDown0618DirectionalCloseYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.a_penetration_count_log", "fib_lifecycle_down_a_penetration_count_log", "fibonacci_lifecycle", fibLifecycleDownAPenetrationCountLogCol, 13},
+    {"fibonacci_lifecycle.down.a_close_beyond_count_log", "fib_lifecycle_down_a_close_beyond_count_log", "fibonacci_lifecycle", fibLifecycleDownACloseBeyondCountLogCol, 13},
+    {"fibonacci_lifecycle.down.youngest_a_penetration_age_log1p", "fib_lifecycle_down_youngest_a_penetration_age_log1p", "fibonacci_lifecycle", fibLifecycleDownAPenetrationYoungestAgeLogCol, 13},
+    {"fibonacci_lifecycle.down.youngest_a_close_beyond_age_log1p", "fib_lifecycle_down_youngest_a_close_beyond_age_log1p", "fibonacci_lifecycle", fibLifecycleDownACloseBeyondYoungestAgeLogCol, 13},
 }};
 
 // Keep catalog validation separate from lookup so focused tests can exercise
@@ -295,12 +341,18 @@ inline bool ChannelAvailableForSemanticLayout(const Channel& channel,
                      channel.introducedSemanticLayout == 10 ||
                      channel.introducedSemanticLayout == 11 ||
                      channel.introducedSemanticLayout == 12;
+        case 13: return channel.introducedSemanticLayout == 8 ||
+                     channel.introducedSemanticLayout == 9 ||
+                     channel.introducedSemanticLayout == 10 ||
+                     channel.introducedSemanticLayout == 11 ||
+                     channel.introducedSemanticLayout == 12 ||
+                     channel.introducedSemanticLayout == 13;
         default: return false;
     }
 }
 
 inline std::vector<const Channel*> ResolvePrefix(std::string_view prefix,
-                                                  int semanticLayoutVersion = 12)
+                                                  int semanticLayoutVersion = 13)
 {
     ValidateRegistry();
     std::vector<const Channel*> result;
