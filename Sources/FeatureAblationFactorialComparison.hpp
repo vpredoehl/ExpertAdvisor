@@ -80,7 +80,9 @@ struct Report
 };
 
 // Argument grammar:
-//   Y11:Y01:Y10:Y00;Y11:Y01:Y10:Y00@MASK11/MASK01/MASK10/MASK00
+//   [FACTOR_A:FACTOR_B|]Y11:Y01:Y10:Y00;Y11:Y01:Y10:Y00@MASK11/MASK01/MASK10/MASK00
+// FACTOR_A and FACTOR_B are optional lowercase machine identifiers. Omitting
+// them retains the original counts/ages labels for existing invocations.
 // The four masks are canonicalized before evidence is loaded.  ';', '@', and
 // '/' are deliberately not feature-ablation token characters, while commas
 // remain available inside an individual mask expression.

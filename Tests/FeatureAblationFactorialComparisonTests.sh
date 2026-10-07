@@ -18,6 +18,7 @@ mkdir -p "${build_dir}"
 scheduler_source="${repo_root}/Sources/SchedulerCore/ExperimentScheduler.cpp"
 service_source="${repo_root}/Sources/FeatureAblationFactorialComparisonService.cpp"
 rg -q -- '--compare-feature-ablation-factorial=' "${scheduler_source}"
+rg -q -- '\[FACTOR_A:FACTOR_B|\]Y11:Y01:Y10:Y00' "${scheduler_source}"
 rg -q 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ' "${service_source}"
 if rg -n '\b(pqxx::work|INSERT|UPDATE|DELETE|Persist)\b' "${service_source}"; then
     printf '%s\n' 'factorial comparison database adapter gained a write path' >&2

@@ -10435,7 +10435,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "No winner, ranking, recommendation, or database write is produced.\n"
         << "Usage: " << exe
         << " --compare-feature-ablation-factorial="
-           "Y11:Y01:Y10:Y00;Y11:Y01:Y10:Y00@MASK11/MASK01/MASK10/MASK00\n"
+           "[FACTOR_A:FACTOR_B|]Y11:Y01:Y10:Y00;Y11:Y01:Y10:Y00@MASK11/MASK01/MASK10/MASK00\n"
         << "Read-only matched-seed 2x2 feature-ablation report. Y11 is factor-A "
            "on/factor-B on, Y01 is A off/B on, Y10 is A on/B off, and Y00 is "
            "both off. The four declared masks are canonicalized and must exactly "
@@ -10444,7 +10444,9 @@ void PrintExperimentSchedulerHelp(const char* executable)
            "plus descriptive factor-A, factor-B, and interaction effects using "
            "ON-minus-OFF arithmetic. All other configured identity and completed "
            "execution provenance must match; missing metrics are disclosed, not "
-           "pooled. No significance inference, winner, ranking, or database write "
+           "pooled. Optional factor labels must be distinct lowercase machine "
+           "identifiers ([a-z][a-z0-9_]{0,62}); omitted labels remain counts/ages. "
+           "No significance inference, winner, ranking, or database write "
            "is produced.\n"
         << "Usage: " << exe
         << " --validate-controlled-replication-study=PATH\n"

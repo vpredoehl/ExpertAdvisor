@@ -91,10 +91,23 @@ long long ParseId(std::string_view text)
     return value;
 }
 
+bool IsMachineIdentifier(std::string_view value)
+{
+    if (value.empty() || value.size() > 63 ||
+        value.front() < 'a' || value.front() > 'z')
+        return false;
+    return std::all_of(value.begin(), value.end(), [](char character)
+    {
+        return (character >= 'a' && character <= 'z') ||
+            (character >= '0' && character <= '9') || character == '_';
+    });
+}
+
 void ValidateDesign(Design& design)
 {
-    if (design.factorALabel.empty() || design.factorBLabel.empty())
-        throw std::invalid_argument("feature_ablation_factorial_factor_label_empty");
+    if (!IsMachineIdentifier(design.factorALabel) ||
+        !IsMachineIdentifier(design.factorBLabel))
+        throw std::invalid_argument("feature_ablation_factorial_factor_label_invalid");
     if (design.factorALabel == design.factorBLabel)
         throw std::invalid_argument("feature_ablation_factorial_factor_labels_equal");
     std::set<std::string> masks;
@@ -200,13 +213,25 @@ Command ParseCommand(std::string_view text)
     if (text.empty() || at == std::string_view::npos ||
         at != text.rfind('@'))
         throw std::invalid_argument("feature_ablation_factorial_argument_invalid");
-    const std::string_view members = text.substr(0, at);
+    std::string_view members = text.substr(0, at);
     const std::string_view masks = text.substr(at + 1);
     const auto maskParts = Split(masks, '/');
     if (maskParts.size() != 4)
         throw std::invalid_argument("feature_ablation_factorial_requires_four_masks");
 
     Command command;
+    const std::size_t labelSeparator = members.find('|');
+    if (labelSeparator != std::string_view::npos)
+    {
+        if (labelSeparator != members.rfind('|'))
+            throw std::invalid_argument("feature_ablation_factorial_factor_labels_invalid");
+        const auto labels = Split(members.substr(0, labelSeparator), ':');
+        if (labels.size() != 2)
+            throw std::invalid_argument("feature_ablation_factorial_factor_labels_invalid");
+        command.design.factorALabel = std::string(labels[0]);
+        command.design.factorBLabel = std::string(labels[1]);
+        members.remove_prefix(labelSeparator + 1);
+    }
     for (std::size_t index = 0; index < 4; ++index)
         command.design.expectedMasks[index] = std::string(maskParts[index]);
     ValidateDesign(command.design);

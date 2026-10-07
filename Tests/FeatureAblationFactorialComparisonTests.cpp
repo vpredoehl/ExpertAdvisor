@@ -134,6 +134,13 @@ Factorial::Command Command()
         kMask01 + "/" + kMask10 + "/");
 }
 
+Factorial::Command CustomLabelCommand()
+{
+    return Factorial::ParseCommand(
+        "retracement_ages:a_boundary_ages|101:102:103:104;105:106:107:108@" +
+        std::string(kMask11) + "/" + kMask01 + "/" + kMask10 + "/");
+}
+
 Source ValidSource()
 {
     Source source;
@@ -167,6 +174,8 @@ int main()
     assert(command.seedCells.size() == 2);
     assert(command.design.expectedMasks[0] == kMask11);
     assert(command.design.expectedMasks[3].empty());
+    assert(command.design.factorALabel == "counts");
+    assert(command.design.factorBLabel == "ages");
 
     const auto source = ValidSource();
     const auto report = Factorial::Evaluate(command, source);
@@ -181,6 +190,22 @@ int main()
     assert(std::fabs(*aggregate.descriptiveFactorAMainEffectMean - 7.5) < 1e-12);
     assert(std::fabs(*aggregate.descriptiveFactorBMainEffectMean - 6.0) < 1e-12);
     assert(std::fabs(*aggregate.descriptiveInteractionMean + 3.0) < 1e-12);
+
+    // Caller-declared labels are durable report identity, not arithmetic
+    // inputs. They allow a subsequent factorial to name different features.
+    const auto customLabels = Factorial::Evaluate(CustomLabelCommand(), source);
+    assert(customLabels.design.factorALabel == "retracement_ages");
+    assert(customLabels.design.factorBLabel == "a_boundary_ages");
+    const auto& customAggregate = Metric(customLabels, "aggregate_return");
+    assert(customAggregate.descriptiveFactorAMainEffectMean ==
+           aggregate.descriptiveFactorAMainEffectMean);
+    assert(customAggregate.descriptiveFactorBMainEffectMean ==
+           aggregate.descriptiveFactorBMainEffectMean);
+    assert(customAggregate.descriptiveInteractionMean ==
+           aggregate.descriptiveInteractionMean);
+    const std::string customRendered = Factorial::Render(customLabels);
+    assert(customRendered.find("factor_a=retracement_ages") != std::string::npos);
+    assert(customRendered.find("factor_b=a_boundary_ages") != std::string::npos);
     // All three baseline comparisons intentionally permit the declared,
     // nested non-empty ablation contrasts only in this factorial path.
     assert(report.seeds[0].comparisons[0].intentionalDifferences.size() == 1);
@@ -225,7 +250,11 @@ int main()
 
     for (std::string_view invalid : {"", "101:102:103@a/b/c/d",
                                      "101:102:103:104@a/b/c",
-                                     "101:102:103:104@a/a/b/c"})
+                                     "101:102:103:104@a/a/b/c",
+                                     "Retracement:ages|101:102:103:104@a/b/c/d",
+                                     "retracement-ages:ages|101:102:103:104@a/b/c/d",
+                                     "ages:ages|101:102:103:104@a/b/c/d",
+                                     "retracement:ages:extra|101:102:103:104@a/b/c/d"})
     {
         try { (void)Factorial::ParseCommand(invalid); assert(false); }
         catch (const std::invalid_argument&) {}
