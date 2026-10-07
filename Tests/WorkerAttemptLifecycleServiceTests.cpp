@@ -199,6 +199,42 @@ int main()
     assert(experimentRequest.canonicalManifestPath ==
            "/tmp/layout8/manifest.json");
 
+    ReservedWorkerAttempt dedicatedTrainAttempt = ExperimentAttempt();
+    dedicatedTrainAttempt.workerAttemptId = 74;
+    dedicatedTrainAttempt.canonicalExecutablePath =
+        "/tmp/lstm-train-worker";
+    repository.reservationResult = {
+        WorkerAttemptReservationStatus::Reserved,
+        dedicatedTrainAttempt};
+    WorkerAttemptLifecycleService dedicatedTrainService{
+        repository,
+        {.schedulerInvocationId = "scheduler-a", .schedulerFencingToken = 17,
+         .selectedWorkerCanonicalExecutablePath = "/tmp/lstm-train-worker",
+         .semanticLayoutVersion = 13,
+         .modelInputWidth = 171,
+         .semanticWorkerRole = "train",
+         .sourceCommit = "dedicated-layout-13-commit",
+         .executableSha256 = "dedicated-layout-13-sha256",
+         .runtimeIdentity = "dedicated-layout-13-runtime",
+         .canonicalManifestPath = "/tmp/layout13/train/manifest.json"}};
+    const auto dedicatedTrain = dedicatedTrainService.reserveExperiment(
+        {41, "train", "/tmp/train.log", "nonce-dedicated", false});
+    assert(dedicatedTrain && dedicatedTrain->workerAttemptId == 74);
+    assert(repository.experimentReservation);
+    assert(repository.experimentReservation->canonicalExecutablePath ==
+           "/tmp/lstm-train-worker");
+    assert(repository.experimentReservation->semanticLayoutVersion == 13);
+    assert(repository.experimentReservation->modelInputWidth == 171);
+    assert(repository.experimentReservation->semanticWorkerRole == "train");
+    dedicatedTrainService.recordSpawned(
+        {*dedicatedTrain, 43211, "dedicated-start",
+         "/tmp/lstm-train-worker --train --scheduler-experiment-id=41 "
+         "--scheduler-worker-attempt-id=74",
+         true});
+    assert(repository.spawned);
+    assert(repository.spawned->canonicalExecutablePath ==
+           "/tmp/lstm-train-worker");
+
     ReservedWorkerAttempt checkpointAttempt{
         72,
         "scheduler-a:worker:nonce-b:checkpoint_infer:88",

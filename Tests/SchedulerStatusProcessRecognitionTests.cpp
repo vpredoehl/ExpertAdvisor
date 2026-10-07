@@ -34,6 +34,20 @@ int main()
     assert(IsSchedulerStatusSchedulerProcessCommand(
         "LSTM --schedule-experiments"));
 
+    const std::string dedicatedTrain =
+        "/Volumes/Developer SSD/ExpertAdvisor/lstm-train-worker --train "
+        "--scheduler-experiment-id=42 --scheduler-worker-attempt-id=84";
+    assert(IsSchedulerStatusWorkerProcessCommand(dedicatedTrain));
+    assert(IsSchedulerStatusWorkerProcessCommand(
+        "/opt/ExpertAdvisor/LSTM_Release --train"));
+    assert(IsSchedulerStatusWorkerProcessCommand("LSTM --train"));
+    assert(!IsSchedulerStatusWorkerProcessCommand(
+        "/opt/ExpertAdvisor/lstm-train-worker-helper --train"));
+    assert(!IsSchedulerStatusWorkerProcessCommand(
+        "/usr/bin/printf lstm-train-worker --train"));
+    assert(!IsSchedulerStatusWorkerProcessCommand(
+        "/opt/ExpertAdvisor/lstm-train-worker --train-extra"));
+
     assert(!IsSchedulerStatusSchedulerProcessCommand(
         "/opt/ExpertAdvisor/lstm-infer-worker --infer"));
     assert(!IsSchedulerStatusSchedulerProcessCommand(

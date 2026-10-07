@@ -44,6 +44,7 @@ struct Fixture
     fs::path root;
     fs::path executable6;
     fs::path executable7;
+    fs::path trainingExecutable7;
     fs::path inferenceExecutable7;
 
     Fixture()
@@ -54,6 +55,8 @@ struct Fixture
         root = created;
         executable6 = artifact(6, kCommit6, kHash6) / "LSTM_Release";
         executable7 = artifact(7, kCommit7, kHash7) / "LSTM_Release";
+        trainingExecutable7 = roleArtifact(7, "train", kCommit7,
+                                           kHash7) / "lstm-train-worker";
         inferenceExecutable7 = roleArtifact(7, "infer", kInferCommit7,
                                             kInferHash7) / "lstm-infer-worker";
         writeExecutable(executable6, "worker-six\n");
@@ -243,6 +246,68 @@ struct Fixture
             "/LSTM_Release\",\"manifest\":\"layout7/" + kCommit7 + "/" +
             kHash7 + "/manifest.json\",\"runtime_identity\":\"" +
             kRuntimeIdentity + "\",\"capabilities\":[\"train\",\"infer\",\"analyze\"]},"
+            "{\"semantic_layout\":7,\"worker_role\":\"infer\","
+            "\"artifact_manifest_schema_version\":2,\"worker_rule\":\"current\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kInferCommit7} + "\",\"sha256\":\"" + kInferHash7 +
+            "\",\"executable\":\"layout7/infer/" + kInferCommit7 + "/" +
+            kInferHash7 + "/lstm-infer-worker\",\"manifest\":\"layout7/infer/" +
+            kInferCommit7 + "/" + kInferHash7 +
+            "/manifest.json\",\"runtime_identity\":\"" + kRuntimeIdentity +
+            "\",\"capabilities\":[\"infer\"]}]}");
+    }
+
+    void writeDedicatedRoleAwareRegistry(
+        bool featureAblationQualified = true)
+    {
+        const std::string trainingCapabilities = featureAblationQualified
+            ? "[\"train\",\"train_feature_ablation_v1\"]"
+            : "[\"train\"]";
+        writeExecutable(trainingExecutable7,
+            "#!/bin/sh\n"
+            "worker_dir=${0%/*}\n"
+            "test -r \"$worker_dir/default.metallib\" || exit 40\n"
+            "test -r \"$worker_dir/MetaNN.metallib\" || exit 41\n"
+            "exit 0\n");
+        writeExecutable(inferenceExecutable7, "infer-worker\n");
+        writeManifest(6, kCommit6, kHash6, "historical", {"train"});
+        write(trainingExecutable7.parent_path() / "manifest.json",
+            "{\"schema_version\":2,\"semantic_layout\":7,\"storage\":\"immutable\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kCommit7} + "\",\"sha256\":\"" + kHash7 +
+            "\",\"executable_identity\":\"lstm-train-worker\","
+            "\"worker_role\":\"train\",\"capabilities\":" +
+            trainingCapabilities + "}");
+        write(inferenceExecutable7.parent_path() / "manifest.json",
+            "{\"schema_version\":2,\"semantic_layout\":7,\"storage\":\"immutable\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kInferCommit7} + "\",\"sha256\":\"" + kInferHash7 +
+            "\",\"executable_identity\":\"lstm-infer-worker\","
+            "\"worker_role\":\"infer\",\"capabilities\":[\"infer\"]}");
+        linkRuntime(trainingExecutable7.parent_path());
+        linkRuntime(inferenceExecutable7.parent_path());
+        write(root / "registry.json",
+            "{\"schema_version\":4,\"current_layout\":7,\"runtimes\":["
+            "{\"identity\":\"" + std::string{kRuntimeIdentity} +
+            "\",\"directory\":\"runtime/" + kRuntimeIdentity +
+            "\",\"manifest\":\"runtime/" + kRuntimeIdentity +
+            "/manifest.json\"}],\"workers\":["
+            "{\"semantic_layout\":6,\"worker_role\":\"train\","
+            "\"artifact_manifest_schema_version\":1,\"worker_rule\":\"historical\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kCommit6} + "\",\"sha256\":\"" + kHash6 +
+            "\",\"executable\":\"layout6/" + kCommit6 + "/" + kHash6 +
+            "/LSTM_Release\",\"manifest\":\"layout6/" + kCommit6 + "/" +
+            kHash6 + "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity + "\",\"capabilities\":[\"train\"]},"
+            "{\"semantic_layout\":7,\"worker_role\":\"train\","
+            "\"artifact_manifest_schema_version\":2,\"worker_rule\":\"current\","
+            "\"model_input_width\":77,\"source_commit\":\"" +
+            std::string{kCommit7} + "\",\"sha256\":\"" + kHash7 +
+            "\",\"executable\":\"layout7/train/" + kCommit7 + "/" + kHash7 +
+            "/lstm-train-worker\",\"manifest\":\"layout7/train/" + kCommit7 +
+            "/" + kHash7 + "/manifest.json\",\"runtime_identity\":\"" +
+            kRuntimeIdentity + "\",\"capabilities\":" + trainingCapabilities + "},"
             "{\"semantic_layout\":7,\"worker_role\":\"infer\","
             "\"artifact_manifest_schema_version\":2,\"worker_rule\":\"current\","
             "\"model_input_width\":77,\"source_commit\":\"" +
@@ -543,6 +608,59 @@ int main()
            fs::canonical(roleAware.executable7));
     assert(roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Infer) !=
            roleAwareRegistry.find(7, EA::Scheduler::SemanticWorkerRole::Train));
+
+    const EA::Scheduler::SemanticWorkerCapabilities dedicatedAblationRequired{
+        EA::Scheduler::kTrainFeatureAblationCapability};
+    Fixture dedicatedRoleAware;
+    dedicatedRoleAware.writeDedicatedRoleAwareRegistry();
+    const auto dedicatedRegistry = dedicatedRoleAware.load();
+    const auto dedicatedTraining = EA::Scheduler::SelectTrainingWorker(
+        {{77}, {7}, true}, dedicatedRegistry, dedicatedAblationRequired);
+    const auto dedicatedInference =
+        dedicatedRegistry.selectInferenceWorker({{77}, {7}, true});
+    const auto historicalTraining =
+        dedicatedRegistry.selectTrainingReferenceWorker({{77}, {6}, true});
+    assert(dedicatedTraining.selected);
+    assert(dedicatedTraining.canonicalExecutablePath ==
+           fs::canonical(dedicatedRoleAware.trainingExecutable7));
+    assert(dedicatedInference.selected);
+    assert(dedicatedInference.canonicalExecutablePath ==
+           fs::canonical(dedicatedRoleAware.inferenceExecutable7));
+    assert(historicalTraining.selected);
+    assert(historicalTraining.canonicalExecutablePath ==
+           fs::canonical(dedicatedRoleAware.executable6));
+    AssertTrainingCommandIdentity(historicalTraining, dedicatedTraining);
+
+    Fixture dedicatedWithoutAblation;
+    dedicatedWithoutAblation.writeDedicatedRoleAwareRegistry(false);
+    const auto unqualifiedDedicatedRegistry = dedicatedWithoutAblation.load();
+    assert(EA::Scheduler::SelectTrainingWorker(
+               {{77}, {7}, true}, unqualifiedDedicatedRegistry).selected);
+    const auto rejectedAblation = EA::Scheduler::SelectTrainingWorker(
+        {{77}, {7}, true}, unqualifiedDedicatedRegistry,
+        dedicatedAblationRequired);
+    assert(!rejectedAblation.selected);
+    assert(Contains(rejectedAblation.diagnostic,
+                    "semantic_worker_capability_incompatible"));
+
+    Fixture wrongDedicatedPath;
+    wrongDedicatedPath.writeDedicatedRoleAwareRegistry();
+    Fixture::replaceText(
+        wrongDedicatedPath.root / "registry.json",
+        "/lstm-train-worker\",\"manifest\"",
+        "/LSTM_Release\",\"manifest\"");
+    assert(Contains(Failure([&] { (void)wrongDedicatedPath.load(); }),
+                    "semantic_worker_registry_malformed:content_addressed_path_mismatch"));
+
+    Fixture wrongDedicatedIdentity;
+    wrongDedicatedIdentity.writeDedicatedRoleAwareRegistry();
+    Fixture::replaceText(
+        wrongDedicatedIdentity.trainingExecutable7.parent_path() /
+            "manifest.json",
+        "\"executable_identity\":\"lstm-train-worker\"",
+        "\"executable_identity\":\"LSTM_Release\"");
+    assert(Contains(Failure([&] { (void)wrongDedicatedIdentity.load(); }),
+                    "semantic_worker_manifest_mismatch"));
 
     Fixture ablationOnInferenceWorker;
     ablationOnInferenceWorker.writeRoleAwareRegistry();

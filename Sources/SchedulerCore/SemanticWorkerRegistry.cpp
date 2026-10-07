@@ -608,7 +608,9 @@ SemanticWorkerArtifact ParseWorker(
     const std::string manifestRelative =
         String(Required(object, "manifest"), "manifest");
     const std::string executableIdentity = roleAwareArtifact
-        ? (worker.role == SemanticWorkerRole::Infer ? "lstm-infer-worker" : "LSTM_Release")
+        ? (worker.role == SemanticWorkerRole::Infer
+               ? "lstm-infer-worker"
+               : "lstm-train-worker")
         : "LSTM_Release";
     if (executableRelative != expectedPrefix + executableIdentity ||
         manifestRelative != expectedPrefix + "manifest.json")

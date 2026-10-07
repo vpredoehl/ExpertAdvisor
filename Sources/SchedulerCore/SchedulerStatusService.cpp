@@ -745,11 +745,9 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
 
         const bool isScheduler =
             IsSchedulerStatusSchedulerProcessCommand(command);
-        const bool isLegacyLstm =
-            SchedulerStatusCommandHasExecutableBasename(
-                command, "LSTM_Release") ||
-            SchedulerStatusCommandHasExecutableBasename(command, "LSTM");
-        if (!isScheduler && !isLegacyLstm)
+        const bool isWorker =
+            IsSchedulerStatusWorkerProcessCommand(command);
+        if (!isScheduler && !isWorker)
             continue;
 
         if (isScheduler)
@@ -1925,7 +1923,7 @@ std::vector<std::string> BuildSchedulerStatusWarnings(const SchedulerStatusProce
             *processes.maxAnalyzeProcs, accounting.managedAnalyze))
         warnings.push_back("analysis worker count exceeds max-analyze-procs");
     if (!accounting.unmanagedWorkers.empty())
-        warnings.push_back("unmanaged LSTM_Release worker processes detected: " + std::to_string(accounting.unmanagedWorkers.size()));
+        warnings.push_back("unmanaged scheduler worker processes detected: " + std::to_string(accounting.unmanagedWorkers.size()));
     const int identityMismatches = accounting.identityMismatchTrain +
         accounting.identityMismatchInfer + accounting.identityMismatchAnalyze;
     if (identityMismatches > 0)

@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -59,13 +60,17 @@ std::optional<ScientificExecutionProvenance> ReadPersistedExecution(
         row["semantic_layout_version"].is_null() ||
         row["model_input_width"].is_null() || row["semantic_worker_role"].is_null() ||
         row["source_commit"].is_null() || row["executable_sha256"].is_null() ||
-        row["runtime_identity"].is_null()) return std::nullopt;
+        row["runtime_identity"].is_null() ||
+        row["canonical_executable_path"].is_null()) return std::nullopt;
+    const std::string executableName = std::filesystem::path{
+        TextOrEmpty(row, "canonical_executable_path")}.filename().string();
+    if (executableName.empty()) return std::nullopt;
     return ScientificExecutionProvenance{
         row["worker_attempt_id"].as<long long>(), std::string{phase},
         row["semantic_layout_version"].as<int>(), row["model_input_width"].as<int>(),
         row["semantic_worker_role"].as<std::string>(), row["source_commit"].as<std::string>(),
         row["executable_sha256"].as<std::string>(),
-        phase == "train" ? "LSTM_Release" : "lstm-infer-worker",
+        executableName,
         row["runtime_identity"].as<std::string>(),
         TextOrEmpty(row, "canonical_manifest_path")};
 }
@@ -118,7 +123,7 @@ void LoadAuthoritativeExecutionProvenance(pqxx::transaction_base& transaction,
         ContractFailure(experimentId,
                         "train_producer_worker_attempt_id_missing");
     const pqxx::result training = transaction.exec(
-        "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
+        "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.canonical_executable_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
         "FROM model m JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=m.producer_worker_attempt_id "
         "WHERE m.model_id=$2 AND m.experiment_id=$1 AND a.experiment_id=$1 "
         "AND a.worker_kind='experiment' AND a.lifecycle_phase='train' "
@@ -146,7 +151,7 @@ void LoadAuthoritativeExecutionProvenance(pqxx::transaction_base& transaction,
             ContractFailure(experimentId,
                             "infer_producer_worker_attempt_id_missing");
         const pqxx::result inference = transaction.exec(
-            "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
+            "SELECT a.worker_attempt_id,a.semantic_layout_version,a.model_input_width,a.semantic_worker_role,a.source_commit,a.executable_sha256,a.runtime_identity,a.canonical_manifest_path,a.canonical_executable_path,a.lifecycle_state,a.completed_at,a.exit_code,a.reconciliation_result "
             "FROM inference_eval_result r JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=r.producer_worker_attempt_id "
             "WHERE r.id=$2 AND r.model_id=$3 AND a.experiment_id=$1 "
             "AND a.worker_kind='experiment' AND a.lifecycle_phase='infer' "

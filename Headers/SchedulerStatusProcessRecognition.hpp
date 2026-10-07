@@ -86,4 +86,20 @@ inline bool IsSchedulerStatusSchedulerProcessCommand(
            SchedulerStatusCommandHasExecutableBasename(command, "LSTM");
 }
 
+// Candidate discovery only. Authoritative ownership is established later from
+// the persisted attempt's PID, process group, start identity, executable path,
+// command line, and attempt identity.
+inline bool IsSchedulerStatusWorkerProcessCommand(std::string_view command)
+{
+    if (SchedulerStatusCommandHasExecutableBasename(command, "LSTM_Release") ||
+        SchedulerStatusCommandHasExecutableBasename(command, "LSTM"))
+    {
+        return true;
+    }
+
+    return SchedulerStatusCommandHasExecutableBasename(
+               command, "lstm-train-worker") &&
+           SchedulerStatusCommandHasArgument(command, "--train");
+}
+
 } // namespace EA::ExperimentScheduler

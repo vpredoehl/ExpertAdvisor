@@ -368,9 +368,25 @@ int main()
     assert(control.finalModelId == controlIds.model);
     assert(control.trainingExecution &&
            control.trainingExecution->workerAttemptId == controlIds.experiment * 10 + 1);
+    assert(control.trainingExecution->executableName == "LSTM_Release");
     assert(control.inferenceExecution &&
            control.inferenceExecution->workerAttemptId == controlIds.experiment * 10 + 2);
+    assert(control.inferenceExecution->executableName == "lstm-infer-worker");
     assert(treatment.finalModelId == treatmentIds.model);
+    transaction.exec(
+        "UPDATE experiment_scheduler_worker_attempt SET "
+        "canonical_executable_path=$1 WHERE worker_attempt_id=$2;",
+        pqxx::params{
+            "/fixtures/Builds/SemanticWorkers/layout13/train/"
+            "c8e74e26f913c31bf73e6bc168c213a1710be098/"
+            "b6e717e6692c5d2fd6829bc9c8898d7b16982a48ce207271cdff8f2ad33f955e/"
+            "lstm-train-worker",
+            treatmentIds.experiment * 10 + 1});
+    const Pair::ArmEvidence dedicatedTreatment =
+        LoadArm(transaction, treatmentIds.experiment);
+    assert(dedicatedTreatment.trainingExecution);
+    assert(dedicatedTreatment.trainingExecution->executableName ==
+           "lstm-train-worker");
 
     // A historical artifact with a NULL persisted producer link is a precise
     // missing-linkage failure.  It is never inferred from the otherwise
