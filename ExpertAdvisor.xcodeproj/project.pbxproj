@@ -52,6 +52,50 @@
 		0F6100033610000100AAA001 /* LegacyDiagnosticCli.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6100013610000100AAA001 /* LegacyDiagnosticCli.cpp */; };
 		0F6200033610000100AAA001 /* LaunchArguments.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6200013610000100AAA001 /* LaunchArguments.cpp */; };
 		0F6300033610000100AAA001 /* CheckpointTrainingControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6300013610000100AAA001 /* CheckpointTrainingControl.cpp */; };
+		0FA100023A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA100013A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp */; };
+		0FA200023A00000100AAA001 /* PersistedModelRuntimeConfig.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA200013A00000100AAA001 /* PersistedModelRuntimeConfig.cpp */; };
+		0FA300023A00000100AAA001 /* ModelRuntimeValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA300013A00000100AAA001 /* ModelRuntimeValidation.cpp */; };
+		0FA400023A00000100AAA001 /* RuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA400003A00000100AAA001 /* RuntimeLogging.cpp */; };
+		0FA400013A00000100AAA001 /* RuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA400003A00000100AAA001 /* RuntimeLogging.cpp */; };
+		0FA500013A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA500003A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp */; };
+		0FA500023A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA500003A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp */; };
+		0FA600013A00000100AAA001 /* LstmRuntimeConstruction.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA600003A00000100AAA001 /* LstmRuntimeConstruction.cpp */; };
+		0FA600023A00000100AAA001 /* LstmRuntimeConstruction.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA600003A00000100AAA001 /* LstmRuntimeConstruction.cpp */; };
+		0FA700013A00000100AAA001 /* RuntimeDatabaseConnection.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA700003A00000100AAA001 /* RuntimeDatabaseConnection.cpp */; };
+		0FA700023A00000100AAA001 /* RuntimeDatabaseConnection.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA700003A00000100AAA001 /* RuntimeDatabaseConnection.cpp */; };
+		0FA800013A00000100AAA001 /* LaunchRuntimeConfig.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA800003A00000100AAA001 /* LaunchRuntimeConfig.cpp */; };
+		0FA800023A00000100AAA001 /* LaunchRuntimeConfig.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA800003A00000100AAA001 /* LaunchRuntimeConfig.cpp */; };
+		0FA900013A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA900003A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp */; };
+		0FA900023A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA900003A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp */; };
+		0FAA00013A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAA00003A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp */; };
+		0FAA00023A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAA00003A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp */; };
+		0FAB00013A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAB00003A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp */; };
+		0FAB00023A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAB00003A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp */; };
+		0FAC10013A00000100AAA001 /* TrainWorkerMain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAC10003A00000100AAA001 /* TrainWorkerMain.cpp */; };
+		0FAC20013A00000100AAA001 /* TrainingWorkerApplication.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAC20003A00000100AAA001 /* TrainingWorkerApplication.cpp */; };
+		0FAD00013A00000100AAA001 /* LaunchArguments.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6200013610000100AAA001 /* LaunchArguments.cpp */; };
+		0FAD00023A00000100AAA001 /* CheckpointTrainingControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F6300013610000100AAA001 /* CheckpointTrainingControl.cpp */; };
+		0FAD00033A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA100013A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp */; };
+		0FAD00043A00000100AAA001 /* PersistedModelRuntimeConfig.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA200013A00000100AAA001 /* PersistedModelRuntimeConfig.cpp */; };
+		0FAD00053A00000100AAA001 /* ModelRuntimeValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA300013A00000100AAA001 /* ModelRuntimeValidation.cpp */; };
+		0FAD00063A00000100AAA001 /* RuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA400003A00000100AAA001 /* RuntimeLogging.cpp */; };
+		0FAD00073A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA500003A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp */; };
+		0FAD00083A00000100AAA001 /* LstmRuntimeConstruction.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA600003A00000100AAA001 /* LstmRuntimeConstruction.cpp */; };
+		0FAD00093A00000100AAA001 /* RuntimeDatabaseConnection.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA700003A00000100AAA001 /* RuntimeDatabaseConnection.cpp */; };
+		0FAD000A3A00000100AAA001 /* LaunchRuntimeConfig.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA800003A00000100AAA001 /* LaunchRuntimeConfig.cpp */; };
+		0FAD000B3A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FA900003A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp */; };
+		0FAD000C3A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAA00003A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp */; };
+		0FAD000D3A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FAB00003A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp */; };
+		0FAD000E3A00000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
+		0FAD000F3A00000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
+		0FAD00103A00000100AAA001 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
+		0FAD00133A00000100AAA001 /* LstmRuntimeLogging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0F32000134C0000100AAA001 /* LstmRuntimeLogging.cpp */; };
+		0FAD00143A00000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
+		0FAD00153A00000100AAA001 /* EconomicEventFeatures.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200343310000100AAA001 /* EconomicEventFeatures.cpp */; };
+		0FAD00163A00000100AAA001 /* EconomicEventRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200383311000100AAA001 /* EconomicEventRepository.cpp */; };
+		0FAD00173A00000100AAA001 /* GlobalExperimentControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */; };
+		0FAD00183A00000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp */; };
+		0FAD00193A00000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
 		0A1000032F70000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		0A1000052F70000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
@@ -633,6 +677,19 @@
 		0F6100013610000100AAA001 /* LegacyDiagnosticCli.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LegacyDiagnosticCli.cpp; path = Sources/LegacyDiagnosticCli.cpp; sourceTree = SOURCE_ROOT; };
 		0F6200013610000100AAA001 /* LaunchArguments.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LaunchArguments.cpp; path = Sources/LaunchArguments.cpp; sourceTree = SOURCE_ROOT; };
 		0F6300013610000100AAA001 /* CheckpointTrainingControl.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CheckpointTrainingControl.cpp; path = Sources/CheckpointTrainingControl.cpp; sourceTree = SOURCE_ROOT; };
+		0FA100013A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TrainingWorkerFeatureAblation.cpp; path = Sources/TrainingWorkerFeatureAblation.cpp; sourceTree = SOURCE_ROOT; };
+		0FA200013A00000100AAA001 /* PersistedModelRuntimeConfig.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PersistedModelRuntimeConfig.cpp; path = Sources/PersistedModelRuntimeConfig.cpp; sourceTree = SOURCE_ROOT; };
+		0FA300013A00000100AAA001 /* ModelRuntimeValidation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ModelRuntimeValidation.cpp; path = Sources/ModelRuntimeValidation.cpp; sourceTree = SOURCE_ROOT; };
+		0FA400003A00000100AAA001 /* RuntimeLogging.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = RuntimeLogging.cpp; path = Sources/RuntimeLogging.cpp; sourceTree = SOURCE_ROOT; };
+		0FA500003A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerRuntimeConfigValidation.cpp; path = Sources/SchedulerRuntimeConfigValidation.cpp; sourceTree = SOURCE_ROOT; };
+		0FA600003A00000100AAA001 /* LstmRuntimeConstruction.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LstmRuntimeConstruction.cpp; path = Sources/LstmRuntimeConstruction.cpp; sourceTree = SOURCE_ROOT; };
+		0FA700003A00000100AAA001 /* RuntimeDatabaseConnection.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = RuntimeDatabaseConnection.cpp; path = Sources/RuntimeDatabaseConnection.cpp; sourceTree = SOURCE_ROOT; };
+		0FA800003A00000100AAA001 /* LaunchRuntimeConfig.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LaunchRuntimeConfig.cpp; path = Sources/LaunchRuntimeConfig.cpp; sourceTree = SOURCE_ROOT; };
+		0FA900003A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = RuntimeEconomicCalendarIdentity.cpp; path = Sources/RuntimeEconomicCalendarIdentity.cpp; sourceTree = SOURCE_ROOT; };
+		0FAA00003A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SchedulerWorkerOwnershipTestBoundary.cpp; path = Sources/SchedulerWorkerOwnershipTestBoundary.cpp; sourceTree = SOURCE_ROOT; };
+		0FAB00003A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = LstmHotspotProfileFinalizer.cpp; path = Sources/LstmHotspotProfileFinalizer.cpp; sourceTree = SOURCE_ROOT; };
+		0FAC10003A00000100AAA001 /* TrainWorkerMain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TrainWorkerMain.cpp; path = LSTM/TrainWorkerMain.cpp; sourceTree = SOURCE_ROOT; };
+		0FAC20003A00000100AAA001 /* TrainingWorkerApplication.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = TrainingWorkerApplication.cpp; path = Sources/TrainingWorkerApplication.cpp; sourceTree = SOURCE_ROOT; };
 		0844268B2ED94F86002DEB21 /* candlestick.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = candlestick.plpgsql; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
@@ -1042,6 +1099,7 @@
 		0F6000123600000100AAA001 /* lstm-analyze-worker */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-analyze-worker"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0F8000023800000100AAA001 /* InferWorkerMain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferWorkerMain.cpp; path = LSTM/InferWorkerMain.cpp; sourceTree = SOURCE_ROOT; };
 		0F8000033800000100AAA001 /* lstm-infer-worker */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-infer-worker"; sourceTree = BUILT_PRODUCTS_DIR; };
+		0FA000013A00000100AAA001 /* lstm-train-worker */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "lstm-train-worker"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0F8000403800000100AAA001 /* ManagedInferenceWorkerCli.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ManagedInferenceWorkerCli.cpp; path = Sources/ManagedInferenceWorkerCli.cpp; sourceTree = SOURCE_ROOT; };
 		0F8000413800000100AAA001 /* ManagedInferenceWorkerCli.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ManagedInferenceWorkerCli.hpp; path = Sources/ManagedInferenceWorkerCli.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -1216,6 +1274,7 @@
 				0F1A004533A0000100AAA001 /* lstm-observer */,
 				0F6000123600000100AAA001 /* lstm-analyze-worker */,
 				0F8000033800000100AAA001 /* lstm-infer-worker */,
+				0FA000013A00000100AAA001 /* lstm-train-worker */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -1241,6 +1300,19 @@
 				0F6100013610000100AAA001 /* LegacyDiagnosticCli.cpp */,
 				0F6200013610000100AAA001 /* LaunchArguments.cpp */,
 				0F6300013610000100AAA001 /* CheckpointTrainingControl.cpp */,
+				0FA100013A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp */,
+				0FA200013A00000100AAA001 /* PersistedModelRuntimeConfig.cpp */,
+				0FA300013A00000100AAA001 /* ModelRuntimeValidation.cpp */,
+				0FA400003A00000100AAA001 /* RuntimeLogging.cpp */,
+				0FA500003A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp */,
+				0FA600003A00000100AAA001 /* LstmRuntimeConstruction.cpp */,
+				0FA700003A00000100AAA001 /* RuntimeDatabaseConnection.cpp */,
+				0FA800003A00000100AAA001 /* LaunchRuntimeConfig.cpp */,
+				0FA900003A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp */,
+				0FAA00003A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp */,
+				0FAB00003A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp */,
+				0FAC10003A00000100AAA001 /* TrainWorkerMain.cpp */,
+				0FAC20003A00000100AAA001 /* TrainingWorkerApplication.cpp */,
 				0F40000234D0000100AAA001 /* SchedulerMain.cpp */,
 				0F1A004433A0000100AAA001 /* ObserverMain.cpp */,
 				0F6000023600000100AAA001 /* AnalyzeWorkerMain.cpp */,
@@ -1890,6 +1962,28 @@
 			productReference = 0F8000033800000100AAA001 /* lstm-infer-worker */;
 			productType = "com.apple.product-type.tool";
 		};
+		0FA000043A00000100AAA001 /* lstm-train-worker */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0FA000053A00000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-train-worker" */;
+			buildPhases = (
+				0FAC00003A00000100AAA001 /* Sources */,
+				0A10000C2F70000100AAA001 /* Frameworks */,
+			);
+			buildRules = ();
+			dependencies = (
+				0F5100053601000100AAA001 /* PBXTargetDependency */,
+				0F5000053500000100AAA001 /* PBXTargetDependency */,
+				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+				0F17000B3370000100AAA001 /* PBXTargetDependency */,
+				0F18000B3380000100AAA001 /* PBXTargetDependency */,
+				0F20000B33D0000100AAA001 /* PBXTargetDependency */,
+			);
+			name = "lstm-train-worker";
+			productName = "lstm-train-worker";
+			productReference = 0FA000013A00000100AAA001 /* lstm-train-worker */;
+			productType = "com.apple.product-type.tool";
+		};
 		0F1700003370000100AAA001 /* ProfitabilityCore */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0F1700043370000100AAA001 /* Build configuration list for PBXNativeTarget "ProfitabilityCore" */;
@@ -1989,6 +2083,7 @@
 				0F1A004C33A0000100AAA001 /* lstm-observer */,
 				0F6000143600000100AAA001 /* lstm-analyze-worker */,
 				0F8000043800000100AAA001 /* lstm-infer-worker */,
+				0FA000043A00000100AAA001 /* lstm-train-worker */,
 				0F7000013700000100AAA001 /* LSTM Scheduler Bundle */,
 			);
 		};
@@ -2111,6 +2206,38 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		0FAC00003A00000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0FAC10013A00000100AAA001 /* TrainWorkerMain.cpp in Sources */,
+				0FAC20013A00000100AAA001 /* TrainingWorkerApplication.cpp in Sources */,
+				0FAD00013A00000100AAA001 /* LaunchArguments.cpp in Sources */,
+				0FAD00023A00000100AAA001 /* CheckpointTrainingControl.cpp in Sources */,
+				0FAD00033A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp in Sources */,
+				0FAD00043A00000100AAA001 /* PersistedModelRuntimeConfig.cpp in Sources */,
+				0FAD00053A00000100AAA001 /* ModelRuntimeValidation.cpp in Sources */,
+				0FAD00063A00000100AAA001 /* RuntimeLogging.cpp in Sources */,
+				0FAD00073A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp in Sources */,
+				0FAD00083A00000100AAA001 /* LstmRuntimeConstruction.cpp in Sources */,
+				0FAD00093A00000100AAA001 /* RuntimeDatabaseConnection.cpp in Sources */,
+				0FAD000A3A00000100AAA001 /* LaunchRuntimeConfig.cpp in Sources */,
+				0FAD000B3A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp in Sources */,
+				0FAD000C3A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp in Sources */,
+				0FAD000D3A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp in Sources */,
+				0FAD000E3A00000100AAA001 /* Tensor.cpp in Sources */,
+				0FAD000F3A00000100AAA001 /* LSTM.cpp in Sources */,
+				0FAD00103A00000100AAA001 /* PricePoint.cpp in Sources */,
+				0FAD00133A00000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
+				0FAD00143A00000100AAA001 /* db_cursor.cpp in Sources */,
+				0FAD00153A00000100AAA001 /* EconomicEventFeatures.cpp in Sources */,
+				0FAD00163A00000100AAA001 /* EconomicEventRepository.cpp in Sources */,
+				0FAD00173A00000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
+				0FAD00183A00000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */,
+				0FAD00193A00000100AAA001 /* CheckpointPolicy.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		084426732ED8DD46002DEB21 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2133,6 +2260,14 @@
 				0F6100023610000100AAA001 /* LegacyDiagnosticCli.cpp in Sources */,
 				0F6200023610000100AAA001 /* LaunchArguments.cpp in Sources */,
 				0F6300023610000100AAA001 /* CheckpointTrainingControl.cpp in Sources */,
+				0FA400013A00000100AAA001 /* RuntimeLogging.cpp in Sources */,
+				0FA500013A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp in Sources */,
+				0FA600013A00000100AAA001 /* LstmRuntimeConstruction.cpp in Sources */,
+				0FA700013A00000100AAA001 /* RuntimeDatabaseConnection.cpp in Sources */,
+				0FA800013A00000100AAA001 /* LaunchRuntimeConfig.cpp in Sources */,
+				0FA900013A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp in Sources */,
+				0FAA00013A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp in Sources */,
+				0FAB00013A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp in Sources */,
 				0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0F2200013800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200053800000100AAA001 /* InferenceRuntime.cpp in Sources */,
@@ -2301,6 +2436,17 @@
 				0F6100033610000100AAA001 /* LegacyDiagnosticCli.cpp in Sources */,
 				0F6200033610000100AAA001 /* LaunchArguments.cpp in Sources */,
 				0F6300033610000100AAA001 /* CheckpointTrainingControl.cpp in Sources */,
+				0FA100023A00000100AAA001 /* TrainingWorkerFeatureAblation.cpp in Sources */,
+				0FA200023A00000100AAA001 /* PersistedModelRuntimeConfig.cpp in Sources */,
+				0FA300023A00000100AAA001 /* ModelRuntimeValidation.cpp in Sources */,
+				0FA400023A00000100AAA001 /* RuntimeLogging.cpp in Sources */,
+				0FA500023A00000100AAA001 /* SchedulerRuntimeConfigValidation.cpp in Sources */,
+				0FA600023A00000100AAA001 /* LstmRuntimeConstruction.cpp in Sources */,
+				0FA700023A00000100AAA001 /* RuntimeDatabaseConnection.cpp in Sources */,
+				0FA800023A00000100AAA001 /* LaunchRuntimeConfig.cpp in Sources */,
+				0FA900023A00000100AAA001 /* RuntimeEconomicCalendarIdentity.cpp in Sources */,
+				0FAA00023A00000100AAA001 /* SchedulerWorkerOwnershipTestBoundary.cpp in Sources */,
+				0FAB00023A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp in Sources */,
 				0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0F2200023800000100AAA001 /* InferenceEvaluationFacts.cpp in Sources */,
 				0F2200063800000100AAA001 /* InferenceRuntime.cpp in Sources */,
@@ -3664,6 +3810,51 @@
 			};
 			name = Release;
 		};
+		0FA000063A00000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
+				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)", /opt/homebrew/opt/libomp/lib);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_CPLUSPLUSFLAGS = ("$(OTHER_CFLAGS)", "-Xpreprocessor", "-fopenmp");
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx", "-lomp");
+				PRODUCT_NAME = "lstm-train-worker";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include, "/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include, /opt/homebrew/opt/libomp/include);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources", "$(DERIVED_FILE_DIR)");
+			};
+			name = Debug;
+		};
+		0FA000073A00000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_STANDARD_LIBRARY_HARDENING = fast;
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_OPTIMIZATION_LEVEL = 3;
+				GCC_PREPROCESSOR_DEFINITIONS = ("NDEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
+				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/$(CURRENT_ARCH)/lstm-train-worker.map";
+				LD_GENERATE_MAP_FILE = YES;
+				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)", /opt/homebrew/opt/libomp/lib);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				OTHER_CPLUSPLUSFLAGS = ("$(OTHER_CFLAGS)", "-Xpreprocessor", "-fopenmp");
+				OTHER_LDFLAGS = ("-lpq", "-lpqxx", "-lomp");
+				PRODUCT_NAME = "lstm-train-worker";
+				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/MetaNN/**", /opt/homebrew/include, "/opt/homebrew/opt/libpqxx@7.10.1/include", /opt/homebrew/opt/libpq/include, /opt/homebrew/opt/libomp/include);
+				USER_HEADER_SEARCH_PATHS = ("$(PROJECT_DIR)/Headers", "$(PROJECT_DIR)/Sources", "$(DERIVED_FILE_DIR)");
+			};
+			name = Release;
+		};
 		0F9000143900000100AAA001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3811,6 +4002,15 @@
 			buildConfigurations = (
 				0F8000503800000100AAA001 /* Debug */,
 				0F8000513800000100AAA001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0FA000053A00000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-train-worker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0FA000063A00000100AAA001 /* Debug */,
+				0FA000073A00000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

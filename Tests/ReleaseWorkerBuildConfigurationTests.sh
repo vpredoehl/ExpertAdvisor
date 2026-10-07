@@ -8,11 +8,16 @@ analyze_scheme="${repo_root}/ExpertAdvisor.xcodeproj/xcshareddata/xcschemes/LSTM
 # Release map files must be unique per linker architecture invocation. Xcode
 # links universal command-line tools once per architecture and otherwise
 # reports duplicate map-file producers before it can emit the executable.
-for target in lstm-scheduler lstm-analyze-worker lstm-infer-worker
+for target in lstm-scheduler lstm-analyze-worker lstm-infer-worker lstm-train-worker
 do
     rg -Fq "LD_MAP_FILE_PATH = \"\$(TARGET_TEMP_DIR)/\$(CURRENT_ARCH)/${target}.map\";" \
         "${project}"
 done
+
+train_scheme="${repo_root}/ExpertAdvisor.xcodeproj/xcshareddata/xcschemes/LSTM Train Worker.xcscheme"
+rg -Fq 'BlueprintIdentifier="0FA000043A00000100AAA001"' "${train_scheme}"
+rg -Fq 'BuildableName="lstm-train-worker"' "${train_scheme}"
+! rg -q 'LSTM_TRAIN_WORKER_BUILD=1' "${project}"
 
 # The normal stable DerivedData Release build is also the deployment build for
 # the default scheduler analyzer. Keep that dependency explicit; analysis is
