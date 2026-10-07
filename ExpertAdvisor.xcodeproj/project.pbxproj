@@ -1966,6 +1966,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0FA000053A00000100AAA001 /* Build configuration list for PBXNativeTarget "lstm-train-worker" */;
 			buildPhases = (
+				0FA000083A00000100AAA001 /* Generate train worker build provenance */,
 				0FAC00003A00000100AAA001 /* Sources */,
 				0A10000C2F70000100AAA001 /* Frameworks */,
 			);
@@ -2181,6 +2182,23 @@
 				"$(PROJECT_DIR)/.git",
 			);
 			name = "Generate infer worker build provenance";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"\n";
+		};
+		0FA000083A00000100AAA001 /* Generate train worker build provenance */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py",
+				"$(PROJECT_DIR)/.git",
+			);
+			name = "Generate train worker build provenance";
 			outputPaths = (
 				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
 			);
