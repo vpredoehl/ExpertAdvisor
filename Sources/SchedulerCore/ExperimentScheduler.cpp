@@ -105,6 +105,7 @@
 #include "FeatureAblationPairEvaluationRepository.hpp"
 #include "ExperimentPairComparisonService.hpp"
 #include "ExperimentReplicationComparisonService.hpp"
+#include "FeatureAblationFactorialComparison.hpp"
 #include "ExperimentReplicationPlanningService.hpp"
 #include "ExperimentReplicationMaterialization.hpp"
 #include "ControlledReplicationStudySpecificationService.hpp"
@@ -295,6 +296,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--compare-experiment-replications=", 0) == 0 ||
             arg == "--compare-experiment-replication-families" ||
             arg.rfind("--compare-experiment-replication-families=", 0) == 0 ||
+            arg == "--compare-feature-ablation-factorial" ||
+            arg.rfind("--compare-feature-ablation-factorial=", 0) == 0 ||
             arg == "--validate-controlled-replication-study" ||
             arg.rfind("--validate-controlled-replication-study=", 0) == 0 ||
             arg == "--compare-controlled-replication-study" ||
@@ -1380,6 +1383,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareExperimentReplicationFamilies =
                 EA::ExperimentReplicationComparison::ParseExperimentIdPairFamilies(
                     RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-feature-ablation-factorial")
+        {
+            const std::string value = RequireNextArg(argc, argv, i, arg);
+            (void)EA::FeatureAblationFactorialComparison::ParseCommand(value);
+            options.compareFeatureAblationFactorial = value;
+        }
         else if (arg == "--plan-experiment-replications")
         {
             if (options.planExperimentReplications)
@@ -3282,6 +3291,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareExperimentReplicationFamilies =
                 EA::ExperimentReplicationComparison::ParseExperimentIdPairFamilies(
                     value);
+        else if (SplitOptionWithValue(
+                     arg, "--compare-feature-ablation-factorial", value))
+        {
+            (void)EA::FeatureAblationFactorialComparison::ParseCommand(value);
+            options.compareFeatureAblationFactorial = value;
+        }
         else if (arg == "--validate-controlled-replication-study")
         {
             if (options.validateControlledReplicationStudy)
@@ -3777,6 +3792,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareExperimentPair.has_value() ? 1 : 0) +
         (options.compareExperimentReplications.has_value() ? 1 : 0) +
         (options.compareExperimentReplicationFamilies.has_value() ? 1 : 0) +
+        (options.compareFeatureAblationFactorial.has_value() ? 1 : 0) +
         (options.validateControlledReplicationStudy.has_value() ? 1 : 0) +
         (options.compareControlledReplicationStudy.has_value() ? 1 : 0) +
         (options.freezeControlledReplicationStudy.has_value() ? 1 : 0) +
@@ -10418,6 +10434,19 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "explicit and suppress the cross-context summary. "
         << "No winner, ranking, recommendation, or database write is produced.\n"
         << "Usage: " << exe
+        << " --compare-feature-ablation-factorial="
+           "Y11:Y01:Y10:Y00;Y11:Y01:Y10:Y00@MASK11/MASK01/MASK10/MASK00\n"
+        << "Read-only matched-seed 2x2 feature-ablation report. Y11 is factor-A "
+           "on/factor-B on, Y01 is A off/B on, Y10 is A on/B off, and Y00 is "
+           "both off. The four declared masks are canonicalized and must exactly "
+           "match persisted cell identities; semicolons separate seeds and commas "
+           "remain available inside each mask. It reports cell values and per-seed "
+           "plus descriptive factor-A, factor-B, and interaction effects using "
+           "ON-minus-OFF arithmetic. All other configured identity and completed "
+           "execution provenance must match; missing metrics are disclosed, not "
+           "pooled. No significance inference, winner, ranking, or database write "
+           "is produced.\n"
+        << "Usage: " << exe
         << " --validate-controlled-replication-study=PATH\n"
         << "Validates a versioned prospective controlled-replication study "
            "artifact, recomputes its canonical identity, and reports frozen "
@@ -11933,6 +11962,13 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             EA::ExperimentReplicationComparison::FamilyComparisonCommand command;
             command.families = *options.compareExperimentReplicationFamilies;
             return EA::ExperimentReplicationComparison::RunFamilyComparisonCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.compareFeatureAblationFactorial)
+        {
+            const auto command = EA::FeatureAblationFactorialComparison::
+                ParseCommand(*options.compareFeatureAblationFactorial);
+            return EA::FeatureAblationFactorialComparison::RunCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.validateControlledReplicationStudy)

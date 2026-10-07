@@ -141,6 +141,7 @@ struct SchedulerOptions
         compareExperimentReplications;
     std::optional<std::vector<std::vector<std::pair<long long, long long>>>>
         compareExperimentReplicationFamilies;
+    std::optional<std::string> compareFeatureAblationFactorial;
     std::optional<std::string> validateControlledReplicationStudy;
     std::optional<std::string> compareControlledReplicationStudy;
     std::optional<std::string> freezeControlledReplicationStudy;
