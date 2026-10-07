@@ -129,6 +129,86 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
         ):
             publisher.validate_existing_registry(self.root, registry)
 
+    def test_role_aware_executable_identity_and_capability_contracts(self) -> None:
+        self.assertEqual(
+            publisher.executable_identity(
+                publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION, "train"),
+            "LSTM_Release",
+        )
+        self.assertEqual(
+            publisher.executable_identity(
+                publisher.WORKER_MANIFEST_SCHEMA_VERSION, "train"),
+            "lstm-train-worker",
+        )
+        self.assertEqual(
+            publisher.executable_identity(
+                publisher.WORKER_MANIFEST_SCHEMA_VERSION, "infer"),
+            "lstm-infer-worker",
+        )
+        publisher.validate_role_aware_capabilities("train", ["train"])
+        publisher.validate_role_aware_capabilities(
+            "train", ["train", "train_feature_ablation_v1"])
+        publisher.validate_role_aware_capabilities("infer", ["infer"])
+        for invalid in (
+            ["train_feature_ablation_v1", "train"],
+            ["train", "infer"],
+            ["train_feature_ablation_v1"],
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(
+                    publisher.PublishError,
+                    "role-aware training worker capabilities are invalid",
+                ):
+                    publisher.validate_role_aware_capabilities("train", invalid)
+
+    def test_dedicated_train_build_identity_is_role_commit_and_sha_bound(self) -> None:
+        commit = "c" * 40
+        digest = "d" * 64
+
+        def result(role: str, source_commit: str, executable_sha: str) -> mock.Mock:
+            return mock.Mock(
+                returncode=0,
+                stdout=(
+                    "TRAIN_WORKER_BUILD_IDENTITY,identity_contract_version=1,"
+                    f"artifact_role={role},source_commit={source_commit},"
+                    f"executable_sha256=sha256:{executable_sha}\n"
+                ),
+                stderr="",
+            )
+
+        executable = self.sources / "lstm-train-worker"
+        with mock.patch.object(
+            publisher.subprocess, "run",
+            return_value=result("lstm-train-worker", commit, digest),
+        ):
+            publisher.verify_worker_build_identity(
+                executable, "train", commit, digest)
+
+        with mock.patch.object(
+            publisher.subprocess, "run",
+            return_value=mock.Mock(returncode=1, stdout="", stderr="failed"),
+        ):
+            with self.assertRaisesRegex(
+                publisher.PublishError, "train worker build identity is unavailable"):
+                publisher.verify_worker_build_identity(
+                    executable, "train", commit, digest)
+
+        mismatches = (
+            ("lstm-infer-worker", commit, digest),
+            ("lstm-train-worker", "e" * 40, digest),
+            ("lstm-train-worker", commit, "f" * 64),
+        )
+        for role, source_commit, executable_sha in mismatches:
+            with self.subTest(role=role, commit=source_commit, sha=executable_sha):
+                with mock.patch.object(
+                    publisher.subprocess, "run",
+                    return_value=result(role, source_commit, executable_sha),
+                ):
+                    with self.assertRaisesRegex(
+                        publisher.PublishError, "train worker build identity mismatch"):
+                        publisher.verify_worker_build_identity(
+                            executable, "train", commit, digest)
+
     def test_role_publication_preserves_training_reference_and_never_overwrites(self) -> None:
         worker7 = self.executable("worker7", b"layout-seven")
         commit7 = "7" * 40

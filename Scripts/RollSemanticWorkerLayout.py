@@ -56,9 +56,13 @@ def _resolve_executable(path: Path, expected_name: str) -> Path:
 
 def _runtime_resources_match(training: Path, inference: Path) -> dict[str, Path]:
     resources: dict[str, Path] = {}
-    for built_identity, _ in publisher.RUNTIME_RESOURCE_SPECS:
+    for built_identity, runtime_name in publisher.RUNTIME_RESOURCE_SPECS:
         training_resource = training.parent / built_identity
+        if not training_resource.exists():
+            training_resource = training.parent / runtime_name
         inference_resource = inference.parent / built_identity
+        if not inference_resource.exists():
+            inference_resource = inference.parent / runtime_name
         try:
             training_resource = training_resource.resolve(strict=True)
             inference_resource = inference_resource.resolve(strict=True)
@@ -79,12 +83,13 @@ def _worker_value(
 ) -> tuple[Path, dict, dict]:
     if manifest_schema == publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION:
         relative_directory = Path(f"layout{layout}") / commit / digest
-        executable_name = "LSTM_Release"
     elif manifest_schema == publisher.WORKER_MANIFEST_SCHEMA_VERSION:
         relative_directory = Path(f"layout{layout}") / role / commit / digest
-        executable_name = "lstm-infer-worker"
     else:
         raise publisher.PublishError("unsupported semantic worker artifact manifest schema")
+    executable_name = publisher.executable_identity(manifest_schema, role)
+    if manifest_schema == publisher.WORKER_MANIFEST_SCHEMA_VERSION:
+        publisher.validate_role_aware_capabilities(role, capabilities)
     manifest = {
         "schema_version": manifest_schema,
         "semantic_layout": layout,
@@ -152,7 +157,9 @@ def _stage_worker(
 
 def _validate_rollover_prestate(registry: dict, layout: int) -> None:
     if registry["schema_version"] != publisher.REGISTRY_SCHEMA_VERSION:
-        raise publisher.PublishError("current semantic layout rollover requires registry schema 4")
+        raise publisher.PublishError(
+            "current semantic layout rollover requires registry schema "
+            f"{publisher.REGISTRY_SCHEMA_VERSION}")
     if registry["current_layout"] == layout:
         raise publisher.PublishError("current semantic layout rollover requires a new layout")
     if any(worker["semantic_layout"] == layout for worker in registry["workers"]):

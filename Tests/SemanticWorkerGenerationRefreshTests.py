@@ -37,7 +37,7 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         self.sources.mkdir()
         self.runtime_resources = self.make_runtime("shared-runtime")
         self.seed_registry()
-        self.training = self.executable("LSTM_Release", b"new-layout-eight-training")
+        self.training = self.executable("lstm-train-worker", b"new-layout-eight-training")
         self.inference = self.executable("lstm-infer-worker", b"new-layout-eight-infer")
 
     def tearDown(self) -> None:
@@ -127,10 +127,21 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         self.assertEqual({worker["source_commit"] for worker in current}, {self.new_commit8})
         training_current = next(worker for worker in current
                                 if worker["worker_role"] == "train")
-        self.assertEqual(training_current["capabilities"],
-                         rollover.TRAINING_CAPABILITIES)
+        self.assertEqual(training_current["artifact_manifest_schema_version"],
+                         publisher.WORKER_MANIFEST_SCHEMA_VERSION)
+        self.assertEqual(training_current["capabilities"], ["train"])
         self.assertNotIn("train_feature_ablation_v1",
                          training_current["capabilities"])
+        self.assertEqual(
+            training_current["executable"],
+            str(Path("layout8") / "train" / self.new_commit8 /
+                publisher.sha256(self.training) / "lstm-train-worker"),
+        )
+        training_manifest = json.loads(
+            (self.root / training_current["manifest"]).read_text(encoding="utf-8"))
+        self.assertEqual(training_manifest["schema_version"], 2)
+        self.assertEqual(training_manifest["worker_role"], "train")
+        self.assertEqual(training_manifest["executable_identity"], "lstm-train-worker")
         outgoing_train = next(worker for worker in after["workers"]
                               if worker["semantic_layout"] == 8 and
                               worker["worker_role"] == "train" and
@@ -143,7 +154,7 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         self.assertEqual([self.immutable_bytes(worker) for worker in old_historical],
                          old_historical_bytes)
         self.assertEqual([self.immutable_bytes(worker) for worker in old_current], old_current_bytes)
-        self.assertEqual(training.name, "LSTM_Release")
+        self.assertEqual(training.name, "lstm-train-worker")
         self.assertEqual(inference.name, "lstm-infer-worker")
         self.assertEqual((self.root / "current").resolve(), inference.parent)
 
@@ -250,14 +261,30 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
         with self.assertRaisesRegex(publisher.PublishError, "expected lstm-infer-worker"):
             refresh.refresh(self.root, self.training, wrong, 8, 80, self.new_commit8,
                             check_embedded_commit=False, runtime_resources=dict(self.runtime_resources))
+        wrong_training = self.executable("LSTM_Release", b"wrong training")
+        with self.assertRaisesRegex(publisher.PublishError, "expected lstm-train-worker"):
+            refresh.refresh(self.root, wrong_training, self.inference, 8, 80, self.new_commit8,
+                            check_embedded_commit=False,
+                            runtime_resources=dict(self.runtime_resources))
         self.assertEqual(self.registry_bytes(), before)
 
-    def test_mismatched_requested_commit_and_wrong_layout_or_width_leave_registry_unchanged(self) -> None:
+    def test_explicit_artifact_commits_and_wrong_layout_or_width(self) -> None:
         before = self.registry_bytes()
+        explicit_train_commit = "a" * 40
+        explicit_infer_commit = "b" * 40
         with mock.patch.object(publisher, "clean_source_commit", return_value=self.new_commit8):
-            with self.assertRaisesRegex(publisher.PublishError, "disagrees with clean HEAD"):
-                refresh.refresh_from_repository(REPOSITORY, self.training, self.inference, self.root,
-                                                source_commit="a" * 40)
+            with mock.patch.object(publisher, "current_semantic_contract", return_value=(8, 80)):
+                with mock.patch.object(
+                    refresh, "refresh", return_value=(self.training, self.inference)
+                ) as operation:
+                    result = refresh.refresh_from_repository(
+                        REPOSITORY, self.training, self.inference, self.root,
+                        source_commit=explicit_train_commit,
+                        inference_source_commit=explicit_infer_commit)
+        self.assertEqual(result[4], explicit_train_commit)
+        self.assertEqual(operation.call_args.args[5], explicit_train_commit)
+        self.assertEqual(
+            operation.call_args.kwargs["inference_commit"], explicit_infer_commit)
         with self.assertRaisesRegex(publisher.PublishError, "layout to match source contract"):
             refresh.refresh(self.root, self.training, self.inference, 9, 80, self.new_commit8,
                             check_embedded_commit=False, runtime_resources=dict(self.runtime_resources))
@@ -293,36 +320,60 @@ class SemanticWorkerGenerationRefreshTests(unittest.TestCase):
                 refresh.refresh(self.root, self.training, self.inference, 8, 80, self.new_commit8)
         self.assertEqual(self.registry_bytes(), before)
         with mock.patch.object(publisher, "verify_embedded_commit") as embedded:
-            with mock.patch.object(publisher, "verify_inference_build_identity",
-                                   side_effect=publisher.PublishError("inference worker build identity mismatch")):
+            with mock.patch.object(publisher, "verify_worker_build_identity",
+                                   side_effect=publisher.PublishError("train worker build identity mismatch")):
                 with self.assertRaisesRegex(publisher.PublishError, "build identity mismatch"):
                     refresh.refresh(self.root, self.training, self.inference, 8, 80, self.new_commit8)
-        self.assertGreaterEqual(embedded.call_count, 2)
+        self.assertEqual(embedded.call_count, 1)
         training_dir = self.base / "runtime-training"
         inference_dir = self.base / "runtime-inference"
-        training = self.executable("LSTM_Release", b"training", training_dir)
+        training = self.executable("lstm-train-worker", b"training", training_dir)
         inference = self.executable("lstm-infer-worker", b"inference", inference_dir)
         self.executable("default.metallib", b"same", training_dir)
         self.executable("MetaNN_metal.metallib", b"same", training_dir)
         self.executable("default.metallib", b"different", inference_dir)
         self.executable("MetaNN_metal.metallib", b"same", inference_dir)
         with mock.patch.object(publisher, "verify_embedded_commit"):
-            with mock.patch.object(publisher, "verify_inference_build_identity"):
+            with mock.patch.object(publisher, "verify_worker_build_identity"):
                 with self.assertRaisesRegex(publisher.PublishError, "runtime resource mismatch"):
                     refresh.refresh(self.root, training, inference, 8, 80, self.new_commit8)
         self.assertEqual(self.registry_bytes(), before)
 
+    def test_runtime_match_accepts_published_runtime_names(self) -> None:
+        training_dir = self.base / "built-training"
+        inference_dir = self.base / "published-inference"
+        training = self.executable("lstm-train-worker", b"training", training_dir)
+        inference = self.executable("lstm-infer-worker", b"inference", inference_dir)
+        self.executable("default.metallib", b"same-default", training_dir)
+        self.executable("MetaNN_metal.metallib", b"same-metann", training_dir)
+        self.executable("default.metallib", b"same-default", inference_dir)
+        self.executable("MetaNN.metallib", b"same-metann", inference_dir)
+        resources = rollover._runtime_resources_match(training, inference)
+        self.assertEqual(set(resources), {"default.metallib", "MetaNN_metal.metallib"})
+        self.assertEqual(resources["MetaNN_metal.metallib"].name, "MetaNN.metallib")
+
     def test_immutable_artifact_conflict_leaves_registry_unchanged(self) -> None:
         before = self.registry_bytes()
         digest = publisher.sha256(self.training)
-        conflict = self.root / "layout8" / self.new_commit8 / digest
+        conflict = self.root / "layout8" / "train" / self.new_commit8 / digest
         conflict.mkdir(parents=True)
-        (conflict / "LSTM_Release").write_bytes(b"wrong immutable artifact")
-        (conflict / "LSTM_Release").chmod(0o555)
+        (conflict / "lstm-train-worker").write_bytes(b"wrong immutable artifact")
+        (conflict / "lstm-train-worker").chmod(0o555)
         (conflict / "manifest.json").write_text("{}", encoding="utf-8")
         with self.assertRaisesRegex(publisher.PublishError, "immutable artifact hash conflict"):
             self.publish()
         self.assertEqual(self.registry_bytes(), before)
+
+    def test_inference_identity_may_remain_at_its_explicit_immutable_commit(self) -> None:
+        inference_commit = "b" * 40
+        self.publish(inference_commit=inference_commit)
+        current = [worker for worker in self.registry()["workers"]
+                   if worker["semantic_layout"] == 8 and
+                   worker["worker_rule"] == "current"]
+        self.assertEqual(
+            {worker["worker_role"]: worker["source_commit"] for worker in current},
+            {"train": self.new_commit8, "infer": inference_commit},
+        )
 
 
 if __name__ == "__main__":

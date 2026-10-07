@@ -39,12 +39,14 @@ def _refreshed_training_capabilities(
     """
     if feature_ablation_qualified:
         return ["train", "train_feature_ablation_v1"]
-    return rollover.training_capabilities()
+    return ["train"]
 
 
 def _validate_refresh_prestate(registry: dict, layout: int, width: int) -> None:
     if registry["schema_version"] != publisher.REGISTRY_SCHEMA_VERSION:
-        raise publisher.PublishError("current semantic worker refresh requires registry schema 4")
+        raise publisher.PublishError(
+            "current semantic worker refresh requires registry schema "
+            f"{publisher.REGISTRY_SCHEMA_VERSION}")
     if registry["current_layout"] != layout:
         raise publisher.PublishError(
             "current semantic worker refresh requires registry layout to match source contract")
@@ -71,21 +73,27 @@ def refresh(
     width: int,
     commit: str,
     *,
+    inference_commit: str | None = None,
     check_embedded_commit: bool = True,
     runtime_resources: dict[str, Path] | None = None,
     feature_ablation_qualified: bool = False,
 ) -> tuple[Path, Path]:
     """Stage a matched generation and atomically replace current role bindings."""
-    training = rollover._resolve_executable(training_executable, "LSTM_Release")
+    training = rollover._resolve_executable(training_executable, "lstm-train-worker")
     inference = rollover._resolve_executable(inference_executable, "lstm-infer-worker")
-    if layout <= 0 or width <= 0 or not publisher.COMMIT_PATTERN.fullmatch(commit):
+    inference_commit = inference_commit or commit
+    if (layout <= 0 or width <= 0 or
+            not publisher.COMMIT_PATTERN.fullmatch(commit) or
+            not publisher.COMMIT_PATTERN.fullmatch(inference_commit)):
         raise publisher.PublishError("refresh semantic contract or source commit is invalid")
     if check_embedded_commit:
         publisher.verify_embedded_commit(training, commit)
         training_digest = publisher.sha256(training)
-        publisher.verify_embedded_commit(inference, commit)
+        publisher.verify_worker_build_identity(training, "train", commit, training_digest)
+        publisher.verify_embedded_commit(inference, inference_commit)
         inference_digest = publisher.sha256(inference)
-        publisher.verify_inference_build_identity(inference, commit, inference_digest)
+        publisher.verify_worker_build_identity(
+            inference, "infer", inference_commit, inference_digest)
         runtime_resources = rollover._runtime_resources_match(training, inference)
     else:
         training_digest = publisher.sha256(training)
@@ -96,10 +104,10 @@ def refresh(
     runtime_manifest, runtime_identity = publisher.runtime_manifest(dict(runtime_resources))
     training_relative, training_manifest, training_worker = rollover._worker_value(
         layout, width, commit, training_digest, "train",
-        publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
+        publisher.WORKER_MANIFEST_SCHEMA_VERSION,
         _refreshed_training_capabilities(feature_ablation_qualified), runtime_identity)
     inference_relative, inference_manifest, inference_worker = rollover._worker_value(
-        layout, width, commit, inference_digest, "infer",
+        layout, width, inference_commit, inference_digest, "infer",
         publisher.WORKER_MANIFEST_SCHEMA_VERSION,
         rollover.INFERENCE_CAPABILITIES, runtime_identity)
 
@@ -166,16 +174,17 @@ def refresh_from_repository(
     inference_executable: Path,
     artifact_root: Path | None = None,
     source_commit: str | None = None,
+    inference_source_commit: str | None = None,
     feature_ablation_qualified: bool = False,
 ) -> tuple[Path, Path, int, int, str]:
     repository_root = repository_root.resolve(strict=True)
-    commit = publisher.clean_source_commit(repository_root)
-    if source_commit is not None and source_commit != commit:
-        raise publisher.PublishError("explicit source commit disagrees with clean HEAD")
+    clean_commit = publisher.clean_source_commit(repository_root)
+    commit = source_commit or clean_commit
     layout, width = publisher.current_semantic_contract(repository_root)
     training, inference = refresh(
         artifact_root or repository_root / "Builds" / "SemanticWorkers",
         training_executable, inference_executable, layout, width, commit,
+        inference_commit=inference_source_commit,
         feature_ablation_qualified=feature_ablation_qualified)
     return training, inference, layout, width, commit
 
@@ -187,6 +196,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--inference-executable", required=True, type=Path)
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--source-commit")
+    parser.add_argument("--inference-source-commit")
     parser.add_argument("--train-feature-ablation-qualified", action="store_true")
     return parser.parse_args()
 
@@ -196,11 +206,12 @@ def main() -> int:
     training, inference, layout, width, commit = refresh_from_repository(
         arguments.repository_root, arguments.training_executable,
         arguments.inference_executable, arguments.artifact_root,
-        arguments.source_commit,
-        arguments.train_feature_ablation_qualified)
+        source_commit=arguments.source_commit,
+        inference_source_commit=arguments.inference_source_commit,
+        feature_ablation_qualified=arguments.train_feature_ablation_qualified)
     print(f"Semantic worker generation refreshed: layout={layout}, width={width}")
     print(f"source_commit={commit}")
-    print(f"training_reference={training}")
+    print(f"training_worker={training}")
     print(f"inference_worker={inference}")
     return 0
 

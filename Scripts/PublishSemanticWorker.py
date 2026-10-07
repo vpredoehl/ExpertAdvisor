@@ -31,6 +31,10 @@ RUNTIME_RESOURCE_SPECS = (
     ("MetaNN_metal.metallib", "MetaNN.metallib"),
     ("default.metallib", "default.metallib"),
 )
+ROLE_AWARE_EXECUTABLE_IDENTITIES = {
+    "train": "lstm-train-worker",
+    "infer": "lstm-infer-worker",
+}
 
 
 class PublishError(RuntimeError):
@@ -178,22 +182,56 @@ def verify_embedded_commit(executable: Path, commit: str) -> None:
             f"built executable does not contain exact source commit {commit}")
 
 
-def verify_inference_build_identity(executable: Path, commit: str, digest: str) -> None:
+def executable_identity(manifest_schema: int, worker_role: str) -> str:
+    if manifest_schema == LEGACY_WORKER_MANIFEST_SCHEMA_VERSION:
+        return "LSTM_Release"
+    if manifest_schema != WORKER_MANIFEST_SCHEMA_VERSION:
+        raise PublishError("unsupported semantic worker artifact manifest schema")
+    try:
+        return ROLE_AWARE_EXECUTABLE_IDENTITIES[worker_role]
+    except KeyError as error:
+        raise PublishError("unsupported role-aware semantic worker role") from error
+
+
+def validate_role_aware_capabilities(worker_role: str, capabilities: list[str]) -> None:
+    if worker_role == "infer":
+        if capabilities != ["infer"]:
+            raise PublishError("role-aware inference workers must support only infer")
+        return
+    if worker_role == "train":
+        if capabilities not in (
+            ["train"],
+            ["train", "train_feature_ablation_v1"],
+        ):
+            raise PublishError("role-aware training worker capabilities are invalid")
+        return
+    raise PublishError("unsupported role-aware semantic worker role")
+
+
+def verify_worker_build_identity(
+    executable: Path, worker_role: str, commit: str, digest: str
+) -> None:
+    expected_role = executable_identity(WORKER_MANIFEST_SCHEMA_VERSION, worker_role)
     result = subprocess.run(
         [str(executable), "--build-identity"], check=False,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     if result.returncode != 0:
-        raise PublishError("inference worker build identity is unavailable")
+        raise PublishError(f"{worker_role} worker build identity is unavailable")
     fields = {}
     for field in result.stdout.strip().split(","):
         key, separator, value = field.partition("=")
         if separator:
             fields[key] = value
-    if (fields.get("artifact_role") != "lstm-infer-worker" or
+    if (fields.get("artifact_role") != expected_role or
             fields.get("source_commit") != commit or
             fields.get("executable_sha256") != f"sha256:{digest}"):
-        raise PublishError("inference worker build identity mismatch")
+        raise PublishError(f"{worker_role} worker build identity mismatch")
+
+
+def verify_inference_build_identity(executable: Path, commit: str, digest: str) -> None:
+    """Compatibility wrapper for the existing inference publisher/tests."""
+    verify_worker_build_identity(executable, "infer", commit, digest)
 
 
 def validate_inputs(
@@ -221,8 +259,7 @@ def validate_inputs(
         raise PublishError("capabilities contain an unsupported phase")
     if worker_role != "infer":
         raise PublishError("Phase 22E publication supports only the infer worker role")
-    if set(capabilities) != {"infer"}:
-        raise PublishError("role-aware inference workers must support only infer")
+    validate_role_aware_capabilities(worker_role, capabilities)
 
 
 def load_registry(path: Path) -> dict:
@@ -373,9 +410,15 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
             raise PublishError(
                 "train feature ablation capability requires a train-role worker")
         if (registry["schema_version"] >= ROLE_AWARE_REGISTRY_SCHEMA_VERSION and
-            role == "infer" and manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION and
-            set(capabilities) != {"infer"}):
-            raise PublishError("existing role-aware inference worker capabilities are invalid")
+                manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION):
+            try:
+                validate_role_aware_capabilities(role, capabilities)
+            except PublishError as error:
+                if role == "infer":
+                    raise PublishError(
+                        "existing role-aware inference worker capabilities are invalid"
+                    ) from error
+                raise
         # Layout-only schemas used one current worker for all phases.  Once
         # worker_role exists, the current TRAIN and INFER contracts differ:
         # a legacy-manifest TRAIN worker may retain its train/infer/analyze
@@ -387,9 +430,7 @@ def validate_existing_registry(artifact_root: Path, registry: dict) -> None:
         relative_directory = (Path(f"layout{layout}") / role / commit / digest
                               if manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION
                               else Path(f"layout{layout}") / commit / digest)
-        executable_name = ("lstm-infer-worker"
-                           if manifest_schema == WORKER_MANIFEST_SCHEMA_VERSION and role == "infer"
-                           else "LSTM_Release")
+        executable_name = executable_identity(manifest_schema, role)
         expected_executable = str(relative_directory / executable_name)
         expected_manifest_path = str(relative_directory / "manifest.json")
         if (worker["executable"] != expected_executable or
@@ -687,6 +728,7 @@ def publish(
         }
     runtime_manifest_value, runtime_identity = runtime_manifest(runtime_resources)
 
+    executable_name = executable_identity(WORKER_MANIFEST_SCHEMA_VERSION, worker_role)
     relative_directory = Path(f"layout{layout}") / worker_role / commit / digest
     final_directory = artifact_root / relative_directory
     manifest_value = {
@@ -696,7 +738,7 @@ def publish(
         "model_input_width": width,
         "source_commit": commit,
         "sha256": digest,
-        "executable_identity": "lstm-infer-worker",
+        "executable_identity": executable_name,
         "worker_role": worker_role,
         "capabilities": capabilities,
     }
@@ -708,7 +750,7 @@ def publish(
         "model_input_width": width,
         "source_commit": commit,
         "sha256": digest,
-        "executable": str(relative_directory / "lstm-infer-worker"),
+        "executable": str(relative_directory / executable_name),
         "manifest": str(relative_directory / "manifest.json"),
         "runtime_identity": runtime_identity,
         "capabilities": capabilities,
@@ -762,7 +804,7 @@ def publish(
             staging = Path(tempfile.mkdtemp(
                 prefix=f".{digest}.", suffix=".stage", dir=final_directory.parent))
             try:
-                staged_executable = staging / "lstm-infer-worker"
+                staged_executable = staging / executable_name
                 shutil.copy2(executable, staged_executable)
                 staged_executable.chmod(0o555)
                 if sha256(staged_executable) != digest:
@@ -804,7 +846,7 @@ def publish(
 
         if worker_rule == "current":
             update_current_link_after_registry_commit(artifact_root, relative_directory)
-    return final_directory / "lstm-infer-worker"
+    return final_directory / executable_name
 
 
 def parse_arguments() -> argparse.Namespace:
