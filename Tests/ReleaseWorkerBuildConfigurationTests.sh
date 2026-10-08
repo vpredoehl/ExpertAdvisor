@@ -19,6 +19,31 @@ rg -Fq 'BlueprintIdentifier="0FA000043A00000100AAA001"' "${train_scheme}"
 rg -Fq 'BuildableName="lstm-train-worker"' "${train_scheme}"
 ! rg -q 'LSTM_TRAIN_WORKER_BUILD=1' "${project}"
 
+# Dedicated workers require macOS 27.0 in both configurations. Resolve the
+# target-owned configuration lists so another target's setting cannot satisfy
+# this guard. Shared libraries retain their independent deployment floors.
+python3 - "${project}" <<'PY'
+import json
+import subprocess
+import sys
+
+objects = json.loads(subprocess.check_output([
+    '/usr/bin/plutil', '-convert', 'json', '-o', '-', '--', sys.argv[1]
+]))['objects']
+for name in ('lstm-infer-worker', 'lstm-train-worker'):
+    target = next(value for value in objects.values()
+                  if value.get('isa') == 'PBXNativeTarget' and value.get('name') == name)
+    configurations = objects[target['buildConfigurationList']]['buildConfigurations']
+    names = set()
+    for key in configurations:
+        configuration = objects[key]
+        names.add(configuration['name'])
+        if str(configuration['buildSettings'].get('MACOSX_DEPLOYMENT_TARGET')) != '27.0':
+            sys.exit(f"{name} / {configuration['name']} must require macOS 27.0")
+    if names != {'Debug', 'Release'}:
+        sys.exit(f'{name} must retain Debug and Release configurations')
+PY
+
 # The normal stable DerivedData Release build is also the deployment build for
 # the default scheduler analyzer. Keep that dependency explicit; analysis is
 # intentionally not selected through the semantic inference-worker registry.

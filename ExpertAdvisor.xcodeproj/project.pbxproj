@@ -3797,7 +3797,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
 				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)");
-				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				OTHER_LDFLAGS = ("-lpq", "-lpqxx");
 				PRODUCT_NAME = "lstm-infer-worker";
 				SDKROOT = macosx;
@@ -3822,7 +3822,7 @@
 				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/$(CURRENT_ARCH)/lstm-infer-worker.map";
 				LD_GENERATE_MAP_FILE = YES;
 				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)", /opt/homebrew/opt/libomp/lib);
-				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				OTHER_CPLUSPLUSFLAGS = ("$(OTHER_CFLAGS)", "-Xpreprocessor", "-fopenmp");
 				OTHER_LDFLAGS = ("-lpq", "-lpqxx", "-lomp");
 				PRODUCT_NAME = "lstm-infer-worker";
@@ -3841,7 +3841,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "LSTM_BUILD=1", "LSTM_TARGET_RELEASE=1", "$(inherited)");
 				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)", /opt/homebrew/opt/libomp/lib);
-				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				OTHER_CPLUSPLUSFLAGS = ("$(OTHER_CFLAGS)", "-Xpreprocessor", "-fopenmp");
 				OTHER_LDFLAGS = ("-lpq", "-lpqxx", "-lomp");
 				PRODUCT_NAME = "lstm-train-worker";
@@ -3867,7 +3867,7 @@
 				LD_MAP_FILE_PATH = "$(TARGET_TEMP_DIR)/$(CURRENT_ARCH)/lstm-train-worker.map";
 				LD_GENERATE_MAP_FILE = YES;
 				LIBRARY_SEARCH_PATHS = ("/opt/homebrew/opt/libpqxx@7.10.1/lib", /opt/homebrew/opt/libpq/lib, /opt/homebrew/lib/, "$(PROJECT_DIR)", "$(inherited)", /opt/homebrew/opt/libomp/lib);
-				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				OTHER_CPLUSPLUSFLAGS = ("$(OTHER_CFLAGS)", "-Xpreprocessor", "-fopenmp");
 				OTHER_LDFLAGS = ("-lpq", "-lpqxx", "-lomp");
 				PRODUCT_NAME = "lstm-train-worker";
