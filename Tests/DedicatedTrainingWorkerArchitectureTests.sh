@@ -19,14 +19,60 @@ rg -q '^int main\(int argc, const char\* argv\[\]\)' "$front"
 rg -q 'RunTrainingWorkerApplication\(argc, argv\)' "$front"
 rg -q 'int EA::Training::RunTrainingWorkerApplication\(int argc, const char\* argv\[\]\)' "$application"
 
-# Train Worker owns a distinct source phase with its own root and application.
-rg -U -q '0FA000043A00000100AAA001 /\* lstm-train-worker \*/ = \{[\s\S]*?buildPhases = \([[:space:]]*0FAC00003A00000100AAA001 /\* Sources \*/' "$project"
-rg -U -q '0A10000F2F70000100AAA001 /\* LSTM Release \*/ = \{[\s\S]*?buildPhases = \([\s\S]*?0A10000E2F70000100AAA001 /\* Sources \*/' "$project"
-train_phase="$(sed -n '/0FAC00003A00000100AAA001 \/\* Sources \*\/ = {/,/^[[:space:]]*};/p' "$project")"
-grep -q 'TrainWorkerMain.cpp in Sources' <<<"$train_phase"
-grep -q 'TrainingWorkerApplication.cpp in Sources' <<<"$train_phase"
-! grep -q 'main.cpp in Sources' <<<"$train_phase"
-! grep -q 'CheckpointModelPersistence.cpp' <<<"$train_phase"
+# Resolve target-owned phases by ID. Provenance must precede TRAIN compilation;
+# neither phase has to be first, and object/comment ordering is irrelevant.
+python3 - "$project" <<'PY'
+import json
+from pathlib import PurePosixPath
+import subprocess
+import sys
+
+objects = json.loads(subprocess.check_output(
+    ["/usr/bin/plutil", "-convert", "json", "-o", "-", "--", sys.argv[1]]
+))["objects"]
+train_id = "0FA000043A00000100AAA001"
+source_id = "0FAC00003A00000100AAA001"
+provenance_id = "0FA000083A00000100AAA001"
+release_id = "0A10000F2F70000100AAA001"
+release_source_id = "0A10000E2F70000100AAA001"
+
+
+def require(condition, message):
+    if not condition:
+        sys.exit("TRAIN architecture: " + message)
+
+
+train = objects[train_id]
+release = objects[release_id]
+require(train["isa"] == release["isa"] == "PBXNativeTarget",
+        "worker and Release must be native targets")
+phases = train["buildPhases"]
+require(phases.count(source_id) == 1, "TRAIN must own its Sources phase")
+require(phases.count(provenance_id) == 1, "TRAIN must own its provenance phase")
+require(objects[source_id]["isa"] == "PBXSourcesBuildPhase",
+        "TRAIN Sources must be a source phase")
+require(objects[provenance_id]["isa"] == "PBXShellScriptBuildPhase",
+        "TRAIN provenance must be a shell-script phase")
+require(phases.index(provenance_id) < phases.index(source_id),
+        "TRAIN provenance must precede Sources")
+require([p for p in phases if objects[p]["isa"] == "PBXSourcesBuildPhase"]
+        == [source_id], "TRAIN must have only its dedicated Sources phase")
+require(release["buildPhases"].count(release_source_id) == 1
+        and objects[release_source_id]["isa"] == "PBXSourcesBuildPhase",
+        "Release must retain its Sources phase")
+for target_id, target in objects.items():
+    if target_id != train_id and target.get("isa") == "PBXNativeTarget":
+        require(not {source_id, provenance_id}.intersection(target["buildPhases"]),
+                "TRAIN phases must not be shared with another target")
+
+sources = [PurePosixPath(objects[objects[f]["fileRef"]]["path"]).name
+           for f in objects[source_id]["files"]]
+for required in ("TrainWorkerMain.cpp", "TrainingWorkerApplication.cpp"):
+    require(sources.count(required) == 1, "TRAIN must compile exactly one " + required)
+for forbidden in ("main.cpp", "CheckpointModelPersistence.cpp",
+                  "InferenceRuntime.cpp", "ManagedInferenceApplication.cpp"):
+    require(forbidden not in sources, "TRAIN must not compile " + forbidden)
+PY
 
 # The dedicated application is managed TRAIN only.
 for forbidden in RunInferenceRuntime RunInferenceEvaluation evaluationFacts \
