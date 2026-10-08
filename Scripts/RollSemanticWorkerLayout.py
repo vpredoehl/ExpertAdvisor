@@ -3,8 +3,8 @@
 
 This deliberately does not extend PublishSemanticWorker.py's infer-only CLI.
 An advance of current_layout has a different safety contract: the new layout
-must gain its LSTM_Release training/reference binding and its dedicated
-lstm-infer-worker binding in one registry replacement.
+must gain both TRAIN and INFER role bindings in one registry replacement.
+Legacy TRAIN rollover remains supported for historical compatibility.
 """
 
 from __future__ import annotations
@@ -185,18 +185,26 @@ def rollover(
     check_embedded_commit: bool = True,
     runtime_resources: dict[str, Path] | None = None,
     feature_ablation_qualified: bool = False,
+    dedicated_training: bool = False,
+    inference_commit: str | None = None,
 ) -> tuple[Path, Path]:
     """Stage both immutable artifacts, then atomically advance current_layout."""
-    training = _resolve_executable(training_executable, "LSTM_Release")
+    training = _resolve_executable(
+        training_executable, "lstm-train-worker" if dedicated_training else "LSTM_Release")
     inference = _resolve_executable(inference_executable, "lstm-infer-worker")
-    if layout <= 0 or width <= 0 or not publisher.COMMIT_PATTERN.fullmatch(commit):
+    inference_commit = inference_commit or commit
+    if (layout <= 0 or width <= 0 or
+            not publisher.COMMIT_PATTERN.fullmatch(commit) or
+            not publisher.COMMIT_PATTERN.fullmatch(inference_commit)):
         raise publisher.PublishError("rollover semantic contract or source commit is invalid")
     if check_embedded_commit:
         publisher.verify_embedded_commit(training, commit)
         training_digest = publisher.sha256(training)
-        publisher.verify_embedded_commit(inference, commit)
+        if dedicated_training:
+            publisher.verify_worker_build_identity(training, "train", commit, training_digest)
+        publisher.verify_embedded_commit(inference, inference_commit)
         inference_digest = publisher.sha256(inference)
-        publisher.verify_inference_build_identity(inference, commit, inference_digest)
+        publisher.verify_inference_build_identity(inference, inference_commit, inference_digest)
         runtime_resources = _runtime_resources_match(training, inference)
     else:
         training_digest = publisher.sha256(training)
@@ -205,12 +213,16 @@ def rollover(
             raise publisher.PublishError("test rollover requires explicit runtime resources")
     assert runtime_resources is not None
     runtime_manifest, runtime_identity = publisher.runtime_manifest(dict(runtime_resources))
+    training_schema = (publisher.WORKER_MANIFEST_SCHEMA_VERSION if dedicated_training
+                       else publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION)
+    training_caps = (["train", "train_feature_ablation_v1"]
+                     if feature_ablation_qualified else ["train"]) if dedicated_training \
+                    else training_capabilities(feature_ablation_qualified)
     training_relative, training_manifest, training_worker = _worker_value(
         layout, width, commit, training_digest, "train",
-        publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
-        training_capabilities(feature_ablation_qualified), runtime_identity)
+        training_schema, training_caps, runtime_identity)
     inference_relative, inference_manifest, inference_worker = _worker_value(
-        layout, width, commit, inference_digest, "infer",
+        layout, width, inference_commit, inference_digest, "infer",
         publisher.WORKER_MANIFEST_SCHEMA_VERSION,
         INFERENCE_CAPABILITIES, runtime_identity)
 
@@ -269,16 +281,23 @@ def rollover_from_repository(
     artifact_root: Path | None = None,
     source_commit: str | None = None,
     feature_ablation_qualified: bool = False,
+    dedicated_training: bool = False,
+    inference_source_commit: str | None = None,
 ) -> tuple[Path, Path, int, int, str]:
     repository_root = repository_root.resolve(strict=True)
     commit = publisher.clean_source_commit(repository_root)
-    if source_commit is not None and source_commit != commit:
+    if not dedicated_training and source_commit is not None and source_commit != commit:
         raise publisher.PublishError("explicit source commit disagrees with clean HEAD")
+    if not dedicated_training and inference_source_commit is not None:
+        raise publisher.PublishError("legacy rollover does not support independent inference commits")
+    commit = source_commit or commit
     layout, width = publisher.current_semantic_contract(repository_root)
     training, inference = rollover(
         artifact_root or repository_root / "Builds" / "SemanticWorkers",
         training_executable, inference_executable, layout, width, commit,
-        feature_ablation_qualified=feature_ablation_qualified)
+        feature_ablation_qualified=feature_ablation_qualified,
+        dedicated_training=dedicated_training,
+        inference_commit=inference_source_commit)
     return training, inference, layout, width, commit
 
 
@@ -289,6 +308,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--inference-executable", required=True, type=Path)
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--source-commit")
+    parser.add_argument("--inference-source-commit")
+    parser.add_argument("--dedicated-training", action="store_true")
     parser.add_argument("--train-feature-ablation-qualified", action="store_true")
     return parser.parse_args()
 
@@ -299,7 +320,9 @@ def main() -> int:
         arguments.repository_root, arguments.training_executable,
         arguments.inference_executable, arguments.artifact_root,
         arguments.source_commit,
-        arguments.train_feature_ablation_qualified)
+        arguments.train_feature_ablation_qualified,
+        arguments.dedicated_training,
+        arguments.inference_source_commit)
     print(f"Semantic layout rollover published: layout={layout}, width={width}")
     print(f"source_commit={commit}")
     print(f"training_reference={training}")
