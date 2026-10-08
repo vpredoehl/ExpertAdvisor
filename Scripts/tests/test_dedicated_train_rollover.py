@@ -167,6 +167,67 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
             self.assertEqual(new_train["source_commit"], TRAIN_COMMIT)
             self.assertEqual(new_infer["source_commit"], INFER_COMMIT)
 
+    def test_registry_replace_failure_preserves_prior_authority(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(strict=True)
+            artifacts = root / "artifacts"
+            training = root / "lstm-train-worker"
+            inference = root / "lstm-infer-worker"
+            legacy = root / "LSTM_Release"
+            for binary in (training, inference, legacy):
+                binary.write_bytes(binary.name.encode())
+                binary.chmod(0o755)
+            resources = {}
+            for name, _ in publisher.RUNTIME_RESOURCE_SPECS:
+                resource = root / name
+                resource.write_bytes(name.encode())
+                resources[name] = resource
+            # Rollover requires an existing current layout with both roles.
+            # Seed the disposable registry with the publisher's own
+            # validated artifact/registry format, without using rollover.
+            artifacts.mkdir()
+            runtime_manifest, runtime_id = publisher.runtime_manifest(resources)
+            runtime = publisher.stage_runtime_package(
+                artifacts, resources, runtime_manifest, runtime_id)
+            legacy_digest = publisher.sha256(legacy)
+            infer_digest = publisher.sha256(inference)
+            legacy_rel, legacy_manifest, legacy_worker = rollover._worker_value(
+                13, 171, TRAIN_COMMIT, legacy_digest, "train",
+                publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
+                rollover.training_capabilities(), runtime_id)
+            infer_rel, infer_manifest, infer_worker = rollover._worker_value(
+                13, 171, TRAIN_COMMIT, infer_digest, "infer",
+                publisher.WORKER_MANIFEST_SCHEMA_VERSION,
+                rollover.INFERENCE_CAPABILITIES, runtime_id)
+            rollover._stage_worker(
+                artifacts, legacy, legacy_rel, legacy_manifest, legacy_digest, runtime)
+            rollover._stage_worker(
+                artifacts, inference, infer_rel, infer_manifest, infer_digest, runtime)
+            seed = {
+                "schema_version": publisher.REGISTRY_SCHEMA_VERSION,
+                "current_layout": 13,
+                "runtimes": [runtime],
+                "workers": [legacy_worker, infer_worker],
+            }
+            publisher.validate_existing_registry(artifacts, seed)
+            publisher.atomic_write_json(artifacts / "registry.json", seed)
+            registry_path = artifacts / "registry.json"
+            original = registry_path.read_bytes()
+            with patch.object(publisher, "atomic_write_json",
+                              side_effect=OSError("injected registry replacement failure")):
+                with self.assertRaisesRegex(OSError, "injected registry"):
+                    rollover.rollover(
+                        artifacts, training, inference, 14, 171, TRAIN_COMMIT,
+                        inference_commit=INFER_COMMIT, dedicated_training=True,
+                        check_embedded_commit=False, runtime_resources=resources)
+            self.assertEqual(registry_path.read_bytes(), original)
+            restored = json.loads(registry_path.read_text())
+            self.assertEqual(restored["current_layout"], 13)
+            publisher.validate_existing_registry(artifacts, restored)
+            for worker in restored["workers"]:
+                self.assertTrue((artifacts / worker["executable"]).exists())
+
     def test_distinct_commit_identity_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
