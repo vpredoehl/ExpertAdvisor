@@ -192,6 +192,9 @@ def rollover(
     training = _resolve_executable(
         training_executable, "lstm-train-worker" if dedicated_training else "LSTM_Release")
     inference = _resolve_executable(inference_executable, "lstm-infer-worker")
+    if not dedicated_training and inference_commit is not None and inference_commit != commit:
+        raise publisher.PublishError(
+            "legacy rollover requires identical TRAIN and INFER source commits")
     inference_commit = inference_commit or commit
     if (layout <= 0 or width <= 0 or
             not publisher.COMMIT_PATTERN.fullmatch(commit) or
