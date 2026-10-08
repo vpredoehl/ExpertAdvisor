@@ -2489,19 +2489,89 @@ EA::GlobalExperimentControl::ManagedWorker ManagedWorkerFromExactAttempt(
 }
 
 void CompensateSchedulerPreemptionRollback(
+    const SchedulerOptions& options,
     const EA::GlobalExperimentControl::ManagedWorker& worker,
-    EA::GlobalExperimentControl::ProcessOperations& processes)
+    EA::GlobalExperimentControl::ProcessOperations& processes,
+    pqxx::work* lockedTransaction = nullptr)
 {
-    const auto resumed =
-        EA::GlobalExperimentControl::ResumeWorker(worker, processes);
-    std::cerr << "SCHEDULER_PREEMPTION_ROLLBACK_COMPENSATION"
-              << ",experiment_id=" << worker.experimentId
-              << ",worker_attempt_id="
-              << worker.workerAttemptId.value_or(-1)
-              << ",result=" << resumed.result
-              << ",restored=" << (resumed.success ? 1 : 0)
-              << ",detail=" << resumed.detail
-              << std::endl;
+    // Abort releases the authority, control and lifecycle locks. The old
+    // running snapshot is not permission to undo a newer pause or takeover.
+    // In-flight compensation uses the existing transaction; post-abort
+    // compensation reacquires the same established locks before any SIGCONT.
+    bool signalMayHaveBeenSent = false;
+    try
+    {
+        const auto resumeUnderLocks = [&](pqxx::work& transaction) {
+            RequireAndRefreshSchedulerAuthority(transaction, options);
+            const auto control = LoadLockedGlobalControl(transaction);
+            if (gSchedulerStopRequested || !control ||
+                !EA::GlobalExperimentControl::NormalSchedulingAllowed(*control) ||
+                !worker.workerAttemptId)
+                throw std::runtime_error("rollback_compensation_control_not_running");
+            EA::SchedulerOwnership::ExactAttemptExpectation expected;
+            expected.workerAttemptId = *worker.workerAttemptId;
+            expected.experimentId = worker.experimentId;
+            expected.workerKind = worker.workerKind;
+            expected.lifecyclePhase = worker.phase;
+            expected.capacityClass = worker.capacityClass;
+            expected.requireSignalable = true;
+            expected.requireCompleteProcessIdentity = true;
+            const auto exact = EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+                transaction, expected, true);
+            if (!exact || exact->ownershipOrigin == "legacy_unverified" ||
+                exact->lifecycleStatus != "running" ||
+                exact->launchAttemptIdentity != worker.launchAttemptIdentity ||
+                exact->workerPid != worker.pid ||
+                exact->processGroupId != worker.processGroupId ||
+                exact->processStartIdentity != worker.processStartIdentity ||
+                exact->canonicalExecutablePath != worker.executable ||
+                exact->commandLine != worker.commandLine)
+                throw std::runtime_error("rollback_compensation_exact_attempt_changed");
+            const auto lifecycle = transaction.exec(
+                "SELECT cancellation_request_id,cancel_after_checkpoint_epoch,"
+                "stop_after_checkpoint_epoch,worker_global_pause_request_id,worker_control_state,"
+                "a.observed_by_scheduler_invocation_id FROM experiment e "
+                "JOIN experiment_scheduler_worker_attempt a "
+                "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
+                "WHERE e.experiment_id=$1;", pqxx::params{worker.experimentId});
+            if (lifecycle.size() != 1 || !lifecycle[0][0].is_null() ||
+                !lifecycle[0][1].is_null() || !lifecycle[0][2].is_null() ||
+                !lifecycle[0][3].is_null() || lifecycle[0][4].as<std::string>() != "running" ||
+                lifecycle[0][5].is_null() || lifecycle[0][5].as<std::string>() !=
+                    options.schedulerAuthority.schedulerInvocationId)
+                throw std::runtime_error("rollback_compensation_lifecycle_or_owner_changed");
+            const auto resumed = EA::GlobalExperimentControl::ResumeWorker(
+                ManagedWorkerFromExactAttempt(*exact), processes);
+            signalMayHaveBeenSent = !resumed.signals.empty();
+            return resumed;
+        };
+        const auto resumed = [&] {
+            if (lockedTransaction) return resumeUnderLocks(*lockedTransaction);
+            pqxx::connection connection{LstmDbConnectionString()};
+            pqxx::work transaction{connection};
+            SetTransactionReadWrite(transaction);
+            const auto result = resumeUnderLocks(transaction);
+            transaction.commit();
+            return result;
+        }();
+        std::cerr << "SCHEDULER_PREEMPTION_ROLLBACK_COMPENSATION"
+                  << ",experiment_id=" << worker.experimentId
+                  << ",worker_attempt_id=" << worker.workerAttemptId.value_or(-1)
+                  << ",result=" << resumed.result
+                  << ",restored=" << (resumed.success ? 1 : 0)
+                  << ",detail=" << resumed.detail << std::endl;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "SCHEDULER_PREEMPTION_ROLLBACK_COMPENSATION"
+                  << ",experiment_id=" << worker.experimentId
+                  << ",worker_attempt_id=" << worker.workerAttemptId.value_or(-1)
+                  << ",result=compensation_withheld,restored=0"
+                  << ",signal_may_have_been_sent=" << (signalMayHaveBeenSent ? 1 : 0)
+                  << ",detail=" << error.what()
+                  << ",action=retain_identity_and_reconcile_under_current_authority"
+                  << std::endl;
+    }
 }
 
 bool PreemptOneLowerPriorityWorker(
@@ -2750,7 +2820,7 @@ bool PreemptOneLowerPriorityWorker(
             transaction.abort();
             if (newlyStopped)
                 CompensateSchedulerPreemptionRollback(
-                    worker, *processes);
+                    options, worker, *processes);
         }
         else
         {
@@ -10888,17 +10958,18 @@ bool SuspendCapacityExcess(
         }
         if (!verifiedStopped)
         {
-            if (stoppedByUs && !operatorPause) CompensateSchedulerPreemptionRollback(worker, *processes);
+            if (stoppedByUs && !operatorPause) CompensateSchedulerPreemptionRollback(options, worker, *processes, &transaction);
             stoppedByUs = false;
             return deferred("process_state_race_after_sigstop");
         }
         if (!operatorPause && completed())
         {
-            if (stoppedByUs) CompensateSchedulerPreemptionRollback(worker, *processes);
+            if (stoppedByUs) CompensateSchedulerPreemptionRollback(options, worker, *processes, &transaction);
             stoppedByUs = false;
             return deferred("authoritative_result_won_stop_race");
         }
-        if (SchedulerAuthorityTestFailpointEnabled("capacity_after_sigstop_before_db"))
+        if (SchedulerAuthorityTestFailpointEnabled("capacity_after_sigstop_before_db") ||
+            SchedulerAuthorityTestFailpointEnabled("capacity_rollback_pause_race"))
             throw std::runtime_error("injected_capacity_db_failure_after_sigstop");
         if (!operatorPause)
         {
@@ -10923,7 +10994,13 @@ bool SuspendCapacityExcess(
         if (!commitAttempted)
         {
             transaction.abort();
-            if (stoppedByUs && !operatorPause) CompensateSchedulerPreemptionRollback(worker, *processes);
+            if (SchedulerAuthorityTestFailpointEnabled("capacity_rollback_pause_race"))
+            {
+                // Private database-only, bounded handoff for rollback/control races.
+                std::cerr << "SCHEDULER_CAPACITY_TEST_ROLLBACK_UNLOCKED" << std::endl;
+                ::usleep(2000000);
+            }
+            if (stoppedByUs && !operatorPause) CompensateSchedulerPreemptionRollback(options, worker, *processes);
         }
         else std::cerr << "SCHEDULER_CAPACITY_COMMIT_OUTCOME_AMBIGUOUS,worker_attempt_id=" << attemptId << std::endl;
         throw;
