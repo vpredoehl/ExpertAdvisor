@@ -90,7 +90,8 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
             calls = []
             def verify_commit(path, commit):
                 calls.append((path.name, commit))
-                raise publisher.PublishError("stopped after identity check") if len(calls) == 2 else None
+                if len(calls) == 2:
+                    raise publisher.PublishError("stopped after identity check")
             with patch.object(publisher, "verify_embedded_commit", side_effect=verify_commit), \
                  patch.object(publisher, "verify_worker_build_identity"):
                 with self.assertRaisesRegex(publisher.PublishError, "stopped"):
