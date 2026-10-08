@@ -79,6 +79,22 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
                     runtime_resources={})
             self.assertFalse((root / "artifacts" / "registry.json").exists())
 
+    def test_legacy_rollover_rejects_divergent_infer_commit_before_staging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            train = root / "LSTM_Release"
+            infer = root / "lstm-infer-worker"
+            for executable in (train, infer):
+                executable.write_bytes(b"fixture")
+                executable.chmod(0o755)
+            artifacts = root / "artifacts"
+            with self.assertRaises(publisher.PublishError):
+                rollover.rollover(
+                    artifacts, train, infer, 14, 171, TRAIN_COMMIT,
+                    inference_commit=INFER_COMMIT,
+                    check_embedded_commit=False, runtime_resources={})
+            self.assertFalse(artifacts.exists())
+
     def test_disposable_rollover_retains_previous_generation(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
