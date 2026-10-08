@@ -79,6 +79,50 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
                     runtime_resources={})
             self.assertFalse((root / "artifacts" / "registry.json").exists())
 
+    def test_disposable_rollover_retains_previous_generation(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            training = root / "lstm-train-worker"
+            inference = root / "lstm-infer-worker"
+            legacy = root / "LSTM_Release"
+            for binary in (training, inference, legacy):
+                binary.write_bytes(binary.name.encode())
+                binary.chmod(0o755)
+            resources = {}
+            for name, _ in publisher.RUNTIME_RESOURCE_SPECS:
+                resource = root / name
+                resource.write_bytes(name.encode())
+                resources[name] = resource
+            rollover.rollover(
+                artifacts, legacy, inference, 13, 171, TRAIN_COMMIT,
+                check_embedded_commit=False, runtime_resources=resources)
+            before = json.loads((artifacts / "registry.json").read_text())
+            self.assertEqual(len(before["workers"]), 2)
+            train_path, infer_path = rollover.rollover(
+                artifacts, training, inference, 14, 171, TRAIN_COMMIT,
+                inference_commit=INFER_COMMIT, dedicated_training=True,
+                check_embedded_commit=False, runtime_resources=resources)
+            after = json.loads((artifacts / "registry.json").read_text())
+            self.assertEqual(after["current_layout"], 14)
+            self.assertEqual(len(after["workers"]), 4)
+            self.assertTrue(train_path.exists())
+            self.assertTrue(infer_path.exists())
+            for old in before["workers"]:
+                matches = [w for w in after["workers"]
+                           if w["executable"] == old["executable"]]
+                self.assertEqual(len(matches), 1)
+                self.assertEqual(matches[0]["worker_rule"], "historical")
+                self.assertTrue((artifacts / old["executable"]).exists())
+            new_train = next(w for w in after["workers"]
+                             if w["semantic_layout"] == 14 and w["worker_role"] == "train")
+            new_infer = next(w for w in after["workers"]
+                             if w["semantic_layout"] == 14 and w["worker_role"] == "infer")
+            self.assertEqual(new_train["artifact_manifest_schema_version"], 2)
+            self.assertEqual(new_train["source_commit"], TRAIN_COMMIT)
+            self.assertEqual(new_infer["source_commit"], INFER_COMMIT)
+
     def test_distinct_commit_identity_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
