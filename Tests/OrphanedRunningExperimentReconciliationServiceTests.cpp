@@ -73,6 +73,61 @@ void ExpectMissingProcessPhase(const std::string& phase)
 
 int main()
 {
+    // Displacement/restart observations must not manufacture a new attempt.
+    // Exercise the entire observation matrix, including external SIGCONT,
+    // external SIGSTOP and a live PID with the wrong start identity.
+    for (unsigned bits = 0; bits < 32; ++bits)
+    {
+        const AttemptObservation observation{
+            bool(bits & 1), bool(bits & 2), bool(bits & 4),
+            bool(bits & 8), bool(bits & 16)};
+        const auto plan = PlanAttemptObservation(observation);
+        if (!observation.inspectionSucceeded)
+        {
+            assert(plan.action == AttemptObservationAction::Defer);
+            assert(plan.capacityConsumed);
+            assert(!plan.restoreRunningLifecycle);
+        }
+        else if (!observation.processExists)
+        {
+            assert(plan.action == AttemptObservationAction::ReconcileMissing);
+            assert(!plan.capacityConsumed);
+            assert(!plan.restoreRunningLifecycle);
+        }
+        else
+        {
+            assert(plan.action == AttemptObservationAction::RetainLive);
+            const bool verifiedStopped = observation.identityMatches &&
+                observation.persistedStopped && observation.processStopped;
+            assert(plan.capacityConsumed == !verifiedStopped);
+            assert(plan.restoreRunningLifecycle ==
+                   (observation.identityMatches &&
+                    observation.persistedStopped && !observation.processStopped));
+            assert(plan.lifecycleState ==
+                   (!observation.identityMatches ? "identity_ambiguous" :
+                    verifiedStopped ? "stopped" : "observed"));
+        }
+    }
+    for (const std::string phase : {"train", "infer"})
+    {
+        RecordingReconciliation recording;
+        recording.candidates = {Attempt(phase, "stopped")};
+        recording.observation = {true, true, true, true, false};
+        ReconciliationService service{recording.operations()};
+        assert(service.recoverOrphanedRunningExperiments() == 0);
+        assert((recording.calls == std::vector<std::string>{
+            "load", "observe:" + phase,
+            "persist:" + phase + ":live_worker_observed_without_relaunch"}));
+    }
+    assert(PlanMissingStoppedWorker("train", "pending", true,
+                                   "preemption", false).disposition ==
+           MissingStoppedWorkerDisposition::FailPreemptedTrainWithoutCheckpoint);
+    assert(PlanMissingStoppedWorker("train", "pending", true,
+                                   "preemption", true).disposition ==
+           MissingStoppedWorkerDisposition::RestartPreemptedTrainFromCheckpoint);
+    assert(PlanMissingStoppedWorker("infer", "paused", false,
+                                   "none", false).disposition ==
+           MissingStoppedWorkerDisposition::RestartEligible);
     {
         RecordingReconciliation recording;
         ReconciliationService service{recording.operations()};

@@ -17,7 +17,8 @@ trap cleanup EXIT
 createdb "${test_db}"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 CREATE TABLE model (
-    model_id bigserial PRIMARY KEY
+    model_id bigserial PRIMARY KEY,
+    name text
 );
 CREATE TABLE experiment (
     experiment_id bigserial PRIMARY KEY,
