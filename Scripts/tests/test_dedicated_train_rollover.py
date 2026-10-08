@@ -95,9 +95,35 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
                 resource = root / name
                 resource.write_bytes(name.encode())
                 resources[name] = resource
-            rollover.rollover(
-                artifacts, legacy, inference, 13, 171, TRAIN_COMMIT,
-                check_embedded_commit=False, runtime_resources=resources)
+            # Rollover requires an existing current layout with both roles.
+            # Seed the disposable registry with the publisher's own
+            # validated artifact/registry format, without using rollover.
+            artifacts.mkdir()
+            runtime_manifest, runtime_id = publisher.runtime_manifest(resources)
+            runtime = publisher.stage_runtime_package(
+                artifacts, resources, runtime_manifest, runtime_id)
+            legacy_digest = publisher.sha256(legacy)
+            infer_digest = publisher.sha256(inference)
+            legacy_rel, legacy_manifest, legacy_worker = rollover._worker_value(
+                13, 171, TRAIN_COMMIT, legacy_digest, "train",
+                publisher.LEGACY_WORKER_MANIFEST_SCHEMA_VERSION,
+                rollover.training_capabilities(), runtime_id)
+            infer_rel, infer_manifest, infer_worker = rollover._worker_value(
+                13, 171, TRAIN_COMMIT, infer_digest, "infer",
+                publisher.WORKER_MANIFEST_SCHEMA_VERSION,
+                rollover.INFERENCE_CAPABILITIES, runtime_id)
+            rollover._stage_worker(
+                artifacts, legacy, legacy_rel, legacy_manifest, legacy_digest, runtime)
+            rollover._stage_worker(
+                artifacts, inference, infer_rel, infer_manifest, infer_digest, runtime)
+            seed = {
+                "schema_version": publisher.REGISTRY_SCHEMA_VERSION,
+                "current_layout": 13,
+                "runtimes": [runtime],
+                "workers": [legacy_worker, infer_worker],
+            }
+            publisher.validate_existing_registry(artifacts, seed)
+            publisher.atomic_write_json(artifacts / "registry.json", seed)
             before = json.loads((artifacts / "registry.json").read_text())
             self.assertEqual(len(before["workers"]), 2)
             train_path, infer_path = rollover.rollover(
