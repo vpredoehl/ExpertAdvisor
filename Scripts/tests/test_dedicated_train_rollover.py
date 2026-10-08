@@ -82,7 +82,9 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
     def test_disposable_rollover_retains_previous_generation(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            # macOS /var is commonly a symlink to /private/var. The
+            # publisher correctly requires canonical artifact paths.
+            root = Path(directory).resolve(strict=True)
             artifacts = root / "artifacts"
             training = root / "lstm-train-worker"
             inference = root / "lstm-infer-worker"
