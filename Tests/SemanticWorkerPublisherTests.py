@@ -171,6 +171,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
                 stdout=(
                     "TRAIN_WORKER_BUILD_IDENTITY,identity_contract_version=1,"
                     f"artifact_role={role},source_commit={source_commit},"
+                    "semantic_layout=13,model_input_width=171,"
                     f"executable_sha256=sha256:{executable_sha}\n"
                 ),
                 stderr="",
@@ -182,7 +183,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
             return_value=result("lstm-train-worker", commit, digest),
         ):
             publisher.verify_worker_build_identity(
-                executable, "train", commit, digest)
+                executable, "train", commit, digest, 13, 171)
 
         with mock.patch.object(
             publisher.subprocess, "run",
@@ -191,7 +192,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 publisher.PublishError, "train worker build identity is unavailable"):
                 publisher.verify_worker_build_identity(
-                    executable, "train", commit, digest)
+                    executable, "train", commit, digest, 13, 171)
 
         mismatches = (
             ("lstm-infer-worker", commit, digest),
@@ -207,7 +208,7 @@ class SemanticWorkerPublisherTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         publisher.PublishError, "train worker build identity mismatch"):
                         publisher.verify_worker_build_identity(
-                            executable, "train", commit, digest)
+                            executable, "train", commit, digest, 13, 171)
 
     def test_role_publication_preserves_training_reference_and_never_overwrites(self) -> None:
         worker7 = self.executable("worker7", b"layout-seven")

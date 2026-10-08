@@ -56,22 +56,8 @@ def _resolve_executable(path: Path, expected_name: str) -> Path:
 
 def verify_train_semantic_contract(executable: Path, layout: int, width: int) -> None:
     """Fail closed unless the executable reports the compiled TRAIN contract."""
-    result = subprocess.run(
-        [str(executable), "--build-identity"], check=False,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-    if result.returncode != 0:
-        raise publisher.PublishError("TRAIN semantic build identity is unavailable")
-    fields: dict[str, str] = {}
-    for field in result.stdout.strip().split(","):
-        key, separator, value = field.partition("=")
-        if separator:
-            fields[key] = value
-    if (fields.get("artifact_role") != "lstm-train-worker" or
-            fields.get("semantic_layout") != str(layout) or
-            fields.get("model_input_width") != str(width)):
-        raise publisher.PublishError(
-            "TRAIN executable semantic layout or model input width mismatch")
+    fields = publisher.read_worker_build_identity(executable, "train")
+    publisher.validate_worker_semantic_contract(fields, "train", layout, width)
 
 
 def _runtime_resources_match(training: Path, inference: Path) -> dict[str, Path]:
@@ -224,11 +210,12 @@ def rollover(
         publisher.verify_embedded_commit(training, commit)
         training_digest = publisher.sha256(training)
         if dedicated_training:
-            publisher.verify_worker_build_identity(training, "train", commit, training_digest)
-            verify_train_semantic_contract(training, layout, width)
+            publisher.verify_worker_build_identity(
+                training, "train", commit, training_digest, layout, width)
         publisher.verify_embedded_commit(inference, inference_commit)
         inference_digest = publisher.sha256(inference)
-        publisher.verify_inference_build_identity(inference, inference_commit, inference_digest)
+        publisher.verify_inference_build_identity(
+            inference, inference_commit, inference_digest, layout, width)
         runtime_resources = _runtime_resources_match(training, inference)
     else:
         training_digest = publisher.sha256(training)

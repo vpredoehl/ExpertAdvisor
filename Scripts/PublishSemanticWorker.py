@@ -208,30 +208,60 @@ def validate_role_aware_capabilities(worker_role: str, capabilities: list[str]) 
     raise PublishError("unsupported role-aware semantic worker role")
 
 
-def verify_worker_build_identity(
-    executable: Path, worker_role: str, commit: str, digest: str
-) -> None:
-    expected_role = executable_identity(WORKER_MANIFEST_SCHEMA_VERSION, worker_role)
+def read_worker_build_identity(executable: Path, worker_role: str) -> dict[str, str]:
+    """Read one unambiguous version-1 dedicated-worker identity record."""
     result = subprocess.run(
         [str(executable), "--build-identity"], check=False,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     if result.returncode != 0:
         raise PublishError(f"{worker_role} worker build identity is unavailable")
-    fields = {}
-    for field in result.stdout.strip().split(","):
+    records = result.stdout.strip().splitlines()
+    if len(records) != 1:
+        raise PublishError(f"{worker_role} worker build identity is malformed")
+    header, *record_fields = records[0].split(",")
+    if header != f"{worker_role.upper()}_WORKER_BUILD_IDENTITY":
+        raise PublishError(f"{worker_role} worker build identity is malformed")
+    fields: dict[str, str] = {}
+    for field in record_fields:
         key, separator, value = field.partition("=")
-        if separator:
-            fields[key] = value
+        if (not separator or not re.fullmatch(r"[a-z][a-z0-9_]*", key) or
+                not value or key in fields):
+            raise PublishError(f"{worker_role} worker build identity is malformed")
+        fields[key] = value
+    if fields.get("identity_contract_version") != "1":
+        raise PublishError(f"{worker_role} worker build identity version is unsupported")
+    return fields
+
+
+def validate_worker_semantic_contract(
+    fields: dict[str, str], worker_role: str, layout: int, width: int
+) -> None:
+    expected_role = executable_identity(WORKER_MANIFEST_SCHEMA_VERSION, worker_role)
+    if (fields.get("artifact_role") != expected_role or
+            fields.get("semantic_layout") != str(layout) or
+            fields.get("model_input_width") != str(width)):
+        raise PublishError(f"{worker_role} worker semantic layout or model input width mismatch")
+
+
+def verify_worker_build_identity(
+    executable: Path, worker_role: str, commit: str, digest: str,
+    layout: int, width: int,
+) -> None:
+    expected_role = executable_identity(WORKER_MANIFEST_SCHEMA_VERSION, worker_role)
+    fields = read_worker_build_identity(executable, worker_role)
     if (fields.get("artifact_role") != expected_role or
             fields.get("source_commit") != commit or
             fields.get("executable_sha256") != f"sha256:{digest}"):
         raise PublishError(f"{worker_role} worker build identity mismatch")
+    validate_worker_semantic_contract(fields, worker_role, layout, width)
 
 
-def verify_inference_build_identity(executable: Path, commit: str, digest: str) -> None:
-    """Compatibility wrapper for the existing inference publisher/tests."""
-    verify_worker_build_identity(executable, "infer", commit, digest)
+def verify_inference_build_identity(
+    executable: Path, commit: str, digest: str, layout: int, width: int
+) -> None:
+    """Qualify a new dedicated INFER candidate against its intended contract."""
+    verify_worker_build_identity(executable, "infer", commit, digest, layout, width)
 
 
 def validate_inputs(
@@ -705,8 +735,6 @@ def publish(
     check_embedded_commit: bool = True,
     runtime_resources: dict[str, Path] | None = None,
 ) -> Path:
-    artifact_root.mkdir(parents=True, exist_ok=True)
-    artifact_root = artifact_root.resolve()
     try:
         executable = executable.resolve(strict=True)
     except OSError as error:
@@ -720,7 +748,7 @@ def publish(
     if not SHA256_PATTERN.fullmatch(digest):
         raise PublishError("computed SHA-256 is malformed")
     if check_embedded_commit:
-        verify_inference_build_identity(executable, commit, digest)
+        verify_inference_build_identity(executable, commit, digest, layout, width)
     if runtime_resources is None:
         runtime_resources = {
             built_identity: executable.parent / built_identity
@@ -728,6 +756,7 @@ def publish(
         }
     runtime_manifest_value, runtime_identity = runtime_manifest(runtime_resources)
 
+    artifact_root = artifact_root.resolve()
     executable_name = executable_identity(WORKER_MANIFEST_SCHEMA_VERSION, worker_role)
     relative_directory = Path(f"layout{layout}") / worker_role / commit / digest
     final_directory = artifact_root / relative_directory
@@ -757,6 +786,8 @@ def publish(
         "selection_priority": 0,
     }
 
+    # Qualification completes before any publication filesystem mutation.
+    artifact_root.mkdir(parents=True, exist_ok=True)
     lock_path = artifact_root / ".publish.lock"
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -768,6 +799,13 @@ def publish(
         if worker_rule == "current" and registry["current_layout"] != layout:
             raise PublishError(
                 "inference publication cannot change current layout without a training/reference binding")
+        if worker_rule == "current":
+            current_training = [worker for worker in registry["workers"]
+                                if worker["worker_rule"] == "current" and
+                                worker["worker_role"] == "train"]
+            if (len(current_training) != 1 or
+                    current_training[0]["model_input_width"] != width):
+                raise PublishError("current inference contract disagrees with training/reference binding")
         runtime_value = stage_runtime_package(
             artifact_root,
             runtime_resources,
@@ -842,6 +880,7 @@ def publish(
         if registry["current_layout"] is None:
             raise PublishError("historical publication requires an existing current worker")
 
+        validate_existing_registry(artifact_root, registry)
         atomic_write_json(registry_path, registry)
 
         if worker_rule == "current":
@@ -868,15 +907,15 @@ def main() -> int:
     repository_root = arguments.repository_root.resolve(strict=True)
     artifact_root = (arguments.artifact_root or
                      repository_root / "Builds" / "SemanticWorkers")
-    if arguments.semantic_layout is None or arguments.model_input_width is None:
-        if arguments.worker_rule != "current":
-            raise PublishError("historical import requires explicit semantic layout and width")
+    if arguments.worker_rule == "current":
         source_layout, source_width = current_semantic_contract(repository_root)
-        layout = arguments.semantic_layout or source_layout
-        width = arguments.model_input_width or source_width
+        layout = source_layout if arguments.semantic_layout is None else arguments.semantic_layout
+        width = source_width if arguments.model_input_width is None else arguments.model_input_width
         if (layout, width) != (source_layout, source_width):
             raise PublishError("explicit current contract disagrees with source")
     else:
+        if arguments.semantic_layout is None or arguments.model_input_width is None:
+            raise PublishError("historical import requires explicit semantic layout and width")
         layout, width = arguments.semantic_layout, arguments.model_input_width
     if arguments.worker_rule == "current":
         clean_commit = clean_source_commit(repository_root)

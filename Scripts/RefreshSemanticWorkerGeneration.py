@@ -89,11 +89,12 @@ def refresh(
     if check_embedded_commit:
         publisher.verify_embedded_commit(training, commit)
         training_digest = publisher.sha256(training)
-        publisher.verify_worker_build_identity(training, "train", commit, training_digest)
+        publisher.verify_worker_build_identity(
+            training, "train", commit, training_digest, layout, width)
         publisher.verify_embedded_commit(inference, inference_commit)
         inference_digest = publisher.sha256(inference)
         publisher.verify_worker_build_identity(
-            inference, "infer", inference_commit, inference_digest)
+            inference, "infer", inference_commit, inference_digest, layout, width)
         runtime_resources = rollover._runtime_resources_match(training, inference)
     else:
         training_digest = publisher.sha256(training)

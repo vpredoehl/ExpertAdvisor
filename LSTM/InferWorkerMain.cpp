@@ -1,4 +1,5 @@
 #include "ManagedInferenceWorkerCli.hpp"
+#include "ModelInputExpansion.hpp"
 
 #if defined(__has_include)
 #if __has_include("GeneratedBuildProvenance.hpp")
@@ -67,6 +68,8 @@ int PrintBuildIdentity(const char* executable)
                   << ",identity_contract_version=1"
                   << ",artifact_role=lstm-infer-worker"
                   << ",source_commit=" << SourceCommit()
+                  << ",semantic_layout=" << EA::kModelInputSemanticLayoutVersion
+                  << ",model_input_width=" << EA::kCurrentModelInputWidth
                   << ",canonical_executable=" << canonical
                   << ",executable_sha256="
                   << digest.value_or("unavailable") << std::endl;

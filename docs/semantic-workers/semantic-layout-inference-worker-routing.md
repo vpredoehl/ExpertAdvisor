@@ -24,7 +24,7 @@ The three executable identities are deliberately separate:
   registry artifact supplies the canonical executable and all persisted worker
   provenance before launch.
 
-Role-aware inference executables are stored at:
+Role-aware dedicated TRAIN and INFER executables are stored at:
 
 ```text
 Builds/SemanticWorkers/layout<N>/<role>/<git-commit>/<sha256>/<executable>
@@ -160,6 +160,29 @@ published explicitly with `Scripts/PublishSemanticWorker.py`. Release
 provenance still requires a clean checkout. The semantic publisher determines
 the current semantic contract from the source headers, obtains clean `HEAD`,
 verifies the commit is embedded in the built executable, and computes SHA-256.
+For a current INFER publication, explicit `--semantic-layout` and
+`--model-input-width` values must also match the source contract, and the width
+must match the current TRAIN binding. A historical dedicated INFER import keeps
+its explicit historical contract; it is not compared with today's source.
+
+Every new dedicated candidate must return one version-1 `--build-identity`
+record with the expected `TRAIN_WORKER_BUILD_IDENTITY` or
+`INFER_WORKER_BUILD_IDENTITY` header. Required qualification values are worker
+role, exact source commit, executable SHA-256, compiled `semantic_layout` and
+compiled `model_input_width`. Malformed output, duplicate fields, missing or
+unsupported identity versions, and missing/mismatched semantic fields fail
+before artifact staging or registry replacement. All values are checked from
+the same identity invocation, against the intended publication contract and
+the independently computed executable hash.
+
+Previously published artifacts are loaded and dispatched under their existing
+registry/manifest contracts, without executing or requiring this expanded
+identity interface. Legacy `LSTM_Release` historical import routes remain
+unchanged. An older dedicated INFER binary lacking the semantic fields cannot
+qualify for a new publication merely because it has matching metallibs or an
+approved source commit; use a separately qualified candidate that reports its
+compiled contract. Do not relabel or rewrite the existing artifact.
+
 It then:
 
 1. publishes and verifies the content-addressed shared runtime package;
@@ -170,15 +193,18 @@ It then:
 5. attaches deterministic resource links to the new worker and, during legacy
    registry migration, to existing worker directories without changing their
    executable or manifest identity;
-6. validates the prior registry, retains all prior artifacts, changes only the
-   old current binding for the same role to historical on a role/layout rollover,
-   and atomically replaces `registry.json`;
+6. validates the prior and complete prospective registry, retains all prior
+   immutable artifacts, updates the requested role binding, and atomically
+   replaces `registry.json`;
 7. only after the registry replacement, atomically updates the `current`
    convenience symlink.
 
-Any build, provenance, copy, hash, manifest, or registry failure leaves the
-previous registry authoritative. An artifact staged successfully before a
-registry failure is merely unreachable and safe. Already-running attempts keep
+Qualification failures do not change existing authoritative artifacts or the
+registry. Failures before registry replacement succeeds leave the previous
+registry authoritative. An artifact staged successfully before such a
+failure is merely unreachable and safe. After replacement, a directory-fsync
+failure cannot be assumed to restore the prior registry; inspect registry
+authority before retrying. Already-running attempts keep
 their persisted immutable executable path across current-worker publication.
 Retention is indefinite/manual and reachability-based; the publisher performs
 no deletion.
@@ -228,25 +254,36 @@ separate coordinated command:
 
 ```bash
 /usr/bin/python3 Scripts/RollSemanticWorkerLayout.py \
-  --repository-root /absolute/path/to/ExpertAdvisor \
-  --training-executable /absolute/path/to/LSTM_Release \
-  --inference-executable /absolute/path/to/lstm-infer-worker
+  --repository-root /absolute/path/to/development-checkout \
+  --training-executable /absolute/path/to/lstm-train-worker \
+  --inference-executable /absolute/path/to/lstm-infer-worker \
+  --dedicated-training \
+  --source-commit <exact-train-build-commit> \
+  --inference-source-commit <exact-infer-build-commit>
 ```
 
 It accepts neither a caller-defined layout/width nor caller-defined
 capabilities. It derives layout and width from the checked-out source contract,
-requires a clean exact `HEAD`, verifies that exact commit is embedded in both
-binaries, verifies the standalone infer-worker build-identity contract, and
-requires identical Metal runtime resources from the two Release products. The
-training/reference candidate must be named `LSTM_Release` and is bound with
-`[train,infer,analyze]` by default; the optional
-`train_feature_ablation_v1` is recorded only with the explicit
+requires a clean workflow checkout, verifies each candidate's own embedded
+commit, role and self-hash, and requires identical Metal runtime resources from
+the two products. Both dedicated candidates must report compiled layout and
+width equal to the source-derived pair. In dedicated mode TRAIN must be named
+`lstm-train-worker` and claims `[train]`; INFER must be named
+`lstm-infer-worker` and claims `[infer]`. The optional
+`train_feature_ablation_v1` requires the explicit
 `--train-feature-ablation-qualified` attestation for that exact executable.
-The infer candidate must be named
-`lstm-infer-worker` and is bound with `[infer]` only.
+Independent retained build commits are supported; omitted commits default to
+clean HEAD for TRAIN and the selected TRAIN commit for INFER.
 
-Under the shared publisher lock the command validates the entire prior v4
-registry; verifies that it has exactly the old current `train` and `infer`
+Legacy TRAIN rollover remains supported by omitting `--dedicated-training` and
+supplying `LSTM_Release`. That route retains its schema-v1 TRAIN artifact and
+`[train,infer,analyze]` capabilities, requires the clean HEAD commit for both
+candidates, and does not require a dedicated TRAIN identity. Its new dedicated
+INFER candidate still requires semantic qualification.
+
+Under the shared publisher lock the command validates the entire prior
+registry (upgrading supported older registry shapes to v5); verifies that it
+has exactly the old current `train` and `infer`
 bindings; rejects any already-registered target layout; stages both immutable
 artifacts and their verified runtime links; changes both prior-current bindings
 to `historical`; adds both new-current bindings; validates that complete
@@ -270,17 +307,19 @@ cannot advance the layout:
 
 ```bash
 /usr/bin/python3 Scripts/RefreshSemanticWorkerGeneration.py \
-  --repository-root /absolute/path/to/ExpertAdvisor \
-  --training-executable /absolute/path/to/LSTM_Release \
+  --repository-root /absolute/path/to/development-checkout \
+  --training-executable /absolute/path/to/lstm-train-worker \
   --inference-executable /absolute/path/to/lstm-infer-worker \
-  --source-commit <approved-40-hex-commit>
+  --source-commit <exact-train-build-commit> \
+  --inference-source-commit <exact-infer-build-commit>
 ```
 
 It derives the layout and width from the clean checked-out source, requires
-them to equal the registry's current layout, and requires exactly the current
-`train` and `infer` bindings for that layout. Both candidates must prove the
-same clean commit, including the training executable provenance and infer
-worker build identity/SHA; their runtime resources must match. It stages both
+them to equal the registry's current layout and width, and requires exactly the
+current `train` and `infer` bindings for that layout. Both dedicated candidates
+must prove their own exact commits, roles, hashes and compiled semantic
+layout/width; independent build commits are supported. Their runtime resources
+must match. It stages both
 immutable artifacts, validates the complete prospective registry, then makes
 one registry replacement. The outgoing current TRAIN binding is retained as a
 historical TRAIN candidate with its original artifact manifest, bytes, and

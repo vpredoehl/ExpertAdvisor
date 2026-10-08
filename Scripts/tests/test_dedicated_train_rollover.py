@@ -367,7 +367,7 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
             training.write_bytes(b"fixture")
             training.chmod(0o755)
             def identity(layout, width):
-                return ("TRAIN_WORKER_BUILD_IDENTITY,artifact_role=lstm-train-worker,"
+                return ("TRAIN_WORKER_BUILD_IDENTITY,identity_contract_version=1,artifact_role=lstm-train-worker,"
                         f"semantic_layout={layout},model_input_width={width},"
                         "source_commit=" + TRAIN_COMMIT)
             for reported_layout, reported_width in (
@@ -375,7 +375,7 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
                 with self.subTest(layout=reported_layout, width=reported_width):
                     output = (identity(reported_layout, reported_width)
                               if reported_layout is not None
-                              else "TRAIN_WORKER_BUILD_IDENTITY,artifact_role=lstm-train-worker")
+                              else "TRAIN_WORKER_BUILD_IDENTITY,identity_contract_version=1,artifact_role=lstm-train-worker")
                     completed = __import__("subprocess").CompletedProcess(
                         args=[], returncode=0, stdout=output, stderr="")
                     with patch.object(rollover.subprocess, "run", return_value=completed):
@@ -401,8 +401,7 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
                 if len(calls) == 2:
                     raise publisher.PublishError("stopped after identity check")
             with patch.object(publisher, "verify_embedded_commit", side_effect=verify_commit), \
-                 patch.object(publisher, "verify_worker_build_identity"), \
-                 patch.object(rollover, "verify_train_semantic_contract"):
+                 patch.object(publisher, "verify_worker_build_identity"):
                 with self.assertRaisesRegex(publisher.PublishError, "stopped"):
                     rollover.rollover(
                         root / "artifacts", training, inference, 14, 171,
