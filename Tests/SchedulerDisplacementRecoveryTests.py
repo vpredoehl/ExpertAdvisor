@@ -15,11 +15,16 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PG = Path('/opt/homebrew/opt/postgresql@17/bin')
 CLI = ROOT / 'DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release'
+PHASE_T = '--phase24t' in sys.argv
+if PHASE_T:
+    sys.argv.remove('--phase24t')
+    CLI = ROOT / 'DerivedData/ExpertAdvisor/Phase24T/build/LSTM_Release'
 ACTIVE = "('reserved','spawned','running','observed','identity_ambiguous')"
 
 
@@ -30,8 +35,9 @@ def quote(value):
 class Qualification:
     def __init__(self, output):
         self.out = output.resolve()
-        if not self.out.is_relative_to(ROOT / 'DerivedData/ExpertAdvisor/Phase24S'):
-            raise ValueError('evidence must be inside Rollover DerivedData/ExpertAdvisor/Phase24S')
+        area = ROOT / 'DerivedData/ExpertAdvisor' / ('Phase24T' if PHASE_T else 'Phase24S')
+        if not self.out.is_relative_to(area):
+            raise ValueError('evidence must be inside the phase Rollover DerivedData area')
         self.out.mkdir(parents=True, exist_ok=False, mode=0o700)
         self.data = self.out / 'pgdata'
         self.helper = self.out / 'GlobalExperimentControlProcessTests'
@@ -53,6 +59,36 @@ class Qualification:
             'FOREX_DB_HOST': '127.0.0.1', 'FOREX_DB_NAME': 'ea_phase24s_forex',
         }
         (self.out / 'environment.json').write_text(json.dumps(self.env, indent=2))
+        self.env['TMPDIR'] = str(self.out / 'tmp')
+        (self.out / 'tmp').mkdir()
+        # Native recovery includes a host-wide legacy scheduler search. Scope
+        # that census to registered fixtures; never inspect production PIDs.
+        self.allowed = self.out / 'owned-pids'
+        self.allowed.write_text('')
+        self.env['EA_TEST_OWNED_PIDS'] = str(self.allowed)
+        tools = self.out / 'bin'
+        tools.mkdir()
+        wrapper = tools / 'ps'
+        wrapper.write_text('''#!/usr/bin/python3 -B
+import os,subprocess,sys
+args=sys.argv[1:]
+allowed=set(open(os.environ['EA_TEST_OWNED_PIDS']).read().split())
+if args and args[0]=='-axo':
+ for pid in sorted(allowed):
+  r=subprocess.run(['/bin/ps','-p',pid,'-o',args[1]],capture_output=True,text=True,timeout=3)
+  sys.stdout.write(r.stdout)
+ sys.exit(0)
+if '-p' in args and args[args.index('-p')+1] in allowed:
+ sys.exit(subprocess.run(['/bin/ps']+args,timeout=3).returncode)
+sys.exit(1)
+''')
+        wrapper.chmod(0o700)
+        self.env['PATH'] = str(tools) + ':' + self.env['PATH']
+        (self.out / 'environment.json').write_text(json.dumps(self.env, indent=2))
+
+    def register_pid(self, pid):
+        with self.allowed.open('a') as f:
+            f.write(str(pid) + '\n')
 
     def run(self, name, argv, sql=None, timeout=30, expected=0):
         self.sequence += 1
@@ -224,6 +260,8 @@ class Qualification:
         args = [str(self.artifacts[layout, phase]), '--managed-test-worker', '--self-session',
                 '--' + phase, '--scheduler-experiment-id=' + str(eid),
                 '--scheduler-worker-attempt-id=' + str(attempt), '--ready-fd=' + str(ready.fileno())]
+        if PHASE_T:
+            args.append('--managed-test-max-seconds=180')
         if detached:
             # Dedicated launcher exits; only this new fixture is reparented to PID 1.
             code = ('import subprocess,sys; p=subprocess.Popen(sys.argv[2:],'
@@ -240,6 +278,7 @@ class Qualification:
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             pid = process.pid
         ready.close()
+        self.register_pid(pid)
         self.wait(lambda: (self.out / f'{eid}.ready').stat().st_size > 0, 'worker ready')
         identity = self.inspect(pid)
         assert len(identity) == 5 and identity[0] == identity[1] == str(pid), identity
@@ -322,10 +361,13 @@ class Qualification:
                                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         record = {'process': process, 'log': log, 'identity': []}
         self.daemons.append(record)
+        self.register_pid(process.pid)
         self.wait(lambda: bool(self.inspect(process.pid)), 'daemon identity')
         record['identity'] = self.inspect(process.pid)
         self.wait(lambda: self.sql("SELECT count(*) FROM experiment_scheduler_invocation "
                   f"WHERE process_pid={process.pid} AND status='owner';") == '1', 'daemon authority')
+        self.wait(lambda: 'SCHEDULER_START,' in (self.out / (name + '.log')).read_text(),
+                  'daemon startup completed', seconds=5)
         (self.out / (name + '-identity.json')).write_text(json.dumps(record['identity']))
         with (self.out / 'commands.jsonl').open('a') as f:
             f.write(json.dumps({'name': name, 'argv': list(map(str, args)),
@@ -347,12 +389,16 @@ class Qualification:
         for eid in self.workers:
             self.signal_worker(eid, signal.SIGCONT)
             self.signal_worker(eid, signal.SIGTERM)
-        for worker in self.workers.values():
+        for eid,worker in self.workers.items():
             if worker['process'] is not None:
                 worker['process'].wait(timeout=4)
             else:
                 self.wait(lambda: not self.inspect(worker['pid']) or
                           self.state(worker['pid']).startswith('Z'), 'detached exit')
+            with (self.out/'cleanup-workers.jsonl').open('a') as receipt:
+                receipt.write(json.dumps({'experiment':eid,'identity':worker['identity'],
+                    'result':'direct child reaped' if worker['process'] is not None else 'detached fixture missing or exited zombie',
+                    'timeout_seconds':4})+'\n')
         self.workers.clear()
         self.sql("SET expertadvisor.scheduler_protocol_generation='52';"
                  "UPDATE experiment SET status='failed',resume_requested=false,scheduler_resume_origin='none',"
@@ -490,27 +536,38 @@ class Qualification:
         self.results['external_over_cap'] = {'active_attempts': self.capacity(),
             'os_active': sum(not self.state(w['pid']).startswith('T') for w in self.workers.values()),
             'new_attempts': int(self.sql('SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id IN (995230,995231);')) - 2}
-        assert self.results['external_over_cap'] == {'active_attempts': 2, 'os_active': 2, 'new_attempts': 0}
+        assert self.results['external_over_cap'] == {
+            'active_attempts': 1 if PHASE_T else 2, 'os_active': 1 if PHASE_T else 2, 'new_attempts': 0}
         self.retire()
+
+        if PHASE_T:
+            self.capacity_tests()
 
         # Real owner crash; advance only the private fixture's lease clock to
         # avoid a long wall-clock expiry wait. The live worker stays detached.
         self.launch(995240, detached=True)
+        if PHASE_T:
+            self.launch(995241,layout=13,priority='low',status='pending',origin='preemption',detached=True)
         worker_identity = self.workers[995240]['identity']
         daemon = self.start_daemon('owner-before-crash')
         owner, fence = self.sql('SELECT owner_scheduler_invocation_id,fencing_token '
                                 'FROM experiment_scheduler_lease;').split('|')
         self.sql('UPDATE experiment_scheduler_worker_attempt SET ownership_origin=\'scheduler_launch\','
                  f'scheduler_invocation_id={quote(owner)},scheduler_fencing_token={fence} '
-                 'WHERE experiment_id=995240;')
+                 "WHERE experiment_id IN (995240,995241);")
         rival = self.run('live-owner-rejected', self.scheduler_args(0, 1), expected=3)
         assert 'SCHEDULER_OWNERSHIP_REJECTED' in rival.stdout + rival.stderr
         self.stop_daemon(daemon, signal.SIGKILL)
+        if PHASE_T:self.signal_worker(995241,signal.SIGCONT)
         assert self.inspect(self.workers[995240]['pid']) == worker_identity
         fresh = self.run('dead-owner-fresh-lease-rejected', self.scheduler_args(0, 1), expected=3)
         assert 'reason=owner_lease_valid' in fresh.stdout + fresh.stderr
         self.sql("UPDATE experiment_scheduler_lease SET expires_at=clock_timestamp()-interval '1 second';")
         self.cycle('dead-owner-expired-takeover')
+        if PHASE_T:
+            self.expect(995241,'pending',True)
+            assert self.capacity()==1
+            assert self.sql('SELECT scheduler_invocation_id FROM experiment_scheduler_worker_attempt WHERE experiment_id=995241;')==owner
         assert self.inspect(self.workers[995240]['pid']) == worker_identity
         assert self.sql('SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=995240;') == '1'
         assert self.sql('SELECT scheduler_invocation_id FROM experiment_scheduler_worker_attempt WHERE experiment_id=995240;') == owner
@@ -529,6 +586,170 @@ class Qualification:
         assert self.inspect(self.workers[995240]['pid']) == worker_identity
         assert self.sql('SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=995240;') == '1'
         self.results['stale_fencing_token'] = 'PASS; native heartbeat stops stale owner without signaling worker'
+        self.retire()
+
+    def capacity_tests(self):
+        # Resume after reservation but before parent exec permission. Only the
+        # private scheduler's existing test failpoint facility delays this gate.
+        self.launch(995280,priority='low',status='pending',origin='preemption')
+        self.launch(995281,layout=13,priority='high',status='pending',origin='operator')
+        self.signal_worker(995281,signal.SIGCONT)
+        self.signal_worker(995281,signal.SIGTERM)
+        self.workers[995281]['process'].wait(timeout=4)
+        self.sql("SET expertadvisor.scheduler_protocol_generation='52';"
+                 "UPDATE experiment_scheduler_worker_attempt SET lifecycle_state='abandoned' WHERE experiment_id=995281;"
+                 "UPDATE experiment SET active_scheduler_worker_attempt_id=NULL,worker_pid=NULL,worker_process_group_id=NULL,"
+                 "worker_process_start_identity=NULL,worker_executable=NULL,worker_command_line=NULL,"
+                 "worker_control_state='running',resume_requested=false,scheduler_resume_origin='none' WHERE experiment_id=995281;")
+        actor=[]
+        def resume_at_gate():
+            try:
+                deadline=time.monotonic()+5
+                while time.monotonic()<deadline:
+                    r=subprocess.run([str(PG/'psql'),'-X','-Atq','-d','ea_scheduler_phase24s_lstm','-c',
+                       "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=995281 AND lifecycle_state IN ('reserved','spawned');"],
+                       env=self.env,capture_output=True,text=True,timeout=2)
+                    if r.returncode==0 and r.stdout.strip()=='1':
+                        self.signal_worker(995280,signal.SIGCONT)
+                        actor.append('verified fixture resumed after reservation')
+                        return
+                    time.sleep(0.02)
+                actor.append('reservation not observed')
+            except Exception as error: actor.append(str(error))
+        self.env['EA_SCHEDULER_OWNERSHIP_TEST_ENABLE']='1'
+        self.env['EA_SCHEDULER_OWNERSHIP_TEST_BOUNDARY']='capacity_before_child_gate'
+        observer=threading.Thread(target=resume_at_gate)
+        observer.start()
+        try:
+            result=self.run('external-resume-before-child-gate',self.scheduler_args(0,1),expected=None)
+        finally:
+            observer.join(timeout=7)
+            del self.env['EA_SCHEDULER_OWNERSHIP_TEST_ENABLE']
+            del self.env['EA_SCHEDULER_OWNERSHIP_TEST_BOUNDARY']
+        assert not observer.is_alive() and actor==['verified fixture resumed after reservation'],actor
+        (self.out/'gate-race-actor.json').write_text(json.dumps(actor))
+        assert result.returncode!=0
+        assert 'scheduler_capacity_changed_before_child_gate' in result.stdout+result.stderr
+        assert 'SCHEDULER_CHILD_LAUNCHED' not in result.stdout+result.stderr
+        self.cycle('child-gate-race-recovery')
+        self.expect(995280,'running',False)
+        assert self.capacity()==1
+        assert self.sql("SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=995280;")=='1'
+        self.results['child_gate_race']='PASS externally resumed exact fixture blocks new child exec; original PID/attempt recovered'
+        self.retire()
+
+        # Failure after a verified SIGSTOP must roll back the durable state and
+        # restore only the exact victim; the next normal cycle corrects excess.
+        self.launch(995270,priority='normal')
+        self.launch(995271,layout=13,priority='low',status='pending',origin='preemption')
+        self.signal_worker(995271,signal.SIGCONT)
+        self.env['EA_SCHEDULER_OWNERSHIP_TEST_ENABLE']='1'
+        self.env['EA_SCHEDULER_OWNERSHIP_TEST_BOUNDARY']='capacity_after_sigstop_before_db'
+        try:
+            result=self.run('capacity-rollback-compensation',self.scheduler_args(0,1),expected=None)
+        finally:
+            del self.env['EA_SCHEDULER_OWNERSHIP_TEST_ENABLE']
+            del self.env['EA_SCHEDULER_OWNERSHIP_TEST_BOUNDARY']
+        assert result.returncode!=0
+        assert 'injected_capacity_db_failure_after_sigstop' in result.stdout+result.stderr
+        assert 'restored=1' in result.stdout+result.stderr
+        self.expect(995270,'running',False)
+        self.expect(995271,'running',False)
+        self.cycle('capacity-rollback-retry')
+        self.expect(995270,'running',False)
+        self.expect(995271,'pending',True)
+        assert self.capacity()==1
+        self.results['capacity_rollback']='PASS exact victim restored after failed persistence; bounded retry corrected cap'
+        self.retire()
+
+        # Existing victim order: low loses before high; equal priority loses
+        # newest start first. Stop/resume each original attempt repeatedly.
+        for phase, base in [('infer', 996000), ('train', 996100)]:
+            layout = 9 if phase == 'infer' else 13
+            self.launch(base, phase, layout, 'normal', detached=True)
+            self.launch(base+1, phase, 13, 'high', 'pending', 'preemption', detached=True)
+            self.launch(base+2, phase, 13, 'low', 'pending', 'preemption')
+            self.launch(base+3, phase, 13, 'high', 'paused')
+            paused = self.sql(f'SELECT row_to_json(e) FROM experiment e WHERE experiment_id={base+3};')
+            identities = {e:w['identity'] for e,w in self.workers.items()}
+            caps = {'train': int(phase=='train'), 'infer': int(phase=='infer')}
+            for eid in (base+1,base+2,base+3):
+                self.signal_worker(eid, signal.SIGCONT)
+            for i in range(3):
+                self.cycle(f'{phase}-multiple-cap-correction-{i}', **caps)
+                assert self.capacity(phase)==1
+                self.expect(base+1,'running',False)
+                self.expect(base,'pending',True)
+                self.expect(base+2,'pending',True)
+                self.expect(base+3,'paused',True)
+            assert paused == self.sql(f'SELECT row_to_json(e) FROM experiment e WHERE experiment_id={base+3};')
+            self.signal_worker(base+1,signal.SIGCONT)
+            self.signal_worker(base,signal.SIGCONT)
+            self.cycle(phase+'-repeated-external-resume',**caps)
+            self.expect(base,'pending',True)
+            # Remove only high-priority fixture, then ordinary policy admits
+            # normal before low, without replacing either detached identity.
+            self.signal_worker(base+1,signal.SIGTERM)
+            self.wait(lambda:not self.inspect(self.workers[base+1]['pid']), 'high detached exit')
+            self.cycle(phase+'-capacity-readmission',**caps)
+            self.expect(base,'running',False)
+            assert self.inspect(self.workers[base]['pid'])==identities[base]
+            assert self.sql(f'SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id BETWEEN {base} AND {base+3};')=='4'
+            self.results[phase+'_capacity_correction']='PASS unequal priority, multiple external resumes, operator pause, same detached PID/attempt readmission'
+            self.retire()
+
+        # Both independent caps, equal-priority deterministic order, zero caps.
+        for eid,phase,layout in [(996200,'infer',9),(996201,'infer',13),
+                                 (996202,'train',13),(996203,'train',13)]:
+            self.launch(eid,phase,layout,status='running' if eid%2==0 else 'pending',origin='preemption' if eid%2 else 'none')
+            if eid%2:self.signal_worker(eid,signal.SIGCONT)
+        self.cycle('both-phases-cap-one',train=1,infer=1)
+        for eid in (996200,996202): self.expect(eid,'running',False)
+        for eid in (996201,996203): self.expect(eid,'pending',True)
+        assert self.capacity('train')==self.capacity('infer')==1
+        for eid in (996201,996203):self.signal_worker(eid,signal.SIGCONT)
+        self.cycle('both-phases-cap-zero',train=0,infer=0)
+        for eid in (996200,996201,996202,996203):self.expect(eid,'pending',True)
+        assert self.capacity('train')==self.capacity('infer')==0
+        self.cycle('zero-caps-idempotent',train=0,infer=0)
+        self.cycle('both-phases-readmission',train=1,infer=1)
+        assert self.capacity('train')==self.capacity('infer')==1
+        self.results['independent_zero_caps']='PASS both phases, equal-priority oldest survivor, zero cap, later readmission'
+        self.retire()
+
+        # Identity uncertainty must not become a signal target. Known excess
+        # may be safely stopped; the ambiguous worker remains accounted for.
+        self.launch(996210,priority='low')
+        self.launch(996211,layout=13,status='pending',origin='preemption')
+        self.signal_worker(996211,signal.SIGCONT)
+        self.sql("UPDATE experiment_scheduler_worker_attempt SET worker_process_start_identity='reused-pid' WHERE experiment_id=996210;")
+        self.cycle('ambiguous-excess-fail-closed')
+        self.expect(996210,'running',False)
+        self.expect(996211,'pending',True)
+        assert self.sql('SELECT lifecycle_state FROM experiment_scheduler_worker_attempt WHERE experiment_id=996210;')=='identity_ambiguous'
+        self.results['ambiguous_excess']='PASS unknown identity never signaled, capacity retained, verified excess stopped'
+        self.retire()
+
+        # An in-flight checkpoint/control transition is never a stop target,
+        # even if this means retaining it ahead of a higher-priority worker.
+        self.launch(996220,priority='low')
+        self.launch(996221,layout=13,priority='high',status='pending',origin='preemption')
+        self.sql('UPDATE experiment SET stop_after_checkpoint_epoch=100 WHERE experiment_id=996220;')
+        self.signal_worker(996221,signal.SIGCONT)
+        self.cycle('in-flight-capacity-victim-excluded')
+        self.expect(996220,'running',False)
+        self.expect(996221,'pending',True)
+        self.results['in_flight_exclusion']='PASS checkpoint transition retained; eligible excess safely stopped'
+        self.retire()
+
+        self.launch(996230,layout=13,status='paused')
+        self.sql('UPDATE experiment SET stop_after_checkpoint_epoch=100 WHERE experiment_id=996230;')
+        self.signal_worker(996230,signal.SIGCONT)
+        log=self.cycle('paused-in-flight-control-deferred',train=0,infer=0)
+        assert 'unsafe_transition_or_unobserved_owner' in log
+        assert 'SCHEDULER_CAPACITY_ADMISSION_BLOCKED' in log
+        self.expect(996230,'paused',False)
+        self.results['paused_in_flight_deferred']='PASS explicit diagnostic, no ambiguous control signal or admission; operator recovery required'
         self.retire()
 
     def cleanup(self):
@@ -560,7 +781,7 @@ class Qualification:
 
 
 if __name__ == '__main__':
-    default = ROOT / 'DerivedData/ExpertAdvisor/Phase24S' / time.strftime('Run%Y%m%d%H%M%S')
+    default = ROOT / 'DerivedData/ExpertAdvisor' / ('Phase24T' if PHASE_T else 'Phase24S') / time.strftime('Run%Y%m%d%H%M%S')
     qualification = Qualification(Path(sys.argv[1]) if len(sys.argv) > 1 else default)
     try:
         qualification.setup()

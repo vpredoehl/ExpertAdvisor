@@ -101,3 +101,6 @@ Final HEAD unchanged. `git diff --check` passed. Tracked diff: two test files, *
 
 
 Development archival status at Phase 24T entry: this completed historical report and the preserved Phase 24S tests are included in the independent Phase 24S baseline commit. Statements above about uncommitted state describe their original phase closeout. Retained private evidence was reviewed; no later production state was inspected or asserted.
+
+
+Phase24T follow-up: [external-resume capacity reconciliation qualification](LSTM_Phase24T_External_Resume_Cap_Reconciliation_Output.md) fixes the reproduced capacity gap for verified, pause-safe experiment workers, with deterministic existing victim order, preserved attempts/operator pauses, bounded correction and fail-closed deferrals. Final isolated native and targeted regressions passed. This does not identify the cause of the historical production displacement or qualify representative simultaneous memory demand; production TRAIN expansion remains NO-GO pending separate qualification and authorization. The original Phase24S findings above remain historical evidence.

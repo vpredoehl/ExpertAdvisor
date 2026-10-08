@@ -73,6 +73,14 @@ void ExpectMissingProcessPhase(const std::string& phase)
 
 int main()
 {
+    const std::vector<CapacityWorker> capacityWorkers{
+        {1, 1, "high", 1., true}, {2, 2, "normal", 2., true},
+        {3, 3, "low", 3., true}, {4, 4, "low", 3., true},
+        {5, 5, "low", std::nullopt, true}, {6, 6, "low", 9., false}};
+    assert((PlanCapacityVictims(capacityWorkers, 6, 4) == std::vector<long long>{4, 3}));
+    assert((PlanCapacityVictims(capacityWorkers, 6, 0) == std::vector<long long>{4, 3, 5, 2, 1}));
+    assert(PlanCapacityVictims(capacityWorkers, 1, 1).empty());
+    assert(PlanCapacityVictims({}, 3, 1).empty());
     // Displacement/restart observations must not manufacture a new attempt.
     // Exercise the entire observation matrix, including external SIGCONT,
     // external SIGSTOP and a live PID with the wrong start identity.

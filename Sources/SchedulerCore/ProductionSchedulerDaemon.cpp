@@ -953,12 +953,58 @@ LoadLockedGlobalControl(pqxx::work& w)
     return EA::GlobalExperimentControl::LoadControlSnapshot(w);
 }
 
+EA::GlobalExperimentControl::ManagedWorker ManagedWorkerFromExactAttempt(
+    const EA::SchedulerOwnership::ExactAttemptSnapshot& exact);
+
+bool StoppedAttemptsRemainStopped(pqxx::work& w)
+{
+    // A stopped attempt occupies no database slot. If it was externally
+    // resumed since observation, close admission until the next reconciliation.
+    // Unknown process evidence must not be treated as a free slot either.
+    const auto stopped = w.exec(
+        "SELECT worker_attempt_id,experiment_id,worker_kind,lifecycle_phase,capacity_class "
+        "FROM experiment_scheduler_worker_attempt "
+        "WHERE lifecycle_state='stopped' ORDER BY worker_attempt_id;");
+    auto observer = EA::GlobalExperimentControl::CreateNativeProcessObserver();
+    for (const auto& row : stopped)
+    {
+        EA::SchedulerOwnership::ExactAttemptExpectation expected;
+        expected.workerAttemptId = row[0].as<long long>();
+        expected.experimentId = row[1].as<long long>();
+        expected.workerKind = row[2].as<std::string>();
+        expected.lifecyclePhase = row[3].as<std::string>();
+        expected.capacityClass = row[4].as<std::string>();
+        expected.requiredLifecycleState = "stopped";
+        expected.requireCompleteProcessIdentity = true;
+        const auto exact = EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(w, expected, false);
+        bool safelyStoppedOrMissing = false;
+        if (exact)
+        {
+            const auto worker = ManagedWorkerFromExactAttempt(*exact);
+            const auto verified = worker.lifecycleStatus == "paused"
+                ? EA::GlobalExperimentControl::ValidatePausedManagedWorker(worker, *observer)
+                : EA::GlobalExperimentControl::ValidateStoppedWorkerForSchedulerAdmission(worker, *observer);
+            safelyStoppedOrMissing = verified.identity == EA::GlobalExperimentControl::IdentityResult::ProcessMissing ||
+                (verified.identity == EA::GlobalExperimentControl::IdentityResult::Validated && verified.observation.stopped);
+        }
+        if (!safelyStoppedOrMissing)
+        {
+            std::cout << "SCHEDULER_CAPACITY_ADMISSION_BLOCKED,worker_attempt_id="
+                      << row[0].as<long long>()
+                      << ",reason=stopped_attempt_requires_reobservation" << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
+
 bool SchedulerLaunchAllowed(
     pqxx::work& w,
     const std::string& phase,
     bool cancellationInference = false,
     bool cancellationCheckpointTrain = false)
 {
+    if (!StoppedAttemptsRemainStopped(w)) return false;
     const auto snapshot = LoadLockedGlobalControl(w);
     if (!snapshot)
         return false;
@@ -3335,7 +3381,18 @@ void PersistSpawnedWorkerAttempt(
     pqxx::work transaction{connection};
     SetTransactionReadWrite(transaction);
     if (requireSchedulerAuthority)
+    {
         RequireAndRefreshSchedulerAuthority(transaction, options);
+        SchedulerServiceComposition services{transaction};
+        const int maximum = attempt.capacityClass == "train" ? options.maxTrainProcs :
+            (attempt.capacityClass == "infer" ? options.maxInferProcs : options.maxAnalyzeProcs);
+        // This is the parent gate immediately before exec permission. The
+        // reservation itself is included in capacityUsed; the child cannot
+        // begin work if external resumes invalidated that reservation's census.
+        if (gSchedulerStopRequested || !StoppedAttemptsRemainStopped(transaction) ||
+            services.admission.capacityUsed(attempt.capacityClass) > maximum)
+            throw std::runtime_error("scheduler_capacity_changed_before_child_gate");
+    }
     EA::SchedulerCore::PostgresSchedulerRepository repository{transaction};
     EA::SchedulerCore::WorkerAttemptLifecycleService lifecycle{
         repository,
@@ -3602,6 +3659,8 @@ pid_t LaunchReservedChildProcess(
                 "scheduler_child_process_group_identity_mismatch");
         const std::string processStartIdentity =
             RequireProcessStartIdentity(pid);
+        if (SchedulerAuthorityTestFailpointEnabled("capacity_before_child_gate"))
+            ::usleep(500000); // Bounded private-database race fixture.
         PersistSpawnedWorkerAttempt(
             options,
             attempt,
@@ -8341,19 +8400,23 @@ int RecoverOrphanedRunningExperiments(
                         attemptId);
                     return;
                 }
+                const bool operatorPaused = !checkpointEvalId &&
+                    observationPlan.restoreRunningLifecycle &&
+                    transaction.exec("SELECT status FROM experiment WHERE experiment_id=$1;",
+                                     pqxx::params{experimentId}).one_row()[0].as<std::string>() == "paused";
                 transaction.exec_params(
                     "UPDATE experiment_scheduler_worker_attempt SET "
                     "lifecycle_state=$1,last_observed_at=clock_timestamp(),"
                     "observed_by_scheduler_invocation_id=$2,"
                     "reconciliation_result=$3,diagnostic=$4 "
                     "WHERE worker_attempt_id=$5;",
-                    observationPlan.lifecycleState,
+                    operatorPaused ? std::string{"stopped"} : std::string{observationPlan.lifecycleState},
                     options.schedulerAuthority.schedulerInvocationId,
                     observationPlan.reconciliationResult,
                     observationPlan.diagnostic,
                     attemptId);
                 if (observationPlan.restoreRunningLifecycle &&
-                    !checkpointEvalId)
+                    !checkpointEvalId && !operatorPaused)
                 {
                     transaction.exec_params(
                         "UPDATE experiment SET status='running',"
@@ -10736,9 +10799,217 @@ EA::SchedulerCore::SchedulerPhaseAdmissionPlan LoadPhaseAdmissionPlan(
     return plan;
 }
 
+bool SuspendCapacityExcess(
+    const SchedulerOptions& options, long long attemptId, const std::string& phase,
+    bool operatorPause)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    if (gSchedulerStopRequested) return false;
+    const auto row = transaction.exec(
+        "SELECT experiment_id,scheduler_invocation_id,scheduler_fencing_token "
+        "FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=$1;",
+        pqxx::params{attemptId});
+    if (row.size() != 1) return false;
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId = attemptId;
+    expected.experimentId = row[0][0].as<long long>();
+    expected.workerKind = "experiment";
+    expected.lifecyclePhase = phase;
+    expected.capacityClass = phase;
+    if (!row[0][1].is_null()) expected.schedulerInvocationId = row[0][1].as<std::string>();
+    if (!row[0][2].is_null()) expected.schedulerFencingToken = row[0][2].as<long long>();
+    expected.requireSignalable = true;
+    expected.requireCompleteProcessIdentity = true;
+    if (operatorPause) expected.requiredLifecycleState = "stopped";
+    const auto exact = EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(transaction, expected, true);
+    const auto deferred = [&](const std::string& reason) {
+        std::cout << "SCHEDULER_CAPACITY_RECONCILIATION_DEFERRED,worker_attempt_id="
+                  << attemptId << ",phase=" << phase << ",reason=" << reason
+                  << ",action=withhold_admission_and_retry_next_cycle" << std::endl;
+        return false;
+    };
+    if (!exact || exact->ownershipOrigin == "legacy_unverified" ||
+        exact->lifecycleStatus != (operatorPause ? "paused" : "running"))
+        return deferred("exact_attempt_or_lifecycle_unverified");
+    const auto lifecycle = transaction.exec(
+        "SELECT cancellation_request_id,cancel_after_checkpoint_epoch,stop_after_checkpoint_epoch,"
+        "worker_global_pause_request_id,worker_control_state,a.observed_by_scheduler_invocation_id "
+        "FROM experiment e JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=$1;",
+        pqxx::params{exact->experimentId});
+    if (lifecycle.size() != 1 || lifecycle[0][5].is_null() ||
+        lifecycle[0][5].as<std::string>() != options.schedulerAuthority.schedulerInvocationId ||
+        !lifecycle[0][0].is_null() || !lifecycle[0][1].is_null() ||
+         !lifecycle[0][2].is_null() || !lifecycle[0][3].is_null() ||
+         lifecycle[0][4].as<std::string>() != (operatorPause ? "paused" : "running"))
+        return deferred("unsafe_transition_or_unobserved_owner");
+    const auto completed = [&] {
+        if (phase != "infer") return false;
+        const auto experiment = LoadExperimentCheckpointIdentity(transaction, exact->experimentId);
+        return experiment && HasAuthoritativeCompletedInferenceResultForWorkerAttempt(
+            transaction, *experiment, attemptId,
+            OperatorForcedFinalInferenceRerunRequested(transaction, exact->experimentId));
+    };
+    if (!operatorPause && completed()) return deferred("authoritative_result_awaiting_exit");
+    if (!operatorPause)
+    {
+        SchedulerServiceComposition services{transaction};
+        const int maximum = phase == "train" ? options.maxTrainProcs :
+            (phase == "infer" ? options.maxInferProcs : options.maxAnalyzeProcs);
+        // An earlier victim may have exited after selection. Never suspend
+        // another worker merely because the original batch was over capacity.
+        if (services.admission.capacityUsed(phase) <= maximum) return true;
+    }
+    auto processes = EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    const auto worker = ManagedWorkerFromExactAttempt(*exact);
+    bool stoppedByUs = false, commitAttempted = false;
+    try
+    {
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        const auto signal = operatorPause
+            ? EA::GlobalExperimentControl::PauseExternallyResumedStoppedWorker(worker, *processes)
+            : EA::GlobalExperimentControl::PauseWorker(worker, *processes);
+        stoppedByUs = signal.success && std::find(signal.signals.begin(), signal.signals.end(), SIGSTOP) != signal.signals.end();
+        if (!signal.success) return deferred(signal.result + ":" + signal.detail);
+        // Bound the signal-delivery race. A PID/identity change or another
+        // SIGCONT never creates a free database slot on unverified evidence.
+        bool verifiedStopped = false;
+        for (int observation = 0; observation < 10; ++observation)
+        {
+            const auto verified = operatorPause
+                ? EA::GlobalExperimentControl::ValidatePausedManagedWorker(worker, *processes)
+                : EA::GlobalExperimentControl::ValidateManagedWorker(worker, *processes);
+            if (verified.identity != EA::GlobalExperimentControl::IdentityResult::Validated) break;
+            if (verified.observation.stopped) { verifiedStopped = true; break; }
+            ::usleep(2000);
+        }
+        if (!verifiedStopped)
+        {
+            if (stoppedByUs && !operatorPause) CompensateSchedulerPreemptionRollback(worker, *processes);
+            stoppedByUs = false;
+            return deferred("process_state_race_after_sigstop");
+        }
+        if (!operatorPause && completed())
+        {
+            if (stoppedByUs) CompensateSchedulerPreemptionRollback(worker, *processes);
+            stoppedByUs = false;
+            return deferred("authoritative_result_won_stop_race");
+        }
+        if (SchedulerAuthorityTestFailpointEnabled("capacity_after_sigstop_before_db"))
+            throw std::runtime_error("injected_capacity_db_failure_after_sigstop");
+        if (!operatorPause)
+        {
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(transaction.exec(
+                "UPDATE experiment_scheduler_worker_attempt SET lifecycle_state='stopped',"
+                "last_observed_at=clock_timestamp(),signal_number=$1,"
+                "observed_by_scheduler_invocation_id=$2,reconciliation_result='scheduler_capacity_reconciliation',"
+                "diagnostic='verified_excess_worker_suspended' WHERE worker_attempt_id=$3 "
+                "AND lifecycle_state IN ('spawned','running','observed') RETURNING worker_attempt_id;",
+                pqxx::params{SIGSTOP, options.schedulerAuthority.schedulerInvocationId, attemptId}), "suspend_capacity_attempt");
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(transaction.exec(
+                "UPDATE experiment SET status='pending',resume_requested=true,scheduler_resume_origin='preemption',"
+                "worker_control_state='paused',updated_at=clock_timestamp() WHERE experiment_id=$1 "
+                "AND status='running' AND phase=$2 AND active_scheduler_worker_attempt_id=$3 RETURNING experiment_id;",
+                pqxx::params{exact->experimentId, phase, attemptId}), "requeue_capacity_excess");
+        }
+        commitAttempted = true;
+        transaction.commit();
+    }
+    catch (...)
+    {
+        if (!commitAttempted)
+        {
+            transaction.abort();
+            if (stoppedByUs && !operatorPause) CompensateSchedulerPreemptionRollback(worker, *processes);
+        }
+        else std::cerr << "SCHEDULER_CAPACITY_COMMIT_OUTCOME_AMBIGUOUS,worker_attempt_id=" << attemptId << std::endl;
+        throw;
+    }
+    std::cout << "SCHEDULER_CAPACITY_RECONCILED,worker_attempt_id=" << attemptId
+              << ",experiment_id=" << exact->experimentId << ",phase=" << phase
+              << ",operator_pause_preserved=" << (operatorPause ? 1 : 0)
+              << ",victim_order=lowest_priority_then_newest_worker_started_at_then_experiment_id" << std::endl;
+    return true;
+}
+
+bool ReconcileSchedulerCapacity(const SchedulerOptions& options)
+{
+    if (options.dryRun) return true;
+    bool safe = true;
+    for (const auto& [phase, maximum] : std::vector<std::pair<std::string, int>>{
+             {"train", options.maxTrainProcs}, {"infer", options.maxInferProcs}, {"analyze", options.maxAnalyzeProcs}})
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        const auto rows = transaction.exec(
+            "SELECT a.worker_attempt_id,e.experiment_id,e.scheduler_priority,"
+            "extract(epoch from e.worker_started_at),e.status,a.lifecycle_state,a.worker_pid,"
+            "a.ownership_origin,a.observed_by_scheduler_invocation_id,"
+            "e.cancellation_request_id IS NULL AND e.cancel_after_checkpoint_epoch IS NULL "
+            "AND e.stop_after_checkpoint_epoch IS NULL AND e.worker_global_pause_request_id IS NULL "
+            "AND e.worker_control_state='running' AS pause_safe "
+            "FROM experiment_scheduler_worker_attempt a JOIN experiment e "
+            "ON e.active_scheduler_worker_attempt_id=a.worker_attempt_id "
+            "WHERE a.worker_kind='experiment' AND a.capacity_class=$1 AND a.lifecycle_phase=e.phase "
+            "AND a.lifecycle_state IN ('spawned','running','observed','stopped') ORDER BY a.worker_attempt_id;",
+            pqxx::params{phase});
+        SchedulerServiceComposition services{transaction};
+        const int used = services.admission.capacityUsed(phase);
+        std::vector<EA::SchedulerCore::CapacityWorker> candidates;
+        std::vector<long long> paused;
+        for (const auto& row : rows)
+        {
+            if (row[4].as<std::string>() == "paused" && row[5].as<std::string>() == "stopped")
+                paused.push_back(row[0].as<long long>());
+            candidates.push_back({row[0].as<long long>(), row[1].as<long long>(), row[2].as<std::string>(),
+                row[3].is_null() ? std::nullopt : std::optional<double>{row[3].as<double>()},
+                row[4].as<std::string>() == "running" && row[5].as<std::string>() != "stopped" &&
+                !row[6].is_null() && row[7].as<std::string>() != "legacy_unverified" &&
+                !row[8].is_null() && row[8].as<std::string>() == options.schedulerAuthority.schedulerInvocationId && row[9].as<bool>()});
+        }
+        transaction.commit();
+        for (auto attempt : paused)
+            safe = SuspendCapacityExcess(options, attempt, phase, true) && safe;
+        for (auto attempt : EA::SchedulerCore::PlanCapacityVictims(candidates, used, maximum))
+            safe = SuspendCapacityExcess(options, attempt, phase, false) && safe;
+        pqxx::work verify{connection};
+        RequireAndRefreshSchedulerAuthority(verify, options);
+        SchedulerServiceComposition verification{verify};
+        const int remaining = verification.admission.capacityUsed(phase);
+        if (remaining > maximum)
+        {
+            safe = false;
+            std::cout << "SCHEDULER_CAPACITY_UNRESOLVED,phase=" << phase << ",used=" << remaining
+                      << ",maximum=" << maximum << ",action=withhold_admission_and_inspect_attempts" << std::endl;
+        }
+        verify.commit();
+    }
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work observation{connection};
+    RequireAndRefreshSchedulerAuthority(observation, options);
+    safe = StoppedAttemptsRemainStopped(observation) && safe;
+    observation.commit();
+    return safe;
+}
+
 int RunSchedulerOnce(const SchedulerOptions& options,
                      SchedulerEventLogState* logState)
 {
+    if (!options.dryRun)
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work observation{connection};
+        SetTransactionReadWrite(observation);
+        RequireAndRefreshSchedulerAuthority(observation, options);
+        RecoverOrphanedRunningExperiments(observation, options, logState, options.schedulerVerbose);
+        observation.commit();
+        if (!ReconcileSchedulerCapacity(options)) return 0;
+    }
     QueueSnapshot snapshot;
     SchedulerOptions cycleOptions = options;
     EA::SchedulerCore::SchedulerCycleOperations operations;
@@ -10930,6 +11201,8 @@ int RunScheduler(
         w.commit();
     }
 
+    if (!ReconcileSchedulerCapacity(options))
+        std::cout << "SCHEDULER_CAPACITY_STARTUP_DEFERRED,action=retry_next_cycle" << std::endl;
     std::cout << "SCHEDULER_START"
               << ",dry_run=" << (options.dryRun ? "1" : "0")
               << ",max_train_procs=" << options.maxTrainProcs

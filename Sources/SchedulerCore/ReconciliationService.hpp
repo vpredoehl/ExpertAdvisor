@@ -9,6 +9,20 @@
 namespace EA::SchedulerCore
 {
 
+struct CapacityWorker
+{
+    long long attemptId;
+    long long experimentId;
+    std::string priority;
+    std::optional<double> startedAt;
+    bool pauseSafe;
+};
+
+// Uses the existing preemption victim order. Unsignalable reservations and
+// uncertain identities still occupy capacity, but never become signal targets.
+std::vector<long long> PlanCapacityVictims(
+    std::vector<CapacityWorker> workers, int capacityUsed, int maximumCapacity);
+
 enum class AttemptObservationAction
 {
     Defer,

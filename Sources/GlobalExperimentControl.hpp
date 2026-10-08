@@ -80,6 +80,10 @@ struct SignalOutcome
 
 SignalOutcome PauseWorker(const ManagedWorker& worker,
                           ProcessOperations& processes);
+// Requires current scheduler authority and exact stopped-attempt row locks.
+// Reasserts an operator pause after an external SIGCONT; never admits work.
+SignalOutcome PauseExternallyResumedStoppedWorker(
+    const ManagedWorker& worker, ProcessOperations& processes);
 SignalOutcome ResumeWorker(const ManagedWorker& worker,
                            ProcessOperations& processes);
 // The caller must hold scheduler authority and an exact durable stopped-attempt

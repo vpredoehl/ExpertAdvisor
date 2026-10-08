@@ -9,6 +9,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
     -I"${repo_root}/Sources" \
     "${repo_root}/Tests/OrphanedRunningExperimentReconciliationServiceTests.cpp" \
     "${repo_root}/Sources/SchedulerCore/ReconciliationService.cpp" \
+    "${repo_root}/Sources/SchedulerCore/SchedulerPolicy.cpp" \
     -o "${test_dir}/OrphanedRunningExperimentReconciliationServiceTests"
 
 "${test_dir}/OrphanedRunningExperimentReconciliationServiceTests"

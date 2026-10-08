@@ -25,6 +25,7 @@ public:
     std::vector<bool> waits;
     int callerPid = 900;
     int callerGroup = 900;
+    int signalError = 0;
 
     ProcessObservation Observe(int pid) override
     {
@@ -42,8 +43,8 @@ public:
     bool SignalProcessGroup(int group, int signal, int& error) override
     {
         signals.emplace_back(group, signal);
-        error = 0;
-        return true;
+        error = signalError;
+        return signalError == 0;
     }
 
     bool WaitForProcessGroupExit(
@@ -430,6 +431,46 @@ int main()
     }
     std::filesystem::remove_all(
         std::filesystem::path(spacedExecutable).parent_path());
+
+    // Reasserting a durable operator pause requires the exact attempt and
+    // lifecycle binding, even when an external SIGCONT made the OS active.
+    ManagedWorker externallyResumed = worker;
+    externallyResumed.lifecycleStatus = "paused";
+    externallyResumed.attemptLifecycleState = "stopped";
+    externallyResumed.workerAttemptId = 623;
+    externallyResumed.workerKind = "experiment";
+    externallyResumed.capacityClass = "train";
+    externallyResumed.launchAttemptIdentity = "fixture:623";
+    externallyResumed.commandLine = *worker.commandLine + " --scheduler-worker-attempt-id=623";
+    FakeProcesses external;
+    external.observations.emplace(1200, Observation(*externallyResumed.commandLine));
+    assert(PauseExternallyResumedStoppedWorker(externallyResumed, external).success);
+    assert((external.signals == std::vector<std::pair<int,int>>{{1200,SIGSTOP}}));
+    external.signals.clear();
+    external.observations[1200].stopped = true;
+    assert(PauseExternallyResumedStoppedWorker(externallyResumed, external).success);
+    assert(external.signals.empty());
+    external.observations[1200].stopped = false;
+    external.observations[1200].processStartIdentity = "reused_pid";
+    assert(!PauseExternallyResumedStoppedWorker(externallyResumed, external).success);
+    assert(external.signals.empty());
+    external.observations[1200] = Observation(*externallyResumed.commandLine);
+    externallyResumed.workerAttemptId = 624;
+    assert(!PauseExternallyResumedStoppedWorker(externallyResumed, external).success);
+    assert(external.signals.empty());
+    externallyResumed.workerAttemptId = 623;
+    externallyResumed.authoritativeBindingMatches = false;
+    assert(!PauseExternallyResumedStoppedWorker(externallyResumed, external).success);
+    assert(external.signals.empty());
+    externallyResumed.authoritativeBindingMatches = true;
+    external.signalError = ESRCH;
+    const auto exitRace = PauseExternallyResumedStoppedWorker(externallyResumed, external);
+    assert(!exitRace.success && exitRace.identity == IdentityResult::ProcessMissing);
+    assert(exitRace.detail == "process_group_disappeared_before_sigstop");
+    external.signals.clear();
+    external.observations.clear();
+    assert(!PauseExternallyResumedStoppedWorker(externallyResumed, external).success);
+    assert(external.signals.empty());
 
     SignalOutcome paused = PauseWorker(worker, processes);
     assert(paused.success);

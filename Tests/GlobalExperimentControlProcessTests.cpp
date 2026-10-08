@@ -467,6 +467,14 @@ bool ReadReadyMessage(int descriptor,
 
 [[noreturn]] void RunManagedTestWorker(int argc, char* argv[])
 {
+    // Optional hard lifetime for short qualification fixtures. SIGALRM's
+    // default exit applies when executing; a stopped fixture is still cleaned
+    // up through the harness's exact-identity SIGCONT/TERM path.
+    if (const auto seconds = IntegerOption(argc, argv, "--managed-test-max-seconds="))
+    {
+        if (*seconds <= 0 || *seconds > 300) _exit(8);
+        ::alarm(static_cast<unsigned>(*seconds));
+    }
     const std::optional<int> readyDescriptor =
         IntegerOption(argc, argv, "--ready-fd=");
     const std::optional<int> groupReleaseDescriptor =

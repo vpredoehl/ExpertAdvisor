@@ -1,10 +1,32 @@
 #include "ReconciliationService.hpp"
+#include "SchedulerPolicy.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
 namespace EA::SchedulerCore
 {
+
+std::vector<long long> PlanCapacityVictims(
+    std::vector<CapacityWorker> workers, int capacityUsed, int maximumCapacity)
+{
+    std::erase_if(workers, [](const auto& worker) { return !worker.pauseSafe; });
+    std::sort(workers.begin(), workers.end(), [](const auto& a, const auto& b) {
+        const int ar = PriorityRank(a.priority), br = PriorityRank(b.priority);
+        if (ar != br) return ar > br;
+        if (a.startedAt != b.startedAt) return a.startedAt > b.startedAt;
+        return a.experimentId > b.experimentId;
+    });
+    std::vector<long long> victims;
+    const int excess = std::max(0, capacityUsed - std::max(0, maximumCapacity));
+    for (const auto& worker : workers)
+    {
+        if (static_cast<int>(victims.size()) == excess) break;
+        victims.push_back(worker.attemptId);
+    }
+    return victims;
+}
 
 AttemptObservationPlan PlanAttemptObservation(
     const AttemptObservation& observation) noexcept

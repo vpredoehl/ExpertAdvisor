@@ -180,7 +180,8 @@ using SignalAuthorization = std::function<bool(
 SignalOutcome PauseWorkerAuthorized(
     const ManagedWorker& worker,
     ProcessOperations& processes,
-    const SignalAuthorization& authorize);
+    const SignalAuthorization& authorize,
+    bool resumedStopped = false);
 SignalOutcome ResumeWorkerAuthorized(
     const ManagedWorker& worker,
     ProcessOperations& processes,
@@ -1988,10 +1989,13 @@ bool SendAuthorizedSignal(
 SignalOutcome PauseWorkerAuthorized(
     const ManagedWorker& worker,
     ProcessOperations& processes,
-    const SignalAuthorization& authorize)
+    const SignalAuthorization& authorize,
+    bool resumedStopped)
 {
     SignalOutcome outcome;
-    const ValidatedWorker validated = ValidateManagedWorker(worker, processes);
+    const ValidatedWorker validated = resumedStopped
+        ? SchedulerObservationDetail::ValidateResumedStoppedWorkerForCancellation(worker, processes)
+        : ValidateManagedWorker(worker, processes);
     outcome.identity = validated.identity;
     outcome.detail = validated.detail;
     if (validated.identity != IdentityResult::Validated)
@@ -2307,6 +2311,12 @@ SignalOutcome PauseWorker(const ManagedWorker& worker,
 {
     return PauseWorkerAuthorized(
         worker, processes, SignalAuthorization{});
+}
+
+SignalOutcome PauseExternallyResumedStoppedWorker(
+    const ManagedWorker& worker, ProcessOperations& processes)
+{
+    return PauseWorkerAuthorized(worker, processes, SignalAuthorization{}, true);
 }
 
 SignalOutcome ResumeWorker(const ManagedWorker& worker,
