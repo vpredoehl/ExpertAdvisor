@@ -360,6 +360,33 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
             for worker in restored["workers"]:
                 self.assertTrue((artifacts / worker["executable"]).exists())
 
+    def test_dedicated_train_compiled_contract_mismatch_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            training = root / "lstm-train-worker"
+            training.write_bytes(b"fixture")
+            training.chmod(0o755)
+            def identity(layout, width):
+                return ("TRAIN_WORKER_BUILD_IDENTITY,artifact_role=lstm-train-worker,"
+                        f"semantic_layout={layout},model_input_width={width},"
+                        "source_commit=" + TRAIN_COMMIT)
+            for reported_layout, reported_width in (
+                    (13, 171), (14, 170), (None, None)):
+                with self.subTest(layout=reported_layout, width=reported_width):
+                    output = (identity(reported_layout, reported_width)
+                              if reported_layout is not None
+                              else "TRAIN_WORKER_BUILD_IDENTITY,artifact_role=lstm-train-worker")
+                    completed = __import__("subprocess").CompletedProcess(
+                        args=[], returncode=0, stdout=output, stderr="")
+                    with patch.object(rollover.subprocess, "run", return_value=completed):
+                        with self.assertRaisesRegex(
+                                publisher.PublishError, "semantic layout or model input width"):
+                            rollover.verify_train_semantic_contract(training, 14, 171)
+            completed = __import__("subprocess").CompletedProcess(
+                args=[], returncode=0, stdout=identity(14, 171), stderr="")
+            with patch.object(rollover.subprocess, "run", return_value=completed):
+                rollover.verify_train_semantic_contract(training, 14, 171)
+
     def test_distinct_commit_identity_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -374,7 +401,8 @@ class DedicatedTrainRolloverTests(unittest.TestCase):
                 if len(calls) == 2:
                     raise publisher.PublishError("stopped after identity check")
             with patch.object(publisher, "verify_embedded_commit", side_effect=verify_commit), \
-                 patch.object(publisher, "verify_worker_build_identity"):
+                 patch.object(publisher, "verify_worker_build_identity"), \
+                 patch.object(rollover, "verify_train_semantic_contract"):
                 with self.assertRaisesRegex(publisher.PublishError, "stopped"):
                     rollover.rollover(
                         root / "artifacts", training, inference, 14, 171,
