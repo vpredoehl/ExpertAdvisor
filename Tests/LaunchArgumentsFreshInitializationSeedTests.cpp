@@ -85,6 +85,20 @@ int main()
         "2010-01-01", "2010-01-02"};
     assert(Parse(schedulerEmitted).freshInitializationSeed == 43U);
 
+    // Managed TRAIN loads the authoritative persisted mask. The scheduler's
+    // queue-level --ablate-features option must not become a duplicate worker
+    // override, including matching, mismatching, empty and invalid masks.
+    for (const std::string mask : {"", "relative_tick_volume", "unknown_feature"})
+    {
+        auto withMask = schedulerEmitted;
+        withMask.insert(withMask.begin() + 2, "--ablate-features=" + mask);
+        ExpectInvalid(withMask, "unknown option '--ablate-features=");
+    }
+    auto separatedMask = schedulerEmitted;
+    separatedMask.insert(separatedMask.begin() + 2,
+                         {"--ablate-features", "relative_tick_volume"});
+    ExpectInvalid(separatedMask, "unknown option '--ablate-features'");
+
     ExpectInvalid({"test", "--train", "--fresh-initialization-seed", "42",
                    "--fresh-initialization-seed=43", "2010-01-01", "2010-01-02"},
                   "--fresh-initialization-seed specified more than once");

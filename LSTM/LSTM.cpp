@@ -328,7 +328,7 @@ void PrintAndResetDistribution()
     printf("EPOCH_3CLASS_CONFUSION_MATRIX rows=actual cols=predicted\n");
     for (size_t i = 0; i < direction_output_size; ++i)
     {
-        printf("row%d: %zu %zu %zu\n",
+        printf("row%zu: %zu %zu %zu\n",
                i,
                epoch_conf[i][0],
                epoch_conf[i][1],
