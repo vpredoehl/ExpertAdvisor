@@ -38,7 +38,8 @@ int main()
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
     static_assert(causal_fibonacci_structural_feature_size == 99);
-    static_assert(feature_size == 123);
+    static_assert(causal_price_level_raw_feature_size == 123);
+    static_assert(feature_size == 167);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -65,7 +66,7 @@ int main()
     static_assert(EA::kCausalPocketRecentObservationModelInputWidth == 114);
     static_assert(EA::kFixedConfluenceTensorModelInputWidth == 116);
     static_assert(EA::kCausalPriceLevelRawModelInputWidth == 127);
-    static_assert(EA::kCurrentModelInputWidth == 127);
+    static_assert(EA::kCurrentModelInputWidth == 171);
 
     const auto latestSemantics = EA::ModelInputFeatureSemantics(
         EA::kCurrentModelInputWidth);
@@ -661,7 +662,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80:103:114:116:127";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77:80:103:114:116:127:171";
     }
     assert(unsupportedRejected);
 

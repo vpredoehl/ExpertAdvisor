@@ -3,7 +3,9 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -95,10 +97,12 @@ int main()
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
-    static_assert(EA::kCurrentModelInputWidth == 127);
-    static_assert(EA::kModelInputSemanticLayoutVersion == 12);
+    static_assert(EA::kCausalPriceLevelRawModelInputWidth == 127);
+    static_assert(EA::kCurrentModelInputWidth == 171);
+    static_assert(EA::kModelInputSemanticLayoutVersion == 13);
     static_assert(causal_fibonacci_structural_feature_size == 99);
-    static_assert(feature_size == 123);
+    static_assert(causal_price_level_raw_feature_size == 123);
+    static_assert(feature_size == 167);
     static_assert(tg4InnerBreakAnyCol == 73);
     static_assert(tg4SourceTg3StructurallyEligibleCol == 74);
     static_assert(tg4SourceTg3ConfluentCol == 75);
@@ -177,8 +181,23 @@ int main()
 
     // Cover the availability boundaries before and at 1, 4, 8, and 16 bars,
     // plus a window beginning well after the maximum lookback.
+    std::uint64_t parityFingerprint = 14695981039346656037ULL;
     for (const std::size_t globalPosition : {0u, 1u, 3u, 4u, 7u, 8u, 15u, 16u, 48u})
     {
+        for (const auto width : EA::kRegisteredModelInputWidths)
+        {
+            const auto training = BuildTrainingStyleModelInputRow(
+                sourceRows, rawCloses, globalPosition, 0, width);
+            const auto inference = BuildInferenceStyleModelInputRow(
+                sourceRows, rawCloses, globalPosition, 0, width);
+            AssertByteIdentical(training, inference);
+            const auto* bytes = reinterpret_cast<const unsigned char*>(training.data());
+            for (std::size_t index = 0; index < training.size() * sizeof(float); ++index)
+            {
+                parityFingerprint ^= bytes[index];
+                parityFingerprint *= 1099511628211ULL;
+            }
+        }
         const auto training = BuildTrainingStyleModelInputRow(
             sourceRows, rawCloses, globalPosition, 0, EA::kCurrentModelInputWidth);
         const auto inference = BuildInferenceStyleModelInputRow(
@@ -334,5 +353,8 @@ int main()
     catch (const std::invalid_argument&) { unknownFibonacciNameRejected = true; }
     assert(unknownFibonacciNameRejected);
 
+    std::cout << "FEATURE_PARITY layout=13 width=171 registered_widths="
+              << EA::kRegisteredModelInputWidths.size()
+              << " fingerprint=" << parityFingerprint << '\n';
     return 0;
 }
