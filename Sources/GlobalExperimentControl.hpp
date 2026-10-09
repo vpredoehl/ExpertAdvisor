@@ -1,8 +1,11 @@
 #pragma once
 
+#include "SchedulerCore/SchedulerAuthorityService.hpp"
+
 #include "SchedulerCore/SchedulerOperationalObservation.hpp"
 
 #include <chrono>
+#include <functional>
 #include <iosfwd>
 #include <memory>
 #include <optional>
@@ -132,6 +135,35 @@ bool ReconcileActiveCancellation(pqxx::work& transaction,
                                  const std::string& applicationOwner,
                                  bool claimExpiredLease);
 
+// Recover only a committed global pause plan. The caller owns the transaction;
+// recovery independently fences the current scheduler invocation and lease.
+// A foreign live administrative owner is never displaced.
+bool ReconcileActivePause(
+    pqxx::work& transaction,
+    const EA::SchedulerCore::SchedulerAuthorityContext& authority);
+
+enum class GlobalControlBoundary
+{
+    BeforeIntentCommit,
+    AfterIntentCommit,
+    BeforeStop,
+    AfterStop,
+    BeforeWorkerPersistence,
+    BeforePauseCommit,
+    AfterPauseCommit,
+    BeforeResumeCommit,
+    AfterResumeCommit,
+    DuringReconciliation
+};
+using GlobalControlFaultInjector =
+    std::function<void(GlobalControlBoundary)>;
+
+bool ReconcileActivePauseWithProcessOperationsForTesting(
+    pqxx::work& transaction,
+    const EA::SchedulerCore::SchedulerAuthorityContext& authority,
+    ProcessOperations& processes,
+    const GlobalControlFaultInjector& fault = {});
+
 int RunCommand(const std::string& connectionString,
                const Command& command,
                std::ostream& output,
@@ -144,7 +176,8 @@ int RunCommandWithProcessOperationsForTesting(
     const Command& command,
     std::ostream& output,
     std::ostream& error,
-    ProcessOperations& processes);
+    ProcessOperations& processes,
+    const GlobalControlFaultInjector& fault = {});
 
 struct ExperimentPauseCommand
 {

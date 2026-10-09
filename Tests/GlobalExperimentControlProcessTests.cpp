@@ -1247,6 +1247,9 @@ void ResetCrashFixtures(pqxx::connection& connection)
         "DELETE FROM experiment_admin_worker_outcome "
         "WHERE experiment_id BETWEEN 700000 AND 700099;");
     transaction.exec(
+        "DELETE FROM experiment_analysis_result "
+        "WHERE experiment_id BETWEEN 700000 AND 700099;");
+    transaction.exec(
         "UPDATE experiment_checkpoint_eval "
         "SET status=CASE WHEN status='running' THEN 'failed' ELSE status END,"
         "active_scheduler_worker_attempt_id=NULL "
@@ -1268,14 +1271,20 @@ void ResetCrashFixtures(pqxx::connection& connection)
         "DELETE FROM experiment_admin_request "
         "WHERE action='resume_experiment' "
         "AND target_experiment_id BETWEEN 700000 AND 700099;");
+    // The authoritative isolated schema has reciprocal model/experiment FKs;
+    // retire fixture references and models before removing their experiments.
     transaction.exec(
-        "DELETE FROM experiment WHERE experiment_id BETWEEN 700000 AND 700099;");
+        "UPDATE experiment SET last_model_id=NULL,resume_model_id=NULL,"
+        "stopped_at_checkpoint_model_id=NULL "
+        "WHERE experiment_id BETWEEN 700000 AND 700099;");
     transaction.exec(
         "DELETE FROM matrix WHERE model_id IN ("
         "SELECT model_id FROM model "
         "WHERE experiment_id BETWEEN 700000 AND 700099);");
     transaction.exec(
         "DELETE FROM model WHERE experiment_id BETWEEN 700000 AND 700099;");
+    transaction.exec(
+        "DELETE FROM experiment WHERE experiment_id BETWEEN 700000 AND 700099;");
     transaction.exec(
         "DELETE FROM experiment_admin_request "
         "WHERE invocation_identity LIKE 'crash-window-%' "
@@ -2305,6 +2314,10 @@ void TestSelectiveResumeFromGlobalPause(
         "SELECT current_pause_request_id::text "
         "FROM experiment_global_control WHERE singleton"));
     CHECK(thirdPauseRequest != secondPauseRequest);
+    // Re-pause closes the selectively opened gate as one durable generation.
+    // Previously paused global members must join it so resume-all cannot strand
+    // them under an obsolete generation. No stopped member is continued.
+    CHECK(processes.signals.empty());
     CHECK(Scalar(
               connection,
               "SELECT string_agg("
@@ -2313,8 +2326,8 @@ void TestSelectiveResumeFromGlobalPause(
               "FROM experiment "
               "WHERE experiment_id BETWEEN 700020 AND 700022") ==
           "700020:" + std::to_string(thirdPauseRequest) +
-              ",700021:" + std::to_string(secondPauseRequest) +
-              ",700022:" + std::to_string(secondPauseRequest));
+              ",700021:" + std::to_string(thirdPauseRequest) +
+              ",700022:" + std::to_string(thirdPauseRequest));
 
     processes.signals.clear();
     CHECK(RunSelectiveResume(
@@ -2458,7 +2471,7 @@ void TestSelectiveResumeFromGlobalPause(
     CHECK(processes.signals.empty());
     CHECK(Scalar(
               connection,
-              "SELECT (c.active_request_id IS NULL "
+              "SELECT (c.active_request_id=r.request_id "
               "AND c.current_pause_request_id=r.request_id "
               "AND c.desired_state='paused' "
               "AND e.worker_control_state='running' "
@@ -2494,9 +2507,11 @@ void TestSelectiveResumeFromGlobalPause(
         transaction.exec(
             "UPDATE experiment_admin_request "
             "SET application_lease_until=now()-interval '1 second' "
-            "WHERE invocation_identity='generic-pause-state-race';");
+              "WHERE invocation_identity='generic-pause-state-race';");
         transaction.commit();
     }
+    const auto durableRaceRequest = Scalar(connection,
+        "SELECT active_request_id::text FROM experiment_global_control WHERE singleton;");
     processes.signals.clear();
     racedPause.invocationIdentity = "generic-pause-state-race-recovery";
     std::ostringstream genericRecoveryOutput;
@@ -2519,6 +2534,8 @@ void TestSelectiveResumeFromGlobalPause(
     CHECK(genericRecoveryOutput.str().find(
               "failed_count=0") !=
           std::string::npos);
+    CHECK(Scalar(connection,"SELECT current_pause_request_id::text "
+        "FROM experiment_global_control WHERE singleton;") == durableRaceRequest);
     CHECK(Scalar(
               connection,
               "SELECT e.worker_control_state||':'||"
@@ -5258,6 +5275,365 @@ void TestEmergencyCleanupPath(const std::string& selfPath)
     CHECK(WEXITSTATUS(status) == 1);
 }
 
+int RunTransactionSafeControlTests(const std::string& selfPath,
+                                   const std::string& connectionString)
+{
+    pqxx::connection connection{connectionString};
+    RecordingNativeProcesses processes;
+    auto execute = [&](Action action, const GlobalControlFaultInjector& fault = {}) {
+        Command command;
+        command.action = action;
+        command.confirmed = true;
+        command.invocationIdentity = "phase24y-transaction-owner";
+        std::ostringstream output, error;
+        const int result = RunCommandWithProcessOperationsForTesting(
+            connectionString, command, output, error, processes, fault);
+        std::cout << output.str() << error.str();
+        return result;
+    };
+    auto expire = [&] {
+        pqxx::work tx{connection};
+        tx.exec("UPDATE experiment_admin_request SET application_lease_until=NULL "
+                "WHERE request_id=(SELECT active_request_id FROM experiment_global_control);");
+        tx.commit();
+    };
+    auto assertPaused = [&] {
+        CHECK(Scalar(connection, "SELECT status||':'||resume_requested::text||':'||"
+            "worker_control_state FROM experiment WHERE experiment_id=700090") == "paused:false:paused");
+        CHECK(Scalar(connection, "SELECT desired_state||':'||(active_request_id IS NULL)::text "
+            "FROM experiment_global_control") == "paused:true");
+        CHECK(Scalar(connection, "SELECT lifecycle_state FROM experiment_scheduler_worker_attempt "
+            "WHERE experiment_id=700090") == "stopped");
+    };
+    auto scientific = [&] {
+        return Scalar(connection, "SELECT row_to_json(p)::text FROM (SELECT current_epoch,"
+            "last_model_id,resume_model_id,continuation_source_model_id,"
+            "stopped_at_checkpoint_epoch,stopped_at_checkpoint_model_id,"
+            "last_checkpoint_stop_decision_epoch,stop_after_checkpoint_epoch,"
+            "cancel_after_checkpoint_epoch,checkpoint_policy_revision,"
+            "continuation_policy_revision,train_start,train_end,infer_start,infer_end "
+            "FROM experiment WHERE experiment_id=700090) p;");
+    };
+    auto reset = [&] {
+        { pqxx::work tx{connection};
+          tx.exec("SELECT set_config('expertadvisor.scheduler_protocol_generation','52',true);");
+          tx.exec("UPDATE experiment SET last_model_id=NULL,resume_model_id=NULL WHERE experiment_id=700090;"
+                  "DELETE FROM experiment_admin_worker_outcome WHERE experiment_id=700090;"
+                  "DELETE FROM matrix WHERE model_id IN (SELECT model_id FROM model WHERE experiment_id=700090);"
+                  "DELETE FROM model WHERE experiment_id=700090;"); tx.commit(); }
+        ResetCrashFixtures(connection);
+    };
+    auto fixture = [&] {
+        reset();
+        auto worker = SpawnWorker(selfPath, processes, 700090);
+        InsertRunningExperiment(connection, worker);
+        pqxx::work tx{connection};
+        tx.exec("SELECT set_config('expertadvisor.scheduler_protocol_generation','52',true);");
+        const long long model = tx.exec("INSERT INTO model(experiment_id,name,comment) "
+            "VALUES(700090,'phase24y-checkpoint','periodic training checkpoint') RETURNING model_id;")[0][0].as<long long>();
+        tx.exec_params("INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value) "
+            "VALUES($1,'train_config_meta',1,11,0,10,17);", model);
+        tx.exec_params("UPDATE experiment SET current_epoch=17,last_model_id=$1 "
+            "WHERE experiment_id=700090;", model);
+        tx.commit();
+        processes.signals.clear();
+        return worker;
+    };
+    using B = GlobalControlBoundary;
+    const std::vector<std::pair<B,const char*>> boundaries{
+        {B::BeforeIntentCommit,"before_intent_commit"},
+        {B::AfterIntentCommit,"after_intent_commit"},
+        {B::BeforeStop,"before_sigstop"},
+        {B::AfterStop,"after_sigstop"},
+        {B::BeforeWorkerPersistence,"before_worker_persistence"},
+        {B::BeforePauseCommit,"before_pause_commit"},
+        {B::AfterPauseCommit,"after_pause_commit"}};
+    for (const auto& [boundary,name] : boundaries)
+    {
+        auto worker = fixture();
+        const auto progress = scientific();
+        bool threw = false;
+        try { (void)execute(Action::PauseAll, [&](B observed) {
+            if (observed == boundary) throw std::runtime_error(name);
+        }); } catch (const std::runtime_error&) { threw = true; }
+        CHECK(threw);
+        const bool stopped = boundary == B::AfterStop ||
+            boundary == B::BeforeWorkerPersistence || boundary == B::BeforePauseCommit ||
+            boundary == B::AfterPauseCommit;
+        CHECK(WaitUntil([&] { return processes.Observe(worker.pid).stopped == stopped; }));
+        CHECK(scientific() == progress);
+        if (boundary == B::BeforeIntentCommit)
+            CHECK(Scalar(connection,"SELECT desired_state||':'||(active_request_id IS NULL)::text "
+                "FROM experiment_global_control") == "running:true");
+        else if (boundary == B::AfterPauseCommit)
+            assertPaused();
+        else
+            CHECK(Scalar(connection,"SELECT desired_state||':'||(active_request_id IS NOT NULL)::text||':'||"
+                "(active_request_id=current_pause_request_id)::text FROM experiment_global_control") == "paused:true:true");
+        expire();
+        CHECK(execute(Action::PauseAll) == 0);
+        assertPaused();
+        const auto requestCount = Scalar(connection,"SELECT count(*)::text FROM experiment_admin_request");
+        processes.signals.clear();
+        CHECK(execute(Action::PauseAll) == 0);
+        CHECK(processes.signals.empty());
+        CHECK(Scalar(connection,"SELECT count(*)::text FROM experiment_admin_request") == requestCount);
+        CHECK(scientific() == progress);
+        CHECK(execute(Action::ResumeAll) == 0);
+        CHECK(processes.signals.empty());
+        CHECK(processes.Observe(worker.pid).stopped);
+        CHECK(scientific() == progress);
+        CHECK(Scalar(connection,"SELECT count(*)::text FROM experiment_scheduler_worker_attempt "
+            "WHERE experiment_id=700090") == "1");
+        CleanupWorker(worker, processes);
+        std::cout << "PASS pause " << name << " converges, progress and exact attempt preserved\n";
+    }
+
+    // Abrupt controller death bypasses exceptions/destructors: only committed
+    // intent survives. The parent owns the worker and performs recovery.
+    for (const B boundary : {B::AfterIntentCommit,B::AfterStop})
+    {
+        auto worker = fixture();
+        const pid_t child = ::fork(); CHECK(child >= 0);
+        if (child == 0)
+        {
+            (void)execute(Action::PauseAll,[&](B b) { if (b==boundary) _exit(75); });
+            _exit(76);
+        }
+        int status = 0; CHECK(::waitpid(child,&status,0)==child);
+        CHECK(WIFEXITED(status) && WEXITSTATUS(status)==75);
+        CHECK(Scalar(connection,"SELECT desired_state||':'||(active_request_id IS NOT NULL)::text "
+            "FROM experiment_global_control") == "paused:true");
+        expire(); CHECK(execute(Action::PauseAll)==0); assertPaused();
+        CleanupWorker(worker, processes);
+        std::cout << "PASS abrupt pause controller exit at " << static_cast<int>(boundary) << "\n";
+    }
+
+    // An actual PostgreSQL error after SIGSTOP rolls back worker state, but
+    // cannot roll back the committed plan. Recovery recognizes the exact stop.
+    {
+        auto worker = fixture();
+        pqxx::work tx{connection};
+        tx.exec("CREATE FUNCTION phase24y_stop_fault() RETURNS trigger LANGUAGE plpgsql AS $$ "
+            "BEGIN IF NEW.experiment_id=700090 AND NEW.lifecycle_state='stopped' THEN "
+            "RAISE EXCEPTION 'phase24y_worker_state_persistence_fault'; END IF; RETURN NEW; END $$;"
+            "CREATE TRIGGER phase24y_stop_fault BEFORE UPDATE ON experiment_scheduler_worker_attempt "
+            "FOR EACH ROW EXECUTE FUNCTION phase24y_stop_fault();"); tx.commit();
+        bool failed = false;
+        try { (void)execute(Action::PauseAll); } catch (const pqxx::sql_error&) { failed=true; }
+        CHECK(failed); CHECK(WaitUntil([&]{return processes.Observe(worker.pid).stopped;}));
+        { pqxx::work drop{connection}; drop.exec("DROP TRIGGER phase24y_stop_fault ON "
+            "experiment_scheduler_worker_attempt; DROP FUNCTION phase24y_stop_fault();"); drop.commit(); }
+        expire(); CHECK(execute(Action::PauseAll)==0); assertPaused();
+        CleanupWorker(worker,processes);
+        std::cout << "PASS actual PostgreSQL worker-state persistence failure\n";
+    }
+    for (const B boundary : {B::BeforeResumeCommit,B::AfterResumeCommit})
+    {
+        auto worker=fixture(); CHECK(execute(Action::PauseAll)==0);
+        const auto progress=scientific(); processes.signals.clear(); bool threw=false;
+        try { (void)execute(Action::ResumeAll,[&](B b){if(b==boundary) throw std::runtime_error("resume_fault");}); }
+        catch(const std::runtime_error&){threw=true;}
+        CHECK(threw); CHECK(processes.signals.empty()); CHECK(processes.Observe(worker.pid).stopped);
+        CHECK(scientific()==progress);
+        if(boundary==B::BeforeResumeCommit) assertPaused();
+        else CHECK(Scalar(connection,"SELECT status||':'||resume_requested::text FROM experiment "
+            "WHERE experiment_id=700090")=="pending:true");
+        CHECK(execute(Action::ResumeAll)==0); CHECK(processes.signals.empty());
+        CHECK(Scalar(connection,"SELECT desired_state||':'||(active_request_id IS NULL)::text||':'||"
+            "(current_pause_request_id IS NULL)::text FROM experiment_global_control")=="running:true:true");
+        CleanupWorker(worker,processes);
+        std::cout << "PASS resume boundary " << static_cast<int>(boundary) << " atomic queue/no signals\n";
+    }
+    {
+        auto worker=fixture(); CHECK(execute(Action::PauseAll)==0);
+        { pqxx::work tx{connection}; tx.exec("CREATE FUNCTION phase24y_resume_fault() RETURNS trigger "
+            "LANGUAGE plpgsql AS $$ BEGIN IF NEW.experiment_id=700090 AND NEW.status='pending' "
+            "AND NEW.resume_requested THEN RAISE EXCEPTION 'phase24y_resume_commit_fault'; END IF; "
+            "RETURN NEW; END $$; CREATE CONSTRAINT TRIGGER phase24y_resume_fault AFTER UPDATE ON experiment "
+            "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION phase24y_resume_fault();"); tx.commit(); }
+        bool failed=false; processes.signals.clear();
+        try{(void)execute(Action::ResumeAll);}catch(const pqxx::sql_error&){failed=true;}
+        CHECK(failed); assertPaused(); CHECK(processes.signals.empty()); CHECK(processes.Observe(worker.pid).stopped);
+        { pqxx::work tx{connection}; tx.exec("DROP TRIGGER phase24y_resume_fault ON experiment; "
+            "DROP FUNCTION phase24y_resume_fault();"); tx.commit(); }
+        CHECK(execute(Action::ResumeAll)==0); CleanupWorker(worker,processes);
+        std::cout << "PASS actual deferred PostgreSQL resume-commit failure\n";
+    }
+
+    // Recovery belongs to a fresh, currently fenced scheduler invocation; it
+    // neither takes a live administrative lease nor resumes workers.
+    {
+        auto worker=fixture();
+        try{(void)execute(Action::PauseAll,[](B b){if(b==B::AfterStop)throw std::runtime_error("crash");});}
+        catch(const std::runtime_error&){}
+        EA::SchedulerCore::SchedulerAuthorityContext authority;
+        authority.schedulerInvocationId="phase24y-recovery-scheduler";
+        authority.invocationNonce="phase24y-recovery-nonce";
+        authority.fencingToken=24001; authority.held=true;
+        const auto self=processes.Observe(static_cast<int>(::getpid()));
+        authority.canonicalExecutablePath=self.executable;
+        { pqxx::work tx{connection};
+          tx.exec_params("INSERT INTO experiment_scheduler_invocation(scheduler_invocation_id,process_pid,"
+            "process_group_id,process_start_identity,canonical_executable_path,command_line,invocation_nonce,"
+            "status,protocol_generation) VALUES($1,$2,$3,$4,$5,$6,$7,'owner',52);",
+            authority.schedulerInvocationId,self.pid,self.processGroupId,self.processStartIdentity,
+            self.executable,self.commandLine,authority.invocationNonce);
+          tx.exec_params("UPDATE experiment_scheduler_lease SET owner_scheduler_invocation_id=$1,"
+            "fencing_token=$2,authority_state='active',acquired_at=clock_timestamp(),"
+            "heartbeat_at=clock_timestamp(),expires_at=clock_timestamp()+interval '10 minutes';",
+            authority.schedulerInvocationId,authority.fencingToken); tx.commit(); }
+        auto reconcile=[&](const auto& a,const GlobalControlFaultInjector& f={}) {
+            pqxx::work tx{connection}; tx.exec("SELECT set_config('expertadvisor.scheduler_protocol_generation','52',true);");
+            const bool claimed=ReconcileActivePauseWithProcessOperationsForTesting(tx,a,processes,f);
+            tx.commit(); return claimed;
+        };
+        processes.signals.clear(); CHECK(!reconcile(authority)); CHECK(processes.signals.empty());
+        expire();
+        auto stale=authority; ++stale.fencingToken;
+        bool lost=false; try{(void)reconcile(stale);}catch(const EA::SchedulerCore::SchedulerAuthorityLost&){lost=true;}
+        CHECK(lost); CHECK(processes.signals.empty());
+        auto foreign=authority; foreign.invocationNonce="foreign"; lost=false;
+        try{(void)reconcile(foreign);}catch(const EA::SchedulerCore::SchedulerAuthorityLost&){lost=true;}
+        CHECK(lost); CHECK(processes.signals.empty());
+        bool failed=false;
+        try{(void)reconcile(authority,[](B b){if(b==B::DuringReconciliation)throw std::runtime_error("recovery_fault");});}
+        catch(const std::runtime_error&){failed=true;}
+        CHECK(failed);
+        {
+            pqxx::work tx{connection};
+            tx.exec("SELECT set_config('expertadvisor.scheduler_protocol_generation','52',true);");
+            bool expired = false;
+            try
+            {
+                (void)ReconcileActivePauseWithProcessOperationsForTesting(
+                    tx, authority, processes, [&](B boundary) {
+                        if (boundary == B::BeforeStop)
+                            tx.exec("UPDATE experiment_scheduler_lease "
+                                    "SET expires_at=clock_timestamp()-interval '1 second';");
+                    });
+            }
+            catch (const EA::SchedulerCore::SchedulerAuthorityLost&) { expired = true; }
+            CHECK(expired);
+            CHECK(processes.signals.empty());
+            tx.abort();
+        }
+        CHECK(Scalar(connection,"SELECT active_request_id=current_pause_request_id "
+            "FROM experiment_global_control") == "t");
+        CHECK(reconcile(authority)); assertPaused(); CHECK(processes.signals.empty());
+        CHECK(!reconcile(authority)); CleanupWorker(worker,processes);
+        std::cout << "PASS reconciliation failure/restart, live administrative lease, nonce and fencing\n";
+    }
+    // Exit between intent and application: no signal or new worker is needed.
+    {
+        auto worker=fixture();
+        try{(void)execute(Action::PauseAll,[](B b){if(b==B::AfterIntentCommit)throw std::runtime_error("exit_window");});}
+        catch(const std::runtime_error&){}
+        CleanupWorker(worker,processes); processes.signals.clear(); expire();
+        CHECK(execute(Action::PauseAll)==0); CHECK(processes.signals.empty());
+        CHECK(Scalar(connection,"SELECT lifecycle_state FROM experiment_scheduler_worker_attempt "
+            "WHERE experiment_id=700090")=="abandoned");
+        CHECK(Scalar(connection,"SELECT status||':'||(active_scheduler_worker_attempt_id IS NULL)::text "
+            "FROM experiment WHERE experiment_id=700090")=="paused:true");
+        CHECK(execute(Action::ResumeAll)==0);
+        std::cout << "PASS worker exit after durable intent; no resurrection or duplicate\n";
+    }
+    class ReusedIdentityProcesses final : public ProcessOperations
+    {
+    public:
+        ReusedIdentityProcesses(ProcessOperations& delegate, int pid, int threshold)
+            : delegate_(delegate), pid_(pid), threshold_(threshold) {}
+        ProcessObservation Observe(int pid) override
+        {
+            auto result = delegate_.Observe(pid);
+            if (pid == pid_ && ++observations_ >= threshold_)
+                result.processStartIdentity += ":reused";
+            return result;
+        }
+        bool SignalProcessGroup(int group, int number, int& error) override
+        { return delegate_.SignalProcessGroup(group, number, error); }
+        bool WaitForProcessGroupExit(int group, std::chrono::milliseconds timeout) override
+        { return delegate_.WaitForProcessGroupExit(group, timeout); }
+        int CallerPid() const override { return delegate_.CallerPid(); }
+        int CallerProcessGroupId() const override { return delegate_.CallerProcessGroupId(); }
+    private:
+        ProcessOperations& delegate_;
+        int pid_, threshold_, observations_ = 0;
+    };
+    for (int threshold : {1, 2})
+    {
+        auto worker = fixture();
+        try { (void)execute(Action::PauseAll, [](B b) {
+            if (b == B::AfterIntentCommit) throw std::runtime_error("identity_window");
+        }); } catch (const std::runtime_error&) {}
+        const auto request = Scalar(connection,"SELECT active_request_id::text FROM experiment_global_control");
+        expire();
+        ReusedIdentityProcesses reused(processes, worker.pid, threshold);
+        Command pause;
+        pause.action = Action::PauseAll; pause.confirmed = true;
+        pause.invocationIdentity = "phase24y-identity-recovery";
+        std::ostringstream output, error;
+        CHECK(RunCommandWithProcessOperationsForTesting(
+            connectionString, pause, output, error, reused) == 1);
+        CHECK(processes.signals.empty()); CHECK(!processes.Observe(worker.pid).stopped);
+        CHECK(Scalar(connection,"SELECT active_request_id::text FROM experiment_global_control") == request);
+        pause.action = Action::ResumeAll;
+        CHECK(RunCommandWithProcessOperationsForTesting(
+            connectionString, pause, output, error, reused) == 1);
+        CHECK(processes.signals.empty());
+        CHECK(execute(Action::PauseAll) == 0); assertPaused();
+        CHECK(Scalar(connection,"SELECT current_pause_request_id::text FROM experiment_global_control") == request);
+        CHECK(Scalar(connection,"SELECT count(*)::text FROM experiment_scheduler_worker_attempt "
+            "WHERE experiment_id=700090") == "1");
+        CleanupWorker(worker, processes);
+        std::cout << "PASS reused PID/start identity at observation " << threshold
+                  << ": no signal, resume withheld, committed intent retained\n";
+    }
+    reset();
+    std::cout << "GlobalExperimentControlTransactionTests passed\n";
+    return 0;
+}
+
+int CharacterizeGlobalPauseRollback(const std::string& selfPath,
+                                   const std::string& connectionString)
+{
+    pqxx::connection connection{connectionString};
+    ResetCrashFixtures(connection);
+    RecordingNativeProcesses processes;
+    const ManagedWorker worker = SpawnWorker(selfPath, processes, 700090);
+    InsertRunningExperiment(connection, worker);
+    AfterSignalProcesses fault(processes, [] {
+        throw std::runtime_error("phase24y_after_native_sigstop");
+    });
+    Command pause;
+    pause.action = Action::PauseAll;
+    pause.confirmed = true;
+    pause.invocationIdentity = "phase24y-characterize";
+    std::ostringstream output, error;
+    bool threw = false;
+    try
+    {
+        (void)RunCommandWithProcessOperationsForTesting(
+            connectionString, pause, output, error, fault);
+    }
+    catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+    CHECK(WaitUntil([&] { return processes.Observe(worker.pid).stopped; }));
+    CHECK(Scalar(connection,
+        "SELECT desired_state||':'||(active_request_id IS NULL)::text||':'||"
+        "(current_pause_request_id IS NULL)::text FROM experiment_global_control") ==
+        "running:true:true");
+    CHECK(Scalar(connection, "SELECT status||':'||worker_control_state FROM experiment "
+        "WHERE experiment_id=700090") == "running:running");
+    CHECK(Scalar(connection, "SELECT count(*)::text FROM experiment_admin_request "
+        "WHERE invocation_identity='phase24y-characterize'") == "0");
+    std::cout << "REPRODUCED: native worker stopped; transaction rolled back; "
+                 "running lifecycle and no durable pause request\n";
+    CleanupWorker(worker, processes);
+    ResetCrashFixtures(connection);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -5279,6 +5655,10 @@ int main(int argc, char* argv[])
     (void)EmergencyRegistry();
     CHECK(std::atexit(EmergencyCleanupAtExit) == 0);
     const std::string selfPath = CanonicalSelfPath(argv[0]);
+    if (argc == 3 && std::string{argv[1]} == "--database-transaction-safe-control-tests")
+        return RunTransactionSafeControlTests(selfPath, argv[2]);
+    if (argc == 3 && std::string{argv[1]} == "--characterize-global-pause-rollback")
+        return CharacterizeGlobalPauseRollback(selfPath, argv[2]);
     if (HasArgument(argc, argv, "--emergency-cleanup-self-test"))
         RunEmergencyCleanupSelfTest(selfPath);
     if (HasArgument(

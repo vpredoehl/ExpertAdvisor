@@ -2052,8 +2052,9 @@ SignalOutcome RetainStoppedWorkerForPause(
     ProcessOperations& processes)
 {
     SignalOutcome outcome;
-    const ValidatedWorker validated =
-        ValidateStoppedWorkerForSchedulerAdmission(worker, processes);
+    const ValidatedWorker validated = worker.lifecycleStatus == "paused"
+        ? ValidatePausedManagedWorker(worker, processes)
+        : ValidateStoppedWorkerForSchedulerAdmission(worker, processes);
     outcome.identity = validated.identity;
     outcome.detail = validated.detail;
     if (validated.identity != IdentityResult::Validated)
@@ -3736,12 +3737,343 @@ bool ReconcileActiveCancellation(pqxx::work& transaction,
     return true;
 }
 
+namespace
+{
+std::string DurablePauseSummary(pqxx::work& transaction, long long requestId,
+                               bool completed, bool replay)
+{
+    const auto counts = transaction.exec_params(
+        "SELECT count(*),count(*) FILTER(WHERE worker_attempt_id IS NOT NULL "
+        "AND outcome_status='completed' AND identity_result='validated'),"
+        "count(*) FILTER(WHERE worker_attempt_id IS NULL AND outcome_status='completed'),"
+        "count(*) FILTER(WHERE identity_result='process_missing'),"
+        "count(*) FILTER(WHERE outcome_status IN ('failed','partial')) "
+        "FROM experiment_admin_worker_outcome WHERE request_id=$1;", requestId).one_row();
+    std::ostringstream output;
+    output << "GLOBAL_EXPERIMENT_CONTROL_SUMMARY,request_id=" << requestId
+           << ",action=pause_all,status=" << (completed ? "completed" : "partial")
+           << ",target_count=" << counts[0].as<int>()
+           << ",stopped_workers=" << counts[1].as<int>()
+           << ",pending_paused=" << counts[2].as<int>()
+           << ",missing_reconciled=" << counts[3].as<int>()
+           << ",failed_count=" << counts[4].as<int>();
+    if (replay) output << ",replay=1";
+    output << ",global_state=paused\n";
+    return output.str();
+}
+
+bool ClaimDurablePause(pqxx::work& transaction, long long requestId,
+                       const std::string& owner)
+{
+    const auto claimed = transaction.exec_params(
+        "UPDATE experiment_admin_request r SET application_owner=$2,"
+        "application_lease_until=clock_timestamp()+interval '30 seconds' "
+        "FROM experiment_global_control c WHERE r.request_id=$1 "
+        "AND r.action='pause_all' AND c.singleton AND c.desired_state='paused' "
+        "AND c.active_request_id=r.request_id AND c.current_pause_request_id=r.request_id "
+        "AND (r.application_owner=$2 OR r.application_lease_until IS NULL "
+        "OR r.application_lease_until<=clock_timestamp()) RETURNING r.request_id;",
+        requestId, owner);
+    return claimed.affected_rows() == 1;
+}
+
+void RequirePauseRecoveryAuthority(
+    pqxx::work& transaction,
+    const EA::SchedulerCore::SchedulerAuthorityContext& authority)
+{
+    if (!authority.held || authority.schedulerInvocationId.empty() ||
+        authority.invocationNonce.empty() || authority.fencingToken <= 0 ||
+        authority.canonicalExecutablePath.empty())
+        throw EA::SchedulerCore::SchedulerAuthorityLost("pause_recovery_authority_incomplete");
+    const auto valid = transaction.exec(
+        "SELECT EXISTS(SELECT 1 FROM experiment_scheduler_lease l "
+        "JOIN experiment_scheduler_invocation i "
+        "ON i.scheduler_invocation_id=l.owner_scheduler_invocation_id "
+        "WHERE l.singleton AND l.authority_state='active' "
+        "AND l.owner_scheduler_invocation_id=$1 AND l.fencing_token=$2 "
+        "AND l.expires_at>clock_timestamp() AND i.invocation_nonce=$3 "
+        "AND i.canonical_executable_path=$4 AND i.status='owner' "
+        "AND i.protocol_generation=$5);",
+        pqxx::params{authority.schedulerInvocationId, authority.fencingToken,
+                     authority.invocationNonce, authority.canonicalExecutablePath,
+                     EA::SchedulerCore::kSchedulerProtocolGeneration});
+    if (!valid[0][0].as<bool>())
+        throw EA::SchedulerCore::SchedulerAuthorityLost("pause_recovery_scheduler_fence_lost");
+}
+
+bool ApplyDurablePause(pqxx::work& transaction, long long requestId,
+                      const std::string& owner, ProcessOperations& processes,
+                      const GlobalControlFaultInjector& fault,
+                      const EA::SchedulerCore::SchedulerAuthorityContext* authority = nullptr)
+{
+    if (!OwnsActiveRequest(transaction, requestId, owner, "pause_all", requestId))
+        throw std::runtime_error("durable_pause_owner_or_generation_lost");
+    auto targets = LoadRetryTargets(transaction, requestId, Action::PauseAll);
+    std::stable_sort(targets.begin(), targets.end(), [](const DbTarget& lhs, const DbTarget& rhs) {
+        return lhs.worker.workerAttemptId.value_or(0) < rhs.worker.workerAttemptId.value_or(0);
+    });
+    // Failure remains recoverable even when a previous observation was
+    // inconclusive. Never expand the frozen set or retarget a replacement PID.
+    for (auto& target : targets)
+    {
+        const auto state = transaction.exec_params(
+            "SELECT outcome_status FROM experiment_admin_worker_outcome "
+            "WHERE request_id=$1 AND worker_identity=$2;", requestId, target.workerIdentity);
+        if (state[0][0].as<std::string>() != "completed") target.plan.clear();
+    }
+    const char* const action = "pause_all";
+    int failedCount = 0;
+    for (DbTarget& target : targets)
+    {
+        if (target.plan == "already_accounted") continue;
+        if (authority) RequirePauseRecoveryAuthority(transaction, *authority);
+        const auto exact = LockExactTargetForMutation(
+            transaction, target, true);
+        SignalOutcome signal;
+        if (!exact ||
+            exact->workerPid != std::optional<int>{target.worker.pid} ||
+            exact->processGroupId != target.worker.processGroupId ||
+            exact->processStartIdentity != target.worker.processStartIdentity ||
+            exact->canonicalExecutablePath != target.worker.executable ||
+            exact->commandLine != target.worker.commandLine ||
+            exact->commandIdentity != "experiment:" +
+                std::to_string(target.worker.experimentId) + ":" + target.worker.phase)
+        {
+            signal.identity = IdentityResult::IdentityValidationFailed;
+            signal.result = "identity_validation_failed";
+            signal.detail = "exact_active_worker_attempt_verification_failed";
+            if (target.authoritativeExactTerminalDeparture)
+            {
+                const auto observation = processes.Observe(target.worker.pid);
+                if (observation.inspectionSucceeded && !observation.exists)
+                {
+                    signal.identity = IdentityResult::ProcessMissing;
+                    signal.result = "process_missing";
+                    signal.detail = "frozen_pause_worker_departure_already_reconciled";
+                }
+            }
+        }
+        else
+        {
+            target.worker.lifecycleStatus = exact->lifecycleStatus;
+            target.worker.attemptLifecycleState = exact->lifecycleState;
+            target.worker.launchAttemptIdentity = exact->launchAttemptIdentity;
+            target.worker.ownershipOrigin = exact->ownershipOrigin;
+            if (!OwnsActiveRequest(transaction, requestId, owner, "pause_all", requestId))
+                throw std::runtime_error("pause_request_authority_lost_before_stop");
+            const SignalAuthorization authorize = [&](const ManagedWorker& worker,
+                const ProcessObservation& observed, int number, int& errorNumber,
+                std::string& rejection) {
+                if (authority) RequirePauseRecoveryAuthority(transaction, *authority);
+                const auto fresh = processes.Observe(worker.pid);
+                const bool liveOwner = transaction.exec_params(
+                    "SELECT EXISTS(SELECT 1 FROM experiment_admin_request "
+                    "WHERE request_id=$1 AND application_owner=$2 "
+                    "AND application_lease_until>clock_timestamp());", requestId, owner)[0][0].as<bool>();
+                if (!liveOwner || number != SIGSTOP || !fresh.inspectionSucceeded || !fresh.exists ||
+                    fresh.pid != observed.pid || fresh.processGroupId != observed.processGroupId ||
+                    fresh.processStartIdentity != observed.processStartIdentity ||
+                    fresh.executable != observed.executable || fresh.commandLine != observed.commandLine)
+                {
+                    errorNumber = EINVAL;
+                    rejection = "pause_authority_or_process_identity_changed_before_signal";
+                    return false;
+                }
+                return processes.SignalProcessGroup(fresh.processGroupId, number, errorNumber);
+            };
+            if (fault) fault(GlobalControlBoundary::BeforeStop);
+            if (authority) RequirePauseRecoveryAuthority(transaction, *authority);
+            if (exact->lifecycleState == "stopped")
+            {
+                const auto observation = processes.Observe(target.worker.pid);
+                signal = observation.stopped
+                    ? RetainStoppedWorkerForPause(target.worker, processes)
+                    : PauseWorkerAuthorized(target.worker, processes, authorize, true);
+            }
+            else
+                signal = PauseWorkerAuthorized(target.worker, processes, authorize);
+            if (fault) fault(GlobalControlBoundary::AfterStop);
+            if (fault) fault(GlobalControlBoundary::BeforeWorkerPersistence);
+            if (signal.success)
+            {
+                bool stopped = false;
+                for (int attempt = 0; attempt < 10; ++attempt)
+                {
+                    const auto observed = target.worker.lifecycleStatus == "paused"
+                        ? ValidatePausedManagedWorker(target.worker, processes)
+                        : (target.worker.lifecycleStatus == "pending"
+                            ? ValidateStoppedWorkerForSchedulerAdmission(target.worker, processes)
+                            : ValidateManagedWorker(target.worker, processes));
+                    if (observed.identity != IdentityResult::Validated)
+                    {
+                        signal.identity = observed.identity;
+                        signal.result = observed.identity == IdentityResult::ProcessMissing
+                            ? "process_missing" : ToString(observed.identity);
+                        signal.detail = observed.detail;
+                        break;
+                    }
+                    if (observed.observation.stopped) { stopped = true; break; }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                if (!stopped)
+                {
+                    signal.success = false;
+                    if (signal.identity == IdentityResult::Validated)
+                    {
+                        signal.result = "signaling_failure";
+                        signal.detail = "sigstop_delivery_not_confirmed_durable_intent_retained";
+                    }
+                }
+            }
+            if (signal.success)
+            {
+                const pqxx::result stopped = transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='stopped',last_observed_at=clock_timestamp(),"
+                    "signal_number=$1,reconciliation_result='global_pause',"
+                    "diagnostic='verified_process_group_stopped' "
+                    "WHERE worker_attempt_id=$2 AND lifecycle_state IN "
+                    "('spawned','running','observed','stopped') "
+                    "RETURNING worker_attempt_id;",
+                    signal.signals.empty()
+                        ? std::optional<int>{}
+                        : std::optional<int>{signal.signals.back()},
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(stopped, 1, "pause_all_stop_attempt");
+                const pqxx::result paused = transaction.exec_params(
+                    "UPDATE experiment SET status='paused',resume_requested=false,"
+                    "scheduler_resume_origin='none',worker_control_state='paused',"
+                    "worker_global_pause_request_id=$1,"
+                    "updated_at=clock_timestamp() WHERE experiment_id=$2 "
+                    "AND status IN ('running','pending','paused') "
+                    "AND active_scheduler_worker_attempt_id=$3 "
+                    "RETURNING experiment_id;",
+                    requestId,
+                    target.worker.experimentId,
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(paused, 1, "pause_all_running_member");
+            }
+            else if (signal.identity == IdentityResult::ProcessMissing)
+            {
+                const pqxx::result retired = transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='abandoned',completed_at=clock_timestamp(),"
+                    "reconciliation_result='global_pause_process_missing',"
+                    "diagnostic='exact_process_absence_observed' "
+                    "WHERE worker_attempt_id=$1 AND lifecycle_state IN "
+                    "('spawned','running','observed','stopped') "
+                    "RETURNING worker_attempt_id;",
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(retired, 1, "pause_all_missing_attempt");
+                const pqxx::result paused = transaction.exec_params(
+                    "UPDATE experiment SET status='paused',resume_requested=false,"
+                    "scheduler_resume_origin='none',worker_control_state='paused',"
+                    "worker_global_pause_request_id=$1,"
+                    "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "worker_process_start_identity=NULL,worker_executable=NULL,"
+                    "worker_command_line=NULL,active_scheduler_worker_attempt_id=NULL,"
+                    "updated_at=clock_timestamp() WHERE experiment_id=$2 "
+                    "AND status IN ('running','pending','paused') "
+                    "AND active_scheduler_worker_attempt_id=$3 "
+                    "RETURNING experiment_id;",
+                    requestId,
+                    target.worker.experimentId,
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(paused, 1, "pause_all_missing_member");
+            }
+        }
+        if (!signal.success &&
+            signal.identity != IdentityResult::ProcessMissing)
+            ++failedCount;
+        UpdateSignalOutcome(
+            transaction,
+            requestId,
+            target,
+            signal,
+            false,
+            owner,
+            action);
+    }
+
+
+    UpdateRequestAccounting(transaction, requestId, false, owner, action);
+    const bool unresolved = HasUnresolvedWorkerOutcome(transaction, requestId);
+    if (!unresolved)
+    {
+        const auto cleared = transaction.exec_params(
+            "UPDATE experiment_global_control SET active_request_id=NULL,"
+            "revision=revision+1,updated_at=clock_timestamp() "
+            "WHERE singleton AND active_request_id=$1 "
+            "AND current_pause_request_id=$1 RETURNING singleton;", requestId);
+        RequireAffectedRows(cleared, 1, "pause_all_complete_gate");
+    }
+    // Release the administrative lease even for a partial result; a scheduler
+    // or another supported CLI invocation can immediately recover the plan.
+    transaction.exec_params(
+        "UPDATE experiment_admin_request SET application_lease_until=NULL "
+        "WHERE request_id=$1 AND application_owner=$2;", requestId, owner);
+    return !unresolved && failedCount == 0;
+}
+} // namespace
+
+bool ReconcileActivePauseWithProcessOperationsForTesting(
+    pqxx::work& transaction,
+    const EA::SchedulerCore::SchedulerAuthorityContext& authority,
+    ProcessOperations& processes,
+    const GlobalControlFaultInjector& fault)
+{
+    AcquireCoordinationLock(transaction);
+    // The recovering invocation must still own the scheduler lease. Launch
+    // ownership on the frozen attempt is immutable and may belong to a prior
+    // scheduler; recovery does not transfer it or invent a new attempt.
+    if (!authority.held || authority.schedulerInvocationId.empty() ||
+        authority.invocationNonce.empty() || authority.fencingToken <= 0 ||
+        authority.canonicalExecutablePath.empty())
+        throw EA::SchedulerCore::SchedulerAuthorityLost("pause_recovery_authority_incomplete");
+    const auto protocol = transaction.exec(
+        "SELECT required_generation,cutover_state FROM experiment_scheduler_protocol "
+        "WHERE singleton FOR SHARE;");
+    if (protocol.size()!=1 || protocol[0][0].as<int>()!=EA::SchedulerCore::kSchedulerProtocolGeneration ||
+        protocol[0][1].as<std::string>()!="complete")
+        throw EA::SchedulerCore::SchedulerAuthorityLost("pause_recovery_protocol_barrier_rejected");
+    const auto lease = transaction.exec_params(
+        "SELECT i.invocation_nonce,i.canonical_executable_path,i.status,i.protocol_generation "
+        "FROM experiment_scheduler_lease l JOIN experiment_scheduler_invocation i "
+        "ON i.scheduler_invocation_id=l.owner_scheduler_invocation_id "
+        "WHERE l.singleton AND l.authority_state='active' "
+        "AND l.owner_scheduler_invocation_id=$1 AND l.fencing_token=$2 "
+        "AND l.expires_at>clock_timestamp() FOR UPDATE OF l,i;",
+        authority.schedulerInvocationId, authority.fencingToken);
+    if (lease.size()!=1 || lease[0][0].as<std::string>()!=authority.invocationNonce ||
+        lease[0][1].as<std::string>()!=authority.canonicalExecutablePath ||
+        lease[0][2].as<std::string>()!="owner" ||
+        lease[0][3].as<int>()!=EA::SchedulerCore::kSchedulerProtocolGeneration)
+        throw EA::SchedulerCore::SchedulerAuthorityLost("pause_recovery_scheduler_fence_lost");
+    const auto snapshot = LoadControlSnapshot(transaction);
+    if (!snapshot.activeRequestId || snapshot.activeAction != "pause_all") return false;
+    const std::string owner = "scheduler-pause:" + authority.schedulerInvocationId +
+                              ":" + std::to_string(authority.fencingToken);
+    if (!ClaimDurablePause(transaction, *snapshot.activeRequestId, owner)) return false;
+    if (fault) fault(GlobalControlBoundary::DuringReconciliation);
+    (void)ApplyDurablePause(
+        transaction, *snapshot.activeRequestId, owner, processes, fault, &authority);
+    return true;
+}
+
+bool ReconcileActivePause(pqxx::work& transaction,
+    const EA::SchedulerCore::SchedulerAuthorityContext& authority)
+{
+    auto processes = CreateNativeProcessOperations();
+    return ReconcileActivePauseWithProcessOperationsForTesting(transaction, authority, *processes);
+}
+
 int RunPriorityQueueGlobalControl(
     const std::string& connectionString,
     const Command& command,
     std::ostream& output,
     std::ostream& error,
-    ProcessOperations& processes)
+    ProcessOperations& processes,
+    const GlobalControlFaultInjector& fault)
 {
     const bool pause = command.action == Action::PauseAll;
     const char* const action = pause ? "pause_all" : "resume_all";
@@ -3759,7 +4091,22 @@ int RunPriorityQueueGlobalControl(
         EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(
             transaction);
     AcquireCoordinationLock(transaction);
-    const ControlSnapshot snapshot = LoadControlSnapshot(transaction);
+    ControlSnapshot snapshot = LoadControlSnapshot(transaction);
+    if (snapshot.activeRequestId && snapshot.activeAction == "pause_all" && willApply)
+    {
+        const auto pendingRequest = *snapshot.activeRequestId;
+        if (ClaimDurablePause(transaction, pendingRequest, owner))
+        {
+            const bool completed = ApplyDurablePause(transaction, pendingRequest, owner, processes, fault);
+            const auto summary = DurablePauseSummary(transaction, pendingRequest, completed, true);
+            if (fault) fault(GlobalControlBoundary::BeforePauseCommit);
+            transaction.commit();
+            if (fault) fault(GlobalControlBoundary::AfterPauseCommit);
+            output << summary;
+            if (!completed || pause) return completed ? 0 : 1;
+            return RunPriorityQueueGlobalControl(connectionString, command, output, error, processes, fault);
+        }
+    }
     if (snapshot.activeRequestId)
     {
         error << "GLOBAL_EXPERIMENT_CONTROL_REJECTED,reason="
@@ -3780,7 +4127,8 @@ int RunPriorityQueueGlobalControl(
                      target.worker.phase != "infer"))
                     return true;
                 if (pause)
-                    return target.worker.lifecycleStatus == "paused";
+                    return target.worker.lifecycleStatus == "paused" &&
+                        target.workerGlobalPauseRequestId != snapshot.currentPauseRequestId;
                 return !snapshot.currentPauseRequestId ||
                        target.workerGlobalPauseRequestId !=
                            snapshot.currentPauseRequestId ||
@@ -3805,6 +4153,20 @@ int RunPriorityQueueGlobalControl(
     {
         output << "Use --yes to apply.\n";
         transaction.commit();
+        return 0;
+    }
+
+    const bool alreadySatisfied = pause
+        ? snapshot.desiredState == "paused" && snapshot.currentPauseRequestId &&
+          std::all_of(targets.begin(), targets.end(), [](const DbTarget& t) {
+              return t.worker.lifecycleStatus == "paused";
+          })
+        : snapshot.desiredState == "running" && !snapshot.currentPauseRequestId;
+    if (alreadySatisfied)
+    {
+        transaction.commit();
+        output << "GLOBAL_EXPERIMENT_CONTROL_SUMMARY,action=" << action
+               << ",status=completed,result=already_satisfied,signal_attempted=0\n";
         return 0;
     }
 
@@ -3886,7 +4248,9 @@ int RunPriorityQueueGlobalControl(
             "WHERE request_id=$1 AND application_owner=$2;",
             requestId,
             owner);
+        if (fault) fault(GlobalControlBoundary::BeforeResumeCommit);
         transaction.commit();
+        if (fault) fault(GlobalControlBoundary::AfterResumeCommit);
         output << "GLOBAL_EXPERIMENT_CONTROL_SUMMARY,request_id="
                << requestId
                << ",action=resume_all,status=completed,target_count="
@@ -3896,160 +4260,41 @@ int RunPriorityQueueGlobalControl(
         return 0;
     }
 
-    int stoppedCount = 0;
-    int pendingCount = 0;
-    int missingCount = 0;
-    int failedCount = 0;
-    for (DbTarget& target : targets)
+    // Commit immutable request/worker identities before the first OS effect.
+    for (const auto& target : targets)
     {
-        if (target.worker.lifecycleStatus == "pending" &&
-            !target.worker.workerAttemptId)
+        const bool noWorker = !target.worker.workerAttemptId &&
+            (target.worker.lifecycleStatus == "pending" || target.worker.lifecycleStatus == "paused");
+        InsertOutcome(transaction, requestId, target, noWorker ? "completed" : "planned", "none",
+                      "durable_global_pause_intent");
+        if (noWorker)
         {
-            InsertOutcome(
-                transaction,
-                requestId,
-                target,
-                "completed",
-                "none",
-                "pending_experiment_paused_before_dispatch");
-            const pqxx::result paused = transaction.exec_params(
+            const auto paused = transaction.exec_params(
                 "UPDATE experiment SET status='paused',resume_requested=false,"
                 "scheduler_resume_origin='none',worker_control_state='paused',"
-                "worker_global_pause_request_id=$1,"
-                "updated_at=clock_timestamp() WHERE experiment_id=$2 "
-                "AND status='pending' AND active_scheduler_worker_attempt_id IS NULL "
-                "RETURNING experiment_id;",
-                requestId,
-                target.worker.experimentId);
+                "worker_global_pause_request_id=$1,updated_at=clock_timestamp() "
+                "WHERE experiment_id=$2 AND status IN ('pending','paused') "
+                "AND active_scheduler_worker_attempt_id IS NULL RETURNING experiment_id;",
+                requestId, target.worker.experimentId);
             RequireAffectedRows(paused, 1, "pause_all_pending_member");
-            ++pendingCount;
-            continue;
         }
-        if ((target.worker.lifecycleStatus != "running" &&
-             target.worker.lifecycleStatus != "pending") ||
-            !target.worker.workerAttemptId)
-            continue;
-
-        InsertOutcome(
-            transaction,
-            requestId,
-            target,
-            "planned",
-            "none",
-            "worker_validation_and_pause_planned");
-        const bool retainStoppedWorker =
-            target.worker.lifecycleStatus == "pending" &&
-            target.worker.attemptLifecycleState == "stopped";
-        const auto exact = LockExactTargetForMutation(
-            transaction, target, true);
-        SignalOutcome signal;
-        if (!exact ||
-            (retainStoppedWorker && exact->lifecycleState != "stopped"))
-        {
-            signal.identity = IdentityResult::IdentityValidationFailed;
-            signal.result = "identity_validation_failed";
-            signal.detail = "exact_active_worker_attempt_verification_failed";
-        }
-        else
-        {
-            signal = retainStoppedWorker
-                ? RetainStoppedWorkerForPause(target.worker, processes)
-                : PauseWorker(target.worker, processes);
-            if (signal.success)
-            {
-                const pqxx::result stopped = transaction.exec_params(
-                    "UPDATE experiment_scheduler_worker_attempt SET "
-                    "lifecycle_state='stopped',last_observed_at=clock_timestamp(),"
-                    "signal_number=$1,reconciliation_result='global_pause',"
-                    "diagnostic='verified_process_group_stopped' "
-                    "WHERE worker_attempt_id=$2 AND lifecycle_state IN "
-                    "('spawned','running','observed','stopped') "
-                    "RETURNING worker_attempt_id;",
-                    signal.signals.empty()
-                        ? std::optional<int>{}
-                        : std::optional<int>{signal.signals.back()},
-                    *target.worker.workerAttemptId);
-                RequireAffectedRows(stopped, 1, "pause_all_stop_attempt");
-                const pqxx::result paused = transaction.exec_params(
-                    "UPDATE experiment SET status='paused',resume_requested=false,"
-                    "scheduler_resume_origin='none',worker_control_state='paused',"
-                    "worker_global_pause_request_id=$1,"
-                    "updated_at=clock_timestamp() WHERE experiment_id=$2 "
-                    "AND status IN ('running','pending') "
-                    "AND active_scheduler_worker_attempt_id=$3 "
-                    "RETURNING experiment_id;",
-                    requestId,
-                    target.worker.experimentId,
-                    *target.worker.workerAttemptId);
-                RequireAffectedRows(paused, 1, "pause_all_running_member");
-                ++stoppedCount;
-            }
-            else if (signal.identity == IdentityResult::ProcessMissing)
-            {
-                const pqxx::result retired = transaction.exec_params(
-                    "UPDATE experiment_scheduler_worker_attempt SET "
-                    "lifecycle_state='abandoned',completed_at=clock_timestamp(),"
-                    "reconciliation_result='global_pause_process_missing',"
-                    "diagnostic='exact_process_absence_observed' "
-                    "WHERE worker_attempt_id=$1 AND lifecycle_state IN "
-                    "('spawned','running','observed','stopped') "
-                    "RETURNING worker_attempt_id;",
-                    *target.worker.workerAttemptId);
-                RequireAffectedRows(retired, 1, "pause_all_missing_attempt");
-                const pqxx::result paused = transaction.exec_params(
-                    "UPDATE experiment SET status='paused',resume_requested=false,"
-                    "scheduler_resume_origin='none',worker_control_state='paused',"
-                    "worker_global_pause_request_id=$1,"
-                    "worker_pid=NULL,worker_process_group_id=NULL,"
-                    "worker_process_start_identity=NULL,worker_executable=NULL,"
-                    "worker_command_line=NULL,active_scheduler_worker_attempt_id=NULL,"
-                    "updated_at=clock_timestamp() WHERE experiment_id=$2 "
-                    "AND status IN ('running','pending') "
-                    "AND active_scheduler_worker_attempt_id=$3 "
-                    "RETURNING experiment_id;",
-                    requestId,
-                    target.worker.experimentId,
-                    *target.worker.workerAttemptId);
-                RequireAffectedRows(paused, 1, "pause_all_missing_member");
-                ++missingCount;
-            }
-        }
-        if (!signal.success &&
-            signal.identity != IdentityResult::ProcessMissing)
-            ++failedCount;
-        UpdateSignalOutcome(
-            transaction,
-            requestId,
-            target,
-            signal,
-            false,
-            owner,
-            action);
     }
-
-    UpdateRequestAccounting(transaction, requestId, false, owner, action);
-    const std::string status = failedCount == 0 ? "completed" : "partial";
-    const pqxx::result cleared = transaction.exec_params(
-        "UPDATE experiment_global_control SET active_request_id=NULL,"
-        "revision=revision+1,updated_at=now() "
-        "WHERE singleton AND active_request_id=$1 RETURNING singleton;",
-        requestId);
-    RequireAffectedRows(cleared, 1, "pause_all_complete_gate");
-    transaction.exec_params(
-        "UPDATE experiment_admin_request SET application_lease_until=NULL "
-        "WHERE request_id=$1 AND application_owner=$2;",
-        requestId,
-        owner);
+    if (fault) fault(GlobalControlBoundary::BeforeIntentCommit);
     transaction.commit();
-    output << "GLOBAL_EXPERIMENT_CONTROL_SUMMARY,request_id=" << requestId
-           << ",action=pause_all,status=" << status
-           << ",target_count=" << targets.size()
-           << ",stopped_workers=" << stoppedCount
-           << ",pending_paused=" << pendingCount
-           << ",missing_reconciled=" << missingCount
-           << ",failed_count=" << failedCount
-           << ",global_state=paused\n";
-    return failedCount == 0 ? 0 : 1;
+    if (fault) fault(GlobalControlBoundary::AfterIntentCommit);
+
+    pqxx::work apply{connection};
+    EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(apply);
+    AcquireCoordinationLock(apply);
+    if (!ClaimDurablePause(apply, requestId, owner))
+        throw std::runtime_error("durable_pause_ownership_lost");
+    const bool completed = ApplyDurablePause(apply, requestId, owner, processes, fault);
+    const auto summary = DurablePauseSummary(apply, requestId, completed, false);
+    if (fault) fault(GlobalControlBoundary::BeforePauseCommit);
+    apply.commit();
+    if (fault) fault(GlobalControlBoundary::AfterPauseCommit);
+    output << summary;
+    return completed ? 0 : 1;
 }
 
 int RunCommand(const std::string& connectionString,
@@ -4067,7 +4312,8 @@ int RunCommandWithProcessOperationsForTesting(
     const Command& command,
     std::ostream& output,
     std::ostream& error,
-    ProcessOperations& processes)
+    ProcessOperations& processes,
+    const GlobalControlFaultInjector& fault)
 {
     if (const auto validation = ValidateCommand(command))
     {
@@ -4079,7 +4325,7 @@ int RunCommandWithProcessOperationsForTesting(
         command.action == Action::ResumeAll)
     {
         return RunPriorityQueueGlobalControl(
-            connectionString, command, output, error, processes);
+            connectionString, command, output, error, processes, fault);
     }
 
     std::vector<DbTarget> targets;

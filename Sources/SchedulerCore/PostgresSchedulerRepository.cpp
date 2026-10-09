@@ -151,7 +151,7 @@ PostgresSchedulerRepository::findAuthoritativeFinalInferenceResultForWorkerAttem
         "AND e.active_scheduler_worker_attempt_id=a.worker_attempt_id "
         "AND (e.status='running' OR ("
         " e.status='pending' AND e.resume_requested "
-        " AND e.scheduler_resume_origin='preemption' "
+        " AND e.scheduler_resume_origin IN ('preemption','operator') "
         " AND e.worker_control_state='paused' "
         " AND a.lifecycle_state='stopped')) "
         "ORDER BY r.completed_at DESC,r.id DESC LIMIT 1;",

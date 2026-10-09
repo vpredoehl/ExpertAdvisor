@@ -2995,9 +2995,30 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
 
     auto processes =
         EA::GlobalExperimentControl::CreateNativeProcessOperations();
-    const EA::GlobalExperimentControl::SignalOutcome signal =
-        EA::GlobalExperimentControl::
+    if (SchedulerAuthorityTestFailpointEnabled("stopped_admission_before_sigcont"))
+        throw std::runtime_error("injected_stopped_admission_before_sigcont");
+    if (SchedulerAuthorityTestFailpointEnabled("stopped_admission_fence_loss_before_sigcont"))
+        transaction.exec("UPDATE experiment_scheduler_lease SET "
+            "fencing_token=fencing_token+1 WHERE singleton;");
+    // Admission may perform database and executable inspections after its
+    // initial lease check. Revalidate current authority at the signal boundary.
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    const EA::GlobalExperimentControl::SignalOutcome signal = [&] {
+        if (SchedulerAuthorityTestFailpointEnabled("stopped_admission_sigcont_failure"))
+        {
+            EA::GlobalExperimentControl::SignalOutcome failed;
+            const auto validated = EA::GlobalExperimentControl::
+                ValidateStoppedWorkerForSchedulerAdmission(worker, *processes);
+            failed.identity = validated.identity;
+            failed.result = "signaling_failure";
+            failed.detail = "injected_stopped_admission_sigcont_failure";
+            return failed;
+        }
+        return EA::GlobalExperimentControl::
             ResumeStoppedWorkerForSchedulerAdmission(worker, *processes);
+    }();
+    if (SchedulerAuthorityTestFailpointEnabled("stopped_admission_after_sigcont"))
+        throw std::runtime_error("injected_stopped_admission_after_sigcont");
     if (signal.identity ==
         EA::GlobalExperimentControl::IdentityResult::ProcessMissing)
     {
@@ -3133,9 +3154,15 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
     }
     if (!signal.success)
     {
+        // A failed delivery or unavailable inspection does not erase the
+        // durable stopped/admission intent. Retry through normal admission;
+        // uncertain execution remains guarded by StoppedAttemptsRemainStopped.
+        const bool retryable = signal.result == "permission_failure" ||
+            signal.result == "signaling_failure" ||
+            signal.identity == EA::GlobalExperimentControl::IdentityResult::InspectionFailed;
         transaction.exec_params(
             "UPDATE experiment_scheduler_worker_attempt SET "
-            "lifecycle_state='identity_ambiguous',"
+            "lifecycle_state=$4,"
             "last_observed_at=clock_timestamp(),"
             "observed_by_scheduler_invocation_id=$1,"
             "reconciliation_result='stopped_resume_rejected',"
@@ -3143,7 +3170,8 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
             "AND lifecycle_state='stopped';",
             options.schedulerAuthority.schedulerInvocationId,
             signal.detail.empty() ? signal.result : signal.detail,
-            exact->workerAttemptId);
+            exact->workerAttemptId,
+            retryable ? "stopped" : "identity_ambiguous");
         transaction.commit();
         std::cout << "SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED"
                   << ",experiment_id=" << experiment.experimentId
@@ -3179,6 +3207,8 @@ StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
         exact->workerAttemptId);
     EA::SchedulerOwnership::RequireAffectedExactlyOne(
         running, "activate_admitted_stopped_worker_lifecycle");
+    if (SchedulerAuthorityTestFailpointEnabled("stopped_admission_before_commit"))
+        throw std::runtime_error("injected_stopped_admission_before_commit");
     transaction.commit();
     std::cout << "SCHEDULER_STOPPED_WORKER_ADMITTED"
               << ",experiment_id=" << experiment.experimentId
@@ -8734,7 +8764,7 @@ int RecoverOrphanedRunningExperiments(
                 "AND ((status='running' AND phase=$2) "
                 " OR ($2='infer' AND status='pending' AND phase='infer' "
                 "     AND resume_requested=true "
-                "     AND scheduler_resume_origin='preemption') "
+                "     AND scheduler_resume_origin IN ('preemption','operator')) "
                 " OR ($2='analyze' AND status='completed' "
                 "     AND phase='done')) "
                 "AND active_scheduler_worker_attempt_id=$3 "
@@ -8868,7 +8898,7 @@ int RecoverOrphanedRunningExperiments(
                                 pqxx::params{experimentId, attemptId});
                         EA::SchedulerOwnership::RequireAffectedExactlyOne(
                             clearedPreemption,
-                            "clear_recovered_infer_preemption_origin");
+                            "clear_recovered_infer_resume_origin");
                     }
                     completedEvidence = true;
                 }
@@ -11083,6 +11113,8 @@ int RunSchedulerOnce(const SchedulerOptions& options,
         pqxx::work observation{connection};
         SetTransactionReadWrite(observation);
         RequireAndRefreshSchedulerAuthority(observation, options);
+        (void)EA::GlobalExperimentControl::ReconcileActivePause(
+            observation, options.schedulerAuthority);
         RecoverOrphanedRunningExperiments(observation, options, logState, options.schedulerVerbose);
         observation.commit();
         if (!ReconcileSchedulerCapacity(options)) return 0;
@@ -11115,6 +11147,8 @@ int RunSchedulerOnce(const SchedulerOptions& options,
                 *control);
         if (!options.dryRun)
         {
+            (void)EA::GlobalExperimentControl::ReconcileActivePause(
+                w, options.schedulerAuthority);
             (void)EA::GlobalExperimentControl::ReconcileActiveCancellation(
                 w,
                 SchedulerCancellationReconciliationOwner(options),
@@ -11260,6 +11294,8 @@ int RunScheduler(
         }
         if (!options.dryRun)
         {
+            (void)EA::GlobalExperimentControl::ReconcileActivePause(
+                w, options.schedulerAuthority);
             (void)EA::GlobalExperimentControl::ReconcileActiveCancellation(
                 w,
                 SchedulerCancellationReconciliationOwner(options),

@@ -996,6 +996,47 @@ int main(int argc, char* argv[])
     assert(recovered->modelId == 704);
     assert(!recovered->forcedFinalInferenceRerun);
 
+    // SIGCONT can succeed before the admission transaction rolls back. If the
+    // exact stopped attempt subsequently exits, its committed final result is
+    // authoritative for both preemption and operator/global-resume origins.
+    const auto recoverExact = [&] {
+        return repository.findAuthoritativeFinalInferenceResultForWorkerAttempt(10, 101);
+    };
+    transaction.exec("UPDATE experiment SET status='pending',resume_requested=true,"
+        "scheduler_resume_origin='operator',worker_control_state='paused' WHERE experiment_id=10;"
+        "UPDATE experiment_scheduler_worker_attempt SET lifecycle_state='stopped' "
+        "WHERE worker_attempt_id=101;");
+    assert(recoverExact());
+    transaction.exec("UPDATE experiment SET scheduler_resume_origin='preemption' WHERE experiment_id=10;");
+    assert(recoverExact());
+    transaction.exec("UPDATE experiment SET scheduler_resume_origin='none' WHERE experiment_id=10;");
+    assert(!recoverExact());
+    transaction.exec("UPDATE experiment SET scheduler_resume_origin='operator',resume_requested=false "
+        "WHERE experiment_id=10;");
+    assert(!recoverExact());
+    transaction.exec("UPDATE experiment SET resume_requested=true,status='paused' WHERE experiment_id=10;");
+    assert(!recoverExact());
+    transaction.exec("UPDATE experiment SET status='pending',active_scheduler_worker_attempt_id=NULL "
+        "WHERE experiment_id=10;");
+    assert(!recoverExact());
+    transaction.exec("UPDATE experiment SET active_scheduler_worker_attempt_id=101 WHERE experiment_id=10;"
+        "UPDATE experiment_scheduler_worker_attempt SET lifecycle_state='identity_ambiguous' "
+        "WHERE worker_attempt_id=101;");
+    assert(!recoverExact());
+    transaction.exec("UPDATE experiment_scheduler_worker_attempt SET lifecycle_state='stopped' "
+        "WHERE worker_attempt_id=101;"
+        "UPDATE inference_eval_result SET completed_at=(SELECT reserved_at-interval '1 second' "
+        "FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=101) WHERE id=603;");
+    assert(!recoverExact());
+    transaction.exec("UPDATE inference_eval_result SET completed_at=clock_timestamp() WHERE id=603;"
+        "UPDATE model SET experiment_id=11 WHERE model_id=704;");
+    assert(!recoverExact());
+    transaction.exec("UPDATE model SET experiment_id=10 WHERE model_id=704;"
+        "UPDATE experiment SET operator_forced_final_inference_rerun_requested=true "
+        "WHERE experiment_id=10;");
+    const auto forced = recoverExact();
+    assert(forced && forced->forcedFinalInferenceRerun);
+
     transaction.abort();
     return 0;
 }
