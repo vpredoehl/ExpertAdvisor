@@ -1,5 +1,29 @@
 # Ordinary canonical `LSTM_Release` publication
 
+## Development Release build
+
+Run `Scripts/build-lstm-release.sh` from any working directory to build
+`ExpertAdvisor.xcodeproj`, scheme `LSTM Release`, configuration `Release`, with
+`CODE_SIGNING_ALLOWED=NO`. It resolves the repository from its script location
+and reuses `DerivedData/ExpertAdvisor` without cleaning or overriding
+`CONFIGURATION_BUILD_DIR`, preserving incremental caches. The legacy
+`Scripts/build-release.sh` delegates to this command.
+
+Use `--help` for usage or `--dry-run` to inspect the resolved paths and exact
+command without building or creating logs. Real builds retain full stdout and
+stderr in a unique UTC-timestamped log under
+`DerivedData/ExpertAdvisor/BuildLogs/`. The command reports Git HEAD, result,
+executable path, SHA-256 and log path. A successful build must produce an
+executable at `DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release`.
+Xcode failures retain their original exit code; logging or output-verification
+failures after Xcode succeeds return 1.
+
+The existing Xcode provenance phase still requires a clean source tree for
+Release. Publication settings are explicitly disabled; the command does not
+run the executable, deploy artifacts, push changes or control schedulers.
+
+## Publication
+
 `Scripts/PublishCanonicalLSTMRelease.py` publishes only the ordinary
 compatibility/operator/training `LSTM_Release`. It is intentionally distinct
 from `Scripts/PublishSemanticWorker.py`; it neither reads nor changes
