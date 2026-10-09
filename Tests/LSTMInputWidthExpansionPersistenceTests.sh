@@ -16,13 +16,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-include_flags=()
+include_flags=("-I${repo_root}/MetaNN/MetaNN")
 while IFS= read -r include_dir; do
     include_flags+=("-I${include_dir}")
-done < <(find "${repo_root}/MetaNN" -type d -print)
+done < <(find -L "${repo_root}/MetaNN/MetaNN/MetaNN" -type d -print)
 
 xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=26.2 \
-    -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable \
+    -O1 -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable \
     -Wno-unused-function -Wno-unused-but-set-variable -Wno-format \
     -Wno-ignored-qualifiers -Wno-reorder-ctor -Wno-sign-compare \
     -I"${repo_root}/Headers" "${include_flags[@]}" \
@@ -30,6 +30,7 @@ xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=26.2 \
     -isystem /opt/homebrew/opt/libpq/include \
     "${repo_root}/Tests/LSTMInputWidthExpansionPersistenceTests.cpp" \
     "${repo_root}/LSTM/LSTM.cpp" "${repo_root}/LSTM/Tensor.cpp" "${repo_root}/Sources/EconomicEventFeatures.cpp" \
+    "${repo_root}/LSTM/MetalForwardAffine.mm" \
     "${repo_root}/Common/PricePoint.cpp" \
     -L"${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release" \
     -L/opt/homebrew/opt/libpqxx@7.10.1/lib \

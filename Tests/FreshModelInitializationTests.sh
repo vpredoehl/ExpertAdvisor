@@ -13,21 +13,22 @@ for required in libMetaNN.a libMetalBuffer.a default.metallib MetaNN_metal.metal
     fi
 done
 
-include_flags=()
+include_flags=("-I${repo_root}/MetaNN/MetaNN")
 while IFS= read -r include_dir; do
     include_flags+=("-I${include_dir}")
-done < <(find "${repo_root}/MetaNN" -type d -print)
+done < <(find -L "${repo_root}/MetaNN/MetaNN/MetaNN" -type d -print)
 read -r -a pqxx_compile_flags <<< "$(pkg-config --cflags libpqxx)"
 read -r -a pqxx_link_flags <<< "$(pkg-config --libs libpqxx)"
 
 xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=26.2 \
-    -O1 -Wall -Wextra -Werror \
+    -O1 -fobjc-arc -Wall -Wextra -Werror \
     -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
     -Wno-unused-but-set-variable -Wno-format -Wno-ignored-qualifiers \
     -Wno-reorder-ctor -Wno-sign-compare \
     -I"${repo_root}/Headers" "${include_flags[@]}" "${pqxx_compile_flags[@]}" \
     "${repo_root}/Tests/FreshModelInitializationTests.cpp" \
     "${repo_root}/LSTM/LSTM.cpp" "${repo_root}/LSTM/Tensor.cpp" \
+    "${repo_root}/LSTM/MetalForwardAffine.mm" \
     "${repo_root}/Sources/EconomicEventFeatures.cpp" \
     "${repo_root}/Common/PricePoint.cpp" \
     -L"${products_dir}" -lMetaNN -lMetalBuffer \

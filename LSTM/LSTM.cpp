@@ -27,6 +27,10 @@
 #include "LSTM.hpp"
 #include "Tensor.hpp"
 #include "MatrixUtils.hpp"
+#include "MetalForwardAffine.hpp"
+#ifdef LSTM_NUMERICAL_TEST_OBSERVERS
+#include "LSTMNumericalEvidence.hpp"
+#endif
 #include "BuildConfig.hpp"
 #include "TargetLabel.hpp"
 #include "ModelInputContract.hpp"
@@ -2360,12 +2364,12 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
             auto biasMem = lowBias.SharedMemory();
             auto yMem = lowY.SharedMemory();
 
-            MetaNN::NSMetalMatMul::MatMulBias(
+            EA::MetalForwardAffine::ForwardMatMulBias(
                 aMem,
                 bMem,
                 biasMem,
                 yMem,
-                B, K, gateCols);
+                B, K, gateCols, RuntimeDiagnosticLoggingEnabled());
         }
         else
 #endif
@@ -2382,12 +2386,12 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
             auto biasMem = lowBias.SharedMemory();
             auto yMem = lowY.SharedMemory();
 
-            MetaNN::NSMetalMatMul::MatMulBias(
+            EA::MetalForwardAffine::ForwardMatMulBias(
                 aMem,
                 bMem,
                 biasMem,
                 yMem,
-                B, K, gateCols);
+                B, K, gateCols, RuntimeDiagnosticLoggingEnabled());
         }
 #if LSTM_SHAPE_DIAG
         static bool s_printed_batch_matmul_shapes = false;
@@ -3710,6 +3714,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 #else
             const EAMatrix& x_t_batch = wb.packed_steps[tstep];
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, nullptr));
+#endif
+#ifdef LSTM_NUMERICAL_TEST_OBSERVERS
+            const auto& sc = cache.back();
+            EA::Testing::RecordLSTMNumericalMatrices("forward_cache",
+                {&sc.x, &sc.h_prev, &sc.c_prev, &sc.i, &sc.f, &sc.g, &sc.o, &sc.c, &sc.h, &sc.z_f});
 #endif
         }
 #if LSTM_HEAVY_DIAG
@@ -5823,6 +5832,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             }
         }
 
+#ifdef LSTM_NUMERICAL_TEST_OBSERVERS
+        EA::Testing::RecordLSTMNumericalMatrices("preclip",
+            {&d_param_f, &d_bias_f, &d_headW_f, &d_headB_f, &d_headDirW_f, &d_headDirB_f});
+#endif
 #if LSTM_USE_GRAD_CLIP
         if (gradsFinite)
         {
@@ -5834,6 +5847,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             ClipMatrixInPlace(d_headDirW_f, LSTM_GRAD_CLIP_THRESHOLD, "d_headDirW");
             ClipMatrixInPlace(d_headDirB_f, LSTM_GRAD_CLIP_THRESHOLD, "d_headDirB");
         }
+#endif
+#ifdef LSTM_NUMERICAL_TEST_OBSERVERS
+        EA::Testing::RecordLSTMNumericalMatrices("postclip",
+            {&d_param_f, &d_bias_f, &d_headW_f, &d_headB_f, &d_headDirW_f, &d_headDirB_f});
 #endif
         if (phase3ClipFullDiagEnabled)
         {

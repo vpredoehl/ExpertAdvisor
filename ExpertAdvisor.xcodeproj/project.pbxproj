@@ -34,6 +34,11 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		0A25B1000000000200AAA001 /* MetalForwardAffine.mm in Sources */ = {isa = PBXBuildFile; fileRef = 0A25B1000000000100AAA001 /* MetalForwardAffine.mm */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		0A25B1000000000200AAA002 /* MetalForwardAffine.mm in Sources */ = {isa = PBXBuildFile; fileRef = 0A25B1000000000100AAA001 /* MetalForwardAffine.mm */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		0A25B1000000000200AAA003 /* MetalForwardAffine.mm in Sources */ = {isa = PBXBuildFile; fileRef = 0A25B1000000000100AAA001 /* MetalForwardAffine.mm */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		0A25B1000000000200AAA004 /* MetalForwardAffine.mm in Sources */ = {isa = PBXBuildFile; fileRef = 0A25B1000000000100AAA001 /* MetalForwardAffine.mm */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		0A25B1000000000200AAA005 /* MetalForwardAffine.mm in Sources */ = {isa = PBXBuildFile; fileRef = 0A25B1000000000100AAA001 /* MetalForwardAffine.mm */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
@@ -668,6 +673,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0A25B1000000000100AAA001 /* MetalForwardAffine.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MetalForwardAffine.mm; sourceTree = "<group>"; };
 		0820370222B43B0D0025307B /* db_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = db_cursor.cpp; path = Common/db_cursor.cpp; sourceTree = SOURCE_ROOT; };
 		08403E922F1DD75E004742A5 /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Tensor.hpp; sourceTree = "<group>"; };
 		08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = db_cursor_iterator.hpp; sourceTree = "<group>"; };
@@ -1616,6 +1622,7 @@
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
+				0A25B1000000000100AAA001 /* MetalForwardAffine.mm */,
 			);
 			path = LSTM;
 			sourceTree = "<group>";
@@ -2245,6 +2252,7 @@
 				0FAD000D3A00000100AAA001 /* LstmHotspotProfileFinalizer.cpp in Sources */,
 				0FAD000E3A00000100AAA001 /* Tensor.cpp in Sources */,
 				0FAD000F3A00000100AAA001 /* LSTM.cpp in Sources */,
+				0A25B1000000000200AAA001 /* MetalForwardAffine.mm in Sources */,
 				0FAD00103A00000100AAA001 /* PricePoint.cpp in Sources */,
 				0FAD00133A00000100AAA001 /* LstmRuntimeLogging.cpp in Sources */,
 				0FAD00143A00000100AAA001 /* db_cursor.cpp in Sources */,
@@ -2429,6 +2437,7 @@
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0E72000130D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
+				0A25B1000000000200AAA002 /* MetalForwardAffine.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2608,6 +2617,7 @@
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0E72000230D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
+				0A25B1000000000200AAA003 /* MetalForwardAffine.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2833,6 +2843,7 @@
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0E72000230D0000100AAA001 /* Common/HistoricalFxTimestamp.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
+				0A25B1000000000200AAA004 /* MetalForwardAffine.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2853,6 +2864,7 @@
 				0F80002B3800000100AAA001 /* Tensor.cpp in Sources */,
 				0F80002C3800000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */,
 				0F80002D3800000100AAA001 /* LSTM.cpp in Sources */,
+				0A25B1000000000200AAA005 /* MetalForwardAffine.mm in Sources */,
 				0F80002E3800000100AAA001 /* CheckpointPolicy.cpp in Sources */,
 				0F80002F3800000100AAA001 /* ContinuationPolicy.cpp in Sources */,
 				0F8000303800000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,

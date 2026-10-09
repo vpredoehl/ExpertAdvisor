@@ -16,10 +16,12 @@
 #include "MatrixUtils.hpp"
 #include "PricePoint.hpp"
 #include "Tensor.hpp"
+#include "LSTMNumericalEvidence.hpp"
 
 namespace
 {
 bool diagnostics = false;
+std::ofstream* tensorEvidence = nullptr;
 
 void Require(bool condition, const char* message)
 {
@@ -106,13 +108,24 @@ void RestoreMatrices(const EA::LSTM& saved, EA::LSTM& restored)
 }
 } // namespace
 
+void EA::Testing::RecordLSTMNumericalMatrices(const char* stage,
+    std::initializer_list<const EA::LSTM::EAMatrix*> matrices)
+{
+    Require(tensorEvidence != nullptr, "tensor evidence stream missing");
+    const auto length = static_cast<uint64_t>(std::strlen(stage));
+    Write(*tensorEvidence, length);
+    tensorEvidence->write(stage, static_cast<std::streamsize>(length));
+    Write(*tensorEvidence, static_cast<uint64_t>(matrices.size()));
+    for (const auto* matrix : matrices) WriteMatrix(*tensorEvidence, *matrix);
+}
+
 extern "C" bool LstmRuntimeDiagnosticLoggingEnabled() { return diagnostics; }
 
 int main(int argc, char** argv)
 {
     try
     {
-        Require(argc == 4, "usage: fixture legacy|auxiliary|log|percent on|off output");
+        Require(argc == 4 || argc == 5, "usage: fixture legacy|auxiliary|log|percent on|off output [production]");
         diagnostics = std::string{argv[2]} == "on";
         const std::string mode = argv[1];
         const auto type = mode == "log" ? EA::LSTM::TargetType::LogReturn :
@@ -122,9 +135,11 @@ int main(int argc, char** argv)
             EA::TrainingObjective::ProfitabilityAuxiliary() : EA::TrainingObjective::Legacy();
         // Fixture architecture and window lengths only; production defaults,
         // input width and semantic layout are unchanged.
-        hidden_size = 8;
+        const bool productionDimensions = argc == 5 && std::string{argv[4]} == "production";
+        Require(argc == 4 || productionDimensions, "unknown fixture dimensions");
+        hidden_size = productionDimensions ? 64 : 8;
         n_out = hidden_size;
-        window_size = 4;
+        window_size = productionDimensions ? 64 : 4;
         prediction_horizon = 2;
         TestMetalForgetSlice();
         Tensor tensor{"usdcadrmp"};
@@ -155,10 +170,14 @@ int main(int argc, char** argv)
             model.targetScale = 100000.0f; // regression fixture exercises real clipping
         std::ofstream output{argv[3], std::ios::binary | std::ios::trunc};
         Require(static_cast<bool>(output), "cannot open evidence file");
+        std::ofstream tensors{std::string{argv[3]} + ".tensors", std::ios::binary | std::ios::trunc};
+        Require(static_cast<bool>(tensors), "cannot open tensor evidence file");
+        tensorEvidence = &tensors;
         std::cout << std::setprecision(15);
-        const Window batch{tensor.end() - 8, tensor.end()};
+        const Window batch{tensor.end() - static_cast<std::ptrdiff_t>(window_size + prediction_horizon + 2), tensor.end()};
         WriteState(output, model);
-        for (unsigned short call = 0; call < 66; ++call)
+        const unsigned short updates = productionDimensions ? 3 : 66;
+        for (unsigned short call = 0; call < updates; ++call)
         {
             const auto result = model.CalculateBatch(batch, 2);
             Require(std::isfinite(std::get<0>(result)) && model.optimizerUpdateCount == call + 1U,
@@ -188,6 +207,7 @@ int main(int argc, char** argv)
                                 pair.first->Shape()[0] * pair.first->Shape()[1] * sizeof(float)) == 0,
                     "restored matrix continuation parameters changed");
         WriteState(output, restored);
+        tensorEvidence = nullptr;
     }
     catch (const std::exception& error)
     {
