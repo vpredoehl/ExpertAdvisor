@@ -5,6 +5,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -17,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <sys/wait.h>
+#include <sys/sysctl.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>
@@ -613,6 +615,166 @@ int PrintManagedTestProcessIdentity(int pid)
               << observation.processStartIdentity << "|"
               << executable << "|"
               << observation.commandLine << "\n";
+    return 0;
+}
+
+std::optional<std::string> DiagnosticStartIdentity(int pid, int& errorNumber)
+{
+    proc_bsdinfo info{};
+    errno = 0;
+    const int bytes = ::proc_pidinfo(
+        pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+    errorNumber = errno;
+    if (bytes != static_cast<int>(sizeof(info)) ||
+        info.pbi_pid != static_cast<uint32_t>(pid) ||
+        (info.pbi_start_tvsec == 0 && info.pbi_start_tvusec == 0))
+    {
+        if (errorNumber == 0)
+            errorNumber = EIO;
+        return std::nullopt;
+    }
+    return std::to_string(info.pbi_start_tvsec) + ":" +
+           std::to_string(info.pbi_start_tvusec);
+}
+
+std::optional<NativeProcessStatus> DiagnosticStatus(
+    int pid, int& errorNumber)
+{
+    const std::string command =
+        "ps -p " + std::to_string(pid) +
+        " -o pid= -o pgid= -o state= -o command=";
+    FILE* pipe = ::popen(command.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        errorNumber = errno;
+        return std::nullopt;
+    }
+    char buffer[16384] = {};
+    std::string line;
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+        line += buffer;
+    const int closeStatus = ::pclose(pipe);
+    if (closeStatus != 0 || line.empty())
+    {
+        errorNumber = closeStatus != 0 ? ECHILD : EIO;
+        return std::nullopt;
+    }
+    std::istringstream input(line);
+    NativeProcessStatus status;
+    if (!(input >> status.pid >> status.processGroupId >> status.state) ||
+        status.pid != pid)
+    {
+        errorNumber = EIO;
+        return std::nullopt;
+    }
+    std::getline(input, status.commandLine);
+    const size_t begin = status.commandLine.find_first_not_of(" \t");
+    if (begin != std::string::npos)
+        status.commandLine.erase(0, begin);
+    errorNumber = 0;
+    return status;
+}
+
+std::optional<std::string> DiagnosticExecutablePath(
+    int pid, int& errorNumber)
+{
+    char path[PROC_PIDPATHINFO_MAXSIZE] = {};
+    errno = 0;
+    const int length = ::proc_pidpath(pid, path, sizeof(path));
+    errorNumber = errno;
+    if (length <= 0)
+        return std::nullopt;
+    return std::string{path};
+}
+
+std::optional<std::string> DiagnosticKernelExecutablePath(
+    int pid, int& errorNumber)
+{
+    int mib[] = {CTL_KERN, KERN_PROCARGS2, pid};
+    size_t size = 0;
+    errno = 0;
+    if (::sysctl(mib, 3, nullptr, &size, nullptr, 0) != 0 ||
+        size <= sizeof(int))
+    {
+        errorNumber = errno != 0 ? errno : EIO;
+        return std::nullopt;
+    }
+    std::vector<char> buffer(size, '\0');
+    errno = 0;
+    if (::sysctl(mib, 3, buffer.data(), &size, nullptr, 0) != 0 ||
+        size <= sizeof(int))
+    {
+        errorNumber = errno != 0 ? errno : EIO;
+        return std::nullopt;
+    }
+    const char* executable = buffer.data() + sizeof(int);
+    const size_t available = size - sizeof(int);
+    const void* terminator = std::memchr(executable, '\0', available);
+    if (terminator == nullptr || terminator == executable)
+    {
+        errorNumber = EIO;
+        return std::nullopt;
+    }
+    errorNumber = 0;
+    return std::string{
+        executable,
+        static_cast<size_t>(
+            static_cast<const char*>(terminator) - executable)};
+}
+
+int DiagnosticManagedTestProcessIdentity(int pid)
+{
+    auto fail = [](const char* stage, int errorNumber, const std::string& detail) {
+        std::cout << "stage=" << stage << ",errno=" << errorNumber
+                  << ",detail=" << detail << "\n";
+        return 1;
+    };
+    errno = 0;
+    if (::kill(pid, 0) != 0)
+        return fail("process_existence", errno, "kill_0_failed");
+
+    int errorNumber = 0;
+    const auto startBefore = DiagnosticStartIdentity(pid, errorNumber);
+    if (!startBefore)
+        return fail("first_process_start_identity_read", errorNumber,
+                    "proc_pidinfo_failed");
+
+    const auto status = DiagnosticStatus(pid, errorNumber);
+    if (!status)
+        return fail("process_status_read", errorNumber,
+                    "ps_status_failed_or_unparseable");
+    if (status->processGroupId <= 1)
+        return fail("process_group_observation", EINVAL,
+                    "invalid_process_group_id");
+
+    auto executable = DiagnosticExecutablePath(pid, errorNumber);
+    if (!executable)
+        executable = DiagnosticKernelExecutablePath(pid, errorNumber);
+    if (!executable)
+        return fail("executable_path_read", errorNumber,
+                    "proc_pidpath_and_kernel_args_failed");
+    const std::string canonical = CanonicalExecutableIdentity(*executable);
+    if (canonical.empty())
+        return fail("executable_canonicalization", errno != 0 ? errno : EIO,
+                    "realpath_failed");
+
+    const auto startAfter = DiagnosticStartIdentity(pid, errorNumber);
+    if (!startAfter)
+        return fail("second_process_start_identity_read", errorNumber,
+                    "proc_pidinfo_failed");
+    if (*startBefore != *startAfter)
+        return fail("process_start_identity_stability", EAGAIN,
+                    *startBefore + "->" + *startAfter);
+    if (status->pid != pid || status->commandLine.empty() ||
+        status->processGroupId <= 1)
+        return fail("final_observation_validation", EINVAL,
+                    "pid_command_or_group_invalid");
+
+    std::cout << "stage=success,errno=0,pid=" << status->pid
+              << ",pgid=" << status->processGroupId
+              << ",start=" << *startAfter
+              << ",executable=" << canonical
+              << ",command=" << status->commandLine << "\n";
     return 0;
 }
 
@@ -5107,6 +5269,9 @@ int main(int argc, char* argv[])
     if (const std::optional<int> inspectedPid =
             IntegerOption(argc, argv, "--inspect-managed-test-process="))
         return PrintManagedTestProcessIdentity(*inspectedPid);
+    if (const std::optional<int> diagnosticPid =
+            IntegerOption(argc, argv, "--diagnose-managed-test-process="))
+        return DiagnosticManagedTestProcessIdentity(*diagnosticPid);
 
     // Construct the registry before registering the callback. C++ registers
     // the function-local static destructor at construction time, so reverse
