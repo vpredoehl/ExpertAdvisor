@@ -1630,12 +1630,17 @@ int EA::Training::RunTrainingWorkerApplication(int argc, const char* argv[])
                             return std::sqrt(s);
                         };
 
-                        double p0 = l2(l.param);
-                        double b0 = l2(l.bias);
-                        double hw0 = l2(l.returnHeadWeight);
-                        double hb0 = l2(l.returnHeadBias);
-                        double dhw0 = l2(l.returnHeadDirWeight);
-                        double dhb0 = l2(l.returnHeadDirBias);
+                        const bool batchDiagnosticsEnabled = LogDiagnostic();
+                        const bool directionHead =
+                            l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn;
+                        double p0 = 0.0, b0 = 0.0, hw0 = 0.0, hb0 = 0.0;
+                        if (batchDiagnosticsEnabled)
+                        {
+                            p0 = l2(l.param);
+                            b0 = l2(l.bias);
+                            hw0 = l2(directionHead ? l.returnHeadDirWeight : l.returnHeadWeight);
+                            hb0 = l2(directionHead ? l.returnHeadDirBias : l.returnHeadBias);
+                        }
 
                         float loss = 0.0f;
                         size_t _unused1 = 0;
@@ -1649,21 +1654,22 @@ int EA::Training::RunTrainingWorkerApplication(int argc, const char* argv[])
                         }
                         (void)_unused1; (void)_unused2;
 
-                        double p1 = l2(l.param);
-                        double b1 = l2(l.bias);
-                        double hw1 = l2(l.returnHeadWeight);
-                        double hb1 = l2(l.returnHeadBias);
-                        double dhw1 = l2(l.returnHeadDirWeight);
-                        double dhb1 = l2(l.returnHeadDirBias);
+                        if (batchDiagnosticsEnabled)
+                        {
+                            const double p1 = l2(l.param);
+                            const double b1 = l2(l.bias);
+                            const double hw1 = l2(directionHead ? l.returnHeadDirWeight : l.returnHeadWeight);
+                            const double hb1 = l2(directionHead ? l.returnHeadDirBias : l.returnHeadBias);
 
-                        DiagnosticOut() << "epoch " << (e+1)
-                        << " loss=" << loss
-                        << " ||param|| " << p0  << " -> " << p1
-                        << " ||bias|| "  << b0  << " -> " << b1;
-                        if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
-                            DiagnosticOut() << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
-                        else
-                            DiagnosticOut() << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
+                            DiagnosticOut() << "epoch " << (e+1)
+                            << " loss=" << loss
+                            << " ||param|| " << p0  << " -> " << p1
+                            << " ||bias|| "  << b0  << " -> " << b1;
+                            if (directionHead)
+                                DiagnosticOut() << " ||dirHeadW|| " << hw0 << " -> " << hw1 << " ||dirHeadB|| " << hb0 << " -> " << hb1 << std::endl;
+                            else
+                                DiagnosticOut() << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
+                        }
                     } );
                     if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
                     {
