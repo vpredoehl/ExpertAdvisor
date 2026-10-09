@@ -74,6 +74,7 @@ void EA::Testing::RecordLSTMNumericalMatrices(const char* stage,
     for (const auto* matrix : matrices) Matrix(*observed, *matrix);
 }
 
+#ifndef LSTM_QUALIFICATION_HELPERS_ONLY
 int main(int argc, char** argv) {
     @autoreleasepool {
         try {
@@ -188,3 +189,4 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     }
 }
+#endif
