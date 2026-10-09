@@ -130,8 +130,18 @@ void EA::LSTM::PrintMatrixSummary(const char* label,
     std::cout << "\n";
 }
 
+// Match Tensor's standalone-library fallback: diagnostics stay enabled when
+// the application's runtime logging bridge is not linked.
+extern "C" bool LstmRuntimeDiagnosticLoggingEnabled() __attribute__((weak_import));
+
 namespace
 {
+bool RuntimeDiagnosticLoggingEnabled()
+{
+    return (LstmRuntimeDiagnosticLoggingEnabled == nullptr) ||
+           LstmRuntimeDiagnosticLoggingEnabled();
+}
+
 struct Phase2MatrixStats
 {
     size_t finiteCount = 0;
@@ -2443,7 +2453,8 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 #endif
-    auto z_f_view = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * H, H);
+    // ViewCols returns an independently owned contiguous SliceCols copy.
+    auto z_f_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * H, H);
 
     BatchStepCache sc
     {
@@ -2456,7 +2467,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         NNUtils::DeepCopyMatrix(scratch.gate_o_batch),
         NNUtils::DeepCopyMatrix(scratch.c),
         NNUtils::DeepCopyMatrix(scratch.h),
-        NNUtils::DeepCopyMatrix(z_f_view)
+        std::move(z_f_logits)
     };
 
     prevCellState = sc.c;
@@ -5700,12 +5711,32 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         phase3ScaleMatrixInPlace(d_headDirW_f, invN);
         phase3ScaleMatrixInPlace(d_headDirB_f, invN);
 
-        auto d_param_preclip = NNUtils::DeepCopyMatrix(d_param_f);
-        auto d_bias_preclip = NNUtils::DeepCopyMatrix(d_bias_f);
-        auto d_headW_preclip = NNUtils::DeepCopyMatrix(d_headW_f);
-        auto d_headB_preclip = NNUtils::DeepCopyMatrix(d_headB_f);
-        auto d_headDirW_preclip = NNUtils::DeepCopyMatrix(d_headDirW_f);
-        auto d_headDirB_preclip = NNUtils::DeepCopyMatrix(d_headDirB_f);
+        static size_t s_phase3ClipFullDiagCount = 0;
+        const size_t phase3ClipFullDiagIdx = s_phase3ClipFullDiagCount++;
+        const bool phase3ClipFullDiagEnabled =
+            (phase3ClipFullDiagIdx < LSTM_PHASE3_HEAD_DIAG_LIMIT) &&
+            RuntimeDiagnosticLoggingEnabled();
+
+        // Snapshot mean gradients before clipping, only for active consumers.
+        // Empty optionals do not allocate matrix storage.
+        std::optional<EAMatrix> d_param_preclip, d_bias_preclip;
+        std::optional<EAMatrix> d_headW_preclip, d_headB_preclip;
+        std::optional<EAMatrix> d_headDirW_preclip, d_headDirB_preclip;
+        if (phase3ClipFullDiagEnabled)
+        {
+            d_param_preclip = NNUtils::DeepCopyMatrix(d_param_f);
+            d_bias_preclip = NNUtils::DeepCopyMatrix(d_bias_f);
+            if (targetType == TargetType::UpNeutralDownReturn)
+            {
+                d_headDirW_preclip = NNUtils::DeepCopyMatrix(d_headDirW_f);
+                d_headDirB_preclip = NNUtils::DeepCopyMatrix(d_headDirB_f);
+            }
+            else
+            {
+                d_headW_preclip = NNUtils::DeepCopyMatrix(d_headW_f);
+                d_headB_preclip = NNUtils::DeepCopyMatrix(d_headB_f);
+            }
+        }
 
         // For UpNeutralDownReturn, allow the recurrent core to learn faster
         // so hidden-state geometry can keep up with the direction head.
@@ -5776,22 +5807,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             MatrixAllFiniteHost("d_headDirW", d_headDirW_f) &&
             MatrixAllFiniteHost("d_headDirB", d_headDirB_f);
 
-        static size_t s_phase3ClipFullDiagCount = 0;
-        const size_t phase3ClipFullDiagIdx = s_phase3ClipFullDiagCount++;
-        const bool phase3ClipFullDiagEnabled = (phase3ClipFullDiagIdx < LSTM_PHASE3_HEAD_DIAG_LIMIT);
         if (phase3ClipFullDiagEnabled)
         {
-            PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_param", d_param_preclip, LSTM_GRAD_CLIP_THRESHOLD);
-            PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_bias", d_bias_preclip, LSTM_GRAD_CLIP_THRESHOLD);
+            PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_param", *d_param_preclip, LSTM_GRAD_CLIP_THRESHOLD);
+            PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_bias", *d_bias_preclip, LSTM_GRAD_CLIP_THRESHOLD);
             if (targetType == TargetType::UpNeutralDownReturn)
             {
-                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headDirW", d_headDirW_preclip, LSTM_GRAD_CLIP_THRESHOLD);
-                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headDirB", d_headDirB_preclip, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headDirW", *d_headDirW_preclip, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headDirB", *d_headDirB_preclip, LSTM_GRAD_CLIP_THRESHOLD);
             }
             else
             {
-                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headW", d_headW_preclip, LSTM_GRAD_CLIP_THRESHOLD);
-                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headB", d_headB_preclip, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headW", *d_headW_preclip, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipMatrixStats("DIAG_GRAD_PRECLIP_FULL_", phase3ClipFullDiagIdx, "d_headB", *d_headB_preclip, LSTM_GRAD_CLIP_THRESHOLD);
             }
         }
 
@@ -5811,21 +5839,21 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         {
             PrintPhase3ClipMatrixStats("DIAG_GRAD_POSTCLIP_FULL_", phase3ClipFullDiagIdx, "d_param", d_param_f, LSTM_GRAD_CLIP_THRESHOLD);
             PrintPhase3ClipMatrixStats("DIAG_GRAD_POSTCLIP_FULL_", phase3ClipFullDiagIdx, "d_bias", d_bias_f, LSTM_GRAD_CLIP_THRESHOLD);
-            PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_param", d_param_preclip, d_param_f, LSTM_GRAD_CLIP_THRESHOLD);
-            PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_bias", d_bias_preclip, d_bias_f, LSTM_GRAD_CLIP_THRESHOLD);
+            PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_param", *d_param_preclip, d_param_f, LSTM_GRAD_CLIP_THRESHOLD);
+            PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_bias", *d_bias_preclip, d_bias_f, LSTM_GRAD_CLIP_THRESHOLD);
             if (targetType == TargetType::UpNeutralDownReturn)
             {
                 PrintPhase3ClipMatrixStats("DIAG_GRAD_POSTCLIP_FULL_", phase3ClipFullDiagIdx, "d_headDirW", d_headDirW_f, LSTM_GRAD_CLIP_THRESHOLD);
                 PrintPhase3ClipMatrixStats("DIAG_GRAD_POSTCLIP_FULL_", phase3ClipFullDiagIdx, "d_headDirB", d_headDirB_f, LSTM_GRAD_CLIP_THRESHOLD);
-                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headDirW", d_headDirW_preclip, d_headDirW_f, LSTM_GRAD_CLIP_THRESHOLD);
-                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headDirB", d_headDirB_preclip, d_headDirB_f, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headDirW", *d_headDirW_preclip, d_headDirW_f, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headDirB", *d_headDirB_preclip, d_headDirB_f, LSTM_GRAD_CLIP_THRESHOLD);
             }
             else
             {
                 PrintPhase3ClipMatrixStats("DIAG_GRAD_POSTCLIP_FULL_", phase3ClipFullDiagIdx, "d_headW", d_headW_f, LSTM_GRAD_CLIP_THRESHOLD);
                 PrintPhase3ClipMatrixStats("DIAG_GRAD_POSTCLIP_FULL_", phase3ClipFullDiagIdx, "d_headB", d_headB_f, LSTM_GRAD_CLIP_THRESHOLD);
-                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headW", d_headW_preclip, d_headW_f, LSTM_GRAD_CLIP_THRESHOLD);
-                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headB", d_headB_preclip, d_headB_f, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headW", *d_headW_preclip, d_headW_f, LSTM_GRAD_CLIP_THRESHOLD);
+                PrintPhase3ClipEffect(phase3ClipFullDiagIdx, "d_headB", *d_headB_preclip, d_headB_f, LSTM_GRAD_CLIP_THRESHOLD);
             }
             PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "param", param, d_param_f, lrCore);
             PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "bias", bias, d_bias_f, lrCore);
