@@ -1,6 +1,102 @@
 # Phase 25B-3: production-representative Metal training qualification
 
-**Status: INCONCLUSIVE for Phase 25B-3S on 2026-10-09; Phase 25B-3R remains BLOCKED. Production readiness is not established.**
+**Status: INCONCLUSIVE for Phase 25B-3T on 2026-10-09; Phase 25B-3R remains BLOCKED. Production readiness is not established.**
+
+## Phase 25B-3T Metal command-buffer timing investigation
+
+**Final status: INCONCLUSIVE.** Direct timestamps rule out the
+ExpertAdvisor-owned combined affine command buffer as the dominant source of
+the slow Combined process. The slow process instead spent materially more time
+in the surrounding forward and backward recurrent stages. MetaNN command
+buffers remain intentionally uninstrumented because they are in shared MetaNN;
+therefore the exact CPU-versus-GPU cause of the shared runtime regime is not
+fully observable.
+
+### Timestamp API and validation
+
+The installed macOS 27 SDK (`MacOSX27.0.sdk`) exposes all four relevant
+`MTLCommandBuffer` properties: `GPUStartTime`, `GPUEndTime`,
+`kernelStartTime`, and `kernelEndTime`. An isolated Metal probe, run with GPU
+access, returned nonzero ordered values for an empty command buffer:
+
+| Field | Probe result |
+|---|---:|
+| GPU start → end | 208 ns |
+| Kernel start → end | 14.875 µs |
+| Timestamp validity | all nonzero; both intervals ordered |
+
+The probe established API availability and plausible values. CPU timestamps use
+`std::chrono::steady_clock`; Metal GPU timestamps use Metal's GPU clock. The
+diagnostic never subtracts those clocks or labels CPU wait as GPU execution.
+
+### Instrumentation and controlled run
+
+The isolated CADCHFRMP fixture used the Phase 25B-3S configuration and ran
+three fresh alternating pairs with 8 warmup and 64 measured updates. The
+opt-in instrumentation is disabled unless
+`EA_LSTM_COMMAND_BUFFER_TIMING` is set. It adds no command buffers and no
+additional waits. For the combined path it records CPU command-buffer creation,
+encoding, commit, and `waitUntilCompleted` intervals, plus GPU and kernel
+timestamp durations. MetaNN command-buffer internals are reported as
+unobservable; its existing wall-clock hotspot scopes remain available.
+
+| Pair | Order | MetaNN ms/update | Combined ms/update | Combined change |
+|---:|---|---:|---:|---:|
+| 1 | MetaNN → combined | 760.973 | 729.551 | +4.126% |
+| 2 | Combined → MetaNN | 759.978 | 710.768 | +6.475% |
+| 3 | MetaNN → combined | 775.064 | 986.502 | −27.280% |
+
+Pair 3 reproduced a slow Combined regime after the first 16-update block:
+block means were 746.7, 1094.7, 1139.9, and 964.8 ms/update. All six
+processes produced the same input and final-state hashes; Metal allocation and
+swap remained stable.
+
+### CPU/GPU timing breakdown
+
+The following values are per combined affine command buffer, averaged across
+18,432 buffers (72 updates including warmup). CPU and GPU durations are shown
+separately and are not subtracted across clock domains.
+
+| Combined process | CPU create | CPU encode | CPU commit | CPU wait | GPU execution | GPU kernel |
+|---|---:|---:|---:|---:|---:|---:|
+| Pair 1 fast | 0.397 µs | 17.182 µs | 1.925 µs | 159.137 µs | 31.086 µs | 22.062 µs |
+| Pair 2 fast | 0.391 µs | 17.069 µs | 1.891 µs | 157.801 µs | 30.014 µs | 22.081 µs |
+| Pair 3 slow | 0.388 µs | 17.089 µs | 2.011 µs | 155.817 µs | 31.889 µs | 18.653 µs |
+
+All 18,432 pair-3 command buffers had valid ordered GPU timestamps. CPU
+creation, encoding, commit, and wait timings did not increase in the slow
+process. GPU execution increased only about 6% while kernel duration decreased
+about 15%; neither explains the roughly 35% total-update slowdown.
+
+### Stage comparison and conclusion
+
+Existing hotspot totals for pair 3 versus the two fast Combined processes were:
+
+| Stage total per process | Fast Combined mean | Slow Combined pair 3 | Change |
+|---|---:|---:|---:|
+| Forward step | 21,808 ms | 28,700 ms | +31.6% |
+| Affine scope | 3,319 ms | 3,274 ms | −1.4% |
+| Backward step | 25,145 ms | 32,766 ms | +30.3% |
+| Backward GEMMs | 8,733 ms | 10,229 ms | +17.1% |
+| Gradient clipping | 2.254 ms | 2.183 ms | −3.2% |
+| Optimizer | 0.486 ms | 0.429 ms | −11.7% |
+
+**Measured:** the combined affine command buffer is not the dominant source of
+the slow Combined regime; CPU submission/encoding/wait timings are stable,
+GPU timestamps are valid, and the slow process spends extra wall time in
+forward and backward scopes. **Inferred:** the additional latency is in other
+recurrent command buffers or host/runtime scheduling around them. **Unknown:**
+whether that latency is GPU execution, CPU scheduling, queue scheduling, or a
+Metal synchronization effect, because MetaNN and the remaining recurrent
+operations were not given command-buffer timestamp probes. No thermal,
+Spotlight, or GPU scheduling attribution is made.
+
+Numerical equivalence remains bitwise exact, with matching diagnostic input and
+final-state hashes; checkpoint restoration remains passed. The next action is a
+focused probe of the recurrent gate-state and backward command buffers using
+ExpertAdvisor-owned timing hooks where possible, or an explicit Metal capture
+if shared MetaNN visibility is required. Keep MetaNN as the production default
+and do not begin Phase 25B-4.
 
 ## Phase 25B-3S Metal performance diagnostics
 
@@ -180,6 +276,7 @@ The qualification was completed after the first guarded attempt was stopped when
 | Item | Verified value |
 |---|---|
 | Development branch / Phase 25B-3S start | `dedicated-train-layout-rollover-squashed-v1` / `f39cda1f00c804596c1d23a85590b910dfca668d` |
+| Phase 25B-3T starting commit | `2f71b3519690491dd22879e2d4a9d756b710085e` |
 | Phase 25B-1 / 25B-2 | `091234b54fad122b377aec0044b7ab9dc19e6cb7` / `4493601b30fd70dd44d3a7567d6d53f8510e9baf` ancestors |
 | Production / shared MetaNN | `/Volumes/Developer SSD/ExpertAdvisor` and its `MetaNN/MetaNN`; clean before and after |
 | Production database | Explicit `BEGIN READ ONLY`, `default_transaction_read_only=on`; no writes |
@@ -253,17 +350,19 @@ Recommendation: keep the current default runtime selection unchanged. The combin
 
 ## Commands and files changed
 
-Successful checks included the stable Release and TRAIN builds, standalone fixture builds, the original five-pair timing, `--evidence`, `--sustained`, isolated checkpoint suite, the Phase 25B-3R sustained-pairs runner, the Phase 25B-3S three-pair diagnostic runner, `git diff --check`, shell syntax and Python AST checks. The first guarded attempt was stopped before producing a timing sample; it is not included in the results above. The Phase 25B-3R runner was not restarted after pair 6 stopped before measurement.
+Successful checks included the stable Release and TRAIN builds, standalone fixture builds, the original five-pair timing, `--evidence`, `--sustained`, isolated checkpoint suite, the Phase 25B-3R sustained-pairs runner, the Phase 25B-3S three-pair diagnostic runner, the Phase 25B-3T timestamp probe and three timestamp pairs, `git diff --check`, shell syntax and Python AST checks. The first guarded attempt was stopped before producing a timing sample; it is not included in the results above. The Phase 25B-3R runner was not restarted after pair 6 stopped before measurement.
 
 Changed files:
 
 - `Tests/LSTMProductionTrainingQualification.mm`
+- `Headers/MetalForwardAffine.hpp`
+- `LSTM/MetalForwardAffine.mm`
 - `Tests/LSTMProductionTrainingQualification.sh`
 - `Tests/LSTMProductionCheckpointQualification.mm`
 - `Tests/LSTMProductionTrainingEvidence.py`
 - `Tests/LSTMProductionTrainingQualification.py`
 - `docs/architecture/LSTMProductionTrainingQualification.md`
 
-No production or shared MetaNN file changed. No checkpoint format, training mathematics, semantic layout, default runtime selection, production database, worker registry, scheduler or canonical binary changed. The diagnostic timing is opt-in and disabled by default. The Phase 25B-3S fixture and report changes are committed locally; nothing was pushed, merged or deployed.
+No production or shared MetaNN file changed. No checkpoint format, training mathematics, semantic layout, default runtime selection, production database, worker registry, scheduler or canonical binary changed. The command-buffer timing is opt-in and disabled by default. The Phase 25B-3T instrumentation and report changes are committed locally; nothing was pushed, merged or deployed.
 
 Generated evidence remains under `DerivedData/ExpertAdvisor/Phase25B3`.

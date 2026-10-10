@@ -84,10 +84,12 @@ int main(int argc, char** argv) {
             const std::string prefix = argv[3];
             Require(measured > 0 && warmup + measured <= 1024, "invalid_update_count");
             const bool profileHotspots = std::getenv("EA_LSTM_PROFILE_HOTSPOTS") != nullptr;
+            const bool commandBufferTiming = std::getenv("EA_LSTM_COMMAND_BUFFER_TIMING") != nullptr;
             const std::string profilePath = prefix + ".hotspots.md";
             EA::LSTM::ConfigureHotspotProfiler(
                 profileHotspots,
                 profileHotspots ? std::optional<std::string>{profilePath} : std::nullopt);
+            EA::MetalForwardAffine::ResetCommandBufferTiming();
             // Explicit read-only sessions; connection strings contain no credentials.
             const std::string options = " options='-c default_transaction_read_only=on -c statement_timeout=120000' application_name=phase25b3_read_only";
             const std::string lstmConnection = "dbname=LSTM" + options;
@@ -184,6 +186,22 @@ int main(int argc, char** argv) {
             {
                 Require(EA::LSTM::WriteHotspotProfileReport(profilePath), "hotspot_report_write_failed");
                 std::cout << "LSTM_PROFILE_REPORT,path=" << profilePath << ",written=1\n";
+            }
+            if (commandBufferTiming)
+            {
+                const auto timing = EA::MetalForwardAffine::GetCommandBufferTiming();
+                std::cout << std::setprecision(15)
+                          << "COMMAND_BUFFER_TIMING,path=" << EA::MetalForwardAffine::SelectedPathName()
+                          << ",command_buffers=" << timing.commandBuffers
+                          << ",valid_gpu_timestamps=" << timing.validGpuTimestamps
+                          << ",invalid_gpu_timestamps=" << timing.invalidGpuTimestamps
+                          << ",cpu_create_us=" << timing.cpuCreateUs
+                          << ",cpu_encode_us=" << timing.cpuEncodeUs
+                          << ",cpu_commit_us=" << timing.cpuCommitUs
+                          << ",cpu_wait_us=" << timing.cpuWaitUs
+                          << ",cpu_submit_to_completion_us=" << timing.cpuSubmitToCompletionUs
+                          << ",gpu_execution_us=" << timing.gpuExecutionUs
+                          << ",gpu_kernel_us=" << timing.gpuKernelUs << '\n';
             }
             rusage usage{}; Require(getrusage(RUSAGE_SELF, &usage) == 0, "getrusage_failed");
             std::cout << std::setprecision(15);

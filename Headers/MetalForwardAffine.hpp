@@ -15,6 +15,26 @@ struct SynchronizationStats
     size_t successfulCompletions = 0;
 };
 
+// Process-level opt-in timing for the ExpertAdvisor-owned combined command
+// buffer. GPU timestamps use Metal's GPU clock and are never mixed with CPU
+// steady-clock values. Disabled unless EA_LSTM_COMMAND_BUFFER_TIMING is set.
+struct CommandBufferTimingTotals
+{
+    size_t commandBuffers = 0;
+    size_t validGpuTimestamps = 0;
+    size_t invalidGpuTimestamps = 0;
+    double cpuCreateUs = 0.0;
+    double cpuEncodeUs = 0.0;
+    double cpuCommitUs = 0.0;
+    double cpuWaitUs = 0.0;
+    double cpuSubmitToCompletionUs = 0.0;
+    double gpuExecutionUs = 0.0;
+    double gpuKernelUs = 0.0;
+};
+
+void ResetCommandBufferTiming();
+CommandBufferTimingTotals GetCommandBufferTiming();
+
 // Read once per process. Unset/"metann" uses the original implementation;
 // "combined" opts into the adapter. Invalid values fail before GPU submission.
 const char* SelectedPathName();

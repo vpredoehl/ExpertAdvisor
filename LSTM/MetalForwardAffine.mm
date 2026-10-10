@@ -9,6 +9,7 @@
 #include "MetalForwardAffine.hpp"
 #include <MetaNN/metal/metal_matmul.h>
 #include <cstdlib>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -23,6 +24,25 @@ namespace EA::MetalForwardAffine
 namespace
 {
 enum class Path { MetaNN, Combined };
+
+struct TimingState
+{
+    CommandBufferTimingTotals totals;
+};
+
+TimingState gTiming;
+
+bool CommandBufferTimingEnabled()
+{
+    static const bool enabled = std::getenv("EA_LSTM_COMMAND_BUFFER_TIMING") != nullptr;
+    return enabled;
+}
+
+double ElapsedUs(const std::chrono::steady_clock::time_point start,
+                 const std::chrono::steady_clock::time_point end)
+{
+    return std::chrono::duration<double, std::micro>(end - start).count();
+}
 
 Path SelectedPath()
 {
@@ -131,6 +151,16 @@ const char* SelectedPathName()
     return SelectedPath() == Path::Combined ? "combined" : "metann";
 }
 
+void ResetCommandBufferTiming()
+{
+    gTiming = {};
+}
+
+CommandBufferTimingTotals GetCommandBufferTiming()
+{
+    return gTiming.totals;
+}
+
 void ForwardMatMulBias(const Memory& a, const Memory& b, const Memory& bias,
                        Memory& c, size_t m, size_t k, size_t n, bool diagnosticLogging)
 {
@@ -171,8 +201,12 @@ void CombinedMatMulBias(const Memory& a, const Memory& b, const Memory& bias,
         MPSMatrix* matC = Matrix(rc, m, n);
         MPSMatrixMultiplication* kernel = Kernel(m, k, n);
         id<MTLComputePipelineState> pipeline = BiasPipeline();
+        const bool timing = CommandBufferTimingEnabled();
+        const auto createStart = std::chrono::steady_clock::now();
         id<MTLCommandBuffer> command = [Queue() commandBuffer];
+        const auto createEnd = std::chrono::steady_clock::now();
         if (!command) throw std::runtime_error("MetalForwardAffine: command buffer unavailable");
+        const auto encodeStart = createEnd;
         [kernel encodeToCommandBuffer:command leftMatrix:matA rightMatrix:matB resultMatrix:matC];
 
         // A separate serial encoder preserves GEMM-write -> bias-read/write
@@ -192,14 +226,44 @@ void CombinedMatMulBias(const Memory& a, const Memory& b, const Memory& bias,
             threadsPerThreadgroup:MTLSizeMake(tw, th, 1)];
         [encoder endEncoding];
 
+        const auto encodeEnd = std::chrono::steady_clock::now();
+        const auto commitStart = encodeEnd;
         [command commit];
+        const auto commitEnd = std::chrono::steady_clock::now();
         if (stats) ++stats->submissions;
+        const auto waitStart = commitEnd;
         [command waitUntilCompleted];
+        const auto waitEnd = std::chrono::steady_clock::now();
         if (stats) ++stats->blockingWaits;
         if (command.status != MTLCommandBufferStatusCompleted || command.error != nil)
             throw std::runtime_error(std::string("MetalForwardAffine: command failed: ") +
                 (command.error ? command.error.localizedDescription.UTF8String : "incomplete command buffer"));
         if (stats) ++stats->successfulCompletions;
+        if (timing)
+        {
+            auto& totals = gTiming.totals;
+            ++totals.commandBuffers;
+            totals.cpuCreateUs += ElapsedUs(createStart, createEnd);
+            totals.cpuEncodeUs += ElapsedUs(encodeStart, encodeEnd);
+            totals.cpuCommitUs += ElapsedUs(commitStart, commitEnd);
+            totals.cpuWaitUs += ElapsedUs(waitStart, waitEnd);
+            totals.cpuSubmitToCompletionUs += ElapsedUs(commitStart, waitEnd);
+            const double gpuStart = command.GPUStartTime;
+            const double gpuEnd = command.GPUEndTime;
+            const double kernelStart = command.kernelStartTime;
+            const double kernelEnd = command.kernelEndTime;
+            if (gpuStart > 0.0 && gpuEnd >= gpuStart &&
+                kernelStart > 0.0 && kernelEnd >= kernelStart)
+            {
+                ++totals.validGpuTimestamps;
+                totals.gpuExecutionUs += (gpuEnd - gpuStart) * 1.0e6;
+                totals.gpuKernelUs += (kernelEnd - kernelStart) * 1.0e6;
+            }
+            else
+            {
+                ++totals.invalidGpuTimestamps;
+            }
+        }
     }
 }
 }
