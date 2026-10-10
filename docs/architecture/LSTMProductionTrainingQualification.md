@@ -1,6 +1,93 @@
 # Phase 25B-3: production-representative Metal training qualification
 
-**Status: BLOCKED for Phase 25B-3U new measurements on 2026-10-09; historic root-cause analysis and Phase 25B-3T remain INCONCLUSIVE. Phase 25B-3R remains BLOCKED. Production readiness is not established.**
+**Status: BLOCKED for Phase 25B-3V final qualification on 2026-10-09 because competing file-provider work remains active. Phase 25B-3U and Phase 25B-3R remain BLOCKED; historic root-cause analysis and Phase 25B-3T remain INCONCLUSIVE. Production readiness is not established.**
+
+## Phase 25B-3V final bounded performance qualification
+
+**Final decision: BLOCKED.** The required idle environment was not available.
+No overhead trial or final performance process was launched. This is not a
+NOT QUALIFIED performance result and provides no basis to qualify Combined.
+The investigation stops at the requested preflight boundary; no new diagnostic
+phase, optimization, or extended benchmark follows.
+
+### Environment and safety
+
+The requested Rollover worktree started clean on
+`dedicated-train-layout-rollover-squashed-v1` at
+`9c64344a717fa456e939e5c93333741bfba0601a`. Production and shared MetaNN were
+clean at `b8cdfef03ccdb073caccbf93b0a4282070c0c4d3` and
+`a270e7a5dd239b524fd7d34ad3bb73b646dd7fd6` respectively, matching Phase U.
+
+Sandbox process inspection was denied. Normal-access escalation was used to
+run the existing read-only safety checker and a bounded five-second CPU sample.
+The census recorded fileproviderd at 99.2% CPU; the interval sample confirmed
+**100.0% CPU**, with its associated GDrive Provider at **12.5%**. WindowServer
+was 25.4% and Time Machine Settings 22.2%. The file-provider workload that blocked
+Phase U therefore remains substantial. Overall CPU idle percentage does not
+satisfy the explicit requirement that fileproviderd and its providers be idle.
+
+The scheduler had active count zero and no PID, with last exit 78 / spawn failed.
+The checker found no active LSTM training/inference/analysis or qualification
+worker and no loaded Ollama model. CoreSpotlight was 0% CPU in the census.
+Memory pressure was level 1. Swap used 12.12 MB, matching Phase U's completion;
+the five-second sample showed zero swap-in/out increments. GPU snapshot
+utilization was 7%, with desktop activity; no competing compute GPU process was
+identified. The CPU conflict alone is sufficient to invalidate the preflight.
+No unrelated process was terminated or modified.
+
+Evidence is retained in `DerivedData/ExpertAdvisor/Phase25B3/FinalV/`:
+`preflight-safety.json`, `preflight-cpu.txt`, and `qualification-status.json`.
+Prior S/T/U evidence remains untouched. These current observations do not
+attribute the historic slowdown to file-provider activity.
+
+### Overhead, paired results and statistics
+
+Profiling enabled/disabled overhead was **not measured**, because it would
+require training under the failed preflight. Existing optional instrumentation
+is retained unchanged. No final diagnostic setting was selected or exercised.
+
+| Pair | Required fresh-process order | MetaNN latency | Combined latency | Paired performance | Validity |
+|---:|---|---|---|---|---|
+| 1 | MetaNN → Combined | not measured | not measured | unavailable | not run |
+| 2 | Combined → MetaNN | not measured | not measured | unavailable | not run |
+| 3 | MetaNN → Combined | not measured | not measured | unavailable | not run |
+| 4 | Combined → MetaNN | not measured | not measured | unavailable | not run |
+
+There are **zero valid pairs and zero measured updates**. Aggregate mean/median
+throughput improvement, P90/P95 latency, paired wins, early/late behavior, and
+benchmark RSS/Metal allocation stability are unavailable. Missing measurements
+are not zero improvement and are not failures of mathematical equivalence.
+Older measurements are not substituted for the specified four-pair decision.
+
+### Workload, correctness and limitations
+
+The preserved fixture contract is CADCHFRMP, horizon 4, layout 13, width 171,
+sequence length 64, seed 1002, economic calendar snapshot 1, using the isolated
+historical-data qualification path. Phase U's existing input/state parity and
+numerical/checkpoint results remain passing evidence. Per the preflight stop,
+V did not run the fixture, reopen its production reference records, or verify
+new input/state output. The requested 8 + 128 trajectory has 136 updates and
+cannot use the prior 72-update state hash as its expected final-state hash.
+Fresh-process V input/state parity and memory stability therefore remain
+**unverified**, rather than being claimed from a different update population.
+No numerical or checkpoint suite was repeated.
+
+Only this report changed. Documentation/status validation checks the blocked
+decision, absence of trials, four required orders, and unavailable statistics;
+`git diff --check` passes. No build or GPU test was rerun for this documentation
+change. The starting commit's successful Release build and correctness suite
+are preserved under DiagnosticU. Production/shared MetaNN identity and clean
+Git status are checked again at completion. No production data, scheduler
+configuration, training behavior, defaults, or shared source changed.
+
+Recommendation: **retain MetaNN as the production default**. The final bounded
+performance qualification is BLOCKED, so Combined has neither demonstrated nor
+failed the requested reliable-advantage criteria in V. No further measurements
+are launched in this task. Any later authorized attempt must first satisfy the
+same idle-environment gate. Even a passing four-pair, 128-update comparison would
+only establish bounded short-duration performance; it would not prove sustained
+multi-hour training readiness or authorize production deployment. No Phase
+25B-4, deployment, push, merge, or publication is performed.
 
 ## Phase 25B-3U recurrent synchronization analysis
 
