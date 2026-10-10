@@ -20,10 +20,10 @@ products_dir="${LSTM_TEST_PRODUCTS_DIR:-${repo_root}/DerivedData/ExpertAdvisor/B
 for required in libMetaNN.a libMetalBuffer.a default.metallib MetaNN_metal.metallib; do
     test -f "${products_dir}/${required}"
 done
-include_flags=("-I${repo_root}/MetaNN/MetaNN")
+include_flags=("-I${repo_root}/MetaNN")
 while IFS= read -r include_dir; do
     include_flags+=("-I${include_dir}")
-done < <(find -L "${repo_root}/MetaNN/MetaNN/MetaNN" -type d -print)
+done < <(find -L "${repo_root}/MetaNN/MetaNN" -type d -print)
 read -r -a pqxx_compile_flags <<< "$(pkg-config --cflags libpqxx)"
 read -r -a pqxx_link_flags <<< "$(pkg-config --libs libpqxx)"
 

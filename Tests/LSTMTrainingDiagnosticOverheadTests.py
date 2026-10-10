@@ -37,8 +37,10 @@ with tempfile.TemporaryDirectory(prefix="ea_phase25a_cpu_") as directory:
     (test_dir / "WorkerDiagnosticBlock.inc").write_text(worker_block)
     (test_dir / "GradientSnapshotBlock.inc").write_text(snapshot_block)
     metann = (ROOT / "MetaNN/MetaNN").resolve()
-    includes = ["-I" + str(path) for path in [metann, *sorted({
-        path.parent for path in (metann / "MetaNN").rglob("*.h")})]]
+    include_dirs = [metann.parent, *sorted({
+        path.parent for path in metann.rglob("*.h")
+    })]
+    includes = ["-I" + str(path) for path in include_dirs]
     pqxx_flags = shlex.split(subprocess.check_output(
         ["pkg-config", "--cflags", "libpqxx"], text=True))
     pqxx_libraries = shlex.split(subprocess.check_output(
