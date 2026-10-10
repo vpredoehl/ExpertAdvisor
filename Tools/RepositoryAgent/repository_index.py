@@ -19,6 +19,7 @@ It keeps the index in memory by default.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from bisect import bisect_right
 from collections import defaultdict, deque
 import hashlib
 import json
@@ -368,6 +369,153 @@ class RepositoryIndex:
                         break
             spans.append((open_at, close_at))
         return spans
+
+    @staticmethod
+    def _mask_operation_source(text: str) -> str:
+        """Mask literals/comments only for implementation-call analysis.
+
+        Offsets and newlines are unchanged. An unsupported or unterminated
+        token masks the remaining input, so an affected callback cannot acquire
+        a manufactured closing brace. This is not a C++ preprocessor/parser.
+        """
+        masked = list(text)
+
+        def hide(start: int, end: int) -> None:
+            for offset in range(start, end):
+                if text[offset] != "\n":
+                    masked[offset] = " "
+
+        raw_open = re.compile(r'\b(?:u8|u|U|L)?R"')
+        offset, size = 0, len(text)
+        while offset < size:
+            start = offset
+            if text.startswith("//", offset):
+                end = text.find("\n", offset + 2)
+                # Translation-phase line splicing also extends // comments.
+                while end >= 0 and text[offset:end].rstrip("\r").endswith("\\"):
+                    offset = end + 1
+                    end = text.find("\n", offset)
+                offset = size if end < 0 else end
+            elif text.startswith("/*", offset):
+                end = text.find("*/", offset + 2)
+                offset = size if end < 0 else end + 2
+            elif (raw := raw_open.match(text, offset)) is not None:
+                delimiter_start = raw.end()
+                end = delimiter_start
+                while (end < size and end - delimiter_start <= 16
+                       and text[end] != "("):
+                    if not (33 <= ord(text[end]) <= 126) or text[end] in ")\\":
+                        break
+                    end += 1
+                if end >= size or text[end] != "(" or end - delimiter_start > 16:
+                    offset = size
+                else:
+                    closing = ")" + text[delimiter_start:end] + '"'
+                    close_at = text.find(closing, end + 1)
+                    offset = size if close_at < 0 else close_at + len(closing)
+                if offset < size and (text[offset].isalnum() or text[offset] == "_"):
+                    offset = size  # Unsupported user-defined literal suffix.
+            elif text[offset] in "\"'":
+                prefix_start = offset
+                while prefix_start > 0 and (text[prefix_start - 1].isalnum()
+                                             or text[prefix_start - 1] == "_"):
+                    prefix_start -= 1
+                if text[prefix_start:offset] not in ("", "u8", "u", "U", "L"):
+                    # Includes unsupported numeric digit separators: do not
+                    # reinterpret a later quote as their literal terminator.
+                    hide(start, size)
+                    break
+                quote = text[offset]
+                offset += 1
+                while offset < size:
+                    if text[offset] == quote:
+                        offset += 1
+                        break
+                    if text[offset] == "\n":
+                        offset = size
+                        break
+                    if text[offset] == "\\":
+                        offset += 2  # Includes escaped quotes and spliced lines.
+                    else:
+                        offset += 1
+                offset = min(offset, size)
+                if offset < size and (text[offset].isalnum() or text[offset] == "_"):
+                    offset = size
+            elif text.startswith("\\\n", offset) or text.startswith("\\\r\n", offset):
+                # Other spliced tokens could hide a comment/literal opener.
+                offset = size
+            else:
+                offset += 1
+                continue
+            hide(start, offset)
+        return "".join(masked)
+
+    @classmethod
+    def _operation_implementation_calls(cls, lines: list[str]) -> dict[int, tuple[str, str]]:
+        """Map visible calls to explicit operation lambdas, never aggregates.
+
+        Scan masked structure once rather than balancing each callback against
+        the rest of the file. Only a balanced, semicolon-terminated assignment
+        is admitted. The innermost supported lambda owns a call; unsupported
+        lambda-like capture syntax suppresses its enclosing callback instead
+        of attributing calls across an uncertain callback boundary.
+        """
+        text = cls._mask_operation_source("\n".join(lines))
+        closes: dict[int, int] = {}
+        brackets: dict[int, int] = {}
+        brace_stack: list[int] = []
+        bracket_stack: list[int] = []
+        for offset, char in enumerate(text):
+            if char == "{":
+                brace_stack.append(offset)
+            elif char == "}" and brace_stack:
+                closes[brace_stack.pop()] = offset
+            elif char == "[":
+                bracket_stack.append(offset)
+            elif char == "]" and bracket_stack:
+                brackets[bracket_stack.pop()] = offset
+
+        lambdas = {match.start(): match.end() - 1
+                   for match in _LAMBDA_OPEN_RE.finditer(text)}
+        operations: dict[int, str] = {}
+        assignment_end = re.compile(r"\s*;")
+        for match in _OPERATION_BINDING_RE.finditer(text):
+            open_at = match.end() - 1
+            close_at = closes.get(open_at)
+            if close_at is not None and assignment_end.match(text, close_at + 1):
+                operations[open_at] = re.sub(r"\s+", "", match.group("operation"))
+        if not operations:
+            return {}
+
+        # Generic lambdas, nested capture expressions, attributes, etc. are
+        # deliberately unsupported. Array expressions can conservatively
+        # suppress a callback here; they must never manufacture lambda calls.
+        lambda_tail = re.compile(r"\s*(?:[({<\[]|[A-Za-z_]|->)")
+        uncertain = {
+            start for start, end in brackets.items()
+            if start not in lambdas and lambda_tail.match(text, end + 1)
+        }
+        uncertain.update(bracket_stack)
+        apparent_calls = {match.start(): match.group(1)
+                          for match in _CALL_RE.finditer(text)
+                          if match.group(1).split("::")[-1] not in _CONTROL_WORDS}
+        active: list[int] = []
+        unsafe: set[int] = set()
+        candidates: dict[int, tuple[int, str]] = {}
+        for offset in range(len(text)):
+            while active and offset > closes.get(active[-1], len(text)):
+                active.pop()
+            if offset in lambdas:
+                active.append(lambdas[offset])
+            if offset in uncertain and active:
+                unsafe.add(active[-1])
+            if offset in apparent_calls and active:
+                open_at = active[-1]
+                if open_at in operations and open_at < offset < closes[open_at]:
+                    candidates[offset] = (open_at, apparent_calls[offset])
+        return {offset: (operations[open_at], callee)
+                for offset, (open_at, callee) in candidates.items()
+                if open_at not in unsafe}
 
     @staticmethod
     def _operation_binding_spans(lines: list[str]) -> list[tuple[int, int, str, int | None]]:
@@ -731,6 +879,11 @@ class RepositoryIndex:
                 offset += len(source_line) + 1
             callback_spans = self._callback_body_offsets(lines)
             operation_binding_spans = self._operation_binding_spans(lines)
+            implementation_calls = self._operation_implementation_calls(lines)
+            implementation_by_line: dict[int, dict[int, str]] = defaultdict(dict)
+            for absolute_offset, (_, callee) in implementation_calls.items():
+                line_index = bisect_right(line_offsets, absolute_offset) - 1
+                implementation_by_line[line_index + 1][absolute_offset - line_offsets[line_index]] = callee
             member_call_targets = self._member_call_targets(lines, funcs, line_offsets)
             member_call_offsets = {
                 match.start("method") for match in _MEMBER_CALL_RE.finditer("\n".join(lines))
@@ -748,8 +901,11 @@ class RepositoryIndex:
                         SymbolOccurrence(file, line_no, ident, "reference", owner_name)
                     )
 
-                for match in _CALL_RE.finditer(line):
-                    callee = match.group(1)
+                call_matches = {match.start(): match.group(1) for match in _CALL_RE.finditer(line)}
+                # Masking can expose a genuine call separated from '(' by a
+                # comment. Add it only when the new scoped analysis admits it.
+                call_matches.update(implementation_by_line.get(line_no, {}))
+                for relative_offset, callee in sorted(call_matches.items()):
                     short = callee.split("::")[-1]
                     if short in _CONTROL_WORDS:
                         continue
@@ -769,11 +925,12 @@ class RepositoryIndex:
                             continue
                         if "{" in line:
                             prefix = line.split("{", 1)[0]
-                            if match.start() < len(prefix):
+                            if relative_offset < len(prefix):
                                 continue
-                    absolute_offset = line_offsets[line_no - 1] + match.start()
+                    absolute_offset = line_offsets[line_no - 1] + relative_offset
                     binding = next((span for span in operation_binding_spans
                                     if span[0] <= absolute_offset < span[1] and span[3] == absolute_offset), None)
+                    implementation = implementation_calls.get(absolute_offset)
                     invocation = operation_invocations.get(absolute_offset)
                     member_target = member_call_targets.get(absolute_offset)
                     if binding is not None:
@@ -785,6 +942,11 @@ class RepositoryIndex:
                         relationship_kind, operation, callee = "operation_invocation", invocation, invocation
                     elif member_target is not None:
                         relationship_kind, operation, callee = "direct_invocation", None, member_target
+                    elif implementation is not None:
+                        relationship_kind, operation = (
+                            "operation_implementation_call",
+                            implementation[0],
+                        )
                     elif absolute_offset in member_call_offsets:
                         # A raw `foo.bar()` is not direct-call evidence unless
                         # a safe receiver-type form above resolved it.
@@ -854,6 +1016,10 @@ class RepositoryIndex:
             if depth >= max_depth:
                 continue
             for site in self.callees_of(caller):
+                # Implementation metadata cannot imply callback execution or
+                # expose the callee's downstream calls through this traversal.
+                if site.relationship_kind == "operation_implementation_call":
+                    continue
                 callee = site.callee
                 row = {
                     "depth": depth + 1,
