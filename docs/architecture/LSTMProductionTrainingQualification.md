@@ -1,6 +1,83 @@
 # Phase 25B-3: production-representative Metal training qualification
 
-**Status: qualification complete on 2026-10-09. Production default remains unchanged pending review of performance variability.**
+**Status: BLOCKED for Phase 25B-3R on 2026-10-09. Production readiness is not established.**
+
+## Phase 25B-3R sustained-performance requalification
+
+The six-pair sustained runner was allowed to continue without restarting or
+changing any trial. Five pairs completed 8 warmup plus 504 measured updates;
+pair 6 reached canonical dataset preparation for its combined process and then
+stopped before its first measured update. Its partial input and state files,
+log, and all five completed pair records are preserved under
+`DerivedData/ExpertAdvisor/Phase25B3/SustainedR`. Because the sixth pair has no
+timing sample, this is incomplete evidence and the final status is **BLOCKED**.
+
+The controlled preflight found no LSTM worker, scheduler worker, or Ollama
+model; production PostgreSQL remained read-only. CoreSpotlight was resident but
+near zero CPU, aggregate host samples were predominantly idle, memory pressure
+was level 1, and swap remained 12.12 MB without growth. No competing training or
+GPU workload was observed. This makes substantial background interference an
+unlikely explanation for the completed measurements, while not proving that
+driver, thermal, or Metal runtime state was identical between processes.
+
+### Completed sustained pairs
+
+Training time excludes canonical preparation. The order alternated as
+MetaNN → combined, then combined → MetaNN. “Combined change” is positive when
+combined is faster.
+
+| Pair | Order | MetaNN ms/update | Combined ms/update | Combined change | MetaNN early → late | Combined early → late |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | MetaNN → combined | 801.545 | 1363.075 | −70.056% | 781.624 → 821.467 | 1371.010 → 1355.140 |
+| 2 | Combined → MetaNN | 1207.819 | 1396.388 | −15.612% | 1406.116 → 1009.523 | 1395.387 → 1397.390 |
+| 3 | MetaNN → combined | 751.839 | 828.689 | −10.222% | 756.361 → 747.316 | 718.717 → 938.662 |
+| 4 | Combined → MetaNN | 786.179 | 733.598 | +6.688% | 782.697 → 789.660 | 724.034 → 743.163 |
+| 5 | MetaNN → combined | 787.728 | 765.675 | +2.799% | 796.270 → 779.186 | 785.661 → 745.689 |
+| 6 | Combined → MetaNN | — | — | — | not completed | not completed |
+
+Across the five completed pairs, MetaNN averaged **867.022 ms/update**
+(1.1534 updates/s) and combined averaged **1017.485 ms/update** (0.9828
+updates/s). Combined won 2/5 pairs. The mean of per-trial p90/p95/p99
+latencies was 935.0/950.1/995.3 ms for MetaNN and 1119.7/1132.7/1170.8 ms
+for combined. Early versus late means were 904.6 → 829.4 ms for MetaNN and
+999.0 → 1036.0 ms for combined. These aggregate values are descriptive only:
+the trial means have standard deviations of 191.4 ms and 332.7 ms, and the
+first two pairs were in a materially slower state than pairs 3–5 for both
+implementations.
+
+The order-balanced data therefore do not reproduce a stable combined-only
+regression. They also do not establish a sustained combined advantage. Pair 1
+and pair 2 show combined at 1.36–1.40 s/update; pair 3–5 show both paths near
+0.73–0.83 s/update, with MetaNN itself reaching 1.21 s/update in pair 2.
+The pattern is consistent with process-order and Metal runtime state (queue,
+command-buffer scheduling, driver/thermal state) dominating this workload.
+The timing fixture measures the complete update; source inspection localizes
+the implementation difference to the forward affine call, but this run does
+not separate GEMM execution from synchronization or command-buffer wait time.
+No optimization or diagnostic change was made, and no shared MetaNN source was
+modified.
+
+Every completed pair used the same input SHA-256
+`244b20028c2985d1edf7192918712a97afe348b1ec4ca7d3da69763d69e9e932` and final
+state SHA-256
+`ac8f8ab2bb5194dd18bca2c0424978a9ba7d8efa7d2678417a174acd7e0c5d67`.
+The existing Phase 25B-3 observer result remains bitwise exact:
+`numerical-equivalence.json` reports `bitwise_equal: true`, zero differences,
+and maximum absolute difference zero. The prior four checkpoint restoration
+cases also remain byte-for-byte equivalent. Metal allocation stayed at about
+3.344 GB in every completed process; measured RSS declined from about 4.436 GB
+to about 3.94 GB and showed no unbounded growth. These results do not indicate
+memory pressure or a leak.
+
+### Recommendation for Phase 25B-4
+
+Do not start Phase 25B-4 from this result and do not change the production
+default. A future qualification should first complete a fresh six-pair run in
+a controlled window, then add disabled-by-default lightweight stage timing to
+separate forward affine work from command-buffer synchronization. The next
+study should retain alternating order and record thermal/driver state where
+available. The present evidence supports neither PASS nor FAIL for sustained
+performance, so the required status is **BLOCKED**.
 
 The qualification was completed after the first guarded attempt was stopped when a production scheduler appeared during preparation. The resumed run completed five alternating real-data pairs, numerical observation, all four checkpoint restoration cases, and a 504-update sustained-memory run for each affine path. No production worker, scheduler, database row, checkpoint, registry, or shared MetaNN source was modified.
 
@@ -8,7 +85,7 @@ The qualification was completed after the first guarded attempt was stopped when
 
 | Item | Verified value |
 |---|---|
-| Development branch / HEAD | `dedicated-train-layout-rollover-squashed-v1` / `263e7f3c67a0e219e6b2542a311faedf9249e1a2` |
+| Development branch / HEAD | `dedicated-train-layout-rollover-squashed-v1` / `c5dbe1773b24b11aad710b44791d5fab53b83977` |
 | Phase 25B-1 / 25B-2 | `091234b54fad122b377aec0044b7ab9dc19e6cb7` / `4493601b30fd70dd44d3a7567d6d53f8510e9baf` ancestors |
 | Production / shared MetaNN | `/Volumes/Developer SSD/ExpertAdvisor` and its `MetaNN/MetaNN`; clean before and after |
 | Production database | Explicit `BEGIN READ ONLY`, `default_transaction_read_only=on`; no writes |
@@ -82,7 +159,7 @@ Recommendation: keep the current default runtime selection unchanged. The combin
 
 ## Commands and files changed
 
-Successful checks included the stable Release and TRAIN builds, standalone fixture builds, five-pair timing, `--evidence`, `--sustained`, isolated checkpoint suite, `git diff --check`, shell syntax and Python AST checks. The first guarded attempt was stopped before producing a timing sample; it is not included in the results above.
+Successful checks included the stable Release and TRAIN builds, standalone fixture builds, the original five-pair timing, `--evidence`, `--sustained`, isolated checkpoint suite, the Phase 25B-3R sustained-pairs runner, `git diff --check`, shell syntax and Python AST checks. The first guarded attempt was stopped before producing a timing sample; it is not included in the results above. The Phase 25B-3R runner was not restarted after pair 6 stopped before measurement.
 
 Changed files:
 
@@ -90,8 +167,9 @@ Changed files:
 - `Tests/LSTMProductionTrainingQualification.sh`
 - `Tests/LSTMProductionCheckpointQualification.mm`
 - `Tests/LSTMProductionTrainingEvidence.py`
+- `Tests/LSTMProductionTrainingQualification.py`
 - `docs/architecture/LSTMProductionTrainingQualification.md`
 
-No production or shared MetaNN file changed. No checkpoint format, training mathematics, semantic layout, default runtime selection, production database, worker registry, scheduler or canonical binary changed. Nothing was committed, pushed, merged or deployed.
+No production or shared MetaNN file changed. No checkpoint format, training mathematics, semantic layout, default runtime selection, production database, worker registry, scheduler or canonical binary changed. The validated Phase 25B-3R documentation and runner change are committed locally; nothing was pushed, merged or deployed.
 
 Generated evidence remains under `DerivedData/ExpertAdvisor/Phase25B3`.
