@@ -1,93 +1,253 @@
 # Phase 25B-3: production-representative Metal training qualification
 
-**Status: BLOCKED for Phase 25B-3V final qualification on 2026-10-09 because competing file-provider work remains active. Phase 25B-3U and Phase 25B-3R remain BLOCKED; historic root-cause analysis and Phase 25B-3T remain INCONCLUSIVE. Production readiness is not established.**
+**Status: BLOCKED for the final Phase 25B-3V resumption on 2026-10-09. All four overhead trials and pair 1 were preserved; the new pair-2 Combined run completed, but `duetexpertd` exceeded the training CPU gate during measured MetaNN training. The corrected phase-aware guard did not permit compromised evidence. Phase 25B-3U and Phase 25B-3R remain BLOCKED; historic root-cause analysis and Phase 25B-3T remain INCONCLUSIVE. Production readiness is not established.**
 
 ## Phase 25B-3V final bounded performance qualification
 
-**Final decision: BLOCKED.** The required idle environment was not available.
-No overhead trial or final performance process was launched. This is not a
-NOT QUALIFIED performance result and provides no basis to qualify Combined.
-The investigation stops at the requested preflight boundary; no new diagnostic
-phase, optimization, or extended benchmark follows.
+**Final decision: BLOCKED.** The four-pair population was not completed because
+background CPU contention returned during measured training. The completed first pair favored Combined,
+but it cannot establish the required three-of-four wins and at least 5%
+four-pair aggregate throughput improvement without severe regressions. This is
+an environmental stop, not a NOT QUALIFIED performance result.
 
 ### Environment and safety
 
-The requested Rollover worktree started clean on
-`dedicated-train-layout-rollover-squashed-v1` at
-`9c64344a717fa456e939e5c93333741bfba0601a`. Production and shared MetaNN were
+The resumed development worktree was clean at the required commit
+`95072ed3f6959547f54212813a63189637c072f5` on
+`dedicated-train-layout-rollover-squashed-v1`. Production and shared MetaNN were
 clean at `b8cdfef03ccdb073caccbf93b0a4282070c0c4d3` and
-`a270e7a5dd239b524fd7d34ad3bb73b646dd7fd6` respectively, matching Phase U.
+`a270e7a5dd239b524fd7d34ad3bb73b646dd7fd6`, respectively.
 
-Sandbox process inspection was denied. Normal-access escalation was used to
-run the existing read-only safety checker and a bounded five-second CPU sample.
-The census recorded fileproviderd at 99.2% CPU; the interval sample confirmed
-**100.0% CPU**, with its associated GDrive Provider at **12.5%**. WindowServer
-was 25.4% and Time Machine Settings 22.2%. The file-provider workload that blocked
-Phase U therefore remains substantial. Overall CPU idle percentage does not
-satisfy the explicit requirement that fileproviderd and its providers be idle.
+Fresh read-only process, scheduler, CPU, GPU, memory and thermal checks were
+performed with normal system access because sandbox process inspection was
+denied. The initial five-second CPU sample was 92.51% idle; no production
+worker, scheduler PID or loaded Ollama model was present. Memory pressure was
+level 1, host swap was 12.12 MB, and no thermal warning was recorded. GPU
+snapshot utilization was 10%, with no identified competing compute process.
 
-The scheduler had active count zero and no PID, with last exit 78 / spawn failed.
-The checker found no active LSTM training/inference/analysis or qualification
-worker and no loaded Ollama model. CoreSpotlight was 0% CPU in the census.
-Memory pressure was level 1. Swap used 12.12 MB, matching Phase U's completion;
-the five-second sample showed zero swap-in/out increments. GPU snapshot
-utilization was 7%, with desktop activity; no competing compute GPU process was
-identified. The CPU conflict alone is sufficient to invalidate the preflight.
-No unrelated process was terminated or modified.
+The first partial overhead process stopped on an overly strict zero-swap-in
+guard: 32 pages (512 KiB) returned from existing swap, without swap-out growth,
+swap-usage growth or abnormal pressure. That observation is insufficient to
+establish substantial memory contention. The guard was corrected before any
+accepted result; the incomplete process was preserved and excluded. A repeated
+preflight then found Time Machine `backupd` at 26.3% and 34.8% CPU in two
+five-second samples. The user stopped the backup, and a fresh preflight allowed
+measurements to resume. Three overhead processes completed before a partial
+Combined diagnostics-off process was stopped for ChatGPT Classic at 52.46%
+interval CPU. The user quit that application. Another fresh preflight confirmed
+its absence, 97.1% CPU idle, pressure level 1, swap 12.12 MB, GPU snapshot
+utilization 6%, and no thermal warning. Only the interrupted overhead process
+was replaced; completed evidence was retained.
 
-Evidence is retained in `DerivedData/ExpertAdvisor/Phase25B3/FinalV/`:
-`preflight-safety.json`, `preflight-cpu.txt`, and `qualification-status.json`.
-Prior S/T/U evidence remains untouched. These current observations do not
-attribute the historic slowdown to file-provider activity.
+The benchmark-local monitor is now implemented in
+`Tests/LSTMProductionTrainingQualificationGuard.py`; training/fixture code and
+the existing scheduler/worker safety checker are unchanged. The runner holds
+the existing benchmark lock. Every collected snapshot and its ALLOW, tolerated
+preparation spike, ABORT or INVALIDATE decision is appended to the artifact
+JSONL before any stop is raised. Checker failures are also recorded. No new
+policy was retroactively applied to pair 1 or any completed overhead trial.
 
-### Overhead, paired results and statistics
+| Gate | Deterministic threshold and decision |
+|---|---|
+| CPU threshold | Any other process at least 50% CPU, aggregate background CPU at least 200%, or a backup/file-provider/indexing service at least 10% |
+| Preparation / preflight CPU | One threshold-crossing interval is tolerated. Consecutive qualifying intervals accumulating at least 15 seconds abort; a clear qualifying interval resets the streak |
+| Training CPU | Any threshold-crossing qualifying interval invalidates the run immediately; warmup is included conservatively |
+| Interval validity | CPU intervals must be at least 4 seconds; shorter intervals check hard gates only. Any sampling gap above 15 seconds aborts or invalidates |
+| Thermal / pressure / workers | Non-normal NSProcessInfo thermal state, pressure other than level 1, competing LSTM/qualification workers, scheduler PID or loaded Ollama model block immediately |
+| Swap / idle GPU | Any new swap-outs, at least 16 MiB swap-in per interval, or idle GPU above 25% (or missing evidence) remain hard blockers |
 
-Profiling enabled/disabled overhead was **not measured**, because it would
-require training under the failed preflight. Existing optional instrumentation
-is retained unchanged. No final diagnostic setting was selected or exercised.
+Sampling occurs approximately every five seconds. Preparation ends when the
+fixture's existing flushed `DATASET` marker is observed; subsequent samples use
+training gates. A sample crossing that boundary uses the stricter training
+rule. No model instrumentation or synchronization was added. Small swap-ins
+below the unchanged significance gate are recorded; no memory validation was
+relaxed. Eight database/GPU-free guard regression tests cover the old triald
+61.62% preparation-spike case, the 15-second sustained boundary, immediate
+training invalidation, service/aggregate limits, hard blockers, phase detection
+and decision persistence.
 
-| Pair | Required fresh-process order | MetaNN latency | Combined latency | Paired performance | Validity |
-|---:|---|---|---|---|---|
-| 1 | MetaNN → Combined | not measured | not measured | unavailable | not run |
-| 2 | Combined → MetaNN | not measured | not measured | unavailable | not run |
-| 3 | MetaNN → Combined | not measured | not measured | unavailable | not run |
-| 4 | Combined → MetaNN | not measured | not measured | unavailable | not run |
+**Earlier excluded pair-2 attempt:** at `2026-10-10T04:07:00Z` (2026-10-09 local time), `triald`, PID
+1206, consumed **61.6208% CPU over 5.0957 seconds** while the fresh pair-2
+Combined process was preparing canonical data. This exceeded the predeclared
+50% gate. Pressure remained level 1, thermal state 0, and swap-in/out counters
+420/776, so memory or thermal contention is not claimed. The guard terminated
+only its own fixture. No unrelated application or system service was stopped
+by the agent. That incomplete attempt remains excluded.
 
-There are **zero valid pairs and zero measured updates**. Aggregate mean/median
-throughput improvement, P90/P95 latency, paired wins, early/late behavior, and
-benchmark RSS/Metal allocation stability are unavailable. Missing measurements
-are not zero improvement and are not failures of mathematical equivalence.
-Older measurements are not substituted for the specified four-pair decision.
+The latest resume began at the same development HEAD, with the previous report
+already modified and the new guard/test files added. A preservation manifest
+hashed all logs, JSON, inputs and states of the four overhead trials and pair 1
+before launch; all hashes matched again afterward. The fresh 15-second preflight
+passed: pressure level 1, thermal state 0, swap counters 456/776 and GPU snapshots
+0–7%, with no competing worker/scheduler/model. The existing compiled fixture
+was reused unchanged. No valid completed measurement was repeated.
 
-### Workload, correctness and limitations
+**Final stop:** at `2026-10-10T04:34:44Z`, `duetexpertd`, PID 942, consumed
+**59.9139% CPU over 5.1073 seconds** during pair-2 MetaNN measured training.
+The revised monitor recorded an INVALIDATE decision and terminated only its
+own fixture. The partial state file contained at least 28 complete update
+records, including at least 20 measured updates after eight warmup updates;
+this was not a preparation-only spike. Pressure remained level 1, thermal state
+0 and swap counters 456/776. No CPU preparation spikes were observed in this
+resume; tolerated-spike behavior is covered by the regression tests. Pair-2
+MetaNN is excluded, and pairs 3/4 were not launched. No further performance
+process was launched after this stop.
 
-The preserved fixture contract is CADCHFRMP, horizon 4, layout 13, width 171,
-sequence length 64, seed 1002, economic calendar snapshot 1, using the isolated
-historical-data qualification path. Phase U's existing input/state parity and
-numerical/checkpoint results remain passing evidence. Per the preflight stop,
-V did not run the fixture, reopen its production reference records, or verify
-new input/state output. The requested 8 + 128 trajectory has 136 updates and
-cannot use the prior 72-update state hash as its expected final-state hash.
-Fresh-process V input/state parity and memory stability therefore remain
-**unverified**, rather than being claimed from a different update population.
-No numerical or checkpoint suite was repeated.
+Evidence is outside Git under
+`DerivedData/ExpertAdvisor/Phase25B3/FinalV-resumed/`. Initial and repeated
+preflights, all partial logs and state files, build provenance, safety JSONL,
+completed per-update JSON, and failure snapshots remain intact. `attempt3/`
+contains the first three accepted overhead trials; `attempt4/` contains the
+replacement overhead trial, completed pair 1 and interrupted pair 2.
+The final resumption is isolated under `resume-final/`: `guard-policy.json`,
+`environment-decisions.jsonl`, `preserved-manifest.json`, per-process files,
+`qualification-status.json`, `final-status.json` and `validation.log` retain
+all decisions and evidence. The parent `final-status.json` and
+`final-analysis.log` describe the earlier stop and remain untouched.
+The earlier V file-provider stop remains archived in `FinalV/`; S/T/U/R evidence
+was not overwritten.
 
-Only this report changed. Documentation/status validation checks the blocked
-decision, absence of trials, four required orders, and unavailable statistics;
-`git diff --check` passes. No build or GPU test was rerun for this documentation
-change. The starting commit's successful Release build and correctness suite
-are preserved under DiagnosticU. Production/shared MetaNN identity and clean
-Git status are checked again at completion. No production data, scheduler
-configuration, training behavior, defaults, or shared source changed.
+### Diagnostic instrumentation overhead
 
-Recommendation: **retain MetaNN as the production default**. The final bounded
-performance qualification is BLOCKED, so Combined has neither demonstrated nor
-failed the requested reliable-advantage criteria in V. No further measurements
-are launched in this task. Any later authorized attempt must first satisfy the
-same idle-environment gate. Even a passing four-pair, 128-update comparison would
-only establish bounded short-duration performance; it would not prove sustained
-multi-hour training readiness or authorize production deployment. No Phase
-25B-4, deployment, push, merge, or publication is performed.
+Both optional hotspot profiling and command-buffer timing were enabled together
+for the on trials. Each accepted overhead process was fresh and used 8 warmup
+plus 128 measured updates. MetaNN ran off then on; Combined ran on then off,
+with the interrupted off attempt excluded and replaced after the fresh preflight.
+
+| Path | Diagnostics off ms/update | Diagnostics on ms/update | Observed on/off latency change | Input/state parity |
+|---|---:|---:|---:|---|
+| MetaNN | 783.651268 | 789.541575 | +0.751649% | bitwise exact |
+| Combined | 739.717848 | 733.742414 | -0.807799% | bitwise exact |
+
+The observed differences are small, but one fresh-process comparison per path
+cannot establish a precise causal overhead bound. The negative Combined value
+is observed variation, not evidence that instrumentation intrinsically speeds
+training. Both diagnostic switches were explicitly absent for every final
+qualification process; no timing correction was applied to qualification data.
+Existing instrumentation and production defaults remain unchanged.
+
+### Final paired results and statistics
+
+Every final process used 8 warmup plus 128 measured chronological updates, with
+fresh process isolation and canonical preparation excluded from training time.
+
+| Pair | Required fresh-process order | MetaNN ms/update | Combined ms/update | Combined throughput improvement | Validity |
+|---:|---|---:|---:|---:|---|
+| 1 | MetaNN → Combined | 781.118941 | 733.323510 | +6.517646% | completed, valid |
+| 2 | Combined → MetaNN | invalidated | 752.492268 | unavailable | Combined completed; MetaNN invalidated during measured training |
+| 3 | MetaNN → Combined | unavailable | unavailable | unavailable | not launched after safety stop |
+| 4 | Combined → MetaNN | unavailable | unavailable | unavailable | not launched after safety stop |
+
+There is **one completed pair**, containing **256 measured updates**, plus
+128 valid unpaired pair-2 Combined updates and 512 measured overhead updates.
+Pair-2 Combined's standalone throughput is 1.328917 updates/s; its completed
+result is retained for a future authorized resumption and is not repeated. Partial processes are excluded from all results.
+Combined won the only completed pair. Its throughput was **1.363655 updates/s**
+versus MetaNN's **1.280215 updates/s**; mean latency declined 6.118842%, which
+corresponds to the 6.517646% throughput increase above. The required four-pair
+aggregate and three-of-four reliability decision are **unavailable**. Missing
+pairs are neither zero improvement nor performance failures. Historical trials
+and overhead trials are not substituted for the requested population.
+
+| Completed pair-1 statistic | MetaNN | Combined |
+|---|---:|---:|
+| Median latency (ms) | 768.279937 | 725.755209 |
+| P90 latency (ms) | 826.902312 | 764.053021 |
+| P95 latency (ms) | 841.141731 | 775.374750 |
+| First 64 measured updates mean (ms) | 793.704974 | 741.941154 |
+| Last 64 measured updates mean (ms) | 768.532908 | 724.705866 |
+
+Median-based throughput improved 5.859376%; P95 latency declined 7.818775%.
+No severe mean/tail regression appears in this completed pair, but three
+missing pairs prevent a reliable regression assessment. These within-process
+statistics are descriptive; updates are not treated as independent trials.
+No four-pair confidence interval or sustained-readiness claim is made.
+
+### Workload, numerical validation, checkpoints and memory
+
+The unchanged real fixture read completed production experiment 746 / model
+2090 through explicit read-only PostgreSQL sessions and the established input
+preparation service. Training ran after those sessions closed, without database
+writes. Conditions remained CADCHFRMP, horizon 4, layout 13, width 171, H=64,
+sequence length 64, seed 1002, persisted feature mask/objective/SGD parameters,
+economic calendar snapshot 1 and 189 accepted windows per update. Preparation
+produced the established 369,905 canonical rows.
+
+**Fresh parity PASS:** all seven accepted processes (four overhead, two pair-1,
+and the new pair-2 Combined)
+produced literally identical input files and full 136-update state streams.
+Input SHA-256 is
+`244b20028c2985d1edf7192918712a97afe348b1ec4ca7d3da69763d69e9e932`.
+State SHA-256 is
+`e3b7cc110036036085a8cca8c4f3fa83d968db7a2cdfc96884f735fada87ca8d`.
+The stream includes initial state and every update's loss, accepted-window
+counts, parameter matrices, recurrent states, learning rate, normalization
+state and optimizer/epoch counters. Finite-value and update-count assertions
+passed. Literal comparison found zero state/loss numerical differences. This
+136-update hash is newly established; the historic 72-update hash was not used.
+The prior full forward-cache/preclip/postclip tensor observer result remains
+bitwise exact, with zero differences; that GPU observer suite was not rerun
+after the measured-training safety stop. Fresh gradient-level observation for 136 updates is not
+claimed. Training/test source is unchanged from the passing DiagnosticU suite.
+
+**Checkpoint integrity PASS for preserved evidence:** all four saved A–D
+restored-versus-uninterrupted trajectories were compared literally again and
+remain equal (6,084,621 bytes each; SHA-256
+`3e75d5478efabff65381efde957a086d25cfed2ec3f1c5141ec14d2499c26e30`).
+No checkpoint code or format changed. The private PostgreSQL restoration suite
+was not relaunched; this is verification of preserved independent workflow
+evidence, not a claim of new persistence/restoration experiments.
+
+**Bounded memory PASS for accepted runs:** Metal allocation was constant at
+3,343,761,408 bytes throughout measured updates in all seven completed processes.
+Pair-1 MetaNN RSS went from 4,433,002,496 to 3,957,915,648 bytes; Combined from
+4,434,493,440 to 3,944,677,376 bytes. Each completed process ended below its
+first measured RSS sample; no unbounded growth was observed. The new pair-2
+Combined RSS went from 4,434,739,200 to 3,945,054,208 bytes, with identical
+constant Metal allocation. Accepted safety
+samples retained pressure level 1, thermal state 0 and unchanged swap counters
+within each accepted window. Host swap usage stayed 12.12 MB. Partial runs and
+boundary sampling do not establish long-duration or transient-peak safety.
+
+### Validation, changes and recommendation
+
+The isolated O3 fixture was rebuilt successfully with the existing
+`-Wall -Wextra -Werror` policy and zero emitted warning bytes. Its SHA-256 is
+`eb139b20280b0e135b2e1c93fa37c59d345fb7c0d011b3797ec508b0aeca5326`.
+The latest resumption reused this unchanged binary; it did not rebuild C++ or
+run Xcode/ Clean. Validation commands for this resumption were:
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 Tests/LSTMProductionTrainingQualificationGuardTests.py` — all eight tests PASS.
+- `PYTHONDONTWRITEBYTECODE=1 python3 DerivedData/ExpertAdvisor/Phase25B3/FinalV-resumed/resume-final/preflight.py` — all preflight gates PASS.
+- `PYTHONDONTWRITEBYTECODE=1 python3 DerivedData/ExpertAdvisor/Phase25B3/FinalV-resumed/resume-final/run.py` — pair-2 Combined completed; MetaNN invalidated by the measured-training environmental gate; no later trial launched.
+- `PYTHONDONTWRITEBYTECODE=1 python3 DerivedData/ExpertAdvisor/Phase25B3/FinalV-resumed/resume-final/validate_blocked.py` — preserved-file hashes, literal input/state/checkpoint comparisons, finite losses, update counts, allocation/RSS boundaries and blocked-decision evidence PASS.
+- Final read-only scheduler/process and production/shared MetaNN identity checks, Python AST checks, report/status assertions and `git diff --check`.
+
+Files changed for the local commit:
+
+- `Tests/LSTMProductionTrainingQualificationGuard.py` — phase-aware benchmark-local policy and audit logging.
+- `Tests/LSTMProductionTrainingQualificationGuardTests.py` — concrete guard regressions.
+- `docs/architecture/LSTMProductionTrainingQualification.md` — evidence and final BLOCKED decision.
+
+No training implementation, numerical flags, production worktree, shared MetaNN,
+database row, scheduler configuration, default runtime, checkpoint format or
+production binary changed. Generated evidence remains ignored outside Git.
+Only the report, benchmark-local guard and its tests are committed, after all
+validation passes. Nothing was deployed, merged or pushed.
+
+Recommendation: **retain MetaNN as the production default**. Combined's only
+completed final pair shows a promising 6.52% throughput improvement with exact
+numerical parity and bounded memory, but Phase 25B-3V remains **BLOCKED** because
+the requested four-pair qualification could not finish in a controlled window.
+No Phase 25B-4 or further performance process is launched in this task.
+A future authorized resumption must retain the overhead trials, pair 1 and the
+completed pair-2 Combined process, replace only the invalid MetaNN run, and
+finish pairs 3/4 after a passing preflight. The four-pair aggregate improvement
+and three-of-four decision remain unavailable, not zero or failed. A passing
+four-pair comparison would establish bounded performance rather than multi-hour
+production readiness. The predeclared severe-regression cutoff for this resume
+was at least 20% higher Combined paired mean or P95 latency; it cannot be assessed
+across four pairs with the current missing evidence.
 
 ## Phase 25B-3U recurrent synchronization analysis
 
