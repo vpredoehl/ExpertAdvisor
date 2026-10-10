@@ -1,6 +1,100 @@
 # Phase 25B-3: production-representative Metal training qualification
 
-**Status: BLOCKED for Phase 25B-3R on 2026-10-09. Production readiness is not established.**
+**Status: INCONCLUSIVE for Phase 25B-3S on 2026-10-09; Phase 25B-3R remains BLOCKED. Production readiness is not established.**
+
+## Phase 25B-3S Metal performance diagnostics
+
+**Final status: INCONCLUSIVE.** The diagnostic run did not reproduce the
+combined slow regime within three short pairs, so it does not isolate a
+combined-specific bottleneck. It did reproduce a slow regime in the MetaNN
+path under the same workload, which is evidence that the regime is shared by
+the training process and Metal runtime rather than caused by the combined
+affine operation alone.
+
+### Evidence analysis before new runs
+
+The 504-update traces contain abrupt transitions. In sustained pair 3,
+combined moved from roughly 715–729 ms/update to roughly 1.0–1.15 s/update
+around update 256 and later returned to the fast range. In sustained pair 4,
+combined briefly reached about 990 ms/update around update 72 before returning
+to about 720–750 ms/update. Pair 2 MetaNN also transitioned from about
+1.4 s/update to about 0.76–0.78 s/update after update 320. These are step-like
+changes, not monotonic warmup or gradual memory growth. Metal allocation was
+constant at 3,343,761,408 bytes in the completed processes.
+
+Both implementations perform synchronous Metal work. The combined affine
+path encodes MPS GEMM and row-bias in one command buffer, commits it, and calls
+`waitUntilCompleted`. The MetaNN path performs its GEMM and bias stages through
+separate command buffers, each followed by `waitUntilCompleted`. The existing
+timing records did not contain command-buffer or GPU timestamps, so they could
+not previously separate GPU execution from host submission and waiting.
+
+### Diagnostic method
+
+The isolated read-only fixture used experiment 746’s CADCHFRMP data, horizon 4,
+layout 13, width 171, sequence length 64, seed 1002, and the same canonical
+input hash. Three fresh-process pairs ran 8 warmup and 64 measured updates in
+alternating order. An opt-in profiler enabled the existing `HotspotScope`
+timers; it added CPU elapsed-time counters only and no extra Metal waits. The
+default fixture and production runtime remain unchanged. Profiles include
+`forward_step_batch`, `matmul_bias_gate_preactivation`, `backward_step_batch`,
+`backward_gemms`, `gradient_clipping`, and `optimizer_update`. The profiler
+reports wall time, not GPU hardware timestamps.
+
+| Pair | Order | MetaNN ms/update | Combined ms/update | Combined change |
+|---:|---|---:|---:|---:|
+| 1 | MetaNN → combined | 771.334 | 729.576 | +5.407% |
+| 2 | Combined → MetaNN | 1061.574 | 744.568 | +29.863% |
+| 3 | MetaNN → combined | 767.204 | 698.039 | +9.016% |
+
+All six diagnostic processes used identical input and final-state hashes.
+Combined won all three short pairs. The slow regime appeared in pair 2
+MetaNN, with 16-update block means of 1183.1, 1190.7, 1091.3, and 781.3 ms;
+combined remained between 713 and 863 ms in that pair. No process showed swap
+growth or Metal allocation growth, and the safety snapshots remained clear of
+production workers and competing training processes.
+
+### Stage timing
+
+Hotspot totals below are per diagnostic process across 64 updates. “Forward
+rest” is `forward_step_batch` minus the affine scope. The totals overlap by
+design because nested scopes are reported separately; they are used to locate
+changes, not to sum to the fixture wall time.
+
+| Regime | Total update mean | Forward step | Affine scope | Forward rest | Backward step | Backward GEMMs | Clip | Optimizer |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| MetaNN fast (pairs 1,3) | 769.269 ms | 24,495.7 ms | 5,576.0 ms | 18,919.7 ms | 25,786.3 ms | 8,933.3 ms | 2.236 ms | 0.485 ms |
+| MetaNN slow (pair 2) | 1061.574 ms | 33,254.1 ms | 5,257.3 ms | 27,996.8 ms | 35,217.7 ms | 10,791.2 ms | 2.133 ms | 0.423 ms |
+| Combined (pairs 1–3) | 724.061 ms | 21,889.4 ms | 3,276.6 ms | 18,612.8 ms | 25,365.5 ms | 8,849.3 ms | 2.196 ms | 0.476 ms |
+
+The slow MetaNN process spent about 8.8 seconds more in forward-step scopes
+and 9.4 seconds more in backward-step scopes than fast MetaNN processes. Its
+affine scope was slightly faster, not slower. Clipping and optimizer scopes
+were negligible and unchanged. This excludes the affine call, clipping, and
+optimizer as the cause of the observed short-run slow regime. It supports a
+shared runtime-scheduling or host/GPU execution-state hypothesis affecting
+multiple recurrent stages, but the data do not distinguish CPU scheduling,
+Metal queue scheduling, GPU occupancy, or thermal behavior. No thermal or GPU
+hardware conclusion is inferred from wall time alone.
+
+No GPU start/end timestamps were exposed by the existing fixture profiler, so
+CPU submission/wait time and GPU execution time remain combined in each
+hotspot. Separating those components requires a follow-up Metal command-buffer
+timestamp probe that covers both paths without modifying shared MetaNN.
+
+### Correctness and next action
+
+Each diagnostic pair produced matching input and final-state SHA-256 values;
+the prior observer qualification remains bitwise exact with zero differences,
+and checkpoint restoration remains passed. The diagnostic run made no changes
+to training mathematics, tensor lifetimes, checkpoint behavior, production
+repositories, or the default runtime.
+
+The recommended next action is a narrowly scoped command-buffer timestamp
+study, first for one fast and one slow process when the slow regime is
+actually present. Keep the production default on MetaNN and do not begin
+Phase 25B-4. The current evidence is **INCONCLUSIVE**, not a basis for an
+optimization or a production runtime change.
 
 ## Phase 25B-3R sustained-performance requalification
 
@@ -85,7 +179,7 @@ The qualification was completed after the first guarded attempt was stopped when
 
 | Item | Verified value |
 |---|---|
-| Development branch / HEAD | `dedicated-train-layout-rollover-squashed-v1` / `c5dbe1773b24b11aad710b44791d5fab53b83977` |
+| Development branch / Phase 25B-3S start | `dedicated-train-layout-rollover-squashed-v1` / `f39cda1f00c804596c1d23a85590b910dfca668d` |
 | Phase 25B-1 / 25B-2 | `091234b54fad122b377aec0044b7ab9dc19e6cb7` / `4493601b30fd70dd44d3a7567d6d53f8510e9baf` ancestors |
 | Production / shared MetaNN | `/Volumes/Developer SSD/ExpertAdvisor` and its `MetaNN/MetaNN`; clean before and after |
 | Production database | Explicit `BEGIN READ ONLY`, `default_transaction_read_only=on`; no writes |
@@ -159,7 +253,7 @@ Recommendation: keep the current default runtime selection unchanged. The combin
 
 ## Commands and files changed
 
-Successful checks included the stable Release and TRAIN builds, standalone fixture builds, the original five-pair timing, `--evidence`, `--sustained`, isolated checkpoint suite, the Phase 25B-3R sustained-pairs runner, `git diff --check`, shell syntax and Python AST checks. The first guarded attempt was stopped before producing a timing sample; it is not included in the results above. The Phase 25B-3R runner was not restarted after pair 6 stopped before measurement.
+Successful checks included the stable Release and TRAIN builds, standalone fixture builds, the original five-pair timing, `--evidence`, `--sustained`, isolated checkpoint suite, the Phase 25B-3R sustained-pairs runner, the Phase 25B-3S three-pair diagnostic runner, `git diff --check`, shell syntax and Python AST checks. The first guarded attempt was stopped before producing a timing sample; it is not included in the results above. The Phase 25B-3R runner was not restarted after pair 6 stopped before measurement.
 
 Changed files:
 
@@ -170,6 +264,6 @@ Changed files:
 - `Tests/LSTMProductionTrainingQualification.py`
 - `docs/architecture/LSTMProductionTrainingQualification.md`
 
-No production or shared MetaNN file changed. No checkpoint format, training mathematics, semantic layout, default runtime selection, production database, worker registry, scheduler or canonical binary changed. The validated Phase 25B-3R documentation and runner change are committed locally; nothing was pushed, merged or deployed.
+No production or shared MetaNN file changed. No checkpoint format, training mathematics, semantic layout, default runtime selection, production database, worker registry, scheduler or canonical binary changed. The diagnostic timing is opt-in and disabled by default. The Phase 25B-3S fixture and report changes are committed locally; nothing was pushed, merged or deployed.
 
 Generated evidence remains under `DerivedData/ExpertAdvisor/Phase25B3`.

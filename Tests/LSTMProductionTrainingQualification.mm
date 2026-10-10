@@ -9,6 +9,7 @@
 #include "LSTMNumericalEvidence.hpp"
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -82,6 +83,11 @@ int main(int argc, char** argv) {
             const size_t warmup = std::stoul(argv[1]), measured = std::stoul(argv[2]);
             const std::string prefix = argv[3];
             Require(measured > 0 && warmup + measured <= 1024, "invalid_update_count");
+            const bool profileHotspots = std::getenv("EA_LSTM_PROFILE_HOTSPOTS") != nullptr;
+            const std::string profilePath = prefix + ".hotspots.md";
+            EA::LSTM::ConfigureHotspotProfiler(
+                profileHotspots,
+                profileHotspots ? std::optional<std::string>{profilePath} : std::nullopt);
             // Explicit read-only sessions; connection strings contain no credentials.
             const std::string options = " options='-c default_transaction_read_only=on -c statement_timeout=120000' application_name=phase25b3_read_only";
             const std::string lstmConnection = "dbname=LSTM" + options;
@@ -174,6 +180,11 @@ int main(int argc, char** argv) {
                 allocatedAfter = device.currentAllocatedSize;
             }
             observed = nullptr;
+            if (profileHotspots)
+            {
+                Require(EA::LSTM::WriteHotspotProfileReport(profilePath), "hotspot_report_write_failed");
+                std::cout << "LSTM_PROFILE_REPORT,path=" << profilePath << ",written=1\n";
+            }
             rusage usage{}; Require(getrusage(RUSAGE_SELF, &usage) == 0, "getrusage_failed");
             std::cout << std::setprecision(15);
             for (size_t i = 0; i < latency.size(); ++i)

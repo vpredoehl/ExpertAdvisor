@@ -45,14 +45,17 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def run_one(variant, path, warmup, measured, name, output_directory=DIRECTORY):
+def run_one(variant, path, warmup, measured, name, output_directory=DIRECTORY, diagnostics=False):
     output_directory.mkdir(parents=True, exist_ok=True)
     prefix = output_directory / name
     snapshots = [safety()]
     started = time.monotonic()
     with prefix.with_suffix(".log").open("w") as log:
+        environment = {**os.environ, "EA_LSTM_FORWARD_AFFINE": path}
+        if diagnostics:
+            environment["EA_LSTM_PROFILE_HOTSPOTS"] = "1"
         process = subprocess.Popen([str(DIRECTORY / variant), str(warmup), str(measured), str(prefix)],
-            cwd=DIRECTORY, env={**os.environ, "EA_LSTM_FORWARD_AFFINE": path}, stdout=log, stderr=subprocess.STDOUT)
+            cwd=DIRECTORY, env=environment, stdout=log, stderr=subprocess.STDOUT)
         try:
             while True:
                 try:
@@ -107,6 +110,46 @@ def run_one(variant, path, warmup, measured, name, output_directory=DIRECTORY):
     prefix.with_suffix(".json").write_text(json.dumps(records, indent=2))
     print(json.dumps({key: records[key] for key in ("name", "mean_ms", "updates_per_second", "cpu_percent", "state_sha256", "input_sha256", "process_wall_seconds")}), flush=True)
     return records
+
+
+def diagnostic_pairs():
+    output_directory = DIRECTORY / "DiagnosticS"
+    pairs = []
+    for pair in range(1, 4):
+        order = ("metann", "combined") if pair % 2 else ("combined", "metann")
+        result = {"pair": pair, "order": order}
+        for path in order:
+            result[path] = run_one("timing", path, 8, 64,
+                                   f"pair{pair}_{path}", output_directory, diagnostics=True)
+        assert result["metann"]["input_sha256"] == result["combined"]["input_sha256"], "input parity failed"
+        assert result["metann"]["state_sha256"] == result["combined"]["state_sha256"], "state parity failed"
+        pairs.append(result)
+        (output_directory / "pairs.json").write_text(json.dumps(pairs, indent=2))
+    summary = {}
+    for path in ("metann", "combined"):
+        trials = [pair[path] for pair in pairs]
+        values = [trial["mean_ms"] for trial in trials]
+        summary[path] = {
+            "mean_ms": statistics.mean(values),
+            "trial_mean_sd_ms": statistics.stdev(values),
+            "median_ms": statistics.median(trial["median_ms"] for trial in trials),
+            "p90_ms": statistics.mean(trial["p90_ms"] for trial in trials),
+            "p95_ms": statistics.mean(trial["p95_ms"] for trial in trials),
+            "p99_ms": statistics.mean(trial["p99_ms"] for trial in trials),
+            "early_mean_ms": statistics.mean(trial["early_mean_ms"] for trial in trials),
+            "late_mean_ms": statistics.mean(trial["late_mean_ms"] for trial in trials),
+            "updates_per_second": 1000 / statistics.mean(values),
+            "cpu_percent": statistics.mean(trial["cpu_percent"] for trial in trials),
+            "metal_first_bytes": statistics.mean(trial["metal_first_bytes"] for trial in trials),
+            "metal_last_bytes": statistics.mean(trial["metal_last_bytes"] for trial in trials),
+        }
+    summary.update(
+        combined_wins=sum(pair["combined"]["mean_ms"] < pair["metann"]["mean_ms"] for pair in pairs),
+        input_bitwise_equal=True,
+        loss_and_state_bitwise_equal=True,
+    )
+    (output_directory / "summary.json").write_text(json.dumps(summary, indent=2))
+    print(json.dumps(summary, indent=2), flush=True)
 
 
 def benchmark():
@@ -189,6 +232,7 @@ if __name__ == "__main__":
     parser.add_argument("--evidence", action="store_true")
     parser.add_argument("--sustained", action="store_true")
     parser.add_argument("--sustained-pairs", action="store_true")
+    parser.add_argument("--diagnostic-pairs", action="store_true")
     args = parser.parse_args()
     with (ROOT / "DerivedData/ExpertAdvisor/Phase25B2/runner.lock").open("a") as shared_lock:
         fcntl.flock(shared_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -201,4 +245,6 @@ if __name__ == "__main__":
                 run_one("timing", path, 8, 504, f"sustained_{path}")
         elif args.sustained_pairs:
             sustained_pairs()
+        elif args.diagnostic_pairs:
+            diagnostic_pairs()
         else: benchmark()
