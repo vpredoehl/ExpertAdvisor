@@ -57,7 +57,7 @@ def main():
         "max_hops":{"type":"integer","minimum":1,"maximum":4},
     }
     operation_paths=next(x for x in TOOLS if x["name"]=="discover_operation_relationship_paths")
-    assert operation_paths["inputSchema"]["properties"]["relationship_kind"]["enum"] == ["operation_binding", "operation_invocation"]
+    assert operation_paths["inputSchema"]["properties"]["relationship_kind"]["enum"] == ["operation_binding", "operation_invocation", "operation_implementation_call"]
     single=next(x for x in TOOLS if x["name"]=="verify_source_claim")
     assert "excerpt" not in single["inputSchema"]["properties"]
     bundle=next(x for x in TOOLS if x["name"]=="verify_source_bundle_claim")
@@ -78,7 +78,7 @@ def main():
     assert set(relationship_schema["required"]) == {"topic_id","topic","claim","caller","callee"}
     assert set(relationship_schema["properties"]) == {"topic_id","topic","claim","caller","callee"}
     operation_relationship=next(x for x in TOOLS if x["name"]=="investigate_operation_relationship_claim")
-    assert operation_relationship["inputSchema"]["properties"]["relationship_kind"]["enum"] == ["operation_binding", "operation_invocation"]
+    assert operation_relationship["inputSchema"]["properties"]["relationship_kind"]["enum"] == ["operation_binding", "operation_invocation", "operation_implementation_call"]
     chain=next(x for x in TOOLS if x["name"]=="investigate_relationship_chain_claim")
     chain_schema=chain["inputSchema"]
     assert chain_schema["additionalProperties"] is False

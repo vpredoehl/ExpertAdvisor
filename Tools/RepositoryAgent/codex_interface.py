@@ -787,19 +787,17 @@ class CodexRepositoryInterface:
         }
 
     def _discover_operation_relationship_paths(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Discover only one explicit operation relationship category.
-
-        This does not alter the direct-call graph: operation binding is a
-        source-visible assignment of a one-call lambda, never an invocation.
-        Operation invocations use callable-field identities rather than guessed
-        function targets and therefore are not path-traversable.
-        """
-        self._require_exact_fields(request, {"op", "scope", "from", "to", "max_hops", "relationship_kind"})
+        """Discover typed operations without altering the direct-call graph."""
+        self._require_exact_fields(request, {"op", "scope", "from", "to", "max_hops", "relationship_kind", "operation", "binding_owner"})
         kind = self._required_string(request, "relationship_kind")
+        if kind == "operation_implementation_call" or "binding_owner" in request:
+            return self._discover_operation_implementation_path(request)
+        if "operation" in request:
+            raise ValueError("operation requires implementation discovery or a binding_owner")
         if kind == "operation_invocation":
             return self._discover_operation_invocation(request)
         if kind != "operation_binding":
-            raise ValueError("relationship_kind must be operation_binding or operation_invocation for operation relationship path discovery")
+            raise ValueError("unsupported operation relationship_kind")
         # The direct routine owns all endpoint uniqueness, scope, cap, and
         # materialization rules; this endpoint only changes the admitted kind.
         return self._discover_relationship_paths(
@@ -807,6 +805,111 @@ class CodexRepositoryInterface:
             mode="bounded_operation_relationship_path_discovery",
             allow_kind_field=True,
         )
+
+    def _operation_function(self, requested: str, scoped_files: set[str]) -> str:
+        boundaries = list(self._idx().functions)
+        matches = [fn for fn in boundaries if fn.name == requested]
+        if not matches and "::" not in requested:
+            matches = [fn for fn in boundaries if fn.name.split("::")[-1] == requested]
+        if len(matches) != 1:
+            raise ValueError("operation endpoint must identify exactly one function")
+        if matches[0].file not in scoped_files:
+            raise ValueError("operation endpoint is outside resolved scope")
+        return matches[0].name
+
+    def _operation_sites(self, caller: str, scoped_files: set[str]) -> tuple[list[Any], int]:
+        sites = self._idx().callees_of(caller)
+        if not isinstance(sites, list):
+            raise ValueError("repository relationship metadata is malformed")
+        if len(sites) > MAX_RELATIONSHIP_PATH_EXAMINED_EDGES:
+            raise ValueError("relationship path examined-edge cap exceeded")
+        return ([site for site in sites if getattr(site, "caller", None) == caller
+                 and getattr(site, "file", None) in scoped_files], len(sites))
+
+    def _discover_operation_implementation_path(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Select one implementation, optionally through a compatible field invocation.
+
+        The callback owner is explicit, never inferred from a matching field
+        name. Static slot compatibility does not prove runtime object wiring.
+        This three-edge contextual path never enters direct-call traversal.
+        """
+        kind = self._required_string(request, "relationship_kind")
+        bridge = kind == "operation_invocation" and "binding_owner" in request
+        if kind != "operation_implementation_call" and not bridge:
+            raise ValueError("binding_owner requires operation_invocation")
+        if not bridge and "binding_owner" in request:
+            raise ValueError("binding_owner requires operation_invocation")
+        operation = self._required_string(request, "operation")
+        max_hops = self._relationship_path_max_hops(request.get("max_hops"))
+        scope, files = self._resolve_discovery_scope(self._discovery_scope(request.get("scope")))
+        scoped_files = set(files)
+        caller = self._operation_function(self._required_string(request, "from"), scoped_files)
+        target = self._operation_function(self._required_string(request, "to"), scoped_files)
+        owner = self._operation_function(self._required_string(request, "binding_owner"), scoped_files) if bridge else caller
+        sites, examined = self._operation_sites(owner, scoped_files)
+        matches = []
+        for site in sites:
+            if getattr(site, "relationship_kind", None) != "operation_implementation_call" or getattr(site, "operation", None) != operation:
+                continue
+            try:
+                canonical = self._operation_function(site.callee, scoped_files)
+            except ValueError:
+                continue
+            if canonical == target:
+                proof = self._idx().operation_implementation_proof(owner, site.callee, operation)
+                if proof is not None:
+                    matches.append(site)
+        paths, relationships = [], []
+        if matches and not bridge:
+            if caller == target:
+                raise ValueError("operation path endpoints must be distinct")
+            paths = [[owner, target]]
+            relationships = [{"caller": owner, "callee": target,
+                              "relationship_kind": "operation_implementation_call", "operation": operation}]
+        elif matches and bridge:
+            invocations, count = self._operation_sites(caller, scoped_files)
+            if examined + count > MAX_RELATIONSHIP_PATH_EXAMINED_EDGES:
+                raise ValueError("relationship path examined-edge cap exceeded")
+            slot = self._idx().operation_slot(owner, operation)
+            fields = set()
+            if slot is not None and set(slot["files"]) <= scoped_files:
+                for site in invocations:
+                    if getattr(site, "relationship_kind", None) != "operation_invocation" or site.callee != site.operation:
+                        continue
+                    invoked_slot = self._idx().operation_slot(caller, site.operation)
+                    if invoked_slot is not None and set(invoked_slot["files"]) <= scoped_files and invoked_slot["identity"] == slot["identity"]:
+                        fields.add(site.operation)
+            if len(fields) > 1:
+                raise ValueError("operation invocation receiver is ambiguous")
+            if fields and max_hops >= 3:
+                field = next(iter(fields))
+                assignment = owner + "::" + operation
+                paths = [[caller, field, assignment, target]]
+                relationships = [
+                    {"caller": caller, "callee": field, "relationship_kind": "operation_invocation"},
+                    {"caller": owner, "callee": assignment, "relationship_kind": "operation_binding", "operation": operation},
+                    {"caller": assignment, "callee": target, "relationship_kind": "operation_implementation_call", "operation": operation},
+                ]
+        investigation_targets = []
+        if paths:
+            if bridge:
+                investigation_targets.append({"caller": caller, "callee": paths[0][1],
+                                              "relationship_kind": "operation_invocation"})
+            investigation_targets.append({"caller": owner, "callee": target, "operation": operation,
+                                          "relationship_kind": "operation_implementation_call"})
+        return {
+            "schema_version": 1, "mode": "bounded_operation_relationship_path_discovery",
+            "evidentiary_status": "non_evidentiary",
+            "required_follow_up": "Use investigation_targets with investigate_operation_relationship_claim to verify the invocation and complete callback assignment/call; static slot compatibility does not establish runtime callback wiring or unconditional execution.",
+            "resolved_scope": scope, "from": caller, "to": target, "max_hops": max_hops,
+            "operation": operation, "binding_owner": owner,
+            "paths": paths, "path_count": len(paths), "relationships": relationships,
+            "investigation_targets": investigation_targets,
+            "caps": {"max_hops": MAX_RELATIONSHIP_PATH_HOPS,
+                     "visited_nodes": MAX_RELATIONSHIP_PATH_VISITED_NODES,
+                     "examined_edges": MAX_RELATIONSHIP_PATH_EXAMINED_EDGES,
+                     "returned_paths": MAX_RELATIONSHIP_PATH_RESULTS},
+        }
 
     def _discover_operation_invocation(self, request: dict[str, Any]) -> dict[str, Any]:
         """Discover one field invocation without treating the field as a function.
@@ -1396,11 +1499,15 @@ class CodexRepositoryInterface:
         }
 
     def _investigate_operation_relationship_claim(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Verify one operation binding or invocation from server-selected ranges."""
+        """Verify one typed operation relationship from server-selected ranges."""
         self._require_exact_fields(
-            request, {"op", "topic_id", "topic", "claim", "caller", "callee", "relationship_kind"}
+            request, {"op", "topic_id", "topic", "claim", "caller", "callee", "relationship_kind", "operation"}
         )
         kind = self._required_string(request, "relationship_kind")
+        if kind == "operation_implementation_call":
+            return self._investigate_operation_implementation_claim(request)
+        if "operation" in request:
+            raise ValueError("operation selector requires operation_implementation_call")
         if kind not in {"operation_binding", "operation_invocation"}:
             raise ValueError("relationship_kind must be operation_binding or operation_invocation")
         topic_id = self._required_string(request, "topic_id")
@@ -1449,6 +1556,61 @@ class CodexRepositoryInterface:
             verification_request["ranges"] = ranges
             verification = self._investigate_source_bundle_claim(verification_request)
         return {"selection_manifest": selection_manifest, "verification": verification, "answer": verification["answer"]}
+
+    def _investigate_operation_implementation_claim(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Verify one callback field/target without the owner's symbol-wide cap."""
+        topic_id = self._required_string(request, "topic_id")
+        topic = self._required_string(request, "topic")
+        claim = self._required_string(request, "claim")
+        caller = self._required_string(request, "caller")
+        callee = self._required_string(request, "callee")
+        operation = self._required_string(request, "operation")
+        proof = self._idx().operation_implementation_proof(caller, callee, operation)
+        identity = {"caller": caller, "callee": callee, "operation": operation,
+                    "relationship_kind": "operation_implementation_call"}
+        selection = {"schema_version": 1, "mode": "operation_implementation_range_selection",
+                     **identity, "selected_ranges": [], "route": "not_run",
+                     "selection_status": "callback_assignment_unavailable"}
+        if proof is None:
+            return self._relationship_selection_not_run(selection)
+        if proof["end"] - proof["start"] + 1 > 500:
+            selection["selection_status"] = "callback_range_limit_exceeded"
+            return self._relationship_selection_not_run(selection)
+        spec = {key: proof[key] for key in ("file", "start", "end")}
+        selection.update({"selected_ranges": [spec], "route": "single_range", "selection_status": "selected"})
+        item = self._claim_item(spec)
+        if self._proof_source_hash(item["excerpt"]) != proof["selection_source_sha256"]:
+            selection["selection_status"] = "callback_source_changed"
+            result = self._relationship_selection_not_run(selection)
+            result["verification"]["repository_read_count"] = 1
+            return result
+        # The semantic request also serves as the existing claim-ledger key.
+        # Field/kind/owner/target and original claim cannot alias another slot
+        # or a generic/direct-call decision over the same exact source range.
+        semantic_request = (
+            "Verify this explicitly assigned callback implementation relationship: "
+            + json.dumps(identity, sort_keys=True) + ". It is conditional on callback invocation; "
+            "do not promote it to an unconditional direct call by its lexical owner. "
+            "Verify the assignment and represented call using only the supplied exact source. "
+            "Proposed claim: " + claim
+        )
+        ledger = self._claim_ledger()
+        verdict = ledger.lookup(topic_id, semantic_request, item["file"], item["start"], item["end"], item["excerpt"])
+        if verdict is None:
+            verdict = self._validate_verdict(self._claim_verifier().verify_claim(topic, semantic_request, item))
+            ledger.record_decision(topic_id, semantic_request, item["file"], item["start"], item["end"], item["excerpt"], verdict)
+        hit = verdict.get("ledger_hit") is True
+        manifest = {"schema_version": 1, "mode": "operation_implementation_claim",
+                    "topic_id": topic_id, "topic": topic, "claim": claim,
+                    "relationship": identity, "semantic_request": semantic_request,
+                    "evidence": {**spec, "source_sha256": source_hash(item["excerpt"])},
+                    "verification": {"supports": verdict.get("supports") is True,
+                                     "ledger_hit": hit, "model_turns": int(verdict.get("model_turns", 0))},
+                    "metrics": {"requested_range_count": 1, "effective_range_count": 1,
+                                "repository_read_count": 1, "unrelated_topic_count": 0,
+                                "model_turn_count": int(verdict.get("model_turns", 0)), "ledger_hit": hit}}
+        verification = {"manifest": manifest, "verdict": verdict, "answer": self._render_claim_answer(verdict)}
+        return {"selection_manifest": selection, "verification": verification, "answer": verification["answer"]}
 
     def _required_relationship_chain_path(self, request: dict[str, Any]) -> list[str]:
         """Validate an explicit acyclic chain; this operation never discovers one."""

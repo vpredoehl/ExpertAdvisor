@@ -248,14 +248,15 @@ TOOLS = [
     },
     {
         "name": "investigate_operation_relationship_claim",
-        "description": "Select and verify one server-indexed scheduler operation binding or operation invocation. An operation binding is never reported as a direct call, and an invocation identifies the operation field rather than guessing its bound target.",
+        "description": "Select and verify one indexed operation binding, field invocation, or operation_implementation_call. Implementation claims require an exact operation selector and reread the complete assigned callback, independently of the owner's symbol-wide relationship count. No callback relationship is an unconditional direct call.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "topic_id": {"type": "string"}, "topic": {"type": "string"},
                 "claim": {"type": "string"}, "caller": {"type": "string"},
                 "callee": {"type": "string"},
-                "relationship_kind": {"type": "string", "enum": ["operation_binding", "operation_invocation"]},
+                "relationship_kind": {"type": "string", "enum": ["operation_binding", "operation_invocation", "operation_implementation_call"]},
+                "operation": {"type": "string", "minLength": 1},
             },
             "required": ["topic_id", "topic", "claim", "caller", "callee", "relationship_kind"],
             "additionalProperties": False,
@@ -359,14 +360,16 @@ TOOLS = [
     },
     {
         "name": "discover_operation_relationship_paths",
-        "description": "Return deterministic, metadata-only operation bindings or one-hop operation-field invocations within one direct directory scope. This never reports either relationship as a direct call and does not infer runtime timing.",
+        "description": "Discover metadata-only operation bindings, field invocations, or operation_implementation_call relationships. Implementation discovery requires operation. An invocation can traverse a three-edge static-slot-compatible callback context with explicit binding_owner and operation; this does not establish runtime object wiring or unconditional execution. All existing scope and traversal limits apply.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "scope": {"type": "string", "minLength": 1}, "from": {"type": "string", "minLength": 1},
                 "to": {"type": "string", "minLength": 1},
                 "max_hops": {"type": "integer", "minimum": 1, "maximum": 4},
-                "relationship_kind": {"type": "string", "enum": ["operation_binding", "operation_invocation"]},
+                "relationship_kind": {"type": "string", "enum": ["operation_binding", "operation_invocation", "operation_implementation_call"]},
+                "operation": {"type": "string", "minLength": 1},
+                "binding_owner": {"type": "string", "minLength": 1},
             },
             "required": ["scope", "from", "to", "max_hops", "relationship_kind"],
             "additionalProperties": False,

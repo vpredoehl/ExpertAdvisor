@@ -88,7 +88,7 @@ def main():
             print("  PASS", flush=True)
 
     print()
-    print("PHASE 24B ISOLATED REGRESSION SUMMARY")
+    print("REPOSITORYAGENT ISOLATED REGRESSION SUMMARY")
     print(f"Passed:   {len(passed)}")
     print(f"Failed:   {len(failed)}")
     print(f"Excluded: {len(excluded)}")
@@ -102,11 +102,11 @@ def main():
     if failed:
         return 1
 
-    if len(passed) != 29 or len(excluded) != 3:
+    if len(passed) != 32 or len(excluded) != 3:
         print("Unexpected regression inventory.")
         return 1
 
-    print("\nPHASE 24B REGRESSION SUITE: PASS")
+    print("\nREPOSITORYAGENT REGRESSION SUITE: PASS")
     return 0
 
 

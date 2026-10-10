@@ -14,6 +14,7 @@ workflows.
 `codex_assisted` advertises and admits exactly these planning-facing bounded
 operations:
 
+- `list_catalog_children`
 - `discover_catalog_targets`
 - `discover_relationship_paths`
 - `discover_operation_relationship_paths`
@@ -70,19 +71,68 @@ unqualified call-site names do not create edges. A returned path is not
 evidence: use `investigate_relationship_chain_claim` or another bounded
 evidentiary investigation before making behavioral claims.
 
-`discover_operation_relationship_paths` is a separate metadata-only traversal
-for the deliberately narrow `operation_binding` category (assignment of a
-single-call lambda to an accepted operation field, or the declared positional
-slots of the production `CheckpointAnalysisOperations` aggregate) and one-hop
-`operation_invocation` discovery. It has the same scope and admission caps as
-direct path discovery, but never reports either relationship as a direct call
-and never establishes runtime execution.
-`investigate_operation_relationship_claim` independently rereads exact
-server-selected ranges for either an `operation_binding` or an
-`operation_invocation`. The latter names the invoked operation field (for
-example `operations_.runCheckpointAnalysis`) rather than guessing which bound
-function will run. A complete runtime bridge must therefore retain the
-binding and invocation as separate claims.
+`discover_operation_relationship_paths` retains the existing narrow
+`operation_binding` traversal (single-call lambda assignments and declared
+positional `CheckpointAnalysisOperations` slots) and one-hop
+`operation_invocation` discovery. It also accepts
+`relationship_kind="operation_implementation_call"` with an exact `operation`
+selector to discover an individual call inside an explicitly assigned callback.
+Its `from` endpoint is the callback's lexical owner and `to` is the indexed
+callee. This targeted path does not traverse downstream direct calls.
+
+An `operation_invocation` request can additionally supply `binding_owner` and
+`operation`, with a concrete callee as `to`. This returns a three-edge contextual
+path only when the invocation and explicit callback assignment have the same
+uniquely resolved, declared operation type and field. The path retains the
+invocation, callback assignment, and implementation call as separate typed
+relationships. `max_hops < 3` returns no contextual path. The callback owner
+must be explicitly selected; a field-name match alone cannot create a bridge.
+Ambiguous types, receivers or repeated assignments fail closed. Only explicit
+local declarations and explicit class members are supported; aliases, inferred
+types and dynamic callback wiring are not inferred. Static slot compatibility
+does **not** establish which callback object is installed at runtime, execution
+timing, branch execution, or an unconditional call.
+
+The returned `investigation_targets` provide exact admitted selectors for the
+field invocation and implementation claim. The implementation investigation
+verifies both the complete callback assignment and the represented call; the
+contextual callback identity is not a new function endpoint for a direct-call
+or legacy single-call binding investigation.
+
+For example, within `scope="Sources/SchedulerCore"`:
+
+```json
+{
+  "from": "FinalExperimentDispatchService::runPhase",
+  "to": "BuildTrainCommand",
+  "relationship_kind": "operation_invocation",
+  "binding_owner": "RunFinalExperimentPhase",
+  "operation": "operations.prepareReservedLaunch",
+  "max_hops": 3
+}
+```
+
+All discovery results remain metadata-only and `non_evidentiary`. The existing
+direct-scope, four-hop, 64-node, 512-examined-edge and four-result limits remain
+unchanged. The targeted routes admit at most one contextual path, do not follow
+arbitrary callbacks, and never enter direct-call discovery.
+
+`investigate_operation_relationship_claim` accepts the new implementation kind
+with `caller`, `callee`, and exact `operation`. It selects and rereads the whole
+explicit callback assignment, preserving branch conditions, independently of
+the lexical owner's 16-relationship symbol-investigation cap. Repeated or
+unavailable assignments and callbacks exceeding the existing 500-line range
+limit return an explicit not-run result. The reread must match the indexed
+source hash before verification or replay. The semantic request and existing
+claim-ledger identity include the relationship kind, owner, field, target and
+claim; exact source and verifier identity checks remain in force. Replay still
+rereads evidence and requires no model turn on an exact hit.
+
+Existing binding and invocation investigation behavior is unchanged. An
+invocation names its operation field (such as
+`operations_.runCheckpointAnalysis`), rather than guessing a bound function.
+Behavioral claims still require separate bounded verification of each
+relationship; contextual discovery is not proof of a complete runtime bridge.
 
 For an admitted positional aggregate binding, investigation uses a distinct
 two-range relationship-aware proof: the aggregate declaration (field order)
@@ -189,7 +239,8 @@ PYTHONPATH="$PWD:/Users/vjp/LLM" \
 python3 Tools/RepositoryAgent/tests/run_isolated_regressions.py
 ```
 
-The qualified baseline contains 29 passing modules. Three pre-existing
+The Phase 24D.3 inventory contains 32 passing modules (the previous runner's
+29-module inventory assertion was stale). Three pre-existing
 legacy modules remain excluded pending separate review:
 
 - `test_ledger.py`
@@ -199,6 +250,32 @@ legacy modules remain excluded pending separate review:
 These exclusions are not passing-test claims. The regression runner does
 not load Qwen, invoke production training, build ExpertAdvisor, or access
 PostgreSQL.
+
+The new focused regression module can be run independently:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD:/Users/vjp/LLM" \
+python3 -m unittest Tools.RepositoryAgent.tests.test_bounded_operation_implementation_discovery -v
+```
+
+Validate the five final-dispatch callback implementation relationships and the
+three corresponding operation invocations against the actual read-only Rollover
+source through the local `codex_assisted` MCP adapter:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD:/Users/vjp/LLM" \
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+EXPERTADVISOR_REPOSITORY_ROOT="/Volumes/Developer SSD/ExpertAdvisor-Rollover" \
+/Users/vjp/LLM/mlx-env/bin/python -m \
+Tools.RepositoryAgent.tests.validate_rollover_operation_discovery --qwen
+```
+
+This uses the existing cached Qwen configuration, an in-memory index and a
+disposable claim ledger under the temporary directory. It does not change MCP
+registrations, source, PostgreSQL, workers or production ledgers. Omit `--qwen`
+for deterministic-only validation. The already-running registered MCP process
+must reload the updated code before its tools/list schema reflects these changes;
+this implementation does not restart or reconfigure it.
 
 ## Startup selection
 

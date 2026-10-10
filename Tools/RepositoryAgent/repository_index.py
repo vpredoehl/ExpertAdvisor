@@ -168,6 +168,7 @@ class RepositoryIndex:
         self.calls_by_caller: dict[str, list[CallSite]] = defaultdict(list)
         self._lines: dict[str, list[str]] = {}
         self._functions_by_file: dict[str, list[FunctionBoundary]] = defaultdict(list)
+        self._operation_types: dict[str, list[tuple[str, str, str]]] | None = None
 
     @staticmethod
     def _normalize_listing(raw) -> list[str]:
@@ -980,6 +981,125 @@ class RepositoryIndex:
 
     def callees_of(self, function: str) -> list[CallSite]:
         return list(self.calls_by_caller.get(function, ()))
+
+    def operation_implementation_proof(self, caller: str, callee: str, operation: str) -> dict | None:
+        """Select the complete explicit callback assignment, not its lexical owner.
+
+        Ambiguous/repeated assignments fail closed. The exact indexed source
+        hash lets investigation reject a callback changed since selection.
+        Single-call operation_binding behavior is deliberately unchanged.
+        """
+        def target_matches(textual: str) -> bool:
+            if textual == callee:
+                return True
+            if "::" in textual:
+                return False
+            definitions = [fn for fn in self.functions if fn.name.split("::")[-1] == textual]
+            return len(definitions) == 1 and definitions[0].name == callee
+
+        edges = [site for site in self.callees_of(caller)
+                 if site.caller == caller and target_matches(site.callee)
+                 and site.relationship_kind == "operation_implementation_call"
+                 and site.operation == operation]
+        if not edges or len({site.file for site in edges}) != 1:
+            return None
+        file = edges[0].file
+        lines = self._lines[file]
+        text = self._mask_operation_source("\n".join(lines))
+        assignments = []
+        for match in _OPERATION_BINDING_RE.finditer(text):
+            if re.sub(r"\s+", "", match.group("operation")) != operation:
+                continue
+            close = self._balanced_close(text, match.end() - 1)
+            terminator = None if close is None else re.match(r"\s*;", text[close + 1:])
+            if terminator is None:
+                continue
+            start = text.count("\n", 0, match.start()) + 1
+            end = text.count("\n", 0, close + 1 + terminator.end()) + 1
+            owner = self.function_for_line(file, start)
+            if owner is not None and owner.name == caller:
+                assignments.append((start, end))
+        if len(assignments) != 1:
+            return None
+        start, end = assignments[0]
+        if not all(start <= edge.line <= end for edge in edges):
+            return None
+        return {"file": file, "start": start, "end": end,
+                "selection_source_sha256": hashlib.sha256(
+                    "\n".join(lines[start - 1:end]).encode("utf-8")).hexdigest()}
+
+    def operation_slot(self, caller: str, operation: str) -> dict | None:
+        """Resolve only explicit local/member operation types and declared fields.
+
+        This proves compatible static slots, not which object is installed at
+        runtime. No receiver-name or field-name-only bridge is admitted.
+        Duplicate type names, receiver declarations and assignments fail closed.
+        """
+        parts = operation.split(".")
+        definitions = [fn for fn in self.functions if fn.name == caller]
+        if len(parts) != 2 or len(definitions) != 1:
+            return None
+        receiver, field = parts
+        fn = definitions[0]
+        body = self._mask_operation_source("\n".join(
+            self._lines[fn.file][fn.start_line - 1:fn.end_line]))
+        declaration = re.compile(
+            rf"\b(?P<type>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s+{re.escape(receiver)}\s*;")
+        locals_ = list(declaration.finditer(body))
+        if len(locals_) > 1 or re.search(rf"\b{re.escape(receiver)}\s*=", body):
+            return None
+        if locals_ and body[:locals_[0].start()].count("{") - body[:locals_[0].start()].count("}") != 1:
+            return None
+        if self._operation_types is None:
+            blocks: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+            for file, lines in self._lines.items():
+                masked = self._mask_operation_source("\n".join(lines))
+                namespaces = [(match.end(), self._balanced_close(masked, match.end() - 1), match.group("name"))
+                              for match in _NAMESPACE_OPEN_RE.finditer(masked)]
+                for match in re.finditer(r"\b(?:class|struct)\s+([A-Za-z_]\w*)\s*(?:final\s*)?\{", masked):
+                    close = self._balanced_close(masked, match.end() - 1)
+                    if close is not None:
+                        enclosing = [name for start, end, name in namespaces
+                                     if end is not None and start <= match.start() < end]
+                        qualified = "::".join(enclosing + [match.group(1)])
+                        blocks[match.group(1)].append((file, masked[match.end():close], qualified))
+            self._operation_types = blocks
+        blocks = self._operation_types
+        if locals_:
+            declared_type = locals_[0].group("type")
+            type_name = declared_type.split("::")[-1]
+            declaration_file = fn.file
+        else:
+            if "::" not in caller:
+                return None
+            owner = caller.rsplit("::", 1)[0].split("::")[-1]
+            owners = blocks.get(owner, [])
+            if len(owners) != 1:
+                return None
+            declaration_file, class_body, qualified_owner = owners[0]
+            if self._qualified_owner(fn) != qualified_owner:
+                return None
+            members = list(declaration.finditer(class_body))
+            if len(members) != 1:
+                return None
+            prefix = class_body[:members[0].start()]
+            if prefix.count("{") != prefix.count("}"):
+                return None
+            declared_type = members[0].group("type")
+            type_name = declared_type.split("::")[-1]
+        types = blocks.get(type_name, [])
+        if len(types) != 1:
+            return None
+        if "::" in declared_type and declared_type != types[0][2]:
+            return None
+        fields = list(re.finditer(rf"\b{re.escape(field)}\s*;", types[0][1]))
+        if len(fields) != 1:
+            return None
+        prefix = types[0][1][:fields[0].start()]
+        if prefix.count("{") != prefix.count("}"):
+            return None
+        return {"identity": types[0][2] + "::" + field,
+                "files": sorted({declaration_file, types[0][0]})}
 
     def resolve_symbol(self, symbol: str) -> dict:
         """Return controller-owned structural facts for a symbol."""
