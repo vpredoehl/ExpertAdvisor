@@ -8,7 +8,7 @@ from pathlib import Path
 
 from mlx_lm import load, generate
 
-from expertadvisor_agent import (
+from .source_reader import (
     list_files,
     search,
     read_file,

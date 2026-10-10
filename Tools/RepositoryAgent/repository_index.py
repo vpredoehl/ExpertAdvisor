@@ -9,7 +9,7 @@ Phase 2 goals:
 - bounded caller -> callee traversal
 - no embeddings and no repository writes
 
-The module consumes the existing expertadvisor_agent.py API:
+The module consumes the startup-selected source_reader API:
     list_files(prefix="")
     read_file(name, start=1, end=200)
 
@@ -25,7 +25,7 @@ import json
 import re
 from typing import Iterable, Optional
 
-from expertadvisor_agent import list_files, read_file
+from .source_reader import list_files, read_file
 
 
 _ALLOWED_SUFFIXES = (".cpp", ".cc", ".cxx", ".h", ".hpp", ".metal")

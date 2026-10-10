@@ -21,6 +21,7 @@ def read_file(name, start=1, end=200):
 
 stub.list_files = list_files
 stub.read_file = read_file
+stub.search = lambda pattern, max_results=100: ""
 sys.modules.setdefault("expertadvisor_agent", stub)
 
 from Tools.RepositoryAgent.repository_index import RepositoryIndex

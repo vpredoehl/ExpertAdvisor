@@ -19,7 +19,7 @@ import re
 import secrets
 from typing import Any
 
-from expertadvisor_agent import list_files, read_file, search
+from .source_reader import USES_CONFIGURED_ROOT, list_files, read_file, search
 from .claim_evidence import VerifiedClaimLedger, source_hash
 from .claim_verifier import LazyClaimVerifierRuntime, MAX_BUNDLE_RANGES
 from .evidence import VerifiedEvidenceLedger
@@ -248,7 +248,11 @@ class CodexRepositoryInterface:
         if op == "capabilities": return self.capabilities()
         if op == "list_files":
             prefix = str(request.get("prefix", ""))
-            return {"files": RepositoryIndex._normalize_listing(list_files(prefix))}
+            raw = list_files(prefix)
+            # The configured reader emits exact allowed paths, including the
+            # Phase 24B assertions that are not C++ structural-index inputs.
+            files = raw.splitlines() if USES_CONFIGURED_ROOT else RepositoryIndex._normalize_listing(raw)
+            return {"files": files}
         if op == "search":
             pattern = str(request.get("pattern", ""))
             if not pattern: raise ValueError("search requires non-empty pattern")

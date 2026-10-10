@@ -93,6 +93,113 @@ cannot satisfy another. RepositoryAgent code is loaded from this worktree;
 Tests that need source-sensitive line assertions therefore supply an explicit
 reader fixture rather than assuming worktree line numbers are live MCP lines.
 
+## Isolated development repository
+
+`EXPERTADVISOR_REPOSITORY_ROOT` optionally selects an absolute existing directory
+at process startup. With no override, the adapter delegates to the existing
+`expertadvisor_agent` reader and preserves the production root and permissions.
+The shared `/Users/vjp/LLM/expertadvisor_agent.py` is not modified. An empty,
+relative, missing, or non-directory override fails startup instead of falling
+back to production.
+
+Every RepositoryAgent reader and structural-index consumer imports the same
+startup-selected adapter. Requests cannot switch its root or expand its policy.
+An overridden non-production root permits C/C++/Metal files under `Headers`,
+`Sources`, and `LSTM`, plus exactly these Phase24B evidence files:
+
+- `Tests/DedicatedTrainingWorkerArchitectureTests.sh`
+- `Tests/ReleaseWorkerBuildConfigurationTests.sh`
+- `Scripts/tests/test_dedicated_train_rollover.py`
+- `ExpertAdvisor.xcodeproj/project.pbxproj`
+
+Reads, listings, and searches reject traversal and absolute paths and exclude
+symlinks escaping the repository or permitted directories. The additional files
+are readable evidence; the structural index still parses only C/C++/Metal.
+No shell, write, build, test, or database capability is added. Both existing MCP
+profile definitions remain unchanged.
+
+Add a **separate** full-profile connection, retaining the existing two entries:
+
+```toml
+[mcp_servers.expertadvisor-repository-rollover]
+command = "/Users/vjp/LLM/mlx-env/bin/python"
+args = ["-m", "Tools.RepositoryAgent.repository_agent_mcp"]
+cwd = "/Volumes/Developer SSD/ExpertAdvisor-RepositoryAgent"
+
+[mcp_servers.expertadvisor-repository-rollover.env]
+PYTHONPATH = "/Volumes/Developer SSD/ExpertAdvisor-RepositoryAgent"
+PYTHONDONTWRITEBYTECODE = "1"
+HF_HUB_OFFLINE = "1"
+EXPERTADVISOR_REPOSITORY_ROOT = "/Volumes/Developer SSD/ExpertAdvisor-Rollover"
+EXPERTADVISOR_LEDGER_CACHE_NAMESPACE = "ExpertAdvisor-Rollover"
+EXPERTADVISOR_CLAIM_EVIDENCE_LEDGER = "/Users/vjp/Library/Caches/ExpertAdvisor-Rollover/RepositoryAgent/verified_claims.json"
+```
+
+Use an absolute ledger path: the existing ledger override treats a literal `~`
+literally. The distinct path and namespace isolate both persistence and cache
+identity. Deterministic operations never create/load a claim verifier or import
+`mlx_lm`; model verification is a separate operation and is not needed for
+connection validation. No production-source path belongs in this entry's
+`PYTHONPATH`. `HF_HUB_OFFLINE=1` prevents model downloads if verification is
+requested later; validation does not request verification or load weights.
+
+## Development reader limits and regression qualification
+
+When `EXPERTADVISOR_REPOSITORY_ROOT` selects an isolated development
+repository, source discovery and reading use bounded, read-only operations.
+
+| Resource | Limit |
+| --- | ---: |
+| Directory entries examined | 20,000 |
+| Directory nesting depth | 20 |
+| Search files | 2,000 |
+| Search physical lines | 200,000 |
+| Search input bytes | 32 MiB |
+| Individual physical line | 64 KiB |
+| Read output bytes | 256 KiB |
+| Read output lines | 500 |
+| Search results | 100 |
+| Search pattern length | 256 characters |
+
+Development-root search is **case-insensitive literal substring search**,
+not regular-expression search. The production reader retains its original
+behavior when no repository-root override is configured.
+
+Directory traversal does not follow symlinked directories. Source-file
+resolution rejects paths outside the selected repository and its permitted
+source boundary.
+
+Exceeding a resource budget raises an explicit error rather than silently
+returning incomplete results.
+
+The Rollover source tree contains 217,792 physical lines, exceeding the
+200,000-line search budget. Consequently, an exhaustive search that does
+not reach its requested result count may fail explicitly. This is a
+documented limitation, not a successful exhaustive-search result.
+
+The Phase 24B regression runner executes test modules in separate Python
+processes because some legacy tests use module-level assertions rather
+than `unittest.TestCase` classes.
+
+Run from the isolated RepositoryAgent worktree:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH="$PWD:/Users/vjp/LLM" \
+python3 Tools/RepositoryAgent/tests/run_isolated_regressions.py
+```
+
+The qualified baseline contains 29 passing modules. Three pre-existing
+legacy modules remain excluded pending separate review:
+
+- `test_ledger.py`
+- `test_structural.py`
+- `test_verifier.py`
+
+These exclusions are not passing-test claims. The regression runner does
+not load Qwen, invoke production training, build ExpertAdvisor, or access
+PostgreSQL.
+
 ## Startup selection
 
 Use the explicit command-line option:

@@ -11,7 +11,7 @@ def configure_topic_navigation(navigation):
     """Install benchmark-owned navigation text without importing a benchmark."""
     global TOPIC_NAVIGATION
     TOPIC_NAVIGATION = dict(navigation or {})
-from expertadvisor_agent import list_files, search, read_file
+from .source_reader import list_files, search, read_file
 
 MAX_TOOL_OUTPUT = 30000
 MAX_READ_LINES = 500
@@ -197,7 +197,10 @@ def execute_tool(call):
 
     if tool == "list_files":
         prefix = str(call.get("prefix", ""))
-        result = list_files(prefix)
+        try:
+            result = list_files(prefix)
+        except (ValueError, OSError) as exc:
+            return f"TOOL ERROR: {exc}"
 
     elif tool == "search":
         pattern = str(call.get("pattern", ""))
@@ -205,7 +208,10 @@ def execute_tool(call):
         if not pattern:
             return "TOOL ERROR: search pattern is empty"
 
-        result = search(pattern)
+        try:
+            result = search(pattern)
+        except (ValueError, OSError) as exc:
+            return f"TOOL ERROR: {exc}"
 
     elif tool == "read":
         filename = str(call.get("file", ""))
