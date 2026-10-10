@@ -2457,6 +2457,11 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 #endif
+    // Diagnostic wall time includes cache allocation and CPU shared-memory
+    // copies. Preserve all existing tensor lifetimes and evaluation ordering.
+    std::optional<HotspotScope> cacheMaterializationHotspot;
+    if (HotspotProfilingEnabled())
+        cacheMaterializationHotspot.emplace("forward_cache_materialization");
     // ViewCols returns an independently owned contiguous SliceCols copy.
     auto z_f_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * H, H);
 
@@ -2473,6 +2478,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         NNUtils::DeepCopyMatrix(scratch.h),
         std::move(z_f_logits)
     };
+    cacheMaterializationHotspot.reset();
 
     prevCellState = sc.c;
     prevHiddenState = sc.h;
@@ -2852,6 +2858,11 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
         }
     }
 
+    // This expression path uses CPU evaluation over Metal shared memory;
+    // the scope includes registration, temporary allocation, and evaluation.
+    std::optional<HotspotScope> gateExpressionHotspot;
+    if (HotspotProfilingEnabled())
+        gateExpressionHotspot.emplace("backward_gate_expressions");
     auto tanh_c = MetaNN::Tanh(sc.c);
 
     // Gate gradients (expressions)
@@ -2871,6 +2882,7 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
 
     MetaNN::EvalPlan::Inst().Eval();
 
+    gateExpressionHotspot.reset();
     const EAMatrix& d_i_mat = diH.Data();
     const EAMatrix& d_f_mat = dfH.Data();
     const EAMatrix& d_g_mat = dgH.Data();

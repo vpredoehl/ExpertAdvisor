@@ -1,6 +1,330 @@
 # Phase 25B-3: production-representative Metal training qualification
 
-**Status: INCONCLUSIVE for Phase 25B-3T on 2026-10-09; Phase 25B-3R remains BLOCKED. Production readiness is not established.**
+**Status: BLOCKED for Phase 25B-3U new measurements on 2026-10-09; historic root-cause analysis and Phase 25B-3T remain INCONCLUSIVE. Phase 25B-3R remains BLOCKED. Production readiness is not established.**
+
+## Phase 25B-3U recurrent synchronization analysis
+
+**Final status: BLOCKED for new controlled performance measurements (2026-10-09).
+The historic root-cause assessment remains INCONCLUSIVE.** A sustained competing
+CPU workload prevented a valid new qualification window. Existing measurements
+localize the additional recurrent wall time, but do not establish its dominant
+underlying cause. No new qualification benchmark was launched.
+
+### A. Objective and preflight
+
+Investigate the approximately 14.6-second forward/backward increase in the slow
+Phase T Combined process without changing mathematics, numerical precision,
+production defaults, checkpoint semantics, input layout, or shared MetaNN.
+Development started clean at `5dd91afe9fff87ea2e31580251e6af6506a7c820` on
+`dedicated-train-layout-rollover-squashed-v1` in the requested Rollover worktree.
+Production started clean at `b8cdfef03ccdb073caccbf93b0a4282070c0c4d3`;
+shared MetaNN started clean at `a270e7a5dd239b524fd7d34ad3bb73b646dd7fd6`.
+`MetaNN/MetaNN` is a symlink to production's separate MetaNN repository and was
+inspected read-only.
+
+Sandbox process/swap inspection failed; normal-access escalation was used,
+not an assumption of idleness. The saved launchctl status had no scheduler PID,
+active count zero, and `spawn failed` / last exit 78. No LSTM worker, qualification
+training process, or Ollama runner was present; Ollama's residency API returned
+no models. CoreSpotlight was at 0% CPU. Memory pressure was level 1; swap remained
+12.12 MB and VM swap counters remained 256 in / 776 out. No competing compute
+GPU process was identified, although device utilization was 11% with desktop
+activity, so zero GPU activity is not claimed.
+
+**MEASURED:** the initial census recorded `fileproviderd` at 102.4% CPU. A bounded
+five-second CPU sample confirmed 103.3%, its Provider process 11.6%, and
+WindowServer 37.8%. This is substantial competing work under the requested
+preflight rule. The new alternating qualification pairs were stopped before
+launch. These current observations are a safety blocker, **not evidence that
+file-provider activity caused either historic slow trial**. No external process
+was stopped or reconfigured. Correctness tests do not supply causal latency
+measurements.
+
+### B. Complete existing evidence and population correction
+
+All twelve complete S/T hotspot reports, logs, 72-entry per-update JSON traces,
+safety snapshots, serialized inputs and state trajectories were inspected.
+`DiagnosticU/analyze_existing.py` independently parses every UPDATE log record,
+checks it against JSON, hashes the actual files, and literally compares all
+12 input/state streams. Its complete results are in `existing-analysis.json`
+and `existing-analysis.txt`; no previous evidence was overwritten.
+
+Fast Combined is the mean of T pairs 1/2; slow Combined is T pair 3.
+Fast MetaNN is the mean of S pairs 1/3; slow MetaNN is S pair 2.
+S Combined never exhibits the corresponding slow regime, and T MetaNN remains
+near the fast regime. Measured 16-update blocks confirm T slow Combined's
+746.7 / 1094.7 / 1139.9 / 964.8 ms and S slow MetaNN's
+1183.1 / 1190.7 / 1091.3 / 781.3 ms transitions.
+
+**MEASURED:** hotspot totals include **8 warmup + 64 measured updates**, not just
+64. Counts are 18,432 forward calls and 9,216 backward calls. The fixture's
+published means describe only 64 measured updates. Hotspots have no per-update
+or warmup-separated stage records; a measured-only stage decomposition cannot
+be recovered. Multiplying stage totals by 64/72 would assume a stationary
+regime contradicted by the traces. Earlier S wording that described its hotspot
+totals as “across 64 updates” should be read with this correction.
+
+### C. Actual recurrent execution-path inventory
+
+`CalculateBatch` processes 189 accepted windows as minibatches of 128 and 61,
+each of sequence length 64, input width 171, hidden width 64. It therefore runs
+128 training forward and 128 backward timesteps per update. In this exact
+legacy classification fixture with epoch index 0, the existing epoch checkpoint
+hidden-geometry diagnostic replays both minibatches after the update, adding
+**128 forward calls per update**. Suppressed logging does not remove that replay.
+The 256-forward / 128-backward count is measured, not an assumed single pass.
+The existing replay is left intact; this investigation does not redesign it.
+
+| Region / operation | Calls per fixture update | Execution and synchronization | Existing visibility |
+|---|---:|---|---|
+| Forward concatenate `[x,h]` | 256 | CPU row memcpy through shared `[MTLBuffer contents]`; small C++ vectors; row weight view shares ownership | `concat_cols` also aggregates backward concatenation |
+| Forward affine `(B,235) × (235,256)` plus bias | 256 | Combined: one buffer with MPS GEMM then row-bias encoder, commit and one blocking wait. MetaNN: GEMM and bias each have their own buffer/commit/wait | affine wall scope; Combined CPU/GPU timestamps only |
+| Forward i/f/o sigmoid, g tanh, cell and hidden state | 256 | one `GateStateFused` compute buffer, commit and blocking wait; persistent training scratch buffers | `gate_state_fused` inclusive wall time |
+| Forget-logit slice plus recurrent cache | 256 | one CPU SliceCols allocation/copy and nine `DeepCopyMatrix` allocations/copies; concrete Matrix Evaluate drains EvalPlan, normally already empty; no copy command buffer | hidden inside forward before U; now `forward_cache_materialization` |
+| Replay scratch setup | 128 | a fresh scratch object at each replay timestep; seven Metal-backed scratch matrices allocated before affine | still forward residual, outside new cache scope |
+| Backward gate expressions and cell carry | 128 | shared expression DAG: tanh, products, scalar subtraction, addition; CPU loops and temporary Metal-backed matrices, then EvalPlan bookkeeping; no NSMetalAdd dispatch | hidden inside backward before U; now `backward_gate_expressions` |
+| Backward parameter / bias / hidden GEMMs | 128 sets | three CPU transposes/materializations and three synchronous MPS MatMul buffers, each committed and waited separately | `backward_gemms` includes transpose/allocation, CPU encode/wait, GPU execution |
+| Backward gate packing, `[x,h]`, ones column | 128 | new matrices, CPU memcpy/fill; no GPU copy buffers | packing and concat scopes exclude some allocation |
+| Gate gradient accumulation | 256; plus 2 merges | CPU loops split dW/db into four accumulators, then merge into update gradients with existing casts | aggregate `gate_accumulator_split_merge` mixes backward and outer merges |
+| Clip and SGD | 1 clip; 2 optimizer scopes | CPU in-place float loops; no optimizer GPU buffers | existing clip/optimizer scopes |
+| Host norm / finite / matrix diagnostics | variable | `WaitForAll` submits an **empty** Metal buffer and blocks; FroNormEvalHost does it twice; some helpers copy to host vectors/CPU tensors | inclusive `host_diagnostics_data_copy`, with mixed parentage |
+
+**Source-derived counts (INFERRED):** regular recurrent work requires at least
+896 buffer commits/waits per Combined update: 256 affine + 256 gate-state +
+384 backward GEMMs. MetaNN requires at least 1,152: 512 affine + 256 gate-state
++ 384 backward GEMMs. Over 72 updates these are 64,512 and 82,944 respectively.
+These are lower bounds, excluding heads and diagnostic empty buffers. Each
+forward/backward operation returns after its existing wait, so this path does
+execute many small synchronous GPU operations. The CPU gate expressions and
+cache copies themselves do **not** add command buffers.
+
+Each forward cache allocates ten matrices: 2,560 per fixture update, 184,320 per
+72-update process. The recurrent backward DAG has 23 unique materialized
+expression outputs (16 products, five scalar subtractions, one tanh, one add),
+assuming the shared EvalBuffer deduplication observed in source; approximately
+2,944 temporary matrices per update. EvalPlan uses sets/maps, heap-owned nodes,
+and shared evaluation handles. Metal ContinuousMemory constructs an Impl,
+obtains the device, and allocates shared MTLBuffer storage; its pool only covers
+buffers up to 4,096 bytes. Even the smaller minibatch's B×H float buffers are
+15,616 bytes, so these allocations are outside that pool. Cache copies,
+expression computation, resource allocation/release and host bookkeeping are
+plausible hidden costs, **not measured causes of the historic variation**.
+
+Relevant read-only interfaces are `operation/math/{multiply,add,substract,tanh}.h`,
+`operation/tensor/{dot,permute}.h`, `evaluate/{eval_plan,eval_buffer,eval_handle}.h`,
+`data/facilities/continuous_memory_metal.mm`, and `metal/metal_matmul.mm`.
+The recurrent expression evaluators operate on CPU raw pointers despite their
+Metal device tag. `metal_add.mm` has synchronous unary/binary kernels, but those
+kernels are **not invoked by these gate expressions**. No generic Metal-tag
+assumption was used to label them GPU work. Production build OpenMP settings
+can affect CPU execution; the historical qualification script uses its existing
+O3 flags. Neither path is changed here.
+
+### D–F. Ranked hotspots and fast/slow decomposition
+
+Times below are seconds. Counts cover the complete 72-update process. The ranked
+Combined table uses **17.117265 s full-update increase** as its percentage
+denominator. Residuals are exclusive only of the explicitly named child scopes;
+the operations inside each residual remain inclusive and unresolved.
+
+| Rank / operation | Calls | Fast total | Slow total | Absolute increase | % full-update increase | Instrumentation visibility |
+|---|---:|---:|---:|---:|---:|---|
+| 1 Forward minus affine and fused gate-state | 18,432 parents | 15.939245 | 22.877000 | +6.937755 | 40.53% | reliable parent-minus-two-children residual; cache/scratch/CPU hidden |
+| 2 Backward minus GEMMs and gate packing | 9,216 parents | 16.351277 | 22.478719 | +6.127442 | 35.80% | reliable residual; CPU gate DAG/allocation/bookkeeping hidden |
+| 3 Outside forward/backward/clip/optimizer/window build | 72 updates | 4.741283 | 7.092209 | +2.350926 | 13.73% | outer residual; heads, replay setup, diagnostics, normalization and other bookkeeping |
+| 4 Backward GEMM scope | 9,216 sets | 8.733035 | 10.228600 | +1.495565 | 8.74% | inclusive CPU transpose/allocation plus three GPU submissions/waits |
+| 5 Window batch build | 144 | 0.581529 | 0.835796 | +0.254267 | 1.49% | CPU construction inclusive; disjoint from recurrent calls |
+| Forward affine | 18,432 | 3.319240 | 3.274200 | −0.045040 | −0.26% | nested forward; already removed from rank 1 |
+| Fused gate/state | 18,432 | 2.549515 | 2.548700 | −0.000815 | −0.005% | nested forward; already removed from rank 1 |
+| Gate packing | 9,216 | 0.060889 | 0.058181 | −0.002707 | −0.016% | nested backward; already removed from rank 2 |
+| Clip / optimizer | 72 / 144 | 0.002254 / 0.000486 | 0.002183 / 0.000429 | −0.000071 / −0.000057 | <0.001% each | disjoint CPU scopes |
+
+Additional aggregate leaf checks, **not additive to that partition**:
+host diagnostic copies/norms, 20,126 calls, 0.725503 → 0.725745 s (+0.000243 s,
+0.0014%); accumulator split/merge, 18,576 calls, 0.155569 → 0.148886 s
+(−0.006683 s); concat, 27,648 calls, 0.104968 → 0.099474 s (−0.005493 s);
+appended return features, 18,432 calls, 0.000454 → 0.000458 s (+0.000003 s).
+These aggregate leaves have mixed parents and cannot be subtracted from a
+specific parent's total reliably. Existing profiler `percent` columns divide
+by the sum of overlapping scopes; they are **not percentages of update time**.
+
+| Quantity / scope | Combined fast | Combined slow | Difference | MetaNN fast | MetaNN slow | Difference |
+|---|---:|---:|---:|---:|---:|---:|
+| Measured mean (ms/update, 64 only) | 720.159 | 986.502 | +266.343 | 769.269 | 1061.574 | +292.305 |
+| Total measured updates (64) | 46.090183 | 63.136113 | +17.045930 | 49.233235 | 67.940745 | +18.707510 |
+| Total update time (all 72) | 52.278752 | 69.396017 | +17.117265 | 55.712254 | 77.313604 | +21.601350 |
+| Forward, inclusive | 21.808000 | 28.699900 | +6.891900 | 24.495700 | 33.254100 | +8.758400 |
+| Backward, inclusive | 25.145200 | 32.765500 | +7.620300 | 25.786250 | 35.217700 | +9.431450 |
+| Affine child | 3.319240 | 3.274200 | −0.045040 | 5.576040 | 5.257310 | −0.318730 |
+| Backward GEMM child | 8.733035 | 10.228600 | +1.495565 | 8.933275 | 10.791200 | +1.857925 |
+| Net measured matrix-scope contribution | — | — | +1.450525 | — | — | +1.539195 |
+| Fused forward elementwise/state child | 2.549515 | 2.548700 | −0.000815 | 2.554145 | 2.456000 | −0.098145 |
+| Clip / optimizer | 0.002254 / 0.000486 | 0.002183 / 0.000429 | −0.000128 combined | 0.002236 / 0.000485 | 0.002133 / 0.000423 | −0.000165 combined |
+| Forward residual (minus affine/state) | 15.939245 | 22.877000 | +6.937755 | 16.365515 | 25.540790 | +9.175275 |
+| Backward residual (minus GEMMs/packing) | 16.351277 | 22.478719 | +6.127442 | 16.791176 | 24.367960 | +7.576784 |
+| Outside forward/backward/clip/optimizer | 5.322812 | 7.928005 | +2.605193 | 5.427584 | 8.839249 | +3.411665 |
+
+**MEASURED:** the recurrent difference is **14.512200 s** for Combined, not an
+independent 14.6-second measured-only total. Forward contributes 47.49% and
+backward 52.51% of it. Backward GEMMs increase **17.13%**, while backward stage
+wall time increases **30.31%**. Their +1.495565 s explains only **19.63% of the
+backward increase**, or 10.31% of the recurrent increase. They do not grow
+proportionally or dominate the extra backward latency. For MetaNN, GEMMs grow
+20.80% versus backward's 36.58%, explaining 19.70% of its backward increase;
+its recurrent increase is 18.189850 s.
+
+The forward/backward residual increases together are **13.065197 s**, or
+**90.03% of Combined's recurrent difference** (76.33% of its full-update
+difference). MetaNN shows the same pattern: 16.752059 s, 92.10% of its recurrent
+difference. These residuals include some already measured mixed-parent CPU
+leaves, so they are not a claim of entirely uninstrumented execution. Their
+stable/smaller aggregate leaf timings cannot explain the extra seconds.
+The CPU-only backward elementwise contribution cannot be separated historically;
+its pure arithmetic time is **UNKNOWN**. Existing instrumentation therefore
+does **not fully explain the recurrent difference at operation level**.
+
+### G. CPU/GPU synchronization findings
+
+The preserved T Combined timestamps, across 18,432 buffers in each process:
+
+| Duration | Fast mean total | Slow total | Difference |
+|---|---:|---:|---:|
+| CPU create | 0.007262 | 0.007153 | −0.000110 |
+| CPU encode | 0.315652 | 0.314984 | −0.000668 |
+| CPU commit | 0.035172 | 0.037059 | +0.001886 |
+| CPU blocking wait | 2.920904 | 2.872028 | −0.048876 |
+| GPU execution | 0.563097 | 0.587787 | +0.024690 |
+| GPU kernel interval | 0.406820 | 0.343811 | −0.063009 |
+
+**MEASURED:** the Combined affine wait is smaller in the slow trial. Its tiny
+GPU-duration increase cannot explain the recurrent difference. These durations
+are children of the affine scope, **not additional decomposition rows**. GPU
+kernel and execution intervals can overlap; they are not added together or
+subtracted from CPU clocks. All 18,432 slow-trial GPU timestamps were valid.
+
+**UNKNOWN:** CPU wait versus GPU execution for backward GEMMs and GateStateFused;
+shared MetaNN exposes no command-buffer handles through these interfaces. The
+GEMM wall scope includes CPU transpose/temporary allocation as well as GPU work,
+so its increase does not prove slower GEMM kernels or waits. No ExpertAdvisor-only
+hook can read those buffers' timestamps without intercepting/replacing shared
+internals, which is outside this task. The forward residual predominantly
+executes host allocation/copies/bookkeeping around already synchronous calls;
+wall time in those regions does not identify which underlying operation blocks.
+
+Whole-process CPU time increases only 3.395045 s for Combined's 17.117265 s wall
+increase, and 1.758386 s for MetaNN's 21.601350 s increase. Aggregate process CPU
+time is not a per-scope synchronization measurement and cannot be subtracted
+from wall time to infer exact waits. No thermal, CoreSpotlight, CPU scheduling,
+macOS GPU scheduling, bandwidth, or driver attribution is established.
+
+### H. Instrumentation decision and changes
+
+A. Existing scopes locate the dominant **regions**, not their individual costs.
+B. Extra time is spread across both recurrent stages, not one measured operation.
+C. Only Combined affine has separated CPU wait / GPU duration evidence.
+D. ExpertAdvisor can time cache materialization and backward expression evaluation
+at their existing call boundaries. E. Those CPU wall scopes add no command
+buffers, barriers, waits, copies, or altered operation ordering.
+
+Only two probes were added, using the existing opt-in profiler:
+`forward_cache_materialization` covers the original forget-logit slice and nine
+cache copies; `backward_gate_expressions` covers unchanged expression creation,
+registration, temporary allocation, and the existing EvalPlan evaluation.
+Both remain inclusive; neither is GPU timing or a pure allocation timer.
+When the profiler is disabled, their optional scopes are empty and no new clock
+reads/counters are executed. Phase T command-buffer instrumentation, its
+`EA_LSTM_COMMAND_BUFFER_TIMING` switch, and the default MetaNN affine selection
+are unchanged. Ordinary training still enables profiling only through its
+existing explicit launch option.
+
+Two new counters would run 256 and 128 times per update in this fixture, adding
+384 timer/counter operations and two map keys. Performance perturbation is
+**UNKNOWN**, because the competing workload prohibited controlled on/off timing.
+The new scopes are exercised by correctness-only profiles; their latencies are
+excluded from causal conclusions. No optimization follows from those samples.
+No canonical-data trial, sustained trial, or new production database read/write
+was launched in U. A bounded, unexecuted three-pair runner is retained as a
+DiagnosticU investigation artifact, not a validated new benchmark result.
+
+### I. Numerical equivalence and regression validation
+
+**PASS:** actual S/T input bytes and loss/state trajectory bytes match across
+all twelve processes. Input SHA-256 is
+`244b20028c2985d1edf7192918712a97afe348b1ec4ca7d3da69763d69e9e932`;
+72-update state SHA-256 is
+`ef94c3a8361b6bf8a89d354a5be7324abf8465591a8f403c580951e2eb9d3317`.
+This state stream includes initial state, every loss/counter, and matrices after
+every update, not just a rounded final loss. Prior full observer and private
+PostgreSQL checkpoint restoration evidence is preserved; the database suite
+was not rerun.
+
+**PASS:** the existing database-free numerical suite compares starting-source
+and current-source results, MetaNN/Combined paths, logging on/off, legacy and
+auxiliary classification, log/percent regression with real clipping, and matrix
+restore continuation. Production dimensions H=64/T=64 also pass. Added checks
+verify profiler defaults off, both new counters are emitted when enabled, and
+profiler-on/off state and full forward-cache/preclip/postclip tensor streams
+match literally for both paths. No mathematics, synchronization calls, tensor
+ownership, layout, or checkpoint code was edited.
+
+Validation commands (all retained evidence under DiagnosticU):
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 DerivedData/ExpertAdvisor/Phase25B3/DiagnosticU/analyze_existing.py`
+- `bash DerivedData/ExpertAdvisor/Phase25B3/DiagnosticU/build-fixture.sh` — existing qualification O3/Wall/Wextra/Werror build, successful with no emitted warnings.
+- `LSTM_TEST_EVIDENCE_DIR="$PWD/DerivedData/ExpertAdvisor/Phase25B3/DiagnosticU/numerical" bash Tests/LSTMTrainingDiagnosticNumericalTests.sh DerivedData/ExpertAdvisor/Phase25B3/DiagnosticU/baseline-LSTM.cpp` — all cases PASS, exit 0.
+- `bash -n Tests/LSTMTrainingDiagnosticNumericalTests.sh`, Python AST checks, and `git diff --check`.
+- `xcodebuild -project ExpertAdvisor.xcodeproj -scheme "LSTM Release" -configuration Release -derivedDataPath DerivedData/ExpertAdvisor build` — initial sandbox attempt denied build metadata access; normal-access attempt reached the intentional clean-source Release provenance guard. The clean committed Release build passed (exit 0, `release-build-final.log`); the final documentation commit is also rebuilt, with evidence retained in `release-build-completion.log`.
+
+The existing Release warning debt (`-Ofast` deprecation, infinity under fast-math,
+unused diagnostic locals/functions, empty metal_copy archive object, and stale
+external LLVM toolchain discovery, and libomp built for macOS 27 linked into the macOS-26.2 target) is outside the two probes. Changing those
+numerical flags or shared code would violate this increment's constraints.
+The dedicated O3 fixture compiles under the existing warning-as-error policy;
+no new probe warning is accepted. The preserved evidence-directory option in
+the numerical runner lets this task keep all diagnostics under DerivedData.
+
+### J–L. Assessment, unknowns and next action
+
+**MEASURED:** affine and fused forward gate/state wall time remain stable or
+smaller; clipping, SGD, packing, accumulation and measured diagnostic-copy
+leaves cannot explain the added seconds. Backward GEMM wall time accounts for
+only about one fifth of the backward increase. Approximately 90% of the extra
+recurrent time lies in the forward cache/scratch/host region and backward
+expression/allocation/host region. The current competing workload blocks new
+controlled timing; it is not an attribution for the historic traces.
+
+**INFERRED:** repeated shared-buffer allocation/copy/materialization and the CPU
+expression DAG are higher-value investigation targets than more affine or fused
+activation GPU probes. Source inspection disproves a blanket interpretation of
+all recurrent Metal-tagged elementwise work as synchronous GPU kernels. The
+fixture's repeated hidden-geometry replay substantially increases forward
+allocation/copy counts. Stable retained Metal allocation does not establish
+stable allocation latency or eliminate transient allocation/release overhead.
+
+**UNKNOWN:** which of resource allocation/release, CPU arithmetic/copy loops,
+EvalPlan registration/dispatch, and host blocking accounts for each increase;
+CPU/GPU split inside backward GEMMs; per-update stage location of the regime
+transition; new probe overhead; and causality of the slow regime. No direct
+measurement identifies the dominant underlying cause, so
+ROOT_CAUSE_IDENTIFIED is not warranted.
+
+Recommended next action: in a verified idle window, use the same isolated
+CADCHFRMP/horizon-4/layout-13/width-171/sequence-64/seed-1002/calendar-1 fixture
+with these two scopes and the preserved T timing switch, at most three
+alternating pairs of 8 warmup + 64 measured updates. First establish negligible
+probe perturbation; then compare cache/expression/residual growth. If the slow
+regime does not appear, stop and retain T/S as primary evidence. Split allocation
+from CPU arithmetic only if those results justify another ExpertAdvisor-owned
+probe; obtaining shared-buffer GPU/wait timestamps would require separate
+approved visibility work. Keep the production default MetaNN. Do not start
+Phase 25B-4, deploy, push, merge, change scheduler configuration, or modify
+production records or shared MetaNN.
+
+Files changed in U: `LSTM/LSTM.cpp`,
+`Tests/LSTMTrainingDiagnosticNumericalTests.cpp`,
+`Tests/LSTMTrainingDiagnosticNumericalTests.sh`, and this report. All new evidence
+is in `DerivedData/ExpertAdvisor/Phase25B3/DiagnosticU/`. Production and shared
+MetaNN Git identity/status are checked again at completion.
 
 ## Phase 25B-3T Metal command-buffer timing investigation
 

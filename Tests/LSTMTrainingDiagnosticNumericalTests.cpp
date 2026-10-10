@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -126,6 +127,9 @@ int main(int argc, char** argv)
     try
     {
         Require(argc == 4 || argc == 5, "usage: fixture legacy|auxiliary|log|percent on|off output [production]");
+        Require(!EA::LSTM::HotspotProfilingEnabled(), "hotspot profiling must default off");
+        const bool hotspots = std::getenv("EA_LSTM_PROFILE_HOTSPOTS") != nullptr;
+        EA::LSTM::ConfigureHotspotProfiler(hotspots);
         diagnostics = std::string{argv[2]} == "on";
         const std::string mode = argv[1];
         const auto type = mode == "log" ? EA::LSTM::TargetType::LogReturn :
@@ -208,6 +212,9 @@ int main(int argc, char** argv)
                     "restored matrix continuation parameters changed");
         WriteState(output, restored);
         tensorEvidence = nullptr;
+        if (hotspots)
+            Require(EA::LSTM::WriteHotspotProfileReport(std::string{argv[3]} + ".hotspots.md"),
+                    "hotspot report write failed");
     }
     catch (const std::exception& error)
     {

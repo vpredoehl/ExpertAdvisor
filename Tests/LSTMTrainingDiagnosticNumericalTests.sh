@@ -6,13 +6,16 @@ set -euo pipefail
 # Optional argument is a read-only pre-change LSTM.cpp for exact A/B comparison.
 # Always compares current metann/combined paths, including diagnostics on/off.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-test_dir="$(mktemp -d /tmp/ea_phase25a_numerical.XXXXXX)"
+test_dir="${LSTM_TEST_EVIDENCE_DIR:-$(mktemp -d /tmp/ea_phase25a_numerical.XXXXXX)}"
+mkdir -p "${test_dir}"
 cleanup() {
     local result=$?
-    if [[ "${result}" -eq 0 ]]; then
+    if [[ "${result}" -eq 0 && -z "${LSTM_TEST_EVIDENCE_DIR:-}" ]]; then
         rm -rf -- "${test_dir}"
-    else
+    elif [[ "${result}" -ne 0 ]]; then
         printf 'failed fixture evidence retained: %s\n' "${test_dir}" >&2
+    else
+        printf 'fixture evidence retained: %s\n' "${test_dir}"
     fi
     return "${result}"
 }
@@ -130,5 +133,16 @@ cp "${products_dir}/MetaNN_metal.metallib" "${test_dir}/MetaNN.metallib"
         cmp "production_${mode}_metann_on.bin.tensors" "production_${mode}_metann_off.bin.tensors"
         cmp "production_${mode}_combined_on.bin.tensors" "production_${mode}_combined_off.bin.tensors"
         printf 'PASS %s: H=64 T=64, 3 updates + restored continuation, bitwise forward cache and pre/postclip gradients\n' "${mode}"
+        if [[ "${mode}" == legacy ]]; then
+            for path in metann combined; do
+                EA_LSTM_PROFILE_HOTSPOTS=1 EA_LSTM_FORWARD_AFFINE="${path}" \
+                    ./current legacy off "profile_${path}.bin" production > "profile_${path}.log"
+                cmp "profile_${path}.bin" "production_legacy_${path}_off.bin"
+                cmp "profile_${path}.bin.tensors" "production_legacy_${path}_off.bin.tensors"
+                rg -q '\| forward_cache_materialization \|' "profile_${path}.bin.hotspots.md"
+                rg -q '\| backward_gate_expressions \|' "profile_${path}.bin.hotspots.md"
+            done
+            printf 'PASS recurrent hotspot profiling: default off, enabled scopes, bitwise on/off state and tensors\n'
+        fi
     done
 )
