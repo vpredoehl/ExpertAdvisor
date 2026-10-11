@@ -150,3 +150,10 @@ class StructuralNavigationAdapter:
             # Do not echo untrusted metadata/exception text as numbered source.
             detail = json.dumps(str(exc), ensure_ascii=True)
             return f"TOOL ERROR: {NAVIGATION_MARKER}: " + detail[:1000]
+        except Exception as exc:
+            # Unexpected index/interface failures must not abort an investigation.
+            # Do not expose internal exception messages or filesystem paths.
+            return (
+                f"TOOL ERROR: {NAVIGATION_MARKER}: "
+                f"internal navigation failure ({type(exc).__name__})"
+            )

@@ -296,5 +296,65 @@ class StructuralNavigationTests(unittest.TestCase):
                     self.assertEqual(package["evidence"], [])
 
 
+
+
+class Phase25BUnexpectedFailureTests(unittest.TestCase):
+    """Unexpected navigation failures must remain recoverable tool errors."""
+
+    def test_unexpected_interface_initialization_failure(self):
+        import os
+        from unittest.mock import patch
+        from Tools.RepositoryAgent.structural_navigation_adapter import (
+            StructuralNavigationAdapter,
+        )
+
+        adapter = StructuralNavigationAdapter()
+
+        with patch.dict(
+            os.environ,
+            {"EA_STRUCTURAL_NAVIGATION": "1"},
+        ):
+            with patch(
+                "Tools.RepositoryAgent.structural_navigation_adapter."
+                "CodexRepositoryInterface",
+                side_effect=RuntimeError("private initialization details"),
+            ):
+                result = adapter.execute_tool({
+                    "tool": "resolve_symbol",
+                    "symbol": "Prepare",
+                })
+
+        self.assertTrue(result.startswith("TOOL ERROR:"))
+        self.assertIn("RuntimeError", result)
+        self.assertNotIn("private initialization details", result)
+
+    def test_unexpected_dispatch_failure(self):
+        import os
+        from unittest.mock import Mock, patch
+        from Tools.RepositoryAgent.structural_navigation_adapter import (
+            StructuralNavigationAdapter,
+        )
+
+        adapter = StructuralNavigationAdapter()
+        interface = Mock()
+        interface.dispatch.side_effect = RuntimeError(
+            "private dispatch details"
+        )
+        adapter._interface = interface
+
+        with patch.dict(
+            os.environ,
+            {"EA_STRUCTURAL_NAVIGATION": "1"},
+        ):
+            result = adapter.execute_tool({
+                "tool": "resolve_symbol",
+                "symbol": "Prepare",
+            })
+
+        self.assertTrue(result.startswith("TOOL ERROR:"))
+        self.assertIn("RuntimeError", result)
+        self.assertNotIn("private dispatch details", result)
+
+
 if __name__ == "__main__":
     unittest.main()
