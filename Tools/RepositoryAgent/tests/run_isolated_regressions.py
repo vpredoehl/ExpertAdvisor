@@ -196,7 +196,7 @@ def main():
     if failed:
         return 1
 
-    if len(passed) != 32 or len(excluded) != 3:
+    if len(passed) != 33 or len(excluded) != 3:
         print("Unexpected regression inventory.")
         return 1
 

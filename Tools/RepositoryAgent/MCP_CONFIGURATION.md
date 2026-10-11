@@ -239,8 +239,8 @@ PYTHONPATH="$PWD:/Users/vjp/LLM" \
 python3 Tools/RepositoryAgent/tests/run_isolated_regressions.py
 ```
 
-The Phase 24D.3 inventory contains 32 passing modules (the previous runner's
-29-module inventory assertion was stale). Three pre-existing
+The Phase 25B inventory contains 33 regression modules, including the focused
+structural-navigation adapter tests. Three pre-existing
 legacy modules remain excluded pending separate review:
 
 - `test_ledger.py`
@@ -254,7 +254,7 @@ PostgreSQL.
 ### Scheduler interrupted-launch recovery regressions
 
 The existing RepositoryAgent regression runner supports two explicit
-scheduler recovery modes without changing its default 32-module inventory.
+scheduler recovery modes without changing its default regression inventory.
 
 Static recovery guard (no PostgreSQL):
 
@@ -273,6 +273,64 @@ the checked-in schema, and runs recovery-only with dummy workers.
 Neither mode changes the default RepositoryAgent regression suite.
 The integration test does not access the production LSTM database or
 launch training workers.
+
+### Opt-in autonomous structural navigation (Phase 25B)
+
+The investigation controller retains its existing `{"tool": ...}` protocol.
+Structural navigation is disabled by default. Only the exact environment
+setting `EA_STRUCTURAL_NAVIGATION=1` enables the following additional tools
+and advertises their schemas in the ordinary and recovery investigation prompts:
+
+| Tool | Required fields | Optional fields and bounds |
+| --- | --- | --- |
+| `discover_catalog_targets` | `scope`, `query_groups` | None |
+| `list_catalog_children` | `scope` | `limit`: integer 1–32, default 16; `cursor`: returned opaque cursor, at most 4096 characters |
+| `resolve_symbol` | `symbol` | None |
+| `trace_calls` | `symbol` | `max_depth`: integer 1–4, default 2; `max_nodes`: integer 1–100, default 50 |
+
+Scopes are normalized repository-relative directory selectors, at most 512
+characters; unique directory basenames also resolve through the existing
+catalog contract. Discovery considers immediate indexed files, not descendants.
+Query groups contain 1–4 groups of 1–4 identifier terms: 3–32 ASCII letters or
+digits, beginning with a letter. Terms within a group are ANDed, groups are
+ORed, matching is case-insensitive, and duplicates are rejected. Symbols are
+non-empty strings of at most 256 characters without control characters.
+Unsupported fields, type coercions, and out-of-range parameters are rejected.
+The adapter translates `tool` to the internal interface's `op` only after
+validation. It exposes no verification, investigation, ledger, or database tools.
+
+Catalog pagination preserves the authenticated `next_cursor`, total count,
+scope, and catalog identity. Cursors belong to the same adapter session and
+scope; stale, altered, or cross-session cursors fail closed. A null
+`next_cursor` marks the final page. Duplicate detection uses all canonical
+validated arguments, including defaults and cursors.
+
+Every structural response is marked `NON-EVIDENTIARY STRUCTURAL NAVIGATION`.
+It contains deterministically serialized JSON and never enters the controller's
+`retrieved_lines` store. Only successful legacy `read` operations establish
+source-line provenance; evidence hashing, sanitization, semantic verification,
+and ledger acceptance remain unchanged. Trace results are heuristic depth/row
+bounded views, with no completeness assertion. `max_nodes` bounds trace rows,
+not unique symbols; rows may include callback bindings and omit relationship
+kinds, so source must establish each relationship and any execution claim.
+Responses exceeding 30,000 characters return an explicit error with no partial
+result. Narrow the request or reduce the catalog page size to retry.
+
+The interface/index initializes lazily only for enabled, validated requests.
+Navigation uses the existing startup-selected read-only source reader and
+in-memory CPU index. Set `EXPERTADVISOR_REPOSITORY_ROOT` to the isolated checkout
+at process startup for experiments. Navigation does not initialize Qwen, invoke
+a semantic verifier, write a ledger/cache, access PostgreSQL, or launch workers.
+The six-topic generalization benchmark and its seeds remain unchanged; measure
+model-driven navigation separately in Phase 25C when training resources permit.
+
+Run focused CPU-only coverage without starting the model-backed controller:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 EXPERTADVISOR_REPOSITORY_ROOT="$PWD" \
+PYTHONPATH="$PWD:/Users/vjp/LLM" \
+python3 -m unittest Tools.RepositoryAgent.tests.test_structural_navigation_adapter -v
+```
 
 The new focused regression module can be run independently:
 

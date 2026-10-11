@@ -36,6 +36,7 @@ from .retrieval import (
     _topic_resolved_symbols, _retrieved_window, generic_relationship_bundle_candidates,
     configure_topic_navigation,
 )
+from .structural_navigation_adapter import investigation_prompt
 
 
 
@@ -663,7 +664,7 @@ def investigate_topic(model, tokenizer, topic):
     messages = [
         {
             "role": "system",
-            "content": INVESTIGATION_SYSTEM,
+            "content": investigation_prompt(INVESTIGATION_SYSTEM),
         },
         {
             "role": "user",
@@ -799,7 +800,7 @@ def investigate_topic(model, tokenizer, topic):
     # explicitly restricted to completing the controller's required categories.
     # It therefore accumulates evidence rather than replacing the first pass.
     recovery_messages = [
-        {"role": "system", "content": INVESTIGATION_SYSTEM},
+        {"role": "system", "content": investigation_prompt(INVESTIGATION_SYSTEM)},
         {
             "role": "user",
             "content":

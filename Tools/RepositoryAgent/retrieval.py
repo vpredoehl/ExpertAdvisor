@@ -12,11 +12,15 @@ def configure_topic_navigation(navigation):
     global TOPIC_NAVIGATION
     TOPIC_NAVIGATION = dict(navigation or {})
 from .source_reader import list_files, search, read_file
+from .structural_navigation_adapter import (
+    OPERATIONS as STRUCTURAL_OPERATIONS, StructuralNavigationAdapter, validate_call,
+)
 
 MAX_TOOL_OUTPUT = 30000
 MAX_READ_LINES = 500
 
 _REPOSITORY_INDEX = None
+_STRUCTURAL_NAVIGATION = StructuralNavigationAdapter()
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -193,7 +197,12 @@ def topic_index_navigation(topic, max_symbols=14, max_rows=72):
     return "\n".join(rows[:max_rows])
 
 def execute_tool(call):
+    if not isinstance(call, dict):
+        return "TOOL ERROR: request must be an object"
     tool = call.get("tool")
+
+    if isinstance(tool, str) and tool in STRUCTURAL_OPERATIONS:
+        return _STRUCTURAL_NAVIGATION.execute_tool(call)
 
     if tool == "list_files":
         prefix = str(call.get("prefix", ""))
@@ -256,6 +265,15 @@ def execute_tool(call):
 
 def normalize_call(call):
     tool = call.get("tool")
+
+    if isinstance(tool, str) and tool in STRUCTURAL_OPERATIONS:
+        try:
+            validated = validate_call(call)
+        except ValueError:
+            # Malformed model requests still need a hashable key so the
+            # existing controller can report the tool error without crashing.
+            return ("invalid_structural", json.dumps(call, sort_keys=True, separators=(",", ":")))
+        return ("structural", json.dumps(validated, sort_keys=True, separators=(",", ":")))
 
     if tool == "list_files":
         return (
