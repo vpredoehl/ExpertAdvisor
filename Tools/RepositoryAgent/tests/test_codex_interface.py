@@ -6,7 +6,11 @@ stub.list_files=lambda prefix="": ["Sources/A.cpp"]
 stub.search=lambda pattern,max_results=100: f"Sources/A.cpp:2: {pattern}"
 stub.read_file=lambda name,start=1,end=200: "\n".join(f"{n}: line{n}" for n in range(start,end+1))
 sys.modules["expertadvisor_agent"]=stub
-from Tools.RepositoryAgent.codex_interface import CodexRepositoryInterface
+from Tools.RepositoryAgent import codex_interface
+codex_interface.list_files = stub.list_files
+codex_interface.search = stub.search
+codex_interface.read_file = stub.read_file
+CodexRepositoryInterface = codex_interface.CodexRepositoryInterface
 iface=CodexRepositoryInterface()
 cap=iface.dispatch({"op":"capabilities"})
 assert cap["read_only"] is True

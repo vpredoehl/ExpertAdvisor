@@ -6,6 +6,9 @@ _stub.search = lambda pattern, max_results=100: ""
 _stub.read_file = lambda name, start=1, end=200: ""
 sys.modules.setdefault("expertadvisor_agent", _stub)
 from .. import retrieval as r
+r.list_files = _stub.list_files
+r.search = _stub.search
+r.read_file = _stub.read_file
 assert hasattr(r, "RETRIEVED_LINE_RE")
 assert isinstance(r.TOPIC_NAVIGATION, dict)
 assert r.MAX_TOOL_OUTPUT == 30000

@@ -251,6 +251,29 @@ These exclusions are not passing-test claims. The regression runner does
 not load Qwen, invoke production training, build ExpertAdvisor, or access
 PostgreSQL.
 
+### Scheduler interrupted-launch recovery regressions
+
+The existing RepositoryAgent regression runner supports two explicit
+scheduler recovery modes without changing its default 32-module inventory.
+
+Static recovery guard (no PostgreSQL):
+
+    python3 Tools/RepositoryAgent/tests/run_isolated_regressions.py --scheduler-static
+
+Static guard plus disposable-PostgreSQL integration:
+
+    python3 Tools/RepositoryAgent/tests/run_isolated_regressions.py \
+      --scheduler-integration \
+      "$PWD/DerivedData/Phase24F/Build/Products/Release/LSTM_Release"
+
+Integration requires an explicitly supplied isolated RepositoryAgent
+Release executable. It creates a disposable PostgreSQL database, loads
+the checked-in schema, and runs recovery-only with dummy workers.
+
+Neither mode changes the default RepositoryAgent regression suite.
+The integration test does not access the production LSTM database or
+launch training workers.
+
 The new focused regression module can be run independently:
 
 ```sh

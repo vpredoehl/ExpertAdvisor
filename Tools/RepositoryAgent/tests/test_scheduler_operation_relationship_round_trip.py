@@ -19,9 +19,8 @@ def list_files(prefix=""):
 
 
 def read_file(name, start=1, end=200):
-    with open(os.path.join(ROOT, name), encoding="utf-8") as handle:
-        return "\n".join(f"{number}: {line.rstrip()}" for number, line in
-                         enumerate(handle.readlines()[start - 1:end], start))
+    from Tools.RepositoryAgent.source_reader import RepositorySourceReader
+    return RepositorySourceReader(Path(ROOT)).read_file(name, start, end)
 
 
 stub.list_files = list_files
