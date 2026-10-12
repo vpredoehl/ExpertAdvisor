@@ -102,7 +102,7 @@ PY
 export EA_RESEARCH_SOURCE_SHA256="$(shasum -a 256 "${EA_RESEARCH_SOURCE_MANIFEST}" | awk '{print $1}')"
 export EA_RESEARCH_CONFIG_SHA256="$(shasum -a 256 "${build_dir}/snapshot/Scripts/tg4_analysis_config.frozen_v1.conf" | awk '{print $1}')"
 export EA_RESEARCH_COMPILER="$("${research_cxx}" --version)
-flags=-std=c++20 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic -Wno-c++23-attribute-extensions
+flags=-std=c++20 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic -Wno-c++23-attribute-extensions -lz
 live_root=${repo_root}
 snapshot_root=${build_dir}/snapshot
 sysroot=${research_sdk}"
@@ -120,7 +120,7 @@ export EA_RESEARCH_EXECUTABLE="${build_dir}/fib-trendline-study"
     "${build_dir}/snapshot/Common/HistoricalFxTimestamp.cpp" \
     "${build_dir}/snapshot/Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp" \
     "${build_dir}/snapshot/Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp" \
-    "${pqxx_libs[@]}" -o "${EA_RESEARCH_EXECUTABLE}"
+    "${pqxx_libs[@]}" -lz -o "${EA_RESEARCH_EXECUTABLE}"
 # Verify snapshot bytes after compilation, before any possible database access.
 (cd "${build_dir}/snapshot" && shasum -a 256 -c "${EA_RESEARCH_SOURCE_MANIFEST}" > "${build_dir}/snapshot-verification.log")
 research_libraries="$(python3 - "${EA_RESEARCH_EXECUTABLE}" <<'PYLIB'
@@ -154,7 +154,14 @@ def invoke(args):
 def bounded(start, end):
     return ['--bounded-development', '--start-utc', start, '--end-utc', end]
 start, end = '2018-01-01T00:00:00Z', '2018-02-01T00:00:00Z'
+for tier in ('summary', 'full'):
+    result = invoke(['--episode-publication', tier])
+    assert result.returncode == 0 and f'episode_publication={tier}' in result.stdout
+assert 'episode_publication=summary' in invoke([]).stdout
 invalid = [
+    (['--episode-publication', 'sample'], 'requires summary|full'),
+    (['--episode-publication'], 'requires summary|full'),
+    (['--episode-publication', 'summary', '--episode-publication', 'full'], 'duplicate or incomplete'),
     (['--partition', 'final2025'], '2025 disabled before detector/database access'),
     (['--bounded-development'], 'requires both'),
     (['--bounded-development', '--start-utc', start], 'requires both'),

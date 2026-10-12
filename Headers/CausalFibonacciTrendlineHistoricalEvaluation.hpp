@@ -180,11 +180,27 @@ struct OutcomeRecord
     std::optional<Outcome> outcome;
 };
 struct Gap { std::int64_t previous, next, seconds; };
+// Observational telemetry only: full replay, causal prefix, scoring range.
+struct HighWatermark
+{
+    std::size_t full = 0, prefix = 0, scoring = 0;
+    void Observe(std::size_t count, bool isPrefix)
+    {
+        full = std::max(full, count);
+        auto& phase = isPrefix ? prefix : scoring; phase = std::max(phase, count);
+    }
+};
 struct Audit
 {
     std::size_t candles = 0, prefixCandles = 0, scoredRangeCandles = 0, scheduled = 0;
-    std::size_t classified = 0, resolved = 0, censored = 0, peakIdentities = 0, peakEpisodes = 0;
-    std::optional<std::int64_t> firstTimestamp, lastTimestamp;
+    std::size_t classified = 0, resolved = 0, censored = 0, peakIdentities = 0, peakEpisodes = 0, scheduledMeasurements = 0;
+    std::optional<std::int64_t> firstTimestamp, lastTimestamp, firstEpisodeSaturationTimestamp;
+    std::optional<std::size_t> firstEpisodeSaturationBar;
+    // Retained inputs are post-update counts, not demand before upstream pruning.
+    HighWatermark retainedAB, retainedLines, eligiblePairs, evaluatedPairs, identityLedger, episodeLedger;
+    // Rows: full, prefix, scoring. Columns: initialization, union entry, complement entry.
+    std::array<std::array<std::size_t, 3>, 3> episodeRecords{};
+    std::array<std::size_t, 3> skippedEpisodeOpportunities{};
     std::map<std::string, std::size_t> decisions, censoring, diagnostics, sourceYears;
     bool geometryComplete = true, diagnosticsComplete = true, calendarConsistent = true;
 };
@@ -262,17 +278,26 @@ public:
         ++audit_.sourceYears[std::to_string(utc.tm_year + 1900)];
         candleHash_.Add(std::to_string(c.timestamp) + "," + Number(c.open) + "," + Number(c.high) + ","
                         + Number(c.low) + "," + Number(c.close) + "\n");
+        const bool isPrefix = c.timestamp < range_.start;
+        audit_.retainedAB.Observe(abs.size(), isPrefix);
+        audit_.retainedLines.Observe(lines.size(), isPrefix);
         Prune(bar);
         bool complete = abs.size() <= protocol_.maxABInputs && lines.size() <= protocol_.maxLineInputs;
         if (!complete) ++audit_.diagnostics["input_capacity"];
         auto causalAB = complete ? Canonical(abs, bar, c.timestamp) : std::vector<TG3::ABStructure>{};
         auto causalLines = complete ? Canonical(lines, bar, c.timestamp) : std::vector<TG1A::TrendLineCandidate>{};
+        if (!causalLines.empty() && causalAB.size() > std::numeric_limits<std::size_t>::max() / causalLines.size())
+            throw std::overflow_error("eligible geometry pair demand overflow");
+        audit_.eligiblePairs.Observe(causalAB.size() * causalLines.size(), isPrefix);
+        audit_.identityLedger.Observe(abSnapshots_.size() + lineSnapshots_.size(), isPrefix);
         complete = complete && !identityStopped_ && !sourceCapacityStopped_;
         const bool validAtr = atr && std::isfinite(*atr) && *atr > 0;
         const bool scheduled = c.timestamp == nextSlot_ && c.timestamp >= range_.start;
         Aggregate a;
         if (complete && validAtr) a = Measure(bar, c, *atr, causalAB, causalLines, scheduled);
         else { a.abs = causalAB.size(); a.lines = causalLines.size(); a.complete = complete; }
+        audit_.evaluatedPairs.Observe(a.pairs, isPrefix);
+        audit_.episodeLedger.Observe(episodes_.size(), isPrefix);
         if (!a.complete) audit_.geometryComplete = false;
         if (scheduled)
         {
@@ -397,6 +422,7 @@ private:
         }
         map.emplace(key, Stored{birth, snapshot});
         audit_.peakIdentities = std::max(audit_.peakIdentities, abSnapshots_.size() + lineSnapshots_.size());
+        audit_.identityLedger.Observe(abSnapshots_.size() + lineSnapshots_.size(), *audit_.lastTimestamp < range_.start);
     }
     std::vector<TG3::ABStructure> Canonical(std::span<const TG3::ABStructure> input, std::size_t bar, std::int64_t time)
     {
@@ -502,17 +528,20 @@ private:
                         a.intersection = true; ++a.intersections;
                         for (std::size_t i = 0; i < kRatios.size(); ++i) if (m.ratio == kRatios[i]) a.supportingRatios[i] = true;
                     }
+                    if (scheduled) ++audit_.scheduledMeasurements;
                     if (scheduled && sinks_.geometry) sinks_.geometry(m);
-                    ObserveEpisode(m, ab.identity.availabilityBar, lineBirths.at(m.line));
+                    ObserveEpisode(bar, m, ab.identity.availabilityBar, lineBirths.at(m.line));
                 }
             }
         a.nearFibLevels = fibNear.size(); a.nearLines = lineNear.size();
         audit_.diagnostics["measurements_examined"] += a.measurements;
         return a;
     }
-    void ObserveEpisode(const GeometryMeasurement& m, std::size_t abBirth, std::size_t lineBirth)
+    void ObserveEpisode(std::size_t bar, const GeometryMeasurement& m, std::size_t abBirth, std::size_t lineBirth)
     {
-        if (episodesStopped_) return;
+        const std::size_t phase = m.timestamp < range_.start ? 1 : 2;
+        const auto skipped = [&] { ++audit_.skippedEpisodeOpportunities[0]; ++audit_.skippedEpisodeOpportunities[phase]; };
+        if (episodesStopped_) { skipped(); return; }
         const std::string key = m.ab + "|" + m.line + "|" + Number(m.ratio);
         auto it = episodes_.find(key);
         const bool near = m.cohort != Cohort::D;
@@ -521,13 +550,17 @@ private:
             if (episodes_.size() == protocol_.maxEpisodeStates)
             {
                 episodesStopped_ = true; audit_.diagnosticsComplete = false;
-                ++audit_.diagnostics["episode_capacity_stop"]; return;
+                audit_.firstEpisodeSaturationBar = bar; audit_.firstEpisodeSaturationTimestamp = m.timestamp;
+                ++audit_.diagnostics["episode_capacity_stop"]; skipped(); return;
             }
             it = episodes_.emplace(key, EpisodeState{!near, 0, abBirth, lineBirth}).first;
             audit_.peakEpisodes = std::max(audit_.peakEpisodes, episodes_.size());
+            audit_.episodeLedger.Observe(episodes_.size(), phase == 1);
         }
         if (it->second.near == near) return;
         it->second.near = near; ++it->second.sequence;
+        const std::size_t event = it->second.sequence == 1 ? 0 : (near ? 1 : 2);
+        ++audit_.episodeRecords[0][event]; ++audit_.episodeRecords[phase][event];
         ++audit_.diagnostics["interaction_episodes"];
         if (sinks_.episode) sinks_.episode({m, it->second.sequence});
     }

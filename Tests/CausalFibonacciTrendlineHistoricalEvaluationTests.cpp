@@ -229,11 +229,22 @@ void InvarianceAndCapacity()
     const std::array two{AB(), AB(110, 110.1, -1)}; line = Line(kFirst);
     pairs.engine.Add(kFirst, Bar(kFirst), 2, two, std::span{&line, 1}); pairs.engine.Finalize();
     assert(pairs.decisions[0].status == "capacity_invalid" && !pairs.engine.GetAudit().geometryComplete && pairs.geometry.empty());
+    assert(pairs.engine.GetAudit().eligiblePairs.scoring == 2 && pairs.engine.GetAudit().evaluatedPairs.scoring == 0);
     cap = {}; cap.maxDetectorIdentities = 1; Harness identities(cap); identities.Warm(); identities.Geometry();
     assert(identities.decisions[0].status == "capacity_invalid" && identities.engine.GetAudit().peakIdentities == 1);
     cap = {}; cap.maxEpisodeStates = 1; Harness diagnostic(cap); diagnostic.Warm(); diagnostic.Geometry();
     assert(diagnostic.decisions[0].cohort == S::Cohort::C && diagnostic.engine.GetAudit().geometryComplete);
     assert(!diagnostic.engine.GetAudit().diagnosticsComplete);
+    // Episode accounting observes initialization separately from subsequent
+    // complement/union entries, and partitions observations by decision range.
+    Harness transitions({}, {Time(kFirst), Time(kFirst + 8)});
+    while (transitions.bar < kFirst - 3) transitions.Empty();
+    transitions.Geometry(); transitions.Geometry(110); transitions.Geometry();
+    transitions.Geometry(110); transitions.Geometry();
+    const auto& episodes = transitions.engine.GetAudit().episodeRecords;
+    assert((episodes[0] == std::array<std::size_t, 3>{3, 6, 6}));
+    assert((episodes[1] == std::array<std::size_t, 3>{3, 3, 3}));
+    assert((episodes[2] == std::array<std::size_t, 3>{0, 3, 3}));
     cap = {}; cap.maxABInputs = 1; Harness input(cap); input.Warm();
     input.engine.Add(kFirst, Bar(kFirst), 2, two, std::span{&line, 1});
     assert(input.decisions[0].status == "capacity_invalid");
@@ -326,11 +337,23 @@ void ReplayPartitionsPrefix(const EA::TG4::EvaluationConfiguration& original)
     std::cout << "V2_REPLAY_EQUIVALENCE bars=" << candles.size() << " scheduled=" << first.size()
               << " classified=" << a.Engine().GetAudit().classified << " peak_identities=" << a.Engine().GetAudit().peakIdentities << '\n';
 }
+std::string Text(const std::filesystem::path& path)
+{
+    std::ifstream file(path, std::ios::binary); assert(file);
+    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
+std::string LegacyMeasurement(const S::GeometryMeasurement& m)
+{
+    // Frozen pre-revision CSV serialization, independent of the gzip writer.
+    return std::to_string(m.timestamp) + "," + m.ab + "," + m.line + "," + S::Number(m.ratio) + "," + S::Number(m.fibPrice)
+        + "," + S::Number(m.linePrice) + "," + S::Number(m.dF) + "," + S::Number(m.dL) + "," + S::Number(m.dS) + "," + S::Name(m.cohort);
+}
 void Artifacts(const EA::TG4::EvaluationConfiguration& config, const std::filesystem::path& temp)
 {
-    // All fixture files and output directories are inside the mktemp directory
-    // created by this test script. No C++ cleanup/deletion is performed.
-    const auto write = [&](const std::filesystem::path& p, std::string_view content) { std::ofstream out(p); out << content; };
+    // All fixture files are inside this script's own mktemp directory.
+    // No C++ cleanup/deletion or historical input is used.
+    const auto write = [&](const std::filesystem::path& p, std::string_view content)
+        { std::ofstream out(p, std::ios::binary); out.exceptions(std::ios::failbit | std::ios::badbit); out << content; out.close(); };
     write(temp / "fixture-source", "synthetic sources\n"); write(temp / "fixture-executable", "synthetic executable\n");
     write(temp / "fixture-config", "synthetic configuration\n"); write(temp / "fixture-archive", "synthetic archive fixture\n");
     S::Provenance provenance;
@@ -340,37 +363,199 @@ void Artifacts(const EA::TG4::EvaluationConfiguration& config, const std::filesy
     provenance.sourceSHA256 = S::FileHash(provenance.sourceManifest); provenance.executableSHA256 = S::FileHash(provenance.executable);
     provenance.configurationFileSHA256 = S::FileHash(provenance.configurationFile); provenance.preflightRows = kFirst + 5;
     auto researchConfig = config; researchConfig.fibonacci = S::HistoricalEvaluator::ResearchFibonacci(config.fibonacci);
-    const auto produce = [&](const std::filesystem::path& path, int failure)
+    const std::string header = "bar_start_utc_epoch,ab_natural_key,line_natural_key,ratio,fib_price,line_price,dF,dL,dS,cohort";
+    std::string legacyGeometry, legacyEpisodes;
+    const auto produce = [&](const std::filesystem::path& path, int failure, S::EpisodePublication tier = S::EpisodePublication::Summary,
+                             bool saturated = false, std::size_t batch = 128, bool reverse = false, bool alias = false)
     {
-        S::ArtifactWriter writer(path); S::Protocol p;
-        if (failure == 3) p.maxDetectorIdentities = 1;
-        S::EventEngine engine(p, "fixture", writer.GetSinks(), S::ScoreRange{Time(kFirst), Time(kFirst + 8)});
-        for (std::size_t i = 0; i < kFirst; ++i) engine.Add(i, Bar(i), 2, {}, {});
-        const auto ab = AB(); const auto line = Line(kFirst);
-        engine.Add(kFirst, Bar(kFirst), 2, std::span{&ab, 1}, std::span{&line, 1});
-        for (std::size_t i = kFirst + 1; i <= kFirst + 4; ++i) engine.Add(i, Bar(i), 2, {}, {});
-        engine.Finalize(); auto meta = provenance;
-        if (failure == 1) meta.sourceSHA256 = std::string(64, 'f');
-        if (failure == 2) std::filesystem::create_directory(path / "provenance_manifest.json");
-        if (failure == 4) std::filesystem::create_directory(path / "checksums.sha256");
-        auto effective = researchConfig;
-        if (failure == 5) effective.fibonacci.retracementRatios = {0.5};
-        if (failure) Reject([&] { writer.Complete(engine, effective, meta); });
-        else writer.Complete(engine, effective, meta);
+        bool armed = false; unsigned finalizations = 0;
+        const auto hook = [&](S::CompressionOperation operation)
+        {
+            if (!armed) return;
+            if ((failure == 6 && operation == S::CompressionOperation::Compress) ||
+                (failure == 7 && operation == S::CompressionOperation::Write) ||
+                (failure == 8 && operation == S::CompressionOperation::Finalize))
+                throw std::runtime_error("synthetic codec/write/finalization failure");
+            if ((failure == 9 || failure == 10) && operation == S::CompressionOperation::Finalize && ++finalizations == 2)
+            {
+                // Geometry was already closed. Corrupt its CRC before publication
+                // verification; the episode stream is still being finalized.
+                if (failure == 9)
+                {
+                    std::fstream file(path / "geometry_measurements.csv.gz", std::ios::binary | std::ios::in | std::ios::out);
+                    file.seekg(-8, std::ios::end); char byte = 0; file.get(byte); byte ^= 1;
+                    file.seekp(-8, std::ios::end); file.put(byte); file.close();
+                }
+                else
+                {
+                    // A valid gzip trailer is insufficient: decoded hash/row
+                    // mismatches must also prevent COMPLETE.
+                    S::CompressedCsv replacement(path / "geometry_measurements.csv.gz");
+                    replacement.Append("header\nwrong synthetic geometry\n"); replacement.Finish();
+                }
+            }
+        };
+        const auto operation = [&]
+        {
+            S::ArtifactWriter writer(path, tier, hook); S::Protocol p; p.lineBatchSize = batch;
+            if (failure == 3) p.maxDetectorIdentities = 1;
+            if (saturated) p.maxEpisodeStates = 1;
+            auto sinks = writer.GetSinks();
+            std::string expectedGeometry = header + "\n", expectedEpisodes = header + ",episode_sequence,role\n";
+            const auto geometrySink = sinks.geometry; const auto episodeSink = sinks.episode;
+            sinks.geometry = [&](const S::GeometryMeasurement& m) { expectedGeometry += LegacyMeasurement(m) + "\n"; geometrySink(m); };
+            sinks.episode = [&](const S::Episode& e)
+                { expectedEpisodes += LegacyMeasurement(e.measurement) + "," + std::to_string(e.sequence) + ",DIAGNOSTIC_ONLY\n"; episodeSink(e); };
+            S::EventEngine engine(p, "fixture", sinks, S::ScoreRange{Time(kFirst), Time(kFirst + 8)});
+            for (std::size_t i = 0; i < kFirst; ++i)
+            {
+                // Saturate diagnostically BEFORE scoring, without restricting
+                // primary geometry. Retained input maxima occur in the prefix.
+                if (saturated && i == kFirst - 3)
+                {
+                    const std::array abs{AB(), AB(110, 110.1, -1), AB(120, 120.1, -2)};
+                    const std::array lines{Line(i), Line(i, 115, -1), Line(i, 120, -2)};
+                    engine.Add(i, Bar(i), 2, abs, lines);
+                }
+                else engine.Add(i, Bar(i), 2, {}, {});
+            }
+            std::vector abs{AB(), AB(110, 110.1, -1)};
+            std::vector lines{Line(kFirst), Line(kFirst, 115, -1)};
+            if (!saturated) { abs.resize(1); lines.resize(1); }
+            if (alias) { auto a = abs[0]; --a.identity.aBar; abs.push_back(a); auto l = lines[0]; --l.anchor1Bar; lines.push_back(l); }
+            if (reverse) { std::reverse(abs.begin(), abs.end()); std::reverse(lines.begin(), lines.end()); }
+            armed = true;
+            engine.Add(kFirst, Bar(kFirst), 2, abs, lines);
+            for (std::size_t i = kFirst + 1; i <= kFirst + 4; ++i) engine.Add(i, Bar(i), 2, {}, {});
+            engine.Finalize(); auto meta = provenance;
+            if (saturated)
+            {
+                const auto& a = engine.GetAudit();
+                assert(!a.diagnosticsComplete && a.geometryComplete && a.firstEpisodeSaturationBar == kFirst - 3);
+                assert(a.firstEpisodeSaturationTimestamp == Time(kFirst - 3));
+                assert(a.skippedEpisodeOpportunities[0] == 38 && a.skippedEpisodeOpportunities[1] == 26 && a.skippedEpisodeOpportunities[2] == 12);
+                assert(a.episodeRecords[0][0] == 1 && a.episodeRecords[1][0] == 1 && a.episodeRecords[2][0] == 0);
+                assert(a.retainedAB.prefix == 3 && a.retainedLines.prefix == 3);
+                assert(a.eligiblePairs.prefix == 9 && a.evaluatedPairs.prefix == 9);
+                assert(a.identityLedger.prefix == 6 && a.episodeLedger.prefix == 1 && a.episodeLedger.scoring == 1);
+                assert(a.identityLedger.full == 6 && a.eligiblePairs.full == 9 && a.retainedAB.full == 3);
+            }
+            if (failure == 1) meta.sourceSHA256 = std::string(64, 'f');
+            if (failure == 2) std::filesystem::create_directory(path / "provenance_manifest.json");
+            if (failure == 4) std::filesystem::create_directory(path / "checksums.sha256");
+            auto effective = researchConfig;
+            if (failure == 5) effective.fibonacci.retracementRatios = {0.5};
+            writer.Complete(engine, effective, meta);
+            S::ValidateArtifactPublication(path);
+            std::string decodedGeometry;
+            const auto geometryInfo = S::InspectGzip(path / "geometry_measurements.csv.gz", [&](auto bytes) { decodedGeometry += bytes; });
+            assert(decodedGeometry == expectedGeometry && geometryInfo.sha256 == S::Hash(expectedGeometry));
+            assert(!std::filesystem::exists(path / "geometry_measurements.csv"));
+            if (tier == S::EpisodePublication::Full)
+            {
+                std::string decodedEpisodes;
+                S::InspectGzip(path / "interaction_episodes.csv.gz", [&](auto bytes) { decodedEpisodes += bytes; });
+                assert(decodedEpisodes == expectedEpisodes);
+            }
+            else assert(!std::filesystem::exists(path / "interaction_episodes.csv.gz"));
+            if (!saturated) { legacyGeometry = expectedGeometry; legacyEpisodes = expectedEpisodes; }
+        };
+        if (failure) Reject(operation); else operation();
         assert(std::filesystem::exists(path / "COMPLETE") == (failure == 0));
     };
-    produce(temp / "first", 0); produce(temp / "second", 0);
+    produce(temp / "first", 0); produce(temp / "second", 0); produce(temp / "full", 0, S::EpisodePublication::Full);
     for (const auto& file : std::filesystem::directory_iterator(temp / "first"))
         assert(S::FileHash(file.path()) == S::FileHash(temp / "second" / file.path().filename()));
-    for (int i = 1; i <= 5; ++i) produce(temp / ("failure" + std::to_string(i)), i);
+    for (const char* file : {"decisions.csv", "outcomes.csv", "geometry_measurements.csv.gz", "effective_configuration.txt"})
+        assert(Text(temp / "first" / file) == Text(temp / "full" / file));
+    for (int i = 1; i <= 10; ++i)
+        produce(temp / ("failure" + std::to_string(i)), i, i >= 9 ? S::EpisodePublication::Full : S::EpisodePublication::Summary);
+    assert(Text(temp / "failure3" / "decisions.csv").find("capacity_invalid") != std::string::npos);
+    assert(std::filesystem::exists(temp / "failure3" / "INVALID"));
+    produce(temp / "saturated-summary", 0, S::EpisodePublication::Summary, true);
+    produce(temp / "saturated-full", 0, S::EpisodePublication::Full, true);
+    produce(temp / "saturated-permuted", 0, S::EpisodePublication::Full, true, 1, true, true);
+    for (const char* file : {"decisions.csv", "outcomes.csv", "geometry_measurements.csv.gz"})
+    {
+        assert(Text(temp / "saturated-summary" / file) == Text(temp / "saturated-full" / file));
+        assert(Text(temp / "saturated-full" / file) == Text(temp / "saturated-permuted" / file));
+    }
+    assert(Text(temp / "saturated-summary" / "episode_summary.csv").find("tracking_complete,0,OBSERVED") != std::string::npos);
+    assert(Text(temp / "saturated-summary" / "episode_summary.csv").find("publication_detail_omitted,1,INTENTIONAL") != std::string::npos);
+    assert(Text(temp / "saturated-full" / "episode_summary.csv").find("publication_detail_omitted,0,INTENTIONAL") != std::string::npos);
+    // Synthesize an original v2 publication, not a rewritten historical artifact.
+    const auto legacy = temp / "legacy-v2"; std::filesystem::create_directory(legacy);
+    for (const char* file : {"decisions.csv", "outcomes.csv", "coverage.csv", "exclusions.csv", "gaps.csv", "detector_configuration.json",
+                           "effective_configuration.txt", "source_manifest.sha256", "source_snapshot.tar.gz", "detector_source_configuration.conf"})
+        std::filesystem::copy_file(temp / "first" / file, legacy / file);
+    write(legacy / "geometry_measurements.csv", legacyGeometry); write(legacy / "interaction_episodes.csv", legacyEpisodes);
+    std::istringstream revisedProtocol(Text(temp / "first" / "protocol.json")); std::string protocol, row;
+    while (std::getline(revisedProtocol, row))
+        if (row.find("\"artifact_format\"") == std::string::npos && row.find("\"episode_publication\"") == std::string::npos &&
+            row.find("\"episode_detail_omitted\"") == std::string::npos) protocol += row + "\n";
+    write(legacy / "protocol.json", protocol);
+    const auto manifest = Text(temp / "first" / "provenance_manifest.json");
+    write(legacy / "provenance_manifest.json", "{\n" + manifest.substr(manifest.find("\"schema\":\"fib-trendline-provenance-v2\"")));
+    std::map<std::string, std::string> hashes;
+    for (const auto& file : std::filesystem::directory_iterator(legacy)) hashes[file.path().filename().string()] = S::FileHash(file.path());
+    std::string checksums; for (const auto& [file, hash] : hashes) checksums += hash + "  " + file + "\n";
+    write(legacy / "checksums.sha256", checksums);
+    write(legacy / "COMPLETE", "processing=COMPLETE\nchecksums_sha256=" + S::Hash(checksums) + "\n");
+    S::ValidateArtifactPublication(legacy);
+    // Corruption after publication is detected by both the byte-hash chain and
+    // strict gzip validation. Existing artifacts are never involved.
+    const auto corrupt = temp / "corrupt"; std::filesystem::copy(temp / "first", corrupt, std::filesystem::copy_options::recursive);
+    std::string compressed = Text(corrupt / "geometry_measurements.csv.gz");
+    compressed[compressed.size() - 8] ^= 1; write(corrupt / "geometry_measurements.csv.gz", compressed);
+    Reject([&] { S::InspectGzip(corrupt / "geometry_measurements.csv.gz"); });
+    Reject([&] { S::ValidateArtifactPublication(corrupt); });
+    const auto truncated = temp / "truncated.gz"; write(truncated, compressed.substr(0, 12)); Reject([&] { S::InspectGzip(truncated); });
+    write(temp / "trailing.gz", Text(temp / "first" / "geometry_measurements.csv.gz") + "garbage");
+    Reject([&] { S::InspectGzip(temp / "trailing.gz"); });
     Reject([&] { S::ArtifactWriter existing(temp / "first"); });
     assert(S::Hash("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-    std::cout << "V2_ARTIFACTS deterministic_bytes=true publication_failures=5\n";
+    std::cout << "SCALABLE_ARTIFACTS primary_and_synthetic_outcome_equivalence=true legacy_decoded_bytes=true deterministic_bytes=true publication_failures=10 legacy_v2_validation=true\n";
 }
+void StreamingMemory(const std::filesystem::path& temp)
+{
+    // Larger input than the codec buffers; retain only one fixed row and hashes.
+    // Different producer chunking cannot introduce compression flush boundaries.
+    const std::string row = std::string(1023, 'x') + "\n";
+    S::Sha256 expected; expected.Add("header\n");
+    S::CompressedCsv first(temp / "stream-one.gz"), second(temp / "stream-chunks.gz");
+    first.Append("header\n"); second.Append("header\n");
+    constexpr std::size_t rows = 32768;
+    for (std::size_t i = 0; i < rows; ++i)
+    {
+        first.Append(row); second.Append(std::string_view(row).substr(0, 17)); second.Append(std::string_view(row).substr(17));
+        expected.Add(row);
+    }
+    const auto a = first.Finish(), b = second.Finish();
+    assert(a.sha256 == expected.Digest() && a.sha256 == b.sha256 && a.bytes == rows * row.size() + 7 && a.rows == rows);
+    assert(S::FileHash(temp / "stream-one.gz") == S::FileHash(temp / "stream-chunks.gz"));
+    assert(S::InspectGzip(temp / "stream-one.gz").sha256 == a.sha256);
+    assert(S::CompressedCsv::kBufferBytes == 65536);
+    Reject([&] { first.Append("after-finalization"); }); Reject([&] { first.Finish(); });
+    // Exercise output-buffer draining with low-compressibility input too.
+    S::CompressedCsv noisy(temp / "stream-noisy.gz"); S::Sha256 noiseHash;
+    std::mt19937 generator(12345); std::string block(65536, ' '); std::size_t noiseBytes = 0;
+    for (int i = 0; i < 64; ++i)
+    {
+        for (auto& byte : block) byte = static_cast<char>(32 + generator() % 95);
+        for (std::size_t j = 1023; j < block.size(); j += 1024) block[j] = '\n';
+        noisy.Append(block); noiseHash.Add(block); noiseBytes += block.size();
+    }
+    const auto noise = noisy.Finish();
+    assert(noise.bytes == noiseBytes && noise.sha256 == noiseHash.Digest());
+    assert(S::InspectGzip(temp / "stream-noisy.gz").sha256 == noise.sha256);
+    std::cout << "STREAMING_COMPRESSION synthetic_bytes=" << a.bytes << " decoded_rows=" << a.rows
+              << " output_buffer_bytes=" << S::CompressedCsv::kBufferBytes << " producer_chunk_invariance=true\n";
+}
+
 }
 int main(int argc, char** argv)
 {
     assert(argc == 3); const auto config = EA::TG4::LoadConfigurationFile(argv[1]);
-    Cohorts(); ScheduleCoverageOutcomes(); InvarianceAndCapacity(); ReplayPartitionsPrefix(config); Artifacts(config, argv[2]);
+    Cohorts(); ScheduleCoverageOutcomes(); InvarianceAndCapacity(); ReplayPartitionsPrefix(config); Artifacts(config, argv[2]); StreamingMemory(argv[2]);
     std::cout << "CausalFibonacciTrendlineHistoricalEvaluationTests v2 passed\n";
 }

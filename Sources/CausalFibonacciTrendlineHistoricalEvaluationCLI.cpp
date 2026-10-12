@@ -60,7 +60,8 @@ int main(int argc, char** argv)
     try
     {
         S::Protocol protocol; std::filesystem::path output;
-        bool help = false, havePartition = false, boundedDevelopment = false;
+        bool help = false, havePartition = false, boundedDevelopment = false, haveTier = false;
+        S::EpisodePublication tier = S::EpisodePublication::Summary;
         std::optional<std::int64_t> startUtc, endUtc;
         for (int i = 1; i < argc; ++i)
         {
@@ -70,6 +71,13 @@ int main(int argc, char** argv)
             else if (arg == "--start-utc" && i + 1 < argc && !startUtc) startUtc = ParseUtcBoundary(argv[++i]);
             else if (arg == "--end-utc" && i + 1 < argc && !endUtc) endUtc = ParseUtcBoundary(argv[++i]);
             else if (arg == "--output-dir" && i + 1 < argc && output.empty()) output = argv[++i];
+            else if (arg == "--episode-publication" && i + 1 < argc && !haveTier)
+            {
+                haveTier = true; const std::string value = argv[++i];
+                if (value == "summary") tier = S::EpisodePublication::Summary;
+                else if (value == "full") tier = S::EpisodePublication::Full;
+                else throw std::invalid_argument("episode publication requires summary|full");
+            }
             else if (arg == "--partition" && i + 1 < argc && !havePartition)
             {
                 havePartition = true; const std::string p = argv[++i];
@@ -106,6 +114,9 @@ int main(int argc, char** argv)
             std::cout << "Phase 2B v2 standalone research: fixed UTC bar-start minute 45, complete market-state aggregation.\n"
                 << "--partition development|calibration --output-dir NEW_EXTERNAL_DIRECTORY\n"
                 << "--bounded-development --start-utc YYYY-MM-DDTHH:MM:SSZ --end-utc YYYY-MM-DDTHH:MM:SSZ --output-dir NEW_EXTERNAL_DIRECTORY\n"
+                << "--episode-publication summary|full (default summary); artifact format v3, semantic protocol v2.\n"
+                << "Deterministic lossless gzip geometry; episode tracking unchanged; summary omits raw episode detail.\n"
+                << "episode_publication=" << S::Name(tier) << "\n"
                 << "Replay origin 2010; warmup 2048; calibration embargo 4; no 2025.\n"
                 << "Bounded ranges are half-open; both bounds strictly inside development; final four-bar horizons are purged at range end.\n"
                 << "Calendar UNVERIFIED. Statistical estimation NOT_EXECUTED. --help never accesses a database.\n";
@@ -146,7 +157,7 @@ int main(int argc, char** argv)
         if (!preflight.rowCount || preflight.duplicateTimestampCount)
             throw std::runtime_error("empty or duplicate canonical source; study aborted");
         provenance.preflightRows = preflight.rowCount;
-        S::ArtifactWriter writer(output);
+        S::ArtifactWriter writer(output, tier);
         S::HistoricalEvaluator evaluator(protocol, EA::TG1B::CalibrationConfiguration(config.referenceBarScale),
             config.fibonacci, config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), writer.GetSinks(), score);
         EA::TG4::HistoricalMarketDataRepository::StreamCanonicalCandles(transaction, provenance.sourceSymbol, config, range,

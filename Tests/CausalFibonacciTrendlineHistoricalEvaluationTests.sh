@@ -91,12 +91,12 @@ PYGUARD
     -I"${repo_root}/Headers" \
     "${repo_root}/Sources/TG4HistoricalEmpiricalEvaluation.cpp" \
     "${repo_root}/Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp" \
-    "${repo_root}/Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp" -o "${test_dir}/tests"
+    "${repo_root}/Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp" -lz -o "${test_dir}/tests"
 guard
 "${test_dir}/tests" "${repo_root}/Scripts/tg4_analysis_config.frozen_v1.conf" "${test_dir}"
 guard
 python3 - "${test_dir}" <<'PY'
-import csv, hashlib, json, pathlib, sys
+import csv, gzip, hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1]) / 'first'
 p = json.loads((root / 'protocol.json').read_text())
 m = json.loads((root / 'provenance_manifest.json').read_text())
@@ -108,9 +108,38 @@ assert p['support_model']['status'] == 'NOT_EXECUTED'
 assert p['adequacy']['minimum_B'] == p['adequacy']['minimum_C'] == 500
 assert p['calendar_status'] == 'UNVERIFIED'
 assert m['canonical_candle_content_sha256'] and m['coverage'] == 'UNVERIFIED'
-for name in ('decisions', 'outcomes', 'geometry_measurements', 'interaction_episodes', 'coverage', 'exclusions', 'gaps'):
+for name in ('decisions', 'outcomes', 'episode_summary', 'coverage', 'exclusions', 'gaps', 'compression_manifest'):
     rows = list(csv.reader((root / (name + '.csv')).open()))
     assert rows and all(len(row) == len(rows[0]) for row in rows), name
+assert p['artifact_format'] == 'fib-trendline-artifacts-v3'
+assert p['episode_publication'] == 'summary' and p['episode_detail_omitted']
+assert not (root / 'interaction_episodes.csv').exists() and not (root / 'interaction_episodes.csv.gz').exists()
+for content in csv.DictReader((root / 'compression_manifest.csv').open()):
+    raw = gzip.decompress((root / content['filename']).read_bytes())
+    assert hashlib.sha256(raw).hexdigest() == content['decoded_sha256']
+    assert len(raw) == int(content['decoded_bytes'])
+    assert raw.count(b'\n') - 1 == int(content['decoded_rows'])
+    direct = m['compressed_artifacts'][content['filename']]
+    assert direct['compressed_sha256'] == content['compressed_sha256']
+    assert direct['decoded_sha256'] == content['decoded_sha256']
+    assert direct['decoded_rows'] == int(content['decoded_rows'])
+    rows = list(csv.reader(raw.decode().splitlines()))
+    assert all(len(row) == len(rows[0]) for row in rows)
+assert m['compression']['mtime'] == 0 and m['compression']['level'] == 6
+assert m['diagnostic_tracking_complete'] and m['episode_detail_omitted']
+assert m['capacity_high_watermark_values']['retained_ab_structures']['full_replay'] == 1
+assert m['capacity_high_watermark_values']['eligible_geometry_pairs']['scoring'] == 1
+assert m['capacity_high_watermark_values']['episode_ledger']['full_replay'] == 3
+for name in ('saturated-summary', 'saturated-full'):
+    sat = json.loads((root.parent / name / 'provenance_manifest.json').read_text())
+    assert not sat['diagnostic_tracking_complete']
+    assert sat['episode_detail_omitted'] == (name == 'saturated-summary')
+    assert sat['capacity_high_watermark_values']['retained_ab_structures'] == dict(full_replay=3, prefix=3, scoring=2)
+    assert sat['capacity_high_watermark_values']['eligible_geometry_pairs'] == dict(full_replay=9, prefix=9, scoring=4)
+    summary = {r['metric']: r['value'] for r in csv.DictReader((root.parent / name / 'episode_summary.csv').open()) if r['phase'] == 'full_replay'}
+    assert summary['episode_saturated'] == '1' and summary['skipped_observation_opportunities'] == '38'
+    assert summary['tracking_complete'] == '0'
+assert p['protocol_fingerprint'] == json.loads((root.parent / 'full' / 'protocol.json').read_text())['protocol_fingerprint']
 for line in (root / 'checksums.sha256').read_text().splitlines():
     expected, file = line.split('  ', 1)
     assert hashlib.sha256((root / file).read_bytes()).hexdigest() == expected, file
@@ -120,6 +149,6 @@ assert len({r['decision_id'] for r in decisions}) == len(decisions)
 assert len(outcomes) == sum(r['status'] == 'classified' for r in decisions)
 assert all(int(r['bar_start_utc_epoch']) % 3600 == 2700 for r in decisions)
 assert 'NOT_EXECUTED' in (root / 'COMPLETE').read_text()
-print('Deterministic v2 artifact JSON/CSV/checksum/reconciliation validation passed')
+print('Deterministic artifact-v3/semantic-v2 JSON/CSV/gzip/checksum/reconciliation validation passed')
 PY
 guard
