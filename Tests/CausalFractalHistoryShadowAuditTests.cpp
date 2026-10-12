@@ -281,14 +281,277 @@ void OldAnchorAndBoundary(const std::filesystem::path &root)
     Require(rejected.audit.GetSummary().complete && rejected.audit.GetSummary().structuralRejections > 0,
             "structural rejection is not a demonstrated lost birth");
 }
+
+F::ABStructure GeometryAB(double a, double b)
+{
+    F::ABStructure x;
+    x.identity = {F::ABDirection::UpAB, 2040, Time(2040), 2044, Time(2044), 2046, Time(2046)};
+    x.aPrice = a;
+    x.bPrice = b;
+    x.priceRange = b - a;
+    x.aConfirmationBar = 2042;
+    x.aConfirmationTimestamp = Time(2042);
+    x.bConfirmationBar = 2046;
+    x.bConfirmationTimestamp = Time(2046);
+    return x;
+}
+G::TrendLineCandidate GeometryLine(double projected, std::size_t first = 2030, std::size_t bar = 2051)
+{
+    G::TrendLineCandidate l;
+    l.direction = G::TrendLineDirection::UTL;
+    l.anchor1Bar = first;
+    l.anchor2Bar = first + 3;
+    l.anchor1Timestamp = Time(first);
+    l.anchor2Timestamp = Time(first + 3);
+    l.creationBar = first + 5;
+    l.creationTimestamp = Time(first + 5);
+    l.anchor1ConfirmationBar = first + 2;
+    l.anchor2ConfirmationBar = first + 5;
+    l.anchor1ConfirmationTimestamp = Time(first + 2);
+    l.anchor2ConfirmationTimestamp = Time(first + 5);
+    l.rawPriceSlopePerBar = .01;
+    l.anchor1Price = projected - .01 * static_cast<double>(bar - first);
+    l.anchor2Price = l.anchor1Price + .03;
+    l.anchorSeparationBars = 3;
+    l.currentBar = bar;
+    l.currentTimestamp = Time(bar);
+    l.candidateAgeBars = bar - l.creationBar;
+    l.projectedLinePriceAtCurrentBar = l.ProjectedPrice(bar);
+    return l;
+}
+void DecisionGeometryRules()
+{
+    G::Candle c{Time(2051), 100, 101, 99, 100};
+    auto fib = GeometryAB(99, 101), farFib = GeometryAB(104, 106), offset = GeometryAB(100.20, 100.24);
+    auto far = GeometryLine(102, 2020), near = GeometryLine(100.1), opposite = GeometryLine(99.80);
+    auto measure = [&](F::ABStructure a, std::vector<G::TrendLineCandidate> lines)
+    { return H::EvaluateDecisionGeometry(2051, c, 1, std::span{&a, 1}, lines); };
+    auto a = measure(fib, {far});
+    Require(a.cohort == "A" && a.fibNear == true && a.lineNear == false, "frozen A geometry");
+    auto unchanged = measure(fib, {far});
+    Require(a.cohort == unchanged.cohort && a.eligibleLines == unchanged.eligibleLines,
+            "identical retained universe equivalence");
+    auto distant = measure(fib, {far, GeometryLine(103)});
+    Require(distant.cohort == a.cohort && !distant.lineGeometry.at(S::LineKey(GeometryLine(103))).near,
+            "restored candidate survives but is far");
+    auto d = measure(farFib, {far}), b = measure(farFib, {far, near});
+    Require(d.cohort == "D" && b.cohort == "B" && d.lineNear == false && b.lineNear == true,
+            "D to B with valid nonempty AB/line universe");
+    auto redundant = measure(farFib, {GeometryLine(100.05, 2020), near});
+    Require(redundant.cohort == "B" && redundant.lineGeometry.at(S::LineKey(near)).near,
+            "near restored line does not alter existing Lline");
+    auto beforeF = measure(offset, {far}), afterF = measure(offset, {far, opposite});
+    Require(beforeF.cohort == "A" && afterF.cohort == "F_stratum" && afterF.intersection == false,
+            "A to F requires no same-pair intersection");
+    auto confluence = measure(fib, {far, near});
+    Require(confluence.cohort == "C" && confluence.intersection == true &&
+                confluence.lineGeometry.at(S::LineKey(near)).dS <= .25,
+            "same AB/line/ratio changes I and C precedence");
+    auto empty = H::EvaluateDecisionGeometry(2051, c, 1, std::span{&fib, 1}, {});
+    Require(empty.reconstructed && !empty.lineNear && empty.cohort == "INELIGIBLE_NO_GEOMETRY",
+            "known empty line universe is ineligible not D");
+    auto missing = H::EvaluateDecisionGeometry(2051, c, {}, std::span{&fib, 1}, std::span{&far, 1});
+    Require(!missing.reconstructed && missing.cohort == "UNKNOWN" && !missing.fibNear,
+            "missing ATR fails closed");
+    auto expired = GeometryLine(100, 1533);
+    Require(expired.candidateAgeBars == 513, "expiry fixture age");
+    Require(measure(fib, {far, expired}).eligibleLines == 1,
+            "expired candidate cannot enter counterfactual geometry");
+    auto boundary = GeometryLine(100, 1534);
+    Require(boundary.candidateAgeBars == 512 && measure(fib, {far, boundary}).eligibleLines == 2,
+            "age 512 inclusive");
+    near.currentBar = 2050;
+    auto unresolved = measure(fib, {far, near});
+    Require(!unresolved.reconstructed && unresolved.cohort == "UNKNOWN",
+            "missing current candidate state fails closed");
+    std::cout << "DECISION_GEOMETRY_RULES A_to_F=true A_to_C=true D_to_B=true redundant_near=true "
+                 "missing_ATR_unknown=true missing_geometry_not_D=true expiry_inclusive=true\n";
+}
+void DecisionHistoryPipeline(const std::filesystem::path &root,
+                             const EA::TG4::EvaluationConfiguration &config)
+{
+    constexpr std::size_t count = 2080;
+    S::Protocol p;
+    H::DecisionAuditConfiguration dc{
+        S::Hash(S::CanonicalProtocol(p, {Time(2048), Time(count)}, EA::TG4::ConfigurationFingerprint(config),
+                                     {})),
+        Time(2048), Time(count), false};
+    F::FibonacciConfluenceTracker f(config.fibonacci);
+    G::CausalFractalTrendLineGeometry g(config.geometry);
+    auto provenance = FixtureProvenance(root, count);
+    S::ArtifactWriter writer(root / "decision-pipeline-primary");
+    H::Audit audit(config.fibonacci, config.geometry, root / "decision-pipeline", {}, {}, dc);
+    auto sinks = writer.GetSinks();
+    auto write = sinks.decision;
+    sinks.decision = [&](const S::Decision &d)
+    {
+        write(d);
+        audit.ObservePrimaryDecision({d.identity, d.status, d.cohort ? S::Name(*d.cohort) : "", d.timestamp,
+                                      d.close.has_value(), d.aggregate.complete, d.aggregate.evaluated,
+                                      d.aggregate.abs, d.aggregate.lines, d.aggregate.fibNear,
+                                      d.aggregate.lineNear, d.aggregate.intersection});
+    };
+    S::EventEngine engine(p, EA::TG4::ConfigurationFingerprint(config), std::move(sinks),
+                          S::ScoreRange{Time(2048), Time(count)});
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const double base = i < 1800 ? 100 : 100 + std::sqrt(static_cast<double>(i - 1800) + 1) * .01;
+        bool center = i >= 1800 && i % 3 == 0;
+        G::Candle c{Time(i), base + 1.4, base + (center ? 7 : 6), base + (center ? 0 : .5), base + 1.4};
+        auto u = g.AddCompletedBar(c);
+        f.Advance(i, c.timestamp);
+        auto births = f.ObserveConfirmedFractals(u.newlyConfirmedFractals);
+        engine.Add(i, c, g.CurrentAtr(), f.ABStructures(), g.Candidates());
+        audit.Observe({i, c, g.CurrentAtr(), i >= 2048, i >= 2048 && i % 4 == 3, i >= 2048,
+                       u.newlyConfirmedFractals, births, u.newlyCreatedCandidates, f.ABStructures(),
+                       g.Candidates(), f.TotalABStructuresCreated(), f.ABCapacityEvictions(),
+                       f.ABAgeExpirations()});
+    }
+    engine.Finalize();
+    writer.Complete(engine, config, provenance);
+    Require(audit.Complete({engine.Fingerprint(), provenance.gitCommit, provenance.sourceSHA256,
+                            engine.CandleDigest(), root / "decision-pipeline-primary"}),
+            "positive candidate and pair evidence publication");
+    H::ValidateSidecar(root / "decision-pipeline");
+    Require(audit.GetSummary().complete,
+            "complete counterfactual history reconstruction under native candidate capacities");
+    Require(audit.GetSummary().creationLossesTG1A > 0 && audit.GetSummary().capacityDisplacements > 0,
+            "history restoration creates births and capacity-mediated displacement");
+    Require(audit.GetDecisionSummary().temporal == 7 && audit.GetDecisionSummary().reconstructed == 7 &&
+                audit.GetDecisionSummary().restoredPresence > 0,
+            "scheduled full universe comparison including restored presence");
+    Require(audit.GetDecisionSummary().restoredProximity == 7 && audit.GetDecisionSummary().changedL == 0 &&
+                audit.GetDecisionSummary().changedI == 0 && audit.GetDecisionSummary().changedCohort == 0,
+            "near restored lines are redundant: verified zero predicate and cohort changes");
+    std::cout << "DECISION_HISTORY_PIPELINE temporal=" << audit.GetDecisionSummary().temporal
+              << " restored_presence=" << audit.GetDecisionSummary().restoredPresence
+              << " capacity_displacement=true\n";
+}
+
+void DecisionLifecycleAndFailures(const std::filesystem::path &root,
+                                  const EA::TG4::EvaluationConfiguration &config)
+{
+    // Capacity pressure with equal anchor prices cannot satisfy native birth predicates.
+    Run equal(root / "decision-equal-history");
+    for (std::size_t i = 0; i < 260; ++i)
+    {
+        double low = i % 3 == 0 ? 100 : 101;
+        equal.Add(i, {Time(i), 102, 105, low, 102});
+    }
+    Require(equal.audit.GetSummary().complete && equal.audit.GetSummary().creationLossesTG1A == 0 &&
+                equal.audit.GetSummary()
+                        .history[1][static_cast<std::size_t>(G::FractalKind::Low)][0]
+                        .capacityRemovals > 0,
+            "history pressure alone does not imply birth loss");
+    constexpr std::size_t end = 2056;
+    S::Protocol p;
+    H::DecisionAuditConfiguration dc{
+        S::Hash(
+            S::CanonicalProtocol(p, {Time(2044), Time(end)}, EA::TG4::ConfigurationFingerprint(config), {})),
+        Time(2044), Time(end), false};
+    F::FibonacciConfluenceTracker f(config.fibonacci);
+    G::CausalFractalTrendLineGeometry g(config.geometry);
+    H::Audit expiry(config.fibonacci, config.geometry, root / "decision-expired-before-warmup", {}, {}, dc);
+    for (std::size_t i = 0; i < end; ++i)
+    {
+        auto c = i < 220 ? Candle(i) : G::Candle{Time(i), 100, 110, 99, 100};
+        auto u = g.AddCompletedBar(c);
+        f.Advance(i, c.timestamp);
+        auto births = f.ObserveConfirmedFractals(u.newlyConfirmedFractals);
+        if (i >= 2044 && i % 4 == 3)
+        {
+            auto actual = H::EvaluateDecisionGeometry(i, c, g.CurrentAtr(), f.ABStructures(), g.Candidates());
+            bool temporal = i >= 2048 && i + 4 < end;
+            expiry.ObservePrimaryDecision({dc.semanticFingerprint + ":" + std::to_string(c.timestamp),
+                                           i < 2048    ? "warmup"
+                                           : !temporal ? "partition_purged"
+                                                       : "no_geometry",
+                                           "", c.timestamp, true, true, true, actual.eligibleAB,
+                                           actual.eligibleLines, actual.fibNear.value_or(false),
+                                           actual.lineNear.value_or(false),
+                                           actual.intersection.value_or(false)});
+        }
+        expiry.Observe({i, c, g.CurrentAtr(), i >= 2044, i >= 2044 && i % 4 == 3, i >= 2048,
+                        u.newlyConfirmedFractals, births, u.newlyCreatedCandidates, f.ABStructures(),
+                        g.Candidates(), f.TotalABStructuresCreated(), f.ABCapacityEvictions(),
+                        f.ABAgeExpirations()});
+    }
+    Require(expiry.GetSummary().complete && expiry.GetSummary().creationLossesTG1A > 0 &&
+                expiry.GetDecisionSummary().scheduled == 3 && expiry.GetDecisionSummary().temporal == 1 &&
+                expiry.GetDecisionSummary().restoredPresence == 0,
+            "lost births expire before warmup; schedule and horizon boundaries are preserved");
+    for (int failure = 0; failure < 3; ++failure)
+    {
+        const std::size_t count = 2112;
+        auto parent = root / ("decision-failure-parent-" + std::to_string(failure));
+        auto path = root / ("decision-failure-audit-" + std::to_string(failure));
+        auto provenance = FixtureProvenance(root, count);
+        S::ArtifactWriter writer(parent);
+        S::Protocol protocol;
+        H::DecisionAuditConfiguration cfg{
+            S::Hash(S::CanonicalProtocol(protocol, {Time(2048), Time(count)},
+                                         EA::TG4::ConfigurationFingerprint(config), {})),
+            Time(2048), Time(count), false};
+        H::Audit audit(config.fibonacci, config.geometry, path, {}, {}, cfg);
+        auto sinks = writer.GetSinks();
+        auto write = sinks.decision;
+        sinks.decision = [&](const S::Decision &d)
+        {
+            write(d);
+            if (failure == 2)
+                return;
+            H::PrimaryDecisionObservation q{d.identity,
+                                            d.status,
+                                            d.cohort ? S::Name(*d.cohort) : "",
+                                            d.timestamp,
+                                            d.close.has_value(),
+                                            d.aggregate.complete,
+                                            d.aggregate.evaluated,
+                                            d.aggregate.abs,
+                                            d.aggregate.lines,
+                                            d.aggregate.fibNear,
+                                            d.aggregate.lineNear,
+                                            d.aggregate.intersection};
+            if (failure == 1)
+                q.cohort = "D";
+            audit.ObservePrimaryDecision(q);
+        };
+        S::HistoricalEvaluator evaluator(
+            protocol, EA::TG1B::CalibrationConfiguration(config.referenceBarScale), config.fibonacci,
+            config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), std::move(sinks),
+            S::ScoreRange{Time(2048), Time(count)}, {}, [&](const auto &o) { audit.Observe(o); });
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            double base = 100 + std::sqrt(static_cast<double>(i) + 1) * .01;
+            bool center = i % 100 == 50;
+            auto c = failure == 0 ? G::Candle{Time(i), 100, 100, 100, 100}
+                                  : G::Candle{Time(i), base + 2, base + (center ? 5 : 4),
+                                              base + (center ? 0 : 1), base + 2};
+            evaluator.AddCompletedBar(c);
+        }
+        evaluator.Finalize();
+        writer.Complete(evaluator.Engine(), config, provenance);
+        Require(!audit.GetSummary().complete,
+                "missing ATR, mismatched cohort and missing snapshot fail closed");
+        Require(!audit.Complete({evaluator.Engine().Fingerprint(), provenance.gitCommit,
+                                 provenance.sourceSHA256, evaluator.Engine().CandleDigest(), parent}),
+                "incomplete decision diagnostic cannot complete");
+        Require(!std::filesystem::exists(path / "AUDIT_COMPLETE"), "no marker after incomplete extension");
+    }
+    std::cout << "DECISION_LIFECYCLE equal_history_no_loss=true expired_before_warmup=true "
+                 "schedule_boundaries=true missing_ATR_no_marker=true inconsistent_cohort_no_marker=true "
+                 "missing_state_no_marker=true\n";
+}
 void PrimaryIsolation(const std::filesystem::path &root, const EA::TG4::EvaluationConfiguration &config)
 {
     constexpr std::size_t count = 2112;
     auto provenance = FixtureProvenance(root, count);
-    std::array<std::filesystem::path, 4> directories{root / "isolation-disabled", root / "isolation-enabled",
-                                                     root / "isolation-exhausted",
-                                                     root / "isolation-allocation-failed"};
-    for (std::size_t mode = 0; mode < 4; ++mode)
+    std::array<std::filesystem::path, 7> directories{
+        root / "isolation-disabled",           root / "isolation-enabled",
+        root / "isolation-exhausted",          root / "isolation-allocation-failed",
+        root / "isolation-decision-extension", root / "isolation-decision-budget",
+        root / "isolation-decision-repeat"};
+    for (std::size_t mode = 0; mode < 7; ++mode)
     {
         S::ArtifactWriter writer(directories[mode]);
         std::unique_ptr<H::Audit> audit;
@@ -299,10 +562,22 @@ void PrimaryIsolation(const std::filesystem::path &root, const EA::TG4::Evaluati
             H::Budgets b;
             if (mode == 2)
                 b.shadowFractals = 1;
+            if (mode == 5)
+                b.decisionRecordLimit = 1;
+            S::Protocol protocol;
+            std::optional<H::DecisionAuditConfiguration> dc;
+            if (mode >= 4)
+                dc = H::DecisionAuditConfiguration{
+                    S::Hash(S::CanonicalProtocol(protocol, {Time(2048), Time(count)},
+                                                 EA::TG4::ConfigurationFingerprint(config), {})),
+                    Time(2048), Time(count), false};
             audit = std::make_unique<H::Audit>(config.fibonacci, config.geometry,
                                                root / (mode == 1   ? "isolation-audit"
                                                        : mode == 2 ? "isolation-failed-audit"
-                                                                   : "isolation-allocation-audit"),
+                                                       : mode == 3 ? "isolation-allocation-audit"
+                                                       : mode == 4 ? "isolation-decision-audit"
+                                                       : mode == 5 ? "isolation-decision-failed-audit"
+                                                                   : "isolation-decision-repeat-audit"),
                                                b,
                                                mode == 3 ? H::PublicationHook(
                                                                [&](H::PublicationStep op)
@@ -311,14 +586,28 @@ void PrimaryIsolation(const std::filesystem::path &root, const EA::TG4::Evaluati
                                                                        op == H::PublicationStep::Compress)
                                                                        throw std::bad_alloc();
                                                                })
-                                                         : H::PublicationHook{});
+                                                         : H::PublicationHook{},
+                                               dc);
             observer = [&](const auto &o) { audit->Observe(o); };
             auditArmed = true;
         }
         S::Protocol p;
+        auto sinks = writer.GetSinks();
+        if (mode >= 4)
+        {
+            auto write = sinks.decision;
+            sinks.decision = [&, write](const S::Decision &d)
+            {
+                write(d);
+                audit->ObservePrimaryDecision(
+                    {d.identity, d.status, d.cohort ? S::Name(*d.cohort) : "", d.timestamp,
+                     d.close.has_value(), d.aggregate.complete, d.aggregate.evaluated, d.aggregate.abs,
+                     d.aggregate.lines, d.aggregate.fibNear, d.aggregate.lineNear, d.aggregate.intersection});
+            };
+        }
         S::HistoricalEvaluator evaluator(p, EA::TG1B::CalibrationConfiguration(config.referenceBarScale),
                                          config.fibonacci, config.geometry, config.behavior,
-                                         EA::TG4::ConfigurationFingerprint(config), writer.GetSinks(),
+                                         EA::TG4::ConfigurationFingerprint(config), std::move(sinks),
                                          S::ScoreRange{Time(2048), Time(count)}, {}, std::move(observer));
         for (std::size_t i = 0; i < count; ++i)
         {
@@ -345,15 +634,22 @@ void PrimaryIsolation(const std::filesystem::path &root, const EA::TG4::Evaluati
                 Reject(finish);
             }
             else
-                Require(finish() == (mode == 1), "audit failure is isolated from primary publication");
+                Require(finish() == (mode == 1 || mode == 4 || mode == 6),
+                        "audit failure is isolated from primary publication");
         }
     }
     for (const auto &entry : std::filesystem::directory_iterator(directories[0]))
         if (entry.is_regular_file())
-            for (std::size_t mode = 1; mode < 4; ++mode)
+            for (std::size_t mode = 1; mode < 7; ++mode)
                 Require(S::FileHash(entry.path()) == S::FileHash(directories[mode] / entry.path().filename()),
                         "all primary artifact bytes identical enabled/disabled/exhausted");
     H::ValidateSidecar(root / "isolation-audit");
+    H::ValidateSidecar(root / "isolation-decision-audit");
+    Reject([&] { H::ValidateSidecar(root / "isolation-decision-failed-audit"); });
+    for (const auto &file : std::filesystem::directory_iterator(root / "isolation-decision-audit"))
+        Require(S::FileHash(file.path()) ==
+                    S::FileHash(root / "isolation-decision-repeat-audit" / file.path().filename()),
+                "deterministic decision extension bytes and checksums");
     Reject([&] { H::ValidateSidecar(root / "isolation-failed-audit"); });
     std::cout << "SHADOW_PRIMARY_ISOLATION all_primary_artifact_bytes=true synthetic_outcomes_opaque=true "
                  "failure_isolated=true bars=2112\n";
@@ -478,6 +774,9 @@ int main(int argc, char **argv)
         auto config = Frozen(EA::TG4::LoadConfigurationFile(argv[1]));
         auto root = std::filesystem::path(argv[2]);
         Rules();
+        DecisionGeometryRules();
+        DecisionHistoryPipeline(root, config);
+        DecisionLifecycleAndFailures(root, config);
         Run plain(root / "shadow-plain");
         for (std::size_t i = 0; i < 80; ++i)
             plain.Add(i, Candle(i));

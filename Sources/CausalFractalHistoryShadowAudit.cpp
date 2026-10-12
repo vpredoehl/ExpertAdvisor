@@ -198,6 +198,178 @@ std::string CandidateIdentityReconciliation::Native(const TG3::ABIdentity &x)
     return HistoryShadow::Native(x);
 }
 
+DecisionGeometry EvaluateDecisionGeometry(std::size_t bar, const TG1A::Candle &c, std::optional<double> atr,
+                                          std::span<const AB> inputAB, std::span<const L> inputLines)
+{
+    DecisionGeometry r;
+    if (!atr || !std::isfinite(*atr) || *atr <= 0)
+    {
+        r.reason = "missing_required_atr";
+        return r;
+    }
+    if (inputAB.size() > 512 || inputLines.size() > 4096)
+    {
+        r.reason = "candidate_capacity_unknown";
+        return r;
+    }
+    try
+    {
+        for (const auto &a : inputAB)
+        {
+            const auto &id = a.identity;
+            if (id.direction != TG3::ABDirection::UpAB)
+                continue;
+            if (bar >= id.availabilityBar && bar - id.availabilityBar > 2048)
+                continue;
+            if (!S::Diagnostic::Detail::Eligible(a, bar) || id.aTimestamp >= id.bTimestamp ||
+                id.aTimestamp > a.aConfirmationTimestamp || id.bTimestamp > a.bConfirmationTimestamp ||
+                a.aConfirmationTimestamp > id.availabilityTimestamp ||
+                a.bConfirmationTimestamp > id.availabilityTimestamp || id.availabilityTimestamp > c.timestamp)
+                throw std::runtime_error("unresolved_AB_eligibility");
+            auto [i, inserted] = r.abs.emplace(S::ABKey(a), a);
+            if (!inserted && (S::Snapshot(i->second) != S::Snapshot(a) ||
+                              i->second.identity.availabilityBar != id.availabilityBar))
+                throw std::runtime_error("conflicting_AB_geometry");
+        }
+        for (const auto &l : inputLines)
+        {
+            if (l.direction != TG1A::TrendLineDirection::UTL)
+                continue;
+            if (bar >= l.creationBar && bar - l.creationBar > 512)
+                continue;
+            if (!S::Diagnostic::Detail::Eligible(l, bar) || l.anchor1Timestamp >= l.anchor2Timestamp ||
+                l.anchor1Timestamp > l.anchor1ConfirmationTimestamp ||
+                l.anchor2Timestamp > l.anchor2ConfirmationTimestamp ||
+                l.anchor1ConfirmationTimestamp > l.creationTimestamp ||
+                l.anchor2ConfirmationTimestamp > l.creationTimestamp || l.creationTimestamp > c.timestamp ||
+                l.currentTimestamp != c.timestamp)
+                throw std::runtime_error("unresolved_line_eligibility");
+            auto [i, inserted] = r.lines.emplace(S::LineKey(l), l);
+            if (!inserted &&
+                (S::Snapshot(i->second) != S::Snapshot(l) || i->second.creationBar != l.creationBar ||
+                 i->second.ProjectedPrice(bar) != l.ProjectedPrice(bar)))
+                throw std::runtime_error("conflicting_line_geometry");
+        }
+        r.eligibleAB = r.abs.size();
+        r.eligibleLines = r.lines.size();
+        for (const auto &[key, l] : r.lines)
+        {
+            auto &g = r.lineGeometry[key];
+            g.projectedPrice = l.ProjectedPrice(bar);
+            g.minimumDistance = S::Diagnostic::Detail::NormalizedDistance(c.close, *g.projectedPrice, *atr);
+            if (!g.minimumDistance)
+                throw std::runtime_error("nonrepresentable_line_distance");
+            g.near = *g.minimumDistance <= .25;
+        }
+        for (const auto &[key, a] : r.abs)
+        {
+            auto &g = r.abGeometry[key];
+            for (double ratio : S::kRatios)
+            {
+                auto price = S::Diagnostic::Detail::FiniteDouble(std::lerp(a.bPrice, a.aPrice, ratio));
+                if (!price)
+                    throw std::runtime_error("nonrepresentable_fibonacci_price");
+                auto d = S::Diagnostic::Detail::NormalizedDistance(c.close, *price, *atr);
+                if (!d)
+                    throw std::runtime_error("nonrepresentable_fibonacci_distance");
+                if (!g.minimumDistance || *d < *g.minimumDistance)
+                    g.minimumDistance = d;
+                if (*d <= .25)
+                    g.near = true;
+            }
+        }
+        r.reconstructed = true;
+        if (r.abs.empty() || r.lines.empty())
+        {
+            r.cohort = "INELIGIBLE_NO_GEOMETRY";
+            r.reason = "known_empty_geometry";
+            return r;
+        }
+        bool f = false, l = false, intersection = false;
+        for (const auto &[key, g] : r.abGeometry)
+        {
+            (void)key;
+            f = f || g.near;
+        }
+        for (const auto &[key, g] : r.lineGeometry)
+        {
+            (void)key;
+            l = l || g.near;
+        }
+        std::vector<L> lines;
+        for (const auto &[key, line] : r.lines)
+        {
+            (void)key;
+            lines.push_back(line);
+        }
+        for (const auto &[ak, a] : r.abs)
+            for (std::size_t first = 0; first < lines.size(); first += 128)
+            {
+                auto count = std::min<std::size_t>(128, lines.size() - first);
+                S::Diagnostic::Configuration config(.25);
+                config.retracementRatios.assign(S::kRatios.begin(), S::kRatios.end());
+                config.maxABStructures = 1;
+                config.maxTrendlines = count;
+                config.maxPairEvaluations = count;
+                config.maxMeasurements = count * 3;
+                using K = decltype(S::Diagnostic::Detail::Key(TG2::CandidateIdentity{}));
+                std::map<K, std::string> identities;
+                for (std::size_t n = first; n < first + count; ++n)
+                    identities.emplace(
+                        S::Diagnostic::Detail::Key(S::Diagnostic::Detail::LineIdentity(lines[n])),
+                        S::LineKey(lines[n]));
+                auto batch = S::Diagnostic::Evaluate(bar, c.close, atr, std::span{&a, 1},
+                                                     std::span{lines.data() + first, count}, config);
+                if (batch.pairCapacityReached || batch.measurementCapacityReached ||
+                    batch.measurements.size() != count * 3)
+                    throw std::runtime_error("incomplete_geometry_batch");
+                for (const auto &m : batch.measurements)
+                {
+                    auto dF = S::Diagnostic::Detail::NormalizedDistance(c.close, m.fibPrice, *atr);
+                    auto dL = S::Diagnostic::Detail::NormalizedDistance(c.close, m.linePrice, *atr);
+                    if (!dF || !dL || !m.normalizedStructureDistance)
+                        throw std::runtime_error("nonrepresentable_pair_distance");
+                    if (*dF <= .25 && *dL <= .25 && *m.normalizedStructureDistance <= .25)
+                    {
+                        intersection = true;
+                        const auto lk = identities.at(S::Diagnostic::Detail::Key(m.identity.line));
+                        auto evidence = [&](CandidateGeometry &g)
+                        {
+                            g.conjunction = true;
+                            if (g.conjunctionAB.empty())
+                            {
+                                g.conjunctionAB = ak;
+                                g.conjunctionLine = lk;
+                                g.ratio = m.identity.ratio;
+                                g.fibPrice = m.fibPrice;
+                                g.linePrice = m.linePrice;
+                                g.dF = dF;
+                                g.dL = dL;
+                                g.dS = m.normalizedStructureDistance;
+                            }
+                        };
+                        evidence(r.abGeometry.at(ak));
+                        evidence(r.lineGeometry.at(lk));
+                    }
+                }
+            }
+        r.fibNear = f;
+        r.lineNear = l;
+        r.intersection = intersection;
+        r.cohort = S::Name(S::Classify(f, l, intersection));
+    }
+    catch (const std::runtime_error &e)
+    {
+        r.reconstructed = false;
+        r.fibNear.reset();
+        r.lineNear.reset();
+        r.intersection.reset();
+        r.cohort = "UNKNOWN";
+        r.reason = e.what();
+    }
+    return r;
+}
+
 struct Audit::State
 {
     using Anchor = RestoredAnchor;
@@ -244,12 +416,57 @@ struct Audit::State
     bool finished = false;
     S::Sha256 candleHash;
     std::size_t decodedBytes = 0;
-    State(TG3::Configuration f, TG1A::Configuration g, std::filesystem::path d, Budgets b, PublicationHook h)
+    std::optional<DecisionAuditConfiguration> decisionConfig;
+    DecisionAuditSummary decisions;
+    std::unique_ptr<S::CompressedCsv> decisionChanges, decisionCandidates;
+    std::optional<PrimaryDecisionObservation> pendingDecision;
+    std::int64_t nextDecisionSlot = 0;
+    std::size_t calibrationBars = 0;
+    struct IdentityImpact
+    {
+        bool eligible = false, near = false, conjunction = false, changedDecision = false,
+             necessaryCohort = false, direct = false, displaced = false;
+    };
+    std::map<std::string, IdentityImpact> decisionIdentities;
+    State(TG3::Configuration f, TG1A::Configuration g, std::filesystem::path d, Budgets b, PublicationHook h,
+          std::optional<DecisionAuditConfiguration> dc)
         : fc(std::move(f)), gc(g), tg3(fc), tg1(gc), budgets(b), hook(std::move(h)), dir(std::move(d)),
           removals(dir / "history_removals.csv.gz", [this](S::CompressionOperation op) { Fault(op); }),
-          witnesses(dir / "candidate_witnesses.csv.gz", [this](S::CompressionOperation op) { Fault(op); })
+          witnesses(dir / "candidate_witnesses.csv.gz", [this](S::CompressionOperation op) { Fault(op); }),
+          decisionConfig(std::move(dc))
     {
         summary.failure.reserve(256); // Failure reporting must not allocate in Observe.
+        if (decisionConfig)
+        {
+            auto &d = *decisionConfig;
+            if (!S::IsHash(d.semanticFingerprint) || d.scoreStart < S::kOrigin ||
+                d.scoreStart >= d.scoreEnd || d.scoreEnd > S::kFinalStart ||
+                (!d.calibration && d.scoreEnd > S::kCalibrationStart) ||
+                (d.calibration && d.scoreStart < S::kCalibrationStart) ||
+                b.publicationBufferBytes < 4 * S::CompressedCsv::kBufferBytes || !b.decisionRecordLimit ||
+                !b.decisionIdentityLimit)
+                throw std::invalid_argument("invalid counterfactual decision configuration/budgets");
+            decisions.enabled = true;
+            nextDecisionSlot = d.scoreStart / 3600 * 3600 + 2700;
+            if (nextDecisionSlot < d.scoreStart)
+                nextDecisionSlot += 3600;
+            decisionChanges = std::make_unique<S::CompressedCsv>(
+                dir / "decision_counterfactual_changes.csv.gz", [this](auto op) { Fault(op); });
+            decisionCandidates = std::make_unique<S::CompressedCsv>(
+                dir / "decision_counterfactual_candidates.csv.gz", [this](auto op) { Fault(op); });
+            Append(*decisionChanges,
+                   "row_type,decision_id,bar_start_utc_epoch,completion_utc_epoch,bar,status,actual_cohort,"
+                   "counterfactual_cohort,actual_Ffib,counterfactual_Ffib,actual_Lline,counterfactual_Lline,"
+                   "actual_I,counterfactual_I,actual_AB,counterfactual_AB,actual_lines,counterfactual_lines,"
+                   "primary_status,primary_assigned_cohort,close,atr,ab_identity,line_identity,ratio,fib_"
+                   "price,line_price,dF,dL,dS\n");
+            Append(*decisionCandidates,
+                   "decision_id,bar_start_utc_epoch,completion_utc_epoch,bar,detector,natural_identity,"
+                   "actual_present,counterfactual_present,direct_history_suppression,temporal_eligible,"
+                   "structural_eligible,near_price,same_pair_confluence,necessary_Lline,necessary_I,"
+                   "necessary_cohort,associated_changed_cohort,projected_line_price,minimum_distance,"
+                   "conjunction_AB,conjunction_line,ratio,fib_price,line_price,dF,dL,dS\n");
+        }
         if (fc.maxConfirmedFractalsPerKind != 128 || fc.maxActiveABStructures != 512 ||
             fc.maxABAgeBars != 2048 || gc.maxConfirmedFractalsPerKind != 64 ||
             gc.maxFractalAnchorLookbackBars != 512 || gc.maxCandidates != 4096 ||
@@ -344,7 +561,8 @@ struct Audit::State
             anchors * 256 +
             (boundedAB.size() + shadowAB.size() + fibonacciMirror.ABStructures().size()) * 512 +
             (shadowLines.size() + geometryMirror.Candidates().size()) * 1024 + liveWitnesses.size() * 2048 +
-            capacityEvicted.size() * 512 + bars.size() * 128 + 8 * 1024 * 1024;
+            capacityEvicted.size() * 512 + bars.size() * 128 + 8 * 1024 * 1024 +
+            (decisionConfig ? 32 * 1024 * 1024 + decisionIdentities.size() * 1024 : 0);
         summary.peakAccountedBytes = std::max(summary.peakAccountedBytes, bytes);
         if (anchors > budgets.shadowFractals)
             Fail("shadow_history_budget", false, true);
@@ -840,6 +1058,375 @@ struct Audit::State
             ++i;
         }
     }
+
+    static std::string Value(const std::optional<bool> &b)
+    {
+        return b ? (*b ? "1" : "0") : "UNKNOWN";
+    }
+    static std::string Value(const std::optional<double> &d)
+    {
+        return d ? S::Number(*d) : "UNKNOWN";
+    }
+    void DecisionAppend(S::CompressedCsv &stream, std::string_view text, std::size_t &rows)
+    {
+        if (decisions.decisionRows + decisions.pairRows + decisions.candidateRows >=
+            budgets.decisionRecordLimit)
+        {
+            Fail("decision_record_budget", false, true);
+            throw std::runtime_error(summary.failure);
+        }
+        Append(stream, text);
+        Increment(rows);
+    }
+    void DecisionRow(const PrimaryDecisionObservation &primary, std::size_t bar, std::string_view status,
+                     const DecisionGeometry *actual = {}, const DecisionGeometry *cf = {},
+                     std::optional<double> close = {}, std::optional<double> atr = {})
+    {
+        auto predicate = [](const DecisionGeometry *g, int which)
+        {
+            return g ? Value(which == 0   ? g->fibNear
+                             : which == 1 ? g->lineNear
+                                          : g->intersection)
+                     : "UNKNOWN";
+        };
+        auto count = [](const DecisionGeometry *g, bool ab)
+        { return g && g->reconstructed ? N(ab ? g->eligibleAB : g->eligibleLines) : "UNKNOWN"; };
+        std::string row =
+            "DECISION," + primary.identity + "," + T(primary.timestamp) + "," + T(primary.timestamp + 900) +
+            "," + (bar == std::numeric_limits<std::size_t>::max() ? "UNKNOWN" : N(bar)) + "," +
+            std::string(status) + "," + (actual ? actual->cohort : "UNKNOWN") + "," +
+            (cf ? cf->cohort : "UNKNOWN") + "," + predicate(actual, 0) + "," + predicate(cf, 0) + "," +
+            predicate(actual, 1) + "," + predicate(cf, 1) + "," + predicate(actual, 2) + "," +
+            predicate(cf, 2) + "," + count(actual, true) + "," + count(cf, true) + "," +
+            count(actual, false) + "," + count(cf, false) + "," + primary.status + "," +
+            (primary.cohort.empty() ? "INELIGIBLE" : primary.cohort) + "," + Value(close) + "," + Value(atr);
+        row += ",UNKNOWN,UNKNOWN,UNKNOWN,UNKNOWN,UNKNOWN,UNKNOWN,UNKNOWN,UNKNOWN\n";
+        DecisionAppend(*decisionChanges, row, decisions.decisionRows);
+    }
+    void PrimaryDecision(const PrimaryDecisionObservation &d)
+    {
+        if (!decisionConfig)
+            return;
+        Check(d.timestamp == nextDecisionSlot &&
+                  d.identity == decisionConfig->semanticFingerprint + ":" + T(d.timestamp),
+              "inconsistent_decision_identity");
+        Check(d.timestamp < decisionConfig->scoreEnd, "decision_outside_score_range");
+        const std::set<std::string_view> statuses{"classified",
+                                                  "warmup",
+                                                  "embargo",
+                                                  "invalid_atr",
+                                                  "no_geometry",
+                                                  "invalid_covariates",
+                                                  "partition_purged",
+                                                  "closed_horizon",
+                                                  "calendar_conflict",
+                                                  "capacity_invalid",
+                                                  "closed_market",
+                                                  "missing_open_session",
+                                                  "missing_slot_unverified"};
+        Check(statuses.contains(d.status), "inconsistent_primary_decision_status");
+        Check(d.cohort.empty() || (d.completedCandle && d.status == "classified" &&
+                                   (d.cohort == "A" || d.cohort == "B" || d.cohort == "C" ||
+                                    d.cohort == "D" || d.cohort == "F_stratum")),
+              "inconsistent_primary_cohort_status");
+        Check(!d.intersection || (d.fibNear && d.lineNear), "inconsistent_primary_predicates");
+        nextDecisionSlot += 3600;
+        Increment(decisions.scheduled);
+        if (!d.completedCandle)
+        {
+            Check(d.status == "closed_market" || d.status == "missing_open_session" ||
+                      d.status == "missing_slot_unverified",
+                  "missing_candidate_state");
+            Increment(decisions.missingSlots);
+            DecisionRow(d, std::numeric_limits<std::size_t>::max(), "UNOBSERVABLE_MISSING_SLOT");
+            return;
+        }
+        Check(!pendingDecision, "unconsumed_primary_decision");
+        pendingDecision = d;
+    }
+    void PairEvidence(const CompletedBarObservation &o, const PrimaryDecisionObservation &p,
+                      const DecisionGeometry &actual, const DecisionGeometry &cf)
+    {
+        for (const auto &[ak, a] : cf.abs)
+            for (const auto &[lk, l] : cf.lines)
+            {
+                if (actual.abs.contains(ak) && actual.lines.contains(lk))
+                    continue;
+                S::Diagnostic::Configuration config(.25);
+                config.retracementRatios.assign(S::kRatios.begin(), S::kRatios.end());
+                config.maxABStructures = 1;
+                config.maxTrendlines = 1;
+                config.maxPairEvaluations = 1;
+                config.maxMeasurements = 3;
+                auto batch = S::Diagnostic::Evaluate(o.bar, o.candle.close, o.atr, std::span{&a, 1},
+                                                     std::span{&l, 1}, config);
+                Check(batch.measurements.size() == 3 && !batch.pairCapacityReached &&
+                          !batch.measurementCapacityReached,
+                      "incomplete_pair_evidence");
+                for (const auto &m : batch.measurements)
+                {
+                    auto f = S::Diagnostic::Detail::NormalizedDistance(o.candle.close, m.fibPrice, *o.atr);
+                    auto line =
+                        S::Diagnostic::Detail::NormalizedDistance(o.candle.close, m.linePrice, *o.atr);
+                    Check(f && line && m.normalizedStructureDistance, "unknown_pair_evidence");
+                    std::string row =
+                        "PAIR," + p.identity + "," + T(o.candle.timestamp) + "," +
+                        T(o.candle.timestamp + 900) + "," + N(o.bar) + ",COUNTERFACTUAL_ADDED_PAIR," +
+                        actual.cohort + "," + cf.cohort + "," + Value(actual.fibNear) + "," +
+                        Value(cf.fibNear) + "," + Value(actual.lineNear) + "," + Value(cf.lineNear) + "," +
+                        Value(actual.intersection) + "," + Value(cf.intersection) + "," +
+                        N(actual.eligibleAB) + "," + N(cf.eligibleAB) + "," + N(actual.eligibleLines) + "," +
+                        N(cf.eligibleLines) + "," + p.status + "," +
+                        (p.cohort.empty() ? "INELIGIBLE" : p.cohort) + "," + S::Number(o.candle.close) + "," +
+                        Value(o.atr) + "," + ak + "," + lk + "," + S::Number(m.identity.ratio) + "," +
+                        S::Number(m.fibPrice) + "," + S::Number(m.linePrice) + "," + Value(f) + "," +
+                        Value(line) + "," + Value(m.normalizedStructureDistance) + "\n";
+                    DecisionAppend(*decisionChanges, row, decisions.pairRows);
+                }
+            }
+    }
+    void CandidateEvidence(const CompletedBarObservation &o, const PrimaryDecisionObservation &p,
+                           const DecisionGeometry &actual, const DecisionGeometry &cf)
+    {
+        const bool cohortChanged = actual.cohort != cf.cohort;
+        std::size_t nearAB = 0, nearLines = 0, intersectAB = 0, intersectLines = 0;
+        for (const auto &[k, g] : cf.abGeometry)
+        {
+            (void)k;
+            nearAB += g.near;
+            intersectAB += g.conjunction;
+        }
+        for (const auto &[k, g] : cf.lineGeometry)
+        {
+            (void)k;
+            nearLines += g.near;
+            intersectLines += g.conjunction;
+        }
+        bool presence = false, proximity = false;
+        auto publish = [&](bool ab, const std::string &key, bool actualPresent, bool cfPresent,
+                           const CandidateGeometry &inputGeometry, bool direct, const AB *candidateAB,
+                           const L *candidateLine)
+        {
+            CandidateGeometry g = inputGeometry;
+            std::optional<bool> necessaryL, necessaryI, necessaryC;
+
+            if (cfPresent)
+            {
+                if (cf.fibNear && cf.lineNear && cf.intersection &&
+                    (ab ? cf.eligibleAB > 1 : cf.eligibleLines > 1))
+                {
+                    bool f = ab ? nearAB - static_cast<std::size_t>(g.near) > 0 : *cf.fibNear;
+                    bool l = ab ? *cf.lineNear : nearLines - static_cast<std::size_t>(g.near) > 0;
+                    bool i =
+                        (ab ? intersectAB : intersectLines) - static_cast<std::size_t>(g.conjunction) > 0;
+                    necessaryL = l != *cf.lineNear;
+                    necessaryI = i != *cf.intersection;
+                    necessaryC = std::string(S::Name(S::Classify(f, l, i))) != cf.cohort;
+                }
+                else if (cf.fibNear)
+                    necessaryC = true; // Removing the only required geometry makes it ineligible.
+            }
+            else
+            {
+                // A displaced actual candidate can change the counterfactual
+                // predicate too. This is a conditional geometry toggle, not
+                // another history intervention or an enlarged detector pool.
+                g.conjunction = false;
+                g.conjunctionAB.clear();
+                g.conjunctionLine.clear();
+                g.ratio.reset();
+                g.fibPrice.reset();
+                g.linePrice.reset();
+                g.dF.reset();
+                g.dL.reset();
+                g.dS.reset();
+                auto pair = [&](const AB &a, const L &l)
+                {
+                    S::Diagnostic::Configuration config(.25);
+                    config.retracementRatios.assign(S::kRatios.begin(), S::kRatios.end());
+                    config.maxABStructures = 1;
+                    config.maxTrendlines = 1;
+                    config.maxPairEvaluations = 1;
+                    config.maxMeasurements = 3;
+                    auto result = S::Diagnostic::Evaluate(o.bar, o.candle.close, o.atr, std::span{&a, 1},
+                                                          std::span{&l, 1}, config);
+                    Check(result.measurements.size() == 3 && !result.pairCapacityReached &&
+                              !result.measurementCapacityReached,
+                          "incomplete_displaced_candidate_probe");
+                    for (const auto &m : result.measurements)
+                    {
+                        auto f =
+                            S::Diagnostic::Detail::NormalizedDistance(o.candle.close, m.fibPrice, *o.atr);
+                        auto d =
+                            S::Diagnostic::Detail::NormalizedDistance(o.candle.close, m.linePrice, *o.atr);
+                        Check(f && d && m.normalizedStructureDistance, "unknown_displaced_candidate_probe");
+                        if (*f <= .25 && *d <= .25 && *m.normalizedStructureDistance <= .25)
+                        {
+                            g.conjunction = true;
+                            g.conjunctionAB = S::ABKey(a);
+                            g.conjunctionLine = S::LineKey(l);
+                            g.ratio = m.identity.ratio;
+                            g.fibPrice = m.fibPrice;
+                            g.linePrice = m.linePrice;
+                            g.dF = f;
+                            g.dL = d;
+                            g.dS = m.normalizedStructureDistance;
+                            return;
+                        }
+                    }
+                };
+                if (ab)
+                {
+                    for (const auto &[k, l] : cf.lines)
+                    {
+                        (void)k;
+                        if (!g.conjunction)
+                            pair(*candidateAB, l);
+                    }
+                }
+                else
+                {
+                    for (const auto &[k, a] : cf.abs)
+                    {
+                        (void)k;
+                        if (!g.conjunction)
+                            pair(a, *candidateLine);
+                    }
+                }
+                if ((ab ? cf.eligibleLines > 0 : cf.eligibleAB > 0))
+                {
+                    bool f = ab ? (nearAB > 0 || g.near) : nearAB > 0;
+                    bool l = ab ? nearLines > 0 : (nearLines > 0 || g.near);
+                    bool i = cf.intersection.value_or(false) || g.conjunction;
+                    if (cf.lineNear)
+                        necessaryL = l != *cf.lineNear;
+                    if (cf.intersection)
+                        necessaryI = i != *cf.intersection;
+                    necessaryC = std::string(S::Name(S::Classify(f, l, i))) != cf.cohort;
+                }
+            }
+            const auto tagged = std::string(ab ? "TG3:" : "TG1A:") + key;
+            if (!decisionIdentities.contains(tagged) &&
+                decisionIdentities.size() >= budgets.decisionIdentityLimit)
+            {
+                Fail("decision_identity_budget", false, true);
+                throw std::runtime_error(summary.failure);
+            }
+            auto &flags = decisionIdentities[tagged];
+            flags.eligible = true;
+            flags.near = flags.near || g.near;
+            flags.direct = flags.direct || direct;
+            flags.displaced = flags.displaced || (actualPresent && !cfPresent);
+            flags.conjunction = flags.conjunction || g.conjunction;
+            flags.changedDecision = flags.changedDecision || cohortChanged;
+            flags.necessaryCohort = flags.necessaryCohort || (cohortChanged && necessaryC.value_or(false));
+            if (direct && cfPresent)
+            {
+                presence = true;
+                proximity = proximity || g.near;
+            }
+            std::string row =
+                p.identity + "," + T(o.candle.timestamp) + "," + T(o.candle.timestamp + 900) + "," +
+                N(o.bar) + "," + (ab ? "TG3" : "TG1A") + "," + key + "," + (actualPresent ? "1" : "0") + "," +
+                (cfPresent ? "1" : "0") + "," + (direct ? "1" : "0") + ",1,1," + (g.near ? "1" : "0") + "," +
+                (cf.intersection ? (g.conjunction ? "1" : "0") : "UNKNOWN") + "," + Value(necessaryL) + "," +
+                Value(necessaryI) + "," + Value(necessaryC) + "," + (cohortChanged ? "1" : "0") + "," +
+                Value(g.projectedPrice) + "," + Value(g.minimumDistance) + "," +
+                (g.conjunctionAB.empty() ? "UNKNOWN" : g.conjunctionAB) + "," +
+                (g.conjunctionLine.empty() ? "UNKNOWN" : g.conjunctionLine) + "," + Value(g.ratio) + "," +
+                Value(g.fibPrice) + "," + Value(g.linePrice) + "," + Value(g.dF) + "," + Value(g.dL) + "," +
+                Value(g.dS) + "\n";
+            DecisionAppend(*decisionCandidates, row, decisions.candidateRows);
+        };
+        for (const auto &[k, a] : cf.abs)
+            if (!actual.abs.contains(k))
+                publish(true, k, false, true, cf.abGeometry.at(k),
+                        liveWitnesses.contains("TG3:" + Natural(a)), &a, nullptr);
+        for (const auto &[k, l] : cf.lines)
+            if (!actual.lines.contains(k))
+                publish(false, k, false, true, cf.lineGeometry.at(k),
+                        liveWitnesses.contains("TG1A:" + Natural(l)), nullptr, &l);
+        for (const auto &[k, a] : actual.abs)
+            if (!cf.abs.contains(k))
+            {
+                (void)a;
+                publish(true, k, true, false, actual.abGeometry.at(k), false, &a, nullptr);
+            }
+        for (const auto &[k, l] : actual.lines)
+            if (!cf.lines.contains(k))
+            {
+                (void)l;
+                publish(false, k, true, false, actual.lineGeometry.at(k), false, nullptr, &l);
+            }
+        if (presence)
+            Increment(decisions.restoredPresence);
+        if (proximity)
+            Increment(decisions.restoredProximity);
+    }
+    void CompareAtDecision(const CompletedBarObservation &o)
+    {
+        auto &cfg = *decisionConfig;
+        const bool scheduled = o.candle.timestamp >= cfg.scoreStart && o.candle.timestamp < cfg.scoreEnd &&
+                               o.candle.timestamp % 3600 == 2700;
+        Check(scheduled == o.scheduled, "inconsistent_decision_schedule");
+        if (!scheduled)
+            return;
+        Check(pendingDecision && pendingDecision->timestamp == o.candle.timestamp,
+              "missing_candidate_state_primary_decision");
+        auto p = std::move(*pendingDecision);
+        pendingDecision.reset();
+        bool temporal = o.bar >= 2048 && o.candle.timestamp + 3600 < cfg.scoreEnd &&
+                        (!cfg.calibration || calibrationBars > 4);
+        if (!temporal)
+        {
+            DecisionRow(p, o.bar, "NOT_TEMPORALLY_ELIGIBLE");
+            return;
+        }
+        Increment(decisions.temporal);
+        auto actual = EvaluateDecisionGeometry(o.bar, o.candle, o.atr, o.retainedAB, o.retainedLines);
+        auto cf = EvaluateDecisionGeometry(o.bar, o.candle, o.atr, shadowAB, shadowLines);
+        if (!actual.reconstructed || !cf.reconstructed)
+        {
+            Increment(decisions.incomplete);
+            DecisionRow(p, o.bar, "UNKNOWN_INCOMPLETE", &actual, &cf, o.candle.close, o.atr);
+            Fail(!actual.reconstructed ? actual.reason : cf.reason);
+            throw std::runtime_error(summary.failure);
+        }
+        if (!p.geometryComplete || !p.geometryEvaluated || p.eligibleAB != actual.eligibleAB ||
+            p.eligibleLines != actual.eligibleLines ||
+            (actual.fibNear && (p.fibNear != *actual.fibNear || p.lineNear != *actual.lineNear ||
+                                p.intersection != *actual.intersection)) ||
+            (!p.cohort.empty() && p.cohort != actual.cohort) ||
+            (p.status == "classified" && p.cohort.empty()) ||
+            (p.status == "no_geometry" && actual.cohort != "INELIGIBLE_NO_GEOMETRY"))
+        {
+            Increment(decisions.incomplete);
+            DecisionRow(p, o.bar, "UNKNOWN_PRIMARY_INCONSISTENT", &actual, &cf, o.candle.close, o.atr);
+            Fail("inconsistent_primary_geometry_or_cohort");
+            throw std::runtime_error(summary.failure);
+        }
+        for (const auto &[k, a] : cf.abs)
+            if (actual.abs.contains(k))
+                Check(S::Snapshot(a) == S::Snapshot(actual.abs.at(k)),
+                      "counterfactual_shared_AB_payload_divergence");
+        for (const auto &[k, l] : cf.lines)
+            if (actual.lines.contains(k))
+                Check(S::Snapshot(l) == S::Snapshot(actual.lines.at(k)) &&
+                          l.ProjectedPrice(o.bar) == actual.lines.at(k).ProjectedPrice(o.bar),
+                      "counterfactual_shared_line_payload_divergence");
+        Increment(decisions.reconstructed);
+        if (!actual.fibNear || !cf.fibNear)
+            Increment(decisions.noGeometry);
+        if (actual.lineNear && cf.lineNear && *actual.lineNear != *cf.lineNear)
+            Increment(decisions.changedL);
+        if (actual.intersection && cf.intersection && *actual.intersection != *cf.intersection)
+            Increment(decisions.changedI);
+        if (actual.cohort != cf.cohort)
+            Increment(decisions.changedCohort);
+        DecisionRow(p, o.bar, "RECONSTRUCTED", &actual, &cf, o.candle.close, o.atr);
+        CandidateEvidence(o, p, actual, cf);
+        PairEvidence(o, p, actual, cf);
+    }
     void Observe(const CompletedBarObservation &o)
     {
         if (finished)
@@ -880,11 +1467,15 @@ struct Audit::State
             else
                 ++i;
         }
+        if (o.candle.timestamp >= S::kCalibrationStart)
+            Increment(calibrationBars);
         TG3Step(o);
         TG1Step(o);
         for (auto &l : shadowLines)
             Current(l, o);
         Survival(o);
+        if (decisionConfig)
+            CompareAtDecision(o);
         while (!bars.empty() && o.bar - bars.front().bar > gc.maxFractalAnchorLookbackBars + 2)
             bars.pop_front();
         for (std::size_t detector = 0; detector < 2; ++detector)
@@ -909,13 +1500,13 @@ struct Audit::State
 };
 
 Audit::Audit(TG3::Configuration f, TG1A::Configuration g, std::filesystem::path d, Budgets b,
-             PublicationHook hook)
+             PublicationHook hook, std::optional<DecisionAuditConfiguration> dc)
 {
     // Never overwrite evidence or create this sidecar inside an existing primary
     // publication. Caller additionally enforces repository/snapshot boundaries.
     if (std::filesystem::exists(d) || !std::filesystem::create_directories(d))
         throw std::invalid_argument("audit output must be a new directory");
-    state_ = std::make_unique<State>(std::move(f), g, std::move(d), b, std::move(hook));
+    state_ = std::make_unique<State>(std::move(f), g, std::move(d), b, std::move(hook), std::move(dc));
 }
 Audit::~Audit() = default;
 void ValidateFrozenSourceSnapshot(const std::filesystem::path &snapshot)
@@ -949,6 +1540,35 @@ void Audit::Observe(const CompletedBarObservation &o) noexcept
         state_->Fail("unknown_diagnostic_failure");
     }
 }
+void Audit::ObservePrimaryDecision(const PrimaryDecisionObservation &d) noexcept
+{
+    if (!state_->decisionConfig || !state_->summary.complete)
+        return;
+    try
+    {
+        state_->PrimaryDecision(d);
+    }
+    catch (const std::bad_alloc &)
+    {
+        state_->Fail("diagnostic_allocation_exhaustion", false, true);
+    }
+    catch (const std::overflow_error &)
+    {
+        state_->Fail("audit_counter_overflow", false, true);
+    }
+    catch (const std::exception &e)
+    {
+        state_->Fail(e.what());
+    }
+    catch (...)
+    {
+        state_->Fail("unknown_decision_observation_failure");
+    }
+}
+const DecisionAuditSummary &Audit::GetDecisionSummary() const
+{
+    return state_->decisions;
+}
 const Summary &Audit::GetSummary() const
 {
     return state_->summary;
@@ -960,7 +1580,104 @@ bool Audit::Complete(const Provenance &p)
     if (s.finished)
         throw std::logic_error("audit already finalized");
     s.finished = true;
+    if (s.decisionConfig && s.summary.complete &&
+        (s.pendingDecision || s.nextDecisionSlot < s.decisionConfig->scoreEnd ||
+         s.decisionConfig->semanticFingerprint != p.semanticFingerprint))
+        s.Fail("incomplete_or_inconsistent_decision_clock");
     auto removed = s.removals.Finish(), witness = s.witnesses.Finish();
+    std::optional<S::DecodedContent> decisionContent, candidateContent;
+    if (s.decisionConfig)
+    {
+        decisionContent = s.decisionChanges->Finish();
+        candidateContent = s.decisionCandidates->Finish();
+        auto verifyDecision = S::InspectGzip(s.dir / "decision_counterfactual_changes.csv.gz");
+        auto verifyCandidates = S::InspectGzip(s.dir / "decision_counterfactual_candidates.csv.gz");
+        if (verifyDecision.sha256 != decisionContent->sha256 ||
+            verifyCandidates.sha256 != candidateContent->sha256 ||
+            decisionContent->rows != s.decisions.decisionRows + s.decisions.pairRows ||
+            candidateContent->rows != s.decisions.candidateRows)
+            throw std::runtime_error("counterfactual_decision_compression_reconciliation_failure");
+        std::size_t eligible = 0, near = 0, conjunction = 0, associated = 0, necessary = 0, displaced = 0;
+        for (const auto &[key, f] : s.decisionIdentities)
+        {
+            (void)key;
+            eligible += f.eligible && f.direct;
+            displaced += f.displaced;
+            near += f.near;
+            conjunction += f.conjunction;
+            associated += f.changedDecision;
+            necessary += f.necessaryCohort;
+        }
+        std::ostringstream stats;
+        stats.imbue(std::locale::classic());
+        stats << "metric,value,status\n";
+        const std::string completeness = s.summary.complete ? "VERIFIED_OBSERVED_CLOCK" : "PARTIAL_NOT_EXACT";
+        auto count = [&](const char *metric, std::size_t n)
+        {
+            if (s.summary.complete)
+                stats << metric << ',' << n << ',' << completeness << '\n';
+            else
+            {
+                stats << metric << ",UNKNOWN,INCOMPLETE\n";
+                stats << "observed_prefix_" << metric << ',' << n << ",PARTIAL_OBSERVED_PREFIX\n";
+            }
+        };
+        count("scheduled_decisions_examined", s.decisions.scheduled);
+        count("temporally_eligible_decisions", s.decisions.temporal);
+        count("fully_reconstructed_decisions", s.decisions.reconstructed);
+        count("incomplete_decisions", s.decisions.incomplete);
+        count("unobservable_missing_slots", s.decisions.missingSlots);
+        count("known_empty_geometry_decisions", s.decisions.noGeometry);
+        count("decisions_with_restored_candidate_presence", s.decisions.restoredPresence);
+        count("decisions_with_restored_candidate_proximity", s.decisions.restoredProximity);
+        count("decisions_changed_Lline", s.decisions.changedL);
+        count("decisions_changed_I", s.decisions.changedI);
+        count("decisions_changed_cohort", s.decisions.changedCohort);
+        count("distinct_suppressed_candidate_identities",
+              s.summary.creationLossesTG3 + s.summary.creationLossesTG1A);
+        count("distinct_decision_eligible_suppressed_identities", eligible);
+        count("distinct_proximity_contributing_identities", near);
+        count("distinct_same_pair_conjunction_identities", conjunction);
+        count("distinct_cohort_changing_identities", necessary);
+        count("distinct_identities_associated_with_changed_cohort", associated);
+        count("distinct_affected_candidate_identities", s.decisionIdentities.size());
+        count("distinct_capacity_displaced_candidate_identities", displaced);
+        count("candidate_rows", s.decisions.candidateRows);
+        count("added_pair_evidence_rows", s.decisions.pairRows);
+        stats << "diagnostic_complete," << (s.summary.complete ? "1" : "0") << ",VERIFIED_STATUS\n";
+        if (s.decisions.missingSlots)
+            stats << "effect_on_missing_slots,UNKNOWN,UNOBSERVABLE\n";
+        if (s.decisions.noGeometry)
+            stats << "effect_on_geometry_ineligible_decisions,UNKNOWN,INELIGIBLE\n";
+        s.Publish("decision_counterfactual_summary.csv", stats.str());
+        s.Publish(
+            "decision_counterfactual_protocol.json",
+            std::string("{\"schema\":") + Json(kDecisionSchema) +
+                ",\"semantic_fingerprint\":" + Json(s.decisionConfig->semanticFingerprint) +
+                ",\"intervention\":\"TG3 and TG1A history retention only; complete native-cap candidate "
+                "pools\","
+                "\"cohort_comparison\":\"frozen geometric Classify; primary accepted cohort is separately "
+                "recorded; known empty universe is INELIGIBLE_NO_GEOMETRY with UNKNOWN predicates\","
+                "\"attribution\":\"candidate conditional effect removes an added candidate or toggles back a "
+                "displaced candidate in the held counterfactual "
+                "eligible universe; association is not sole-candidate causation\","
+                "\"cohort_changing_identity\":\"symmetric-difference candidate changing the counterfactual "
+                "cohort at an actual-versus-counterfactual changed decision\","
+                "\"evidence\":\"complete added AB/line/ratio pair evidence; remove displaced identities from "
+                "primary geometry; unchanged pairs retain identical payloads\","
+                "\"candidate_scope\":\"eligible UpAB and UTL; unsupported directions remain in native-cap "
+                "pools but are excluded from primary geometry\","
+                "\"missing_slot_policy\":\"no replacement; UNKNOWN and explicitly unobservable; completeness "
+                "concerns observed completed decisions\","
+                "\"decision_clock\":\"UTC bar-start minute 45, completion=bar-start+900\","
+                "\"warmup\":2048,\"calibration_embargo\":4,\"ratios\":[0.382,0.500,0.618],\"threshold_atr\":"
+                "0.25,"
+                "\"AB_capacity\":512,\"line_capacity\":4096,\"AB_age_inclusive\":2048,\"line_age_inclusive\":"
+                "512,"
+                "\"decision_identity_budget\":" +
+                N(s.budgets.decisionIdentityLimit) +
+                ",\"decision_record_budget\":" + N(s.budgets.decisionRecordLimit) + "}\n");
+    }
     auto verifiedRemoved = S::InspectGzip(s.dir / "history_removals.csv.gz"),
          verifiedWitness = S::InspectGzip(s.dir / "candidate_witnesses.csv.gz");
     if (removed.sha256 != verifiedRemoved.sha256 || witness.sha256 != verifiedWitness.sha256 ||
@@ -1081,11 +1798,30 @@ bool Audit::Complete(const Provenance &p)
          << Json(removed.sha256) << ",\"decoded_rows\":" << removed.rows
          << "},\"candidate_witnesses.csv.gz\":{\"decoded_sha256\":" << Json(witness.sha256)
          << ",\"decoded_rows\":" << witness.rows << "}}}\n";
-    s.Publish("audit_provenance.json", prov.str());
+    if (s.decisionConfig)
+    {
+        std::string body = prov.str();
+        body.resize(body.size() - 2);
+        body += ",\"decision_geometry_extension\":" + Json(kDecisionSchema) +
+                ",\"decision_geometry_complete\":" + (s.summary.complete ? "true" : "false") +
+                ",\"decision_compressed_contents\":{\"decision_counterfactual_changes.csv.gz\":{\"decoded_"
+                "sha256\":" +
+                Json(decisionContent->sha256) + ",\"decoded_rows\":" + N(decisionContent->rows) +
+                "},\"decision_counterfactual_candidates.csv.gz\":{\"decoded_sha256\":" +
+                Json(candidateContent->sha256) + ",\"decoded_rows\":" + N(candidateContent->rows) + "}}}\n";
+        s.Publish("audit_provenance.json", body);
+    }
+    else
+        s.Publish("audit_provenance.json", prov.str());
     std::string ledger;
     for (const char *name : {"audit_protocol.json", "audit_provenance.json", "candidate_witnesses.csv.gz",
                              "history_removals.csv.gz", "history_summary.csv"})
         ledger += S::FileHash(s.dir / name) + "  " + name + "\n";
+    if (s.decisionConfig)
+        for (const char *name :
+             {"decision_counterfactual_summary.csv", "decision_counterfactual_changes.csv.gz",
+              "decision_counterfactual_candidates.csv.gz", "decision_counterfactual_protocol.json"})
+            ledger += S::FileHash(s.dir / name) + "  " + name + "\n";
     s.Publish("audit_checksums.sha256", ledger);
     if (s.hook)
         s.hook(PublicationStep::Checksum);
@@ -1114,6 +1850,19 @@ void ValidateSidecar(const std::filesystem::path &d)
     std::set<std::string> expected{"audit_protocol.json", "audit_provenance.json",
                                    "candidate_witnesses.csv.gz", "history_removals.csv.gz",
                                    "history_summary.csv"};
+    std::ifstream meta(d / "audit_provenance.json");
+    std::string metadata(std::istreambuf_iterator<char>(meta), {});
+    const bool extension = metadata.find("\"decision_geometry_extension\":") != std::string::npos;
+    if (extension)
+    {
+        if (metadata.find("\"decision_geometry_extension\":" + Json(kDecisionSchema)) == std::string::npos ||
+            metadata.find("\"decision_geometry_complete\":true") == std::string::npos)
+            throw std::runtime_error("counterfactual decision extension incomplete");
+        for (const char *name :
+             {"decision_counterfactual_summary.csv", "decision_counterfactual_changes.csv.gz",
+              "decision_counterfactual_candidates.csv.gz", "decision_counterfactual_protocol.json"})
+            expected.insert(name);
+    }
     std::string row;
     while (std::getline(f, row))
     {
@@ -1137,6 +1886,16 @@ void ValidateSidecar(const std::filesystem::path &d)
         if (json.find(claim) == std::string::npos)
             throw std::runtime_error("audit decoded-content claim mismatch");
     }
+    if (extension)
+        for (const char *name :
+             {"decision_counterfactual_changes.csv.gz", "decision_counterfactual_candidates.csv.gz"})
+        {
+            auto decoded = S::InspectGzip(d / name);
+            const auto claim = Json(name) + ":{\"decoded_sha256\":" + Json(decoded.sha256) +
+                               ",\"decoded_rows\":" + N(decoded.rows) + "}";
+            if (metadata.find(claim) == std::string::npos)
+                throw std::runtime_error("counterfactual decision decoded-content mismatch");
+        }
     std::ifstream marker(d / "AUDIT_COMPLETE");
     std::getline(marker, row);
     if (row != S::FileHash(d / "audit_checksums.sha256") + "  audit_checksums.sha256")

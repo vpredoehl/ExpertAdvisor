@@ -120,7 +120,7 @@ int main(int argc, char** argv)
             std::cout << "Phase 2B v2 standalone research: fixed UTC bar-start minute 45, complete market-state aggregation.\n"
                 << "--partition development|calibration --output-dir NEW_EXTERNAL_DIRECTORY\n"
                 << "--bounded-development --start-utc YYYY-MM-DDTHH:MM:SSZ --end-utc YYYY-MM-DDTHH:MM:SSZ --output-dir NEW_EXTERNAL_DIRECTORY\n"
-                << "--history-shadow-audit-dir NEW_EXTERNAL_DIRECTORY (optional, independent diagnostic sidecar).\n"
+                << "--history-shadow-audit-dir NEW_EXTERNAL_DIRECTORY (optional; includes causal decision-geometry counterfactual extension).\n"
                 << "--episode-publication summary|full (default summary); artifact format v3, semantic protocol v2.\n"
                 << "Deterministic lossless gzip geometry; episode tracking unchanged; summary omits raw episode detail.\n"
                 << "episode_publication=" << S::Name(tier) << "\n"
@@ -168,7 +168,11 @@ int main(int argc, char** argv)
         if (!auditOutput.empty())
         {
             EA::FibonacciResearch::HistoryShadow::ValidateFrozenSourceSnapshot(snapshot);
-            shadowAudit = std::make_unique<EA::FibonacciResearch::HistoryShadow::Audit>(config.fibonacci, config.geometry, auditOutput);
+            EA::FibonacciResearch::HistoryShadow::DecisionAuditConfiguration auditConfig{
+                S::Hash(S::CanonicalProtocol(protocol,score,EA::TG4::ConfigurationFingerprint(config),{})),score.start,score.end,
+                protocol.partition==S::Partition::Calibration};
+            shadowAudit = std::make_unique<EA::FibonacciResearch::HistoryShadow::Audit>(config.fibonacci, config.geometry, auditOutput,
+                EA::FibonacciResearch::HistoryShadow::Budgets{},EA::FibonacciResearch::HistoryShadow::PublicationHook{},auditConfig);
         }
         EA::FibonacciResearch::HistoryShadow::Observer observer;
         if (shadowAudit) observer = [&](const auto& observation) { shadowAudit->Observe(observation); };
@@ -180,8 +184,19 @@ int main(int argc, char** argv)
             throw std::runtime_error("empty or duplicate canonical source; study aborted");
         provenance.preflightRows = preflight.rowCount;
         S::ArtifactWriter writer(output, tier);
+        auto sinks=writer.GetSinks();
+        if(shadowAudit)
+        {
+            auto writeDecision=sinks.decision;
+            sinks.decision=[&,writeDecision](const S::Decision& d){
+                writeDecision(d);
+                shadowAudit->ObservePrimaryDecision({d.identity,d.status,d.cohort?S::Name(*d.cohort):"",d.timestamp,d.close.has_value(),
+                    d.aggregate.complete,d.aggregate.evaluated,d.aggregate.abs,d.aggregate.lines,
+                    d.aggregate.fibNear,d.aggregate.lineNear,d.aggregate.intersection});
+            };
+        }
         S::HistoricalEvaluator evaluator(protocol, EA::TG1B::CalibrationConfiguration(config.referenceBarScale),
-            config.fibonacci, config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), writer.GetSinks(), score, {}, std::move(observer));
+            config.fibonacci, config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), std::move(sinks), score, {}, std::move(observer));
         EA::TG4::HistoricalMarketDataRepository::StreamCanonicalCandles(transaction, provenance.sourceSymbol, config, range,
             [&](const EA::TG1A::Candle& c) { evaluator.AddCompletedBar(c); });
         evaluator.Finalize(); transaction.commit();

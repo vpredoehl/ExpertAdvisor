@@ -198,5 +198,44 @@ assert not (root.parent / 'isolation-failed-audit' / 'AUDIT_COMPLETE').exists()
 assert not (root.parent / 'isolation-allocation-audit' / 'AUDIT_COMPLETE').exists()
 print('Deterministic artifact-v3/semantic-v2 JSON/CSV/gzip/checksum/reconciliation validation passed')
 print('Shadow-audit-v1 JSON/CSV/gzip/parent-linkage/completeness validation passed')
+for folder in ('isolation-decision-audit', 'decision-pipeline'):
+    audit = root.parent / folder
+    meta = json.loads((audit / 'audit_provenance.json').read_text())
+    protocol = json.loads((audit / 'decision_counterfactual_protocol.json').read_text())
+    assert meta['decision_geometry_complete'] and protocol['schema'] == 'causal-decision-geometry-counterfactual-v1'
+    assert meta['decision_geometry_extension'] == protocol['schema']
+    assert protocol['ratios'] == [0.382, 0.500, 0.618] and protocol['threshold_atr'] == 0.25
+    summary = {r['metric']: r for r in csv.DictReader((audit / 'decision_counterfactual_summary.csv').open())}
+    assert summary['diagnostic_complete']['value'] == '1'
+    for filename, claim in meta['decision_compressed_contents'].items():
+        digest = hashlib.sha256(); rows = 0
+        with gzip.open(audit / filename, 'rb') as f:
+            for line in f: digest.update(line); rows += 1
+        assert digest.hexdigest() == claim['decoded_sha256'] and rows - 1 == claim['decoded_rows']
+        with gzip.open(audit / filename, 'rt') as f:
+            reader = csv.reader(f); header = next(reader)
+            assert all(len(row) == len(header) for row in reader), filename
+    for line in (audit / 'audit_checksums.sha256').read_text().splitlines():
+        expected, filename = line.split('  ', 1)
+        assert hashlib.sha256((audit / filename).read_bytes()).hexdigest() == expected
+    if folder == 'decision-pipeline':
+        assert int(summary['decisions_with_restored_candidate_presence']['value']) == 7
+        assert int(summary['decisions_with_restored_candidate_proximity']['value']) == 7
+        assert int(summary['added_pair_evidence_rows']['value']) > 0
+        assert all(summary[k]['value'] == '0' for k in ('decisions_changed_Lline','decisions_changed_I','decisions_changed_cohort'))
+        with gzip.open(audit / 'decision_counterfactual_candidates.csv.gz', 'rt') as f:
+            candidate_rows = list(csv.DictReader(f))
+        assert any(r['actual_present'] == '0' and r['direct_history_suppression'] == '1' for r in candidate_rows)
+        assert any(r['actual_present'] == '1' and r['counterfactual_present'] == '0' for r in candidate_rows)
+    else:
+        assert summary['decisions_with_restored_candidate_presence']['value'] == '0'
+for failure in range(3):
+    failed = root.parent / f'decision-failure-audit-{failure}'
+    assert not (failed / 'AUDIT_COMPLETE').exists()
+    summary = {r['metric']: r['value'] for r in csv.DictReader((failed / 'decision_counterfactual_summary.csv').open())}
+    assert summary['decisions_changed_cohort'] == 'UNKNOWN'
+assert not (root.parent / 'isolation-decision-failed-audit' / 'AUDIT_COMPLETE').exists()
+print('Counterfactual decision-extension JSON/CSV/gzip/positive-pair-evidence/UNKNOWN/checksum validation passed')
+
 PY
 guard

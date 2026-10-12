@@ -5,6 +5,7 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <span>
 
@@ -29,6 +30,56 @@ struct CompletedBarObservation
     std::span<const TG3::ABStructure> retainedAB;
     std::span<const TG1A::TrendLineCandidate> retainedLines;
     std::size_t totalABCreated, abCapacityEvictions, abAgeExpirations;
+};
+inline constexpr std::string_view kDecisionSchema = "causal-decision-geometry-counterfactual-v1";
+struct DecisionAuditConfiguration
+{
+    std::string semanticFingerprint;
+    std::int64_t scoreStart = 0, scoreEnd = 0;
+    bool calibration = false;
+};
+// Deliberately excludes covariates and outcomes. Delivered by the immutable
+// primary decision sink before the completed-bar observer.
+struct PrimaryDecisionObservation
+{
+    std::string identity, status, cohort;
+    std::int64_t timestamp = 0;
+    bool completedCandle = false, geometryComplete = false, geometryEvaluated = false;
+    std::size_t eligibleAB = 0, eligibleLines = 0;
+    bool fibNear = false, lineNear = false, intersection = false;
+};
+struct CandidateGeometry
+{
+    bool near = false, conjunction = false;
+    std::optional<double> projectedPrice, minimumDistance;
+    std::string conjunctionAB, conjunctionLine;
+    std::optional<double> ratio, fibPrice, linePrice, dF, dL, dS;
+};
+struct DecisionGeometry
+{
+    // Known empty geometry is reconstructed, but predicates and cohort remain
+    // UNKNOWN/INELIGIBLE_NO_GEOMETRY. It is never promoted to D.
+    bool reconstructed = false;
+    std::size_t eligibleAB = 0, eligibleLines = 0;
+    std::optional<bool> fibNear, lineNear, intersection;
+    std::string cohort = "UNKNOWN", reason;
+    std::map<std::string, TG3::ABStructure> abs;
+    std::map<std::string, TG1A::TrendLineCandidate> lines;
+    std::map<std::string, CandidateGeometry> abGeometry, lineGeometry;
+};
+// Pure, bounded-batch geometry evaluation. Uses the frozen diagnostic numerical
+// functions and frozen Classify, with its canonical causal eligibility contract.
+DecisionGeometry EvaluateDecisionGeometry(std::size_t bar, const TG1A::Candle &, std::optional<double> atr,
+                                          std::span<const TG3::ABStructure>,
+                                          std::span<const TG1A::TrendLineCandidate>);
+struct DecisionAuditSummary
+{
+    bool enabled = false;
+    std::size_t scheduled = 0, temporal = 0, reconstructed = 0, incomplete = 0;
+    std::size_t missingSlots = 0, noGeometry = 0;
+    std::size_t restoredPresence = 0, restoredProximity = 0;
+    std::size_t changedL = 0, changedI = 0, changedCohort = 0;
+    std::size_t decisionRows = 0, pairRows = 0, candidateRows = 0;
 };
 // Natural identities ignore bar-index aliases; native identities retain them.
 struct CandidateIdentityReconciliation
@@ -76,8 +127,9 @@ struct Budgets
     std::size_t witnessRecords = 2000000;
     std::size_t removalRecords = 2000000;
     std::size_t diagnosticBytes = 128 * 1024 * 1024;
-    std::size_t publicationBufferBytes = 2 * 65536;
+    std::size_t publicationBufferBytes = 4 * 65536;
     std::size_t decodedPublicationBytes = 1024 * 1024 * 1024;
+    std::size_t decisionIdentityLimit = 65536, decisionRecordLimit = 2000000;
 };
 struct Counts
 {
@@ -118,12 +170,15 @@ class Audit
 {
   public:
     Audit(TG3::Configuration fibonacci, TG1A::Configuration geometry,
-          std::filesystem::path newSidecarDirectory, Budgets budgets = {}, PublicationHook hook = {});
+          std::filesystem::path newSidecarDirectory, Budgets budgets = {}, PublicationHook hook = {},
+          std::optional<DecisionAuditConfiguration> decisionAudit = {});
     ~Audit();
     Audit(const Audit &) = delete;
     Audit &operator=(const Audit &) = delete;
     void Observe(const CompletedBarObservation &) noexcept;
     const Summary &GetSummary() const;
+    void ObservePrimaryDecision(const PrimaryDecisionObservation &) noexcept;
+    const DecisionAuditSummary &GetDecisionSummary() const;
     // Finalizes streams, validates parent linkage and checksums. An incomplete
     // diagnostic publishes status/evidence but NEVER AUDIT_COMPLETE.
     bool Complete(const Provenance &);
