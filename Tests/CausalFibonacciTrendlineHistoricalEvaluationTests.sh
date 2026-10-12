@@ -8,22 +8,28 @@ research_cxx="${CXX:-/Applications/Xcode.app/Contents/Developer/Toolchains/Xcode
 research_sdk="${EA_RESEARCH_SDKROOT:-/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk}"
 test -x "${research_git}" && test -x "${research_cxx}" && test -d "${research_sdk}"
 export EA_RESEARCH_GIT="${research_git}"
+export EA_RESEARCH_GUARD_HEAD="$("${research_git}" -C "${repo_root}" rev-parse HEAD)"
 guard() {
 python3 - "${repo_root}" <<'PY'
-import hashlib, os, pathlib, subprocess, sys
+import os, pathlib, subprocess, sys
 root = pathlib.Path(sys.argv[1])
 def git(*args): return subprocess.check_output([os.environ['EA_RESEARCH_GIT'], '-C', str(root), *args], text=True).strip()
-assert git('rev-parse', 'HEAD') == '291fbd286ed19041ba8f275cc59760ebdc4025ae', 'STOP: HEAD changed'
+assert git('rev-parse', 'HEAD') == os.environ['EA_RESEARCH_GUARD_HEAD'], 'STOP: HEAD changed during invocation'
 assert git('branch', '--show-current') == 'lstm-feature-development', 'STOP: branch changed'
-assert not git('diff', '--name-only') and not git('diff', '--cached', '--name-only'), 'STOP: tracked changes'
-for name in ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/CausalFibonacciTrendlineHistoricalArtifact.hpp',
+files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/CausalFibonacciTrendlineHistoricalArtifact.hpp',
              'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
              'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
-             'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']:
+             'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
+assert not git('diff', '--cached', '--name-only'), 'STOP: staged changes'
+assert not git('ls-files', '--others', '--exclude-standard'), 'STOP: unexpected untracked files'
+assert set(git('diff', '--name-only').splitlines()) <= set(files), 'STOP: non-research tracked changes'
+gitdir = pathlib.Path(git('rev-parse', '--absolute-git-dir'))
+for name in ('MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD',
+             'BISECT_LOG', 'index.lock', 'rebase-merge', 'rebase-apply', 'sequencer'):
+    assert not (gitdir / name).exists(), 'STOP: active Git operation: ' + name
+for name in files:
     assert (root / name).is_file() and not (root / name).is_symlink(), 'STOP: missing research file'
-    assert not git('ls-files', '--', name), 'STOP: research file tracked'
-sql = root / 'layout13_replication.sql'
-assert sql.is_file() and not sql.is_symlink() and hashlib.sha256(sql.read_bytes()).hexdigest() == 'afcebbcb591149c9b54873ee19d707bea58d2ab33676ea1598de696b28843590', 'STOP: SQL changed/missing'
+    assert git('ls-files', '--', name) == name, 'STOP: research file is not tracked: ' + name
 PY
 }
 guard
@@ -32,6 +38,55 @@ cleanup() {
     if [[ "${test_dir}" == /tmp/ea_fib_v2_tests.* && -d "${test_dir}" && ! -L "${test_dir}" ]]; then rm -rf -- "${test_dir}"; fi
 }
 trap cleanup EXIT
+python3 - "${repo_root}" <<'PYGUARD'
+import os, pathlib, sys
+from unittest.mock import patch
+root = pathlib.Path(sys.argv[1])
+head = os.environ['EA_RESEARCH_GUARD_HEAD']
+files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/CausalFibonacciTrendlineHistoricalArtifact.hpp',
+         'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
+         'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
+         'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
+checks = 0
+for script in ['Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']:
+    code = (root / script).read_text().split('python3 - "${repo_root}" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
+    assert 'layout13_replication.sql' not in code
+    runner = script.startswith('Scripts/')
+    def verify(expected, validation=True, changed='', staged='', untracked='', actual_head=head,
+               expected_head=head, branch='lstm-feature-development', missing_tracking=False):
+        global checks
+        def fake_git(command, **kwargs):
+            args = tuple(command[3:])
+            replies = {('rev-parse', 'HEAD'): actual_head, ('branch', '--show-current'): branch,
+                       ('rev-parse', '--absolute-git-dir'): str(root / '.git'),
+                       ('diff', '--name-only'): changed, ('diff', '--cached', '--name-only'): staged,
+                       ('ls-files', '--others', '--exclude-standard'): untracked}
+            if args[:2] == ('ls-files', '--'):
+                return '' if missing_tracking else args[2] + '\n'
+            return replies[args] + '\n'
+        passed = True
+        with patch('subprocess.check_output', fake_git), patch.dict(os.environ,
+             {'EA_RESEARCH_GUARD_HEAD': expected_head, 'EA_RESEARCH_VALIDATION_ONLY': '1' if validation else '0'}), \
+             patch.object(sys, 'argv', ['guard', str(root)]):
+            try: exec(compile(code, script, 'exec'), {})
+            except AssertionError: passed = False
+        assert passed == expected, (script, validation, changed, staged, untracked, actual_head, passed)
+        checks += 1
+    verify(True)
+    verify(True, changed=files[3])
+    verify(False, changed='Sources/TrainingPipeline.cpp')
+    verify(False, staged=files[3])
+    verify(False, untracked='unexpected.cpp')
+    verify(False, actual_head='f' * 40)
+    verify(True, actual_head='f' * 40, expected_head='f' * 40) # Future committed HEAD is accepted.
+    verify(False, branch='other')
+    verify(False, missing_tracking=True)
+    if runner:
+        verify(True, validation=False)
+        verify(False, validation=False, changed=files[3])
+        verify(False, validation=False, changed='Sources/TrainingPipeline.cpp')
+print(f'RESEARCH_GUARD_VALIDATION checks={checks} strict_execution=true protected_sql_access=false')
+PYGUARD
 "${research_cxx}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -isysroot "${research_sdk}" \
     -I"${repo_root}/Headers" \
     "${repo_root}/Sources/TG4HistoricalEmpiricalEvaluation.cpp" \

@@ -8,11 +8,18 @@ research_cxx="${CXX:-/Applications/Xcode.app/Contents/Developer/Toolchains/Xcode
 research_sdk="${EA_RESEARCH_SDKROOT:-/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk}"
 test -x "${research_git}" && test -x "${research_cxx}" && test -d "${research_sdk}"
 export EA_RESEARCH_GIT="${research_git}"
-# Only seven untracked research paths are permitted to differ. No clean/reset,
-# production build, Xcode invocation, process control, or worktree cleanup.
+# Freeze this invocation's HEAD, rather than pinning all future research commits.
+export EA_RESEARCH_GUARD_HEAD="$("${research_git}" -C "${repo_root}" rev-parse HEAD)"
+export EA_RESEARCH_VALIDATION_ONLY=0
+if [[ "${1:-}" == "--build-only" ]]; then
+    [[ "$#" == 1 ]] || { echo 'STOP: --build-only takes no study arguments' >&2; exit 1; }
+    export EA_RESEARCH_VALIDATION_ONLY=1
+fi
+# Study execution requires a clean worktree. Build-only permits unstaged edits
+# confined to the seven research files, without executing a database study.
 guard() {
 python3 - "${repo_root}" <<'PY'
-import hashlib, os, pathlib, subprocess, sys
+import os, pathlib, subprocess, sys
 root = pathlib.Path(sys.argv[1])
 files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp',
          'Headers/CausalFibonacciTrendlineHistoricalArtifact.hpp',
@@ -23,16 +30,22 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
 def git(*args):
     return subprocess.check_output([os.environ['EA_RESEARCH_GIT'], '-C', str(root), *args], text=True).strip()
-assert git('rev-parse', 'HEAD') == '291fbd286ed19041ba8f275cc59760ebdc4025ae', 'STOP: HEAD changed'
+assert git('rev-parse', 'HEAD') == os.environ['EA_RESEARCH_GUARD_HEAD'], 'STOP: HEAD changed during invocation'
 assert git('branch', '--show-current') == 'lstm-feature-development', 'STOP: branch changed'
-assert not git('diff', '--name-only') and not git('diff', '--cached', '--name-only'), 'STOP: tracked files changed'
+assert not git('diff', '--cached', '--name-only'), 'STOP: staged changes'
+assert not git('ls-files', '--others', '--exclude-standard'), 'STOP: unexpected untracked files'
+changed = set(git('diff', '--name-only').splitlines())
+if os.environ['EA_RESEARCH_VALIDATION_ONLY'] == '1':
+    assert changed <= set(files), 'STOP: non-research tracked changes'
+else:
+    assert not changed, 'STOP: research execution requires a clean tracked working tree'
+gitdir = pathlib.Path(git('rev-parse', '--absolute-git-dir'))
+for name in ('MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD',
+             'BISECT_LOG', 'index.lock', 'rebase-merge', 'rebase-apply', 'sequencer'):
+    assert not (gitdir / name).exists(), 'STOP: active Git operation: ' + name
 for name in files:
     assert (root / name).is_file() and not (root / name).is_symlink(), 'STOP: research file missing or symlink: ' + name
-    assert not git('ls-files', '--', name), 'STOP: research file became tracked: ' + name
-sql = root / 'layout13_replication.sql'
-assert sql.is_file() and not sql.is_symlink(), 'STOP: protected SQL missing'
-assert hashlib.sha256(sql.read_bytes()).hexdigest() == 'afcebbcb591149c9b54873ee19d707bea58d2ab33676ea1598de696b28843590', 'STOP: protected SQL changed'
-assert not git('ls-files', '--', 'layout13_replication.sql'), 'STOP: SQL became tracked'
+    assert git('ls-files', '--', name) == name, 'STOP: research file is not tracked: ' + name
 PY
 }
 guard
@@ -132,11 +145,55 @@ export EA_RESEARCH_EXECUTABLE_SHA256="$(shasum -a 256 "${EA_RESEARCH_EXECUTABLE}
 guard
 if [[ "${1:-}" == "--build-only" ]]; then
     "${EA_RESEARCH_EXECUTABLE}" --help
-    if "${EA_RESEARCH_EXECUTABLE}" --partition final2025 --output-dir "${build_dir}/forbidden" > "${build_dir}/heldout-rejection.log" 2>&1; then
-        echo "STOP: held-out option was accepted" >&2
-        exit 1
-    fi
-    rg -q '2025 disabled before detector/database access' "${build_dir}/heldout-rejection.log"
+    python3 - "${EA_RESEARCH_EXECUTABLE}" <<'PYCLI'
+import datetime, subprocess, sys
+binary = sys.argv[1]
+def invoke(args):
+    # --help guarantees no database execution even if a rejection regresses.
+    return subprocess.run([binary, *args, '--help'], text=True, capture_output=True, check=False)
+def bounded(start, end):
+    return ['--bounded-development', '--start-utc', start, '--end-utc', end]
+start, end = '2018-01-01T00:00:00Z', '2018-02-01T00:00:00Z'
+invalid = [
+    (['--partition', 'final2025'], '2025 disabled before detector/database access'),
+    (['--bounded-development'], 'requires both'),
+    (['--bounded-development', '--start-utc', start], 'requires both'),
+    (['--bounded-development', '--end-utc', end], 'requires both'),
+    (bounded(end, start), 'start < end'),
+    (bounded(start, start), 'start < end'),
+    (bounded('2009-12-31T23:59:59Z', end), 'within development'),
+    (bounded(start, '2020-01-01T00:00:00Z'), 'within development'),
+    (bounded('2020-01-01T00:00:00Z', '2020-02-01T00:00:00Z'), 'within development'),
+    (bounded('2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z'), 'within development'),
+    (bounded(start, end) + ['--partition', 'calibration'], 'development only'),
+    (bounded(start, end) + ['--partition', 'final2025'], '2025 disabled'),
+    (['--start-utc', start, '--end-utc', end], 'require --bounded-development'),
+    (bounded(start, end) + ['--start-utc', start], 'duplicate or incomplete'),
+    (bounded(start, end) + ['--bounded-development'], 'duplicate or incomplete'),
+    (bounded(start, end) + ['--replay-origin', start], 'unknown'),
+    (bounded(start, end) + ['--warmup-bars', '0'], 'unknown'),
+]
+for bad in ['2018-01-01 00:00:00', '2018-01-01T00:00:00+00:00',
+            '2018-01-01T00:00:00-05:00', '2018-11-04T01:30:00',
+            '2018-01-01T00:00:00.0Z', '2018-01-01T00:00:00Z ', '',
+            '2018-01-01T0x:00:00Z']:
+    invalid.append((bounded(bad, end), 'YYYY-MM-DDTHH:MM:SSZ'))
+for bad in ['2018-02-30T00:00:00Z', '2018-01-01T24:00:00Z',
+            '2018-01-01T00:60:00Z', '2018-01-01T00:00:60Z', '2019-02-29T00:00:00Z']:
+    invalid.append((bounded(start, bad), 'invalid UTC calendar boundary'))
+for args, message in invalid:
+    result = invoke(args)
+    assert result.returncode == 1 and message in result.stderr, (args, result.stdout, result.stderr)
+valid = [('2010-01-01T00:00:00Z', '2010-01-02T00:00:00Z'), (start, end),
+         ('2012-02-29T00:00:00Z', '2012-03-01T00:00:00Z'),
+         ('2019-12-31T22:00:00Z', '2019-12-31T23:59:59Z')]
+epoch = lambda value: int(datetime.datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc).timestamp())
+for lo, hi in valid:
+    result = invoke(bounded(lo, hi))
+    expected = f'bounded_development_plan replay_origin_utc_epoch=1262304000 score_start_utc_epoch={epoch(lo)} score_end_exclusive_utc_epoch={epoch(hi)} input_end_exclusive_utc_epoch={epoch(hi)}'
+    assert result.returncode == 0 and expected in result.stdout, (lo, hi, result.stdout, result.stderr)
+print(f'BOUNDED_CLI_VALIDATION accepted_plans={len(valid)} rejected_requests={len(invalid)} database_access=false replay_origin=2010')
+PYCLI
     echo 'Immutable standalone CLI build and pre-database 2025 rejection passed'
 else
     "${EA_RESEARCH_EXECUTABLE}" "$@"
