@@ -59,7 +59,7 @@ int main(int argc, char** argv)
 {
     try
     {
-        S::Protocol protocol; std::filesystem::path output;
+        S::Protocol protocol; std::filesystem::path output, auditOutput;
         bool help = false, havePartition = false, boundedDevelopment = false, haveTier = false;
         S::EpisodePublication tier = S::EpisodePublication::Summary;
         std::optional<std::int64_t> startUtc, endUtc;
@@ -70,6 +70,12 @@ int main(int argc, char** argv)
             else if (arg == "--bounded-development" && !boundedDevelopment) boundedDevelopment = true;
             else if (arg == "--start-utc" && i + 1 < argc && !startUtc) startUtc = ParseUtcBoundary(argv[++i]);
             else if (arg == "--end-utc" && i + 1 < argc && !endUtc) endUtc = ParseUtcBoundary(argv[++i]);
+            else if (arg == "--history-shadow-audit-dir")
+            {
+                if (i + 1 >= argc || !auditOutput.empty() || argv[i + 1][0] == '-' || argv[i + 1][0] == '\0')
+                    throw std::invalid_argument("unknown, duplicate or incomplete option: " + arg);
+                auditOutput = argv[++i];
+            }
             else if (arg == "--output-dir" && i + 1 < argc && output.empty()) output = argv[++i];
             else if (arg == "--episode-publication" && i + 1 < argc && !haveTier)
             {
@@ -114,6 +120,7 @@ int main(int argc, char** argv)
             std::cout << "Phase 2B v2 standalone research: fixed UTC bar-start minute 45, complete market-state aggregation.\n"
                 << "--partition development|calibration --output-dir NEW_EXTERNAL_DIRECTORY\n"
                 << "--bounded-development --start-utc YYYY-MM-DDTHH:MM:SSZ --end-utc YYYY-MM-DDTHH:MM:SSZ --output-dir NEW_EXTERNAL_DIRECTORY\n"
+                << "--history-shadow-audit-dir NEW_EXTERNAL_DIRECTORY (optional, independent diagnostic sidecar).\n"
                 << "--episode-publication summary|full (default summary); artifact format v3, semantic protocol v2.\n"
                 << "Deterministic lossless gzip geometry; episode tracking unchanged; summary omits raw episode detail.\n"
                 << "episode_publication=" << S::Name(tier) << "\n"
@@ -132,6 +139,13 @@ int main(int argc, char** argv)
         output = std::filesystem::weakly_canonical(std::filesystem::absolute(output));
         if (Within(output, root) || Within(output, snapshot) || std::filesystem::exists(output))
             throw std::invalid_argument("research output must be a new directory outside repository and immutable snapshot");
+        if (!auditOutput.empty())
+        {
+            auditOutput = std::filesystem::weakly_canonical(std::filesystem::absolute(auditOutput));
+            if (Within(auditOutput, root) || Within(auditOutput, snapshot) || Within(auditOutput, output) ||
+                Within(output, auditOutput) || std::filesystem::exists(auditOutput))
+                throw std::invalid_argument("audit output must be a new separate external directory");
+        }
         S::Provenance provenance;
         provenance.gitCommit = Environment("GIT_COMMIT");
         provenance.sourceSHA256 = Environment("EA_RESEARCH_SOURCE_SHA256");
@@ -150,6 +164,14 @@ int main(int argc, char** argv)
         auto config = EA::TG4::LoadConfigurationFile(provenance.configurationFile);
         config.fibonacci = S::HistoricalEvaluator::ResearchFibonacci(config.fibonacci);
         config.fibonacci.absolutePriceTolerance = EA::TG4::EffectiveFibonacciAbsolutePriceTolerance(config, provenance.sourceSymbol);
+        std::unique_ptr<EA::FibonacciResearch::HistoryShadow::Audit> shadowAudit;
+        if (!auditOutput.empty())
+        {
+            EA::FibonacciResearch::HistoryShadow::ValidateFrozenSourceSnapshot(snapshot);
+            shadowAudit = std::make_unique<EA::FibonacciResearch::HistoryShadow::Audit>(config.fibonacci, config.geometry, auditOutput);
+        }
+        EA::FibonacciResearch::HistoryShadow::Observer observer;
+        if (shadowAudit) observer = [&](const auto& observation) { shadowAudit->Observe(observation); };
         pqxx::connection connection{EA::RuntimeDatabaseConnection::ForexConnectionString() + " application_name=fib_trendline_v2_read_only"};
         pqxx::read_transaction transaction{connection};
         transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
@@ -159,11 +181,14 @@ int main(int argc, char** argv)
         provenance.preflightRows = preflight.rowCount;
         S::ArtifactWriter writer(output, tier);
         S::HistoricalEvaluator evaluator(protocol, EA::TG1B::CalibrationConfiguration(config.referenceBarScale),
-            config.fibonacci, config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), writer.GetSinks(), score);
+            config.fibonacci, config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), writer.GetSinks(), score, {}, std::move(observer));
         EA::TG4::HistoricalMarketDataRepository::StreamCanonicalCandles(transaction, provenance.sourceSymbol, config, range,
             [&](const EA::TG1A::Candle& c) { evaluator.AddCompletedBar(c); });
         evaluator.Finalize(); transaction.commit();
         writer.Complete(evaluator.Engine(), config, provenance);
+        if (shadowAudit && !shadowAudit->Complete({evaluator.Engine().Fingerprint(), provenance.gitCommit,
+            provenance.sourceSHA256, evaluator.Engine().CandleDigest(), output}))
+            throw std::runtime_error("primary publication complete; history shadow audit INCOMPLETE: " + shadowAudit->GetSummary().failure);
         std::cout << "processing_complete candles=" << evaluator.Engine().GetAudit().candles
                   << " decisions=" << evaluator.Engine().GetAudit().scheduled
                   << " statistical_estimation=NOT_EXECUTED coverage=UNVERIFIED\n";

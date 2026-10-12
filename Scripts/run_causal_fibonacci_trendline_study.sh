@@ -16,7 +16,7 @@ if [[ "${1:-}" == "--build-only" ]]; then
     export EA_RESEARCH_VALIDATION_ONLY=1
 fi
 # Study execution requires a clean worktree. Build-only permits unstaged edits
-# confined to the seven research files, without executing a database study.
+# confined to the explicit research source/test scope, without executing a database study.
 guard() {
 python3 - "${repo_root}" <<'PY'
 import os, pathlib, subprocess, sys
@@ -28,12 +28,16 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp',
          'Scripts/run_causal_fibonacci_trendline_study.sh',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
+new_files = ['Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
+files += new_files
 def git(*args):
     return subprocess.check_output([os.environ['EA_RESEARCH_GIT'], '-C', str(root), *args], text=True).strip()
 assert git('rev-parse', 'HEAD') == os.environ['EA_RESEARCH_GUARD_HEAD'], 'STOP: HEAD changed during invocation'
 assert git('branch', '--show-current') == 'lstm-feature-development', 'STOP: branch changed'
 assert not git('diff', '--cached', '--name-only'), 'STOP: staged changes'
-assert not git('ls-files', '--others', '--exclude-standard'), 'STOP: unexpected untracked files'
+untracked = set(git('ls-files', '--others', '--exclude-standard').splitlines())
+validation = os.environ.get('EA_RESEARCH_VALIDATION_ONLY', '1') == '1'
+assert untracked <= set(new_files) if validation else not untracked, 'STOP: unexpected untracked files'
 changed = set(git('diff', '--name-only').splitlines())
 if os.environ['EA_RESEARCH_VALIDATION_ONLY'] == '1':
     assert changed <= set(files), 'STOP: non-research tracked changes'
@@ -45,7 +49,7 @@ for name in ('MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD',
     assert not (gitdir / name).exists(), 'STOP: active Git operation: ' + name
 for name in files:
     assert (root / name).is_file() and not (root / name).is_symlink(), 'STOP: research file missing or symlink: ' + name
-    assert git('ls-files', '--', name) == name, 'STOP: research file is not tracked: ' + name
+    assert git('ls-files', '--', name) == name or (validation and name in new_files and name in untracked), 'STOP: research file is not tracked: ' + name
 PY
 }
 guard
@@ -69,7 +73,8 @@ paths = sorted(p for directory in ('Headers', 'Sources', 'Common')
                if p.is_file() and p.suffix in ('.hpp', '.h', '.cpp', '.mm'))
 paths += [root / 'Scripts/tg4_analysis_config.frozen_v1.conf', root / 'Scripts/run_causal_fibonacci_trendline_study.sh',
           root / 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
-          root / 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
+          root / 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh',
+          root / 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
 paths = sorted(set(paths))
 snapshot = task / 'snapshot'
 rows = []
@@ -119,6 +124,7 @@ export EA_RESEARCH_EXECUTABLE="${build_dir}/fib-trendline-study"
     "${build_dir}/snapshot/Sources/RuntimeDatabaseConnection.cpp" \
     "${build_dir}/snapshot/Common/HistoricalFxTimestamp.cpp" \
     "${build_dir}/snapshot/Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp" \
+    "${build_dir}/snapshot/Sources/CausalFractalHistoryShadowAudit.cpp" \
     "${build_dir}/snapshot/Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp" \
     "${pqxx_libs[@]}" -lz -o "${EA_RESEARCH_EXECUTABLE}"
 # Verify snapshot bytes after compilation, before any possible database access.
@@ -158,7 +164,14 @@ for tier in ('summary', 'full'):
     result = invoke(['--episode-publication', tier])
     assert result.returncode == 0 and f'episode_publication={tier}' in result.stdout
 assert 'episode_publication=summary' in invoke([]).stdout
+import tempfile, pathlib
+with tempfile.TemporaryDirectory(prefix='ea_shadow_cli_help_') as task:
+    plan = pathlib.Path(task) / 'sidecar'
+    result = invoke(['--history-shadow-audit-dir', str(plan)])
+    assert result.returncode == 0 and not plan.exists(), 'help must neither create artifacts nor connect to PostgreSQL'
 invalid = [
+    (['--history-shadow-audit-dir'], 'duplicate or incomplete'),
+    (['--history-shadow-audit-dir', '/tmp/a', '--history-shadow-audit-dir', '/tmp/b'], 'duplicate or incomplete'),
     (['--episode-publication', 'sample'], 'requires summary|full'),
     (['--episode-publication'], 'requires summary|full'),
     (['--episode-publication', 'summary', '--episode-publication', 'full'], 'duplicate or incomplete'),

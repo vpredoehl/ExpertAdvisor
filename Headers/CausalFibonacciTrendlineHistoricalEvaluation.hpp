@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CausalFibonacciTrendlineConfluenceDiagnostic.hpp"
+#include "CausalFractalHistoryShadowAudit.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <array>
 #include <functional>
@@ -624,8 +625,8 @@ class HistoricalEvaluator
 public:
     HistoricalEvaluator(Protocol p, TG1B::CalibrationConfiguration calibration, TG3::Configuration fibonacci,
                         TG1A::Configuration geometry, TG2::Configuration behavior, std::string detectorFingerprint,
-                        Sinks sinks, std::optional<ScoreRange> range = {}, SessionCalendar calendar = {})
-        : engine_(p, std::move(detectorFingerprint), std::move(sinks), range, std::move(calendar)),
+                        Sinks sinks, std::optional<ScoreRange> range = {}, SessionCalendar calendar = {}, HistoryShadow::Observer observer = {})
+        : observer_(std::move(observer)), engine_(p, std::move(detectorFingerprint), std::move(sinks), range, std::move(calendar)),
           integration_(calibration, ResearchFibonacci(std::move(fibonacci)), geometry, behavior, {"AUDCAD", "15m"})
     {
         if (geometry.atrPeriod != 14 || geometry.maxCandidateAgeBars != p.maxLineAgeBars ||
@@ -647,6 +648,23 @@ public:
         engine_.ReportSourceCapacity(integration_.Tracker().ABCapacityEvictions() - abEvictionsBefore,
                                      potential - g.Candidates().size());
         engine_.Add(update.bar, c, g.CurrentAtr(), integration_.ABStructures(), g.Candidates());
+        if (observer_)
+        {
+            const auto& u = update.behaviorUpdate.classificationUpdate.geometryUpdate;
+            if (c.timestamp >= kCalibrationStart) ++observerCalibrationCandles_;
+            const bool eligible = update.bar >= engine_.GetProtocol().warmupBars &&
+                g.CurrentAtr() && std::isfinite(*g.CurrentAtr()) && *g.CurrentAtr() > 0 &&
+                c.timestamp + 4 * 900 < engine_.Range().end &&
+                (engine_.GetProtocol().partition != Partition::Calibration || observerCalibrationCandles_ > 4);
+            // The observer receives a const, synchronous view AFTER primary state
+            // updates. It cannot see forward outcomes or mutate source state.
+            observer_({update.bar, c, g.CurrentAtr(), c.timestamp >= engine_.Range().start,
+                c.timestamp >= engine_.Range().start && c.timestamp % 3600 == 2700,
+                eligible, u.newlyConfirmedFractals,
+                update.newlyAvailableABStructures, u.newlyCreatedCandidates,
+                integration_.ABStructures(), g.Candidates(), integration_.Tracker().TotalABStructuresCreated(),
+                integration_.Tracker().ABCapacityEvictions(), integration_.Tracker().ABAgeExpirations()});
+        }
     }
     void Finalize() { if (!engine_.IsFinalized()) { engine_.Finalize(); integration_.Finalize(); } }
     const EventEngine& Engine() const { return engine_; }
@@ -654,6 +672,8 @@ public:
     static TG3::Configuration ResearchFibonacci(TG3::Configuration f)
     { f.retracementRatios.assign(kRatios.begin(), kRatios.end()); f.directionalStudyPolicy = TG3::DirectionalStudyPolicy::SourceUTLUpABOnly; return f; }
 private:
+    HistoryShadow::Observer observer_;
+    std::size_t observerCalibrationCandles_ = 0;
     EventEngine engine_;
     TG3::CausalFibonacciConfluenceIntegration integration_;
 };

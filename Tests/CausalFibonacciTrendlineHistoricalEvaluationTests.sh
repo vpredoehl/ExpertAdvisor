@@ -20,8 +20,12 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/Ca
              'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
              'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
              'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
+new_files = ['Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
+files += new_files
 assert not git('diff', '--cached', '--name-only'), 'STOP: staged changes'
-assert not git('ls-files', '--others', '--exclude-standard'), 'STOP: unexpected untracked files'
+untracked = set(git('ls-files', '--others', '--exclude-standard').splitlines())
+validation = True
+assert untracked <= set(new_files) if validation else not untracked, 'STOP: unexpected untracked files'
 assert set(git('diff', '--name-only').splitlines()) <= set(files), 'STOP: non-research tracked changes'
 gitdir = pathlib.Path(git('rev-parse', '--absolute-git-dir'))
 for name in ('MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD',
@@ -29,7 +33,7 @@ for name in ('MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD',
     assert not (gitdir / name).exists(), 'STOP: active Git operation: ' + name
 for name in files:
     assert (root / name).is_file() and not (root / name).is_symlink(), 'STOP: missing research file'
-    assert git('ls-files', '--', name) == name, 'STOP: research file is not tracked: ' + name
+    assert git('ls-files', '--', name) == name or (validation and name in new_files and name in untracked), 'STOP: research file is not tracked: ' + name
 PY
 }
 guard
@@ -47,6 +51,8 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/Ca
          'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
          'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
+new_files = ['Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
+files += new_files
 checks = 0
 for script in ['Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']:
     code = (root / script).read_text().split('python3 - "${repo_root}" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
@@ -77,6 +83,8 @@ for script in ['Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalF
     verify(False, changed='Sources/TrainingPipeline.cpp')
     verify(False, staged=files[3])
     verify(False, untracked='unexpected.cpp')
+    verify(True, untracked=new_files[0])
+    if runner: verify(False, validation=False, untracked=new_files[0])
     verify(False, actual_head='f' * 40)
     verify(True, actual_head='f' * 40, expected_head='f' * 40) # Future committed HEAD is accepted.
     verify(False, branch='other')
@@ -94,6 +102,14 @@ PYGUARD
     "${repo_root}/Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp" -lz -o "${test_dir}/tests"
 guard
 "${test_dir}/tests" "${repo_root}/Scripts/tg4_analysis_config.frozen_v1.conf" "${test_dir}"
+guard
+"${research_cxx}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -isysroot "${research_sdk}" \
+    -I"${repo_root}/Headers" \
+    "${repo_root}/Sources/TG4HistoricalEmpiricalEvaluation.cpp" \
+    "${repo_root}/Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp" \
+    "${repo_root}/Sources/CausalFractalHistoryShadowAudit.cpp" \
+    "${repo_root}/Tests/CausalFractalHistoryShadowAuditTests.cpp" -lz -o "${test_dir}/shadow-tests"
+"${test_dir}/shadow-tests" "${repo_root}/Scripts/tg4_analysis_config.frozen_v1.conf" "${test_dir}"
 guard
 python3 - "${test_dir}" <<'PY'
 import csv, gzip, hashlib, json, pathlib, sys
@@ -149,6 +165,38 @@ assert len({r['decision_id'] for r in decisions}) == len(decisions)
 assert len(outcomes) == sum(r['status'] == 'classified' for r in decisions)
 assert all(int(r['bar_start_utc_epoch']) % 3600 == 2700 for r in decisions)
 assert 'NOT_EXECUTED' in (root / 'COMPLETE').read_text()
+audit = root.parent / 'shadow-pressure'
+protocol = json.loads((audit / 'audit_protocol.json').read_text())
+provenance = json.loads((audit / 'audit_provenance.json').read_text())
+assert protocol['schema'] == 'causal-fractal-history-shadow-audit-v1'
+assert protocol['semantic_protocol'] == 'fib-trendline-decision-study-v2'
+assert protocol['primary_artifact_format'] == 'fib-trendline-artifacts-v3'
+assert protocol['TG3_history_per_kind'] == 128 and protocol['TG1A_history_per_kind'] == 64
+assert protocol['TG3_candidate_capacity'] == 512 and protocol['TG1A_candidate_capacity'] == 4096
+assert protocol['compression']['mtime'] == 0 and protocol['compression']['zlib_version']
+assert provenance['mirror_parity'] and provenance['diagnostic_complete'] and not provenance['capacity_exhausted']
+assert provenance['creation_losses_TG1A'] == 19474
+assert provenance['lost_candidate_totals'] == 'EXACT_WITHIN_OBSERVED_REPLAY'
+parent = root.parent / 'shadow-pressure-parent'
+assert provenance['parent_primary_checksums_sha256'] == hashlib.sha256((parent / 'checksums.sha256').read_bytes()).hexdigest()
+assert provenance['canonical_candle_sha256'] == provenance['audited_prefix_candle_sha256']
+for name in ('history_summary.csv',):
+    with (audit / name).open() as f:
+        rows = list(csv.reader(f))
+    assert all(len(row) == len(rows[0]) for row in rows)
+for name, claim in provenance['compressed_contents'].items():
+    with gzip.open(audit / name, 'rt') as f:
+        reader = csv.reader(f); header = next(reader); count = 0
+        for row in reader:
+            assert len(row) == len(header), name
+            count += 1
+    assert count == claim['decoded_rows']
+for line in (audit / 'audit_checksums.sha256').read_text().splitlines():
+    expected, name = line.split('  ', 1)
+    assert hashlib.sha256((audit / name).read_bytes()).hexdigest() == expected
+assert not (root.parent / 'isolation-failed-audit' / 'AUDIT_COMPLETE').exists()
+assert not (root.parent / 'isolation-allocation-audit' / 'AUDIT_COMPLETE').exists()
 print('Deterministic artifact-v3/semantic-v2 JSON/CSV/gzip/checksum/reconciliation validation passed')
+print('Shadow-audit-v1 JSON/CSV/gzip/parent-linkage/completeness validation passed')
 PY
 guard
