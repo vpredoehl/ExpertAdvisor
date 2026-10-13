@@ -28,7 +28,7 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp',
          'Scripts/run_causal_fibonacci_trendline_study.sh',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
-new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp', 'Headers/CausalABCapacityCounterfactual.hpp', 'Sources/CausalABCapacityCounterfactual.cpp', 'Tests/CausalABCapacityCounterfactualTests.cpp']
+new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp', 'Headers/CausalABCapacityCounterfactual.hpp', 'Sources/CausalABCapacityCounterfactual.cpp', 'Tests/CausalABCapacityCounterfactualTests.cpp', 'Sources/CausalABCapacityInterventionCLI.cpp', 'Tests/CausalABCapacityInterventionTests.cpp', 'Scripts/run_causal_ab_capacity_interventions.py']
 files += new_files + ['docs/phases/target-generation/PhaseTG3/AB-Capacity-Counterfactual.md']
 def git(*args):
     return subprocess.check_output([os.environ['EA_RESEARCH_GIT'], '-C', str(root), *args], text=True).strip()

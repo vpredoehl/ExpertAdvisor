@@ -784,4 +784,161 @@ void ValidateSidecar(const std::filesystem::path &dir, const std::filesystem::pa
             "parent_linkage_mismatch");
     VerifyChecksums(parent, "checksums.sha256");
 }
+
+InterventionReplay::InterventionReplay(TG3::Configuration f, TG1A::Configuration g)
+    : actual_(f, {"AUDCAD", "15m"}), mirror_(f, {"AUDCAD", "15m"}), geometry_(g, {"AUDCAD", "15m"})
+{
+    Require(f.maxActiveABStructures == 512 && f.maxConfirmedFractalsPerKind == 128 &&
+                f.maxABAgeBars == 2048 && g.maxCandidates == 4096 && g.maxConfirmedFractalsPerKind == 64 &&
+                g.maxCandidateAgeBars == 512 && g.maxFractalAnchorLookbackBars == 512 && g.atrPeriod == 14,
+            "non_frozen_intervention_configuration");
+}
+void InterventionReplay::AddCompletedBar(const TG1A::Candle &c)
+{
+    Require(c.timestamp >= S::kOrigin && c.timestamp < S::kFinalStart && c.timestamp % 900 == 0,
+            "intervention_causal_range");
+    const auto bar = geometry_.CompletedBarCount();
+    std::erase_if(
+        victims_, [&](const auto &v)
+        { return bar > v.ab.identity.availabilityBar && bar - v.ab.identity.availabilityBar > 2048; });
+    // Reserve before transient births. Diagnostic bounds do not alter detectors.
+    Require(victims_.size() + actual_.ABStructures().size() + 2 <= 8192, "intervention_live_AB_budget");
+    auto update = geometry_.AddCompletedBar(c);
+    actual_.Advance(bar, c.timestamp);
+    mirror_.Advance(bar, c.timestamp);
+    auto births = actual_.ObserveConfirmedFractals(update.newlyConfirmedFractals);
+    auto confirmed = update.newlyConfirmedFractals;
+    std::sort(
+        confirmed.begin(), confirmed.end(),
+        [](const auto &a, const auto &b)
+        {
+            return std::tuple(a.confirmationBar, a.anchorBar, static_cast<int>(a.kind), a.anchorTimestamp) <
+                   std::tuple(b.confirmationBar, b.anchorBar, static_cast<int>(b.kind), b.anchorTimestamp);
+        });
+    std::vector<TG3::ABIdentity> mirrorBirths;
+    for (const auto &f : confirmed)
+    {
+        const auto before = mirror_.ABStructures();
+        const auto count = mirror_.ABCapacityEvictions();
+        auto created = mirror_.ObserveConfirmedFractals({f});
+        mirrorBirths.insert(mirrorBirths.end(), created.begin(), created.end());
+        std::size_t removed = 0;
+        for (const auto &a : before)
+            if (std::none_of(mirror_.ABStructures().begin(), mirror_.ABStructures().end(),
+                             [&](const auto &b) { return Identity(a.identity) == Identity(b.identity); }))
+            {
+                victims_.push_back({a, bar, c.timestamp});
+                ++removed;
+            }
+        Require(removed == mirror_.ABCapacityEvictions() - count, "intervention_eviction_capture_parity");
+    }
+    Require(Equal(births, mirrorBirths, [](const auto &x) { return Identity(x); }) &&
+                Equal(actual_.ABStructures(), mirror_.ABStructures(),
+                      [](const auto &x) { return Snapshot(x); }) &&
+                actual_.ABCapacityEvictions() == mirror_.ABCapacityEvictions() &&
+                actual_.ABAgeExpirations() == mirror_.ABAgeExpirations() &&
+                actual_.TotalABStructuresCreated() == mirror_.TotalABStructuresCreated(),
+            "intervention_native_identity_order_parity");
+    ++parityChecks_;
+}
+std::size_t RemainingInterventionPairs(std::size_t budget, std::size_t accumulated)
+{
+    Require(accumulated <= budget, "intervention_accumulated_pairs_exceed_budget");
+    return budget - accumulated;
+}
+std::size_t AccumulateInterventionPairs(std::size_t budget, std::size_t accumulated, std::size_t eligibleAB,
+                                        std::size_t eligibleLines)
+{
+    const auto remaining = RemainingInterventionPairs(budget, accumulated);
+    const auto maximum = std::numeric_limits<std::size_t>::max();
+    Require(!eligibleLines || eligibleAB <= maximum / eligibleLines,
+            "intervention_pair_multiplication_overflow");
+    const auto pairs = eligibleAB * eligibleLines;
+    Require(pairs <= maximum - accumulated, "intervention_pair_accumulation_overflow");
+    Require(pairs <= remaining, "intervention_evaluation_exceeds_remaining_pairs");
+    return accumulated + pairs;
+}
+InterventionResult EvaluateInterventions(std::size_t bar, const TG1A::Candle &candle,
+                                         std::optional<double> atr, std::span<const AB> actual,
+                                         std::span<const Line> lines, std::span<const CapacityVictim> victims,
+                                         std::span<const std::string> qualifying, std::size_t budget)
+{
+    Require(candle.timestamp % 3600 == 2700 && candle.timestamp >= S::kOrigin &&
+                candle.timestamp < S::kFinalStart,
+            "intervention_decision_timestamp");
+    Require(actual.size() <= 512 && lines.size() <= 4096 && actual.size() + victims.size() <= 8192 &&
+                qualifying.size() <= 5,
+            "intervention_input_budget");
+    InterventionResult out;
+    auto evaluate = [&](std::span<const AB> abs)
+    {
+        const auto remaining = RemainingInterventionPairs(budget, out.pairs);
+        auto g = H::EvaluateDecisionGeometry(bar, candle, atr, abs, lines, {8192, 4096, remaining});
+        Require(g.reconstructed, "intervention_geometry_incomplete");
+        out.pairs = AccumulateInterventionPairs(budget, out.pairs, g.eligibleAB, g.eligibleLines);
+        return g;
+    };
+    out.actual = evaluate(actual);
+    std::vector<AB> complete(actual.begin(), actual.end());
+    std::map<std::string, AB> live;
+    for (const auto &v : victims)
+    {
+        Require(v.evictionBar <= bar && v.evictionTimestamp <= candle.timestamp &&
+                    v.evictionBar >= v.ab.identity.availabilityBar &&
+                    v.evictionTimestamp >= v.ab.identity.availabilityTimestamp,
+                "intervention_eviction_provenance");
+        Require(bar >= v.ab.identity.availabilityBar && bar - v.ab.identity.availabilityBar <= 2048,
+                "intervention_expired_victim");
+        const auto native = H::CandidateIdentityReconciliation::Native(v.ab.identity);
+        Require(live.emplace(native, v.ab).second, "intervention_duplicate_victim");
+        Require(std::none_of(actual.begin(), actual.end(),
+                             [&](const auto &a) { return Identity(a.identity) == Identity(v.ab.identity); }),
+                "intervention_victim_retained_overlap");
+        complete.push_back(v.ab);
+    }
+    std::sort(complete.begin(), complete.end(),
+              [](const auto &a, const auto &b) { return Order(a) < Order(b); });
+    out.complete = evaluate(complete);
+    // Verify the entire restoration universe, including nonqualifying/direction
+    // victims. A forensic short list is never substituted for complete state.
+    std::set<std::string> discovered;
+    for (const auto &[native, a] : live)
+        if (a.identity.direction == TG3::ABDirection::UpAB && out.complete.abs.contains(S::ABKey(a)))
+        {
+            const auto &g = out.complete.abGeometry.at(S::ABKey(a));
+            if (g.near || g.conjunction)
+                discovered.insert(native);
+        }
+    std::set<std::string> expected(qualifying.begin(), qualifying.end());
+    Require(expected.size() == qualifying.size() && expected == discovered,
+            "intervention_complete_qualifier_parity");
+    out.qualifyingIdentities.assign(expected.begin(), expected.end());
+    auto same = [](const auto &a, const auto &b)
+    {
+        return a.fibNear == b.fibNear && a.lineNear == b.lineNear && a.intersection == b.intersection &&
+               a.cohort == b.cohort;
+    };
+    for (std::size_t mask = 0; mask < (std::size_t{1} << expected.size()); ++mask)
+    {
+        std::vector<AB> selected(actual.begin(), actual.end());
+        for (std::size_t i = 0; i < out.qualifyingIdentities.size(); ++i)
+            if (mask & (std::size_t{1} << i))
+                selected.push_back(live.at(out.qualifyingIdentities[i]));
+        std::sort(selected.begin(), selected.end(),
+                  [](const auto &a, const auto &b) { return Order(a) < Order(b); });
+        auto g = evaluate(selected);
+        const bool sufficient = same(g, out.complete);
+        out.subsets.push_back({mask, std::move(g), sufficient, false});
+    }
+    Require(same(out.subsets.front().geometry, out.actual), "intervention_baseline_parity");
+    Require(same(out.subsets.back().geometry, out.complete), "intervention_joint_complete_parity");
+    for (auto &subset : out.subsets)
+    {
+        subset.minimal = subset.sufficient;
+        for (const auto &proper : out.subsets)
+            if (proper.mask != subset.mask && (proper.mask & subset.mask) == proper.mask && proper.sufficient)
+                subset.minimal = false;
+    }
+    return out;
+}
 } // namespace EA::FibonacciResearch::ABCapacity

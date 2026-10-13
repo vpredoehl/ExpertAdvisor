@@ -60,4 +60,56 @@ class Audit
     std::unique_ptr<State> state_;
 };
 void ValidateSidecar(const std::filesystem::path &directory, const std::filesystem::path &parentPrimary);
+
+// Independent intervention replay: one continuous native detector state, no
+// primary evaluation or publication, and no fractal-history restoration.
+struct CapacityVictim
+{
+    TG3::ABStructure ab;
+    std::size_t evictionBar;
+    std::int64_t evictionTimestamp;
+};
+class InterventionReplay
+{
+  public:
+    InterventionReplay(TG3::Configuration, TG1A::Configuration);
+    void AddCompletedBar(const TG1A::Candle &);
+    const TG3::FibonacciConfluenceTracker &Actual() const { return actual_; }
+    const TG1A::CausalFractalTrendLineGeometry &Geometry() const { return geometry_; }
+    const std::vector<CapacityVictim> &Victims() const { return victims_; }
+    std::size_t ParityChecks() const { return parityChecks_; }
+
+  private:
+    TG3::FibonacciConfluenceTracker actual_, mirror_;
+    TG1A::CausalFractalTrendLineGeometry geometry_;
+    std::vector<CapacityVictim> victims_;
+    std::size_t parityChecks_ = 0;
+};
+struct SubsetResult
+{
+    std::size_t mask = 0;
+    HistoryShadow::DecisionGeometry geometry;
+    bool sufficient = false, minimal = false;
+};
+struct InterventionResult
+{
+    HistoryShadow::DecisionGeometry actual, complete;
+    std::vector<std::string> qualifyingIdentities; // native lexical mask order
+    std::vector<SubsetResult> subsets;
+    std::size_t pairs = 0;
+};
+// Checked accounting is exposed for synthetic size_t boundary tests; it does
+// not change geometry or detector capacities.
+std::size_t RemainingInterventionPairs(std::size_t budget, std::size_t accumulated);
+std::size_t AccumulateInterventionPairs(std::size_t budget, std::size_t accumulated, std::size_t eligibleAB,
+                                        std::size_t eligibleLines);
+// Reuses a single reconstructed decision snapshot. Evaluates every subset with
+// the authoritative geometry helper, never by an approximate predicate rule.
+// Requires the qualifying list to match ALL contributing live capacity victims.
+InterventionResult EvaluateInterventions(std::size_t bar, const TG1A::Candle &, std::optional<double> atr,
+                                         std::span<const TG3::ABStructure> actual,
+                                         std::span<const TG1A::TrendLineCandidate> lines,
+                                         std::span<const CapacityVictim> victims,
+                                         std::span<const std::string> qualifying,
+                                         std::size_t pairBudget = 64 * 1024 * 1024);
 } // namespace EA::FibonacciResearch::ABCapacity
