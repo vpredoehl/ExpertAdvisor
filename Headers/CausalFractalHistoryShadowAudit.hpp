@@ -69,9 +69,16 @@ struct DecisionGeometry
 };
 // Pure, bounded-batch geometry evaluation. Uses the frozen diagnostic numerical
 // functions and frozen Classify, with its canonical causal eligibility contract.
+// Defaults preserve the history-only audit's original candidate bounds. A
+// separate diagnostic may request more AB inputs without changing any detector.
+struct GeometryBudgets
+{
+    std::size_t maxABInputs = 512, maxLineInputs = 4096;
+    std::size_t maxPairs = 512 * 4096;
+};
 DecisionGeometry EvaluateDecisionGeometry(std::size_t bar, const TG1A::Candle &, std::optional<double> atr,
                                           std::span<const TG3::ABStructure>,
-                                          std::span<const TG1A::TrendLineCandidate>);
+                                          std::span<const TG1A::TrendLineCandidate>, GeometryBudgets = {});
 struct DecisionAuditSummary
 {
     bool enabled = false;

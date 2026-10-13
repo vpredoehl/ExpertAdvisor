@@ -20,12 +20,12 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/Ca
              'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
              'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
              'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
-new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
-files += new_files
+new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp', 'Headers/CausalABCapacityCounterfactual.hpp', 'Sources/CausalABCapacityCounterfactual.cpp', 'Tests/CausalABCapacityCounterfactualTests.cpp']
+files += new_files + ['docs/phases/target-generation/PhaseTG3/AB-Capacity-Counterfactual.md']
 assert not git('diff', '--cached', '--name-only'), 'STOP: staged changes'
 untracked = set(git('ls-files', '--others', '--exclude-standard').splitlines())
 validation = True
-assert untracked <= set(new_files) if validation else not untracked, 'STOP: unexpected untracked files'
+assert untracked <= set(new_files + ['docs/phases/target-generation/PhaseTG3/AB-Capacity-Counterfactual.md']) if validation else not untracked, 'STOP: unexpected untracked files'
 assert set(git('diff', '--name-only').splitlines()) <= set(files), 'STOP: non-research tracked changes'
 gitdir = pathlib.Path(git('rev-parse', '--absolute-git-dir'))
 for name in ('MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD',
@@ -33,7 +33,7 @@ for name in ('MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD',
     assert not (gitdir / name).exists(), 'STOP: active Git operation: ' + name
 for name in files:
     assert (root / name).is_file() and not (root / name).is_symlink(), 'STOP: missing research file'
-    assert git('ls-files', '--', name) == name or (validation and name in new_files and name in untracked), 'STOP: research file is not tracked: ' + name
+    assert git('ls-files', '--', name) == name or (validation and name in new_files + ['docs/phases/target-generation/PhaseTG3/AB-Capacity-Counterfactual.md'] and name in untracked), 'STOP: research file is not tracked: ' + name
 PY
 }
 guard
@@ -51,8 +51,8 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/Ca
          'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
          'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
-new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
-files += new_files
+new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp', 'Headers/CausalABCapacityCounterfactual.hpp', 'Sources/CausalABCapacityCounterfactual.cpp', 'Tests/CausalABCapacityCounterfactualTests.cpp']
+files += new_files + ['docs/phases/target-generation/PhaseTG3/AB-Capacity-Counterfactual.md']
 checks = 0
 for script in ['Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']:
     code = (root / script).read_text().split('python3 - "${repo_root}" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
@@ -238,4 +238,78 @@ assert not (root.parent / 'isolation-decision-failed-audit' / 'AUDIT_COMPLETE').
 print('Counterfactual decision-extension JSON/CSV/gzip/positive-pair-evidence/UNKNOWN/checksum validation passed')
 
 PY
+guard
+
+"${research_cxx}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -isysroot "${research_sdk}" \
+    -I"${repo_root}/Headers" \
+    "${repo_root}/Sources/TG4HistoricalEmpiricalEvaluation.cpp" \
+    "${repo_root}/Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp" \
+    "${repo_root}/Sources/CausalFractalHistoryShadowAudit.cpp" \
+    "${repo_root}/Sources/CausalABCapacityCounterfactual.cpp" \
+    "${repo_root}/Tests/CausalABCapacityCounterfactualTests.cpp" -lz -o "${test_dir}/ab-capacity-tests"
+"${test_dir}/ab-capacity-tests" "${repo_root}/Scripts/tg4_analysis_config.frozen_v1.conf" "${test_dir}"
+python3 - "${test_dir}/AB-capacity" <<'PYAB'
+import csv, hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for d in sorted(root.glob('*-audit')):
+    for name in ('decisions.csv', 'restored_candidates.csv', 'source_evictions.csv'):
+        rows = list(csv.reader((d / name).open()))
+        assert all(len(r) == len(rows[0]) for r in rows), (d.name, name)
+    if not (d / 'AUDIT_COMPLETE').exists():
+        continue
+    if d.name == 'enabled-audit': # Intentionally corrupted by the C++ integrity test.
+        continue
+    p = json.loads((d / 'audit_protocol.json').read_text())
+    provenance = json.loads((d / 'audit_provenance.json').read_text())
+    summary = {r['metric']: r['value'] for r in csv.DictReader((d / 'summary.csv').open())}
+    assert p['schema'] == 'causal-ab-capacity-counterfactual-v1'
+    assert p['source_AB_capacity'] == 512 and p['TG3_history_per_kind'] == 128
+    assert p['line_capacity'] == 4096 and p['TG1A_history_per_kind'] == 64
+    assert not p['restore_fractal_history'] and p['ratios'] == [.382, .5, .618]
+    assert int(summary['peak_accounted_memory_bytes']) <= p['memory_byte_budget']
+    assert int(summary['peak_live_AB_records']) <= p['live_AB_budget']
+    assert int(summary['total_pairs']) <= p['pair_work_total']
+    assert int(summary['peak_decision_pairs']) <= p['pair_work_per_decision']
+    assert int(summary['decoded_output_bytes']) == sum(f.stat().st_size for f in d.iterdir() if f.is_file())
+    assert int(summary['decoded_output_bytes']) <= p['decoded_output_byte_budget']
+    for line in (d / 'audit_checksums.sha256').read_text().splitlines():
+        h, name = line.split('  ', 1)
+        assert hashlib.sha256((d / name).read_bytes()).hexdigest() == h
+    rows = list(csv.DictReader((d / 'decisions.csv').open()))
+    assert len(rows) == int(summary['scheduled']) == int(summary['decision_rows'])
+    assert all(r['status'] in ('RECONSTRUCTED', 'UNOBSERVABLE_MISSING_SLOT') for r in rows)
+    if d.name == 'observer-boundary-audit':
+        assert rows[0]['actual_cohort'] == 'B' and rows[0]['counterfactual_cohort'] == 'C'
+        assert rows[1]['actual_cohort'] == rows[1]['counterfactual_cohort'] == 'B'
+        victims = list(csv.DictReader((d / 'restored_candidates.csv').open()))
+        assert any(r['age'] == '2048' and r['conjunction'] == '1' for r in victims)
+        assert not any(int(r['age']) > 2048 for r in victims)
+    if d.name == 'missing-slot-audit':
+        assert sum(r['status'] == 'UNOBSERVABLE_MISSING_SLOT' for r in rows) == 1
+        assert all(r['actual_Ffib'] == r['counterfactual_Ffib'] == 'UNKNOWN' for r in rows if r['status'] == 'UNOBSERVABLE_MISSING_SLOT')
+    if d.name == 'positive-audit':
+        assert summary['changed_Ffib'] == summary['changed_I'] == summary['changed_cohort'] == '5'
+        assert summary['changed_Lline'] == '0'
+        assert all(r['actual_cohort'] == 'B' and r['counterfactual_cohort'] == 'C' for r in rows)
+    if d.name == 'repeat-audit':
+        assert provenance['parent_status'] == 'INVALID'
+        assert all(r['primary_status'] == 'capacity_invalid' for r in rows)
+        evictions = list(csv.DictReader((d / 'source_evictions.csv').open()))
+        assert {r['direction'] for r in evictions} == {'0', '1'}
+        assert len(evictions) == int(summary['source_evictions_full'])
+        assert int(evictions[0]['bar']) == int(summary['first_eviction_bar'])
+        assert all(r['reason'] == 'SOURCE_AB_CAPACITY' for r in evictions)
+        assert len({r['AB_identity'] for r in evictions}) == len(evictions)
+        victims = list(csv.DictReader((d / 'restored_candidates.csv').open()))
+        assert any(r['upward'] == '0' for r in victims) and any(r['upward'] == '1' for r in victims)
+        assert any(r['conjunction'] == '1' for r in victims)
+        assert summary['changed_Ffib'] == summary['changed_I'] == summary['changed_cohort'] == '0'
+        assert all(r['eligible_pairs'] == '0' and r['fib_near'] == 'INELIGIBLE' and r['conjunction'] == 'INELIGIBLE' for r in victims if r['upward'] == '0')
+        assert int(summary['source_evictions_full']) == int(summary['source_evictions_prefix']) + int(summary['source_evictions_scoring'])
+cf_rows = list(csv.DictReader((root / 'CF-failure-audit/decisions.csv').open()))
+assert cf_rows[0]['actual_status'] == 'RECONSTRUCTED' and cf_rows[0]['counterfactual_status'] == 'UNKNOWN'
+assert all(r['changed_cohort'] == 'UNKNOWN' for r in cf_rows)
+print('AB-capacity-v1 CSV/JSON/checksum/budget/INVALID-linkage/UNKNOWN validation passed')
+PYAB
+
 guard

@@ -199,7 +199,8 @@ std::string CandidateIdentityReconciliation::Native(const TG3::ABIdentity &x)
 }
 
 DecisionGeometry EvaluateDecisionGeometry(std::size_t bar, const TG1A::Candle &c, std::optional<double> atr,
-                                          std::span<const AB> inputAB, std::span<const L> inputLines)
+                                          std::span<const AB> inputAB, std::span<const L> inputLines,
+                                          GeometryBudgets budgets)
 {
     DecisionGeometry r;
     if (!atr || !std::isfinite(*atr) || *atr <= 0)
@@ -207,7 +208,7 @@ DecisionGeometry EvaluateDecisionGeometry(std::size_t bar, const TG1A::Candle &c
         r.reason = "missing_required_atr";
         return r;
     }
-    if (inputAB.size() > 512 || inputLines.size() > 4096)
+    if (inputAB.size() > budgets.maxABInputs || inputLines.size() > budgets.maxLineInputs)
     {
         r.reason = "candidate_capacity_unknown";
         return r;
@@ -252,6 +253,11 @@ DecisionGeometry EvaluateDecisionGeometry(std::size_t bar, const TG1A::Candle &c
         }
         r.eligibleAB = r.abs.size();
         r.eligibleLines = r.lines.size();
+        if (!r.lines.empty() && r.abs.size() > budgets.maxPairs / r.lines.size())
+        {
+            r.reason = "pair_work_budget";
+            return r;
+        }
         for (const auto &[key, l] : r.lines)
         {
             auto &g = r.lineGeometry[key];
