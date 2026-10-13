@@ -1,4 +1,5 @@
 #include "CausalFibonacciTrendlineHistoricalArtifact.hpp"
+#include "CausalFibonacciResearchCandleSnapshot.hpp"
 #include "RuntimeDatabaseConnection.hpp"
 #include "TG4HistoricalMarketDataRepository.hpp"
 #include <chrono>
@@ -14,6 +15,9 @@
 namespace
 {
 namespace S = EA::FibonacciResearch::TrendlineHistorical;
+using Clock = std::chrono::steady_clock;
+double Elapsed(Clock::time_point start)
+{ return std::chrono::duration<double>(Clock::now() - start).count(); }
 std::string Environment(const char* key)
 {
     const char* value = std::getenv(key);
@@ -127,6 +131,7 @@ int main(int argc, char** argv)
                 << "Replay origin 2010; warmup 2048; calibration embargo 4; no 2025.\n"
                 << "Bounded ranges are half-open; both bounds strictly inside development; final four-bar horizons are purged at range end.\n"
                 << "Calendar UNVERIFIED. Statistical estimation NOT_EXECUTED. --help never accesses a database.\n";
+            std::cout << "Research loading: bounded immutable UTC/OHLC snapshot; database transaction closes before causal evaluation.\n";
             if (boundedDevelopment)
                 std::cout << "bounded_development_plan replay_origin_utc_epoch=" << range.warmupStart
                     << " score_start_utc_epoch=" << score.start << " score_end_exclusive_utc_epoch=" << score.end
@@ -164,6 +169,54 @@ int main(int argc, char** argv)
         auto config = EA::TG4::LoadConfigurationFile(provenance.configurationFile);
         config.fibonacci = S::HistoricalEvaluator::ResearchFibonacci(config.fibonacci);
         config.fibonacci.absolutePriceTolerance = EA::TG4::EffectiveFibonacciAbsolutePriceTolerance(config, provenance.sourceSymbol);
+        std::unique_ptr<S::ResearchCandleSnapshot> candles;
+        {
+            pqxx::connection connection{EA::RuntimeDatabaseConnection::ForexConnectionString() + " application_name=fib_trendline_v2_read_only"};
+            pqxx::read_transaction transaction{connection};
+            transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+            const auto settings = transaction.exec("SELECT current_setting('default_transaction_read_only'),current_setting('statement_timeout'),current_setting('lock_timeout')").one_row();
+            if (settings[0].as<std::string>() != "on")
+                throw std::runtime_error("research loading requires default_transaction_read_only=on via PGOPTIONS");
+            std::cout << "loading_session read_only=" << settings[0].c_str() << " statement_timeout=" << settings[1].c_str()
+                << " lock_timeout=" << settings[2].c_str() << std::endl;
+            auto stage = Clock::now();
+            const auto preflight = EA::TG4::HistoricalMarketDataRepository::Preflight(transaction, provenance.sourceSymbol, config, range);
+            std::cout << "loading_timing preflight_seconds=" << Elapsed(stage) << " rows=" << preflight.rowCount << std::endl;
+            if (!preflight.rowCount || preflight.duplicateTimestampCount)
+                throw std::runtime_error("empty or duplicate canonical source; study aborted");
+            provenance.preflightRows = preflight.rowCount;
+            // Fixed external root, independent of a possibly in-repository TMPDIR.
+            candles = std::make_unique<S::ResearchCandleSnapshot>("/private/tmp", range.warmupStart, range.outcomeEnd,
+                preflight.rowCount, S::ResearchCandleSnapshot::Budgets{});
+            stage = Clock::now();
+            std::optional<Clock::time_point> firstCallback, lastCallbackEnd;
+            double snapshotSeconds = 0;
+            EA::TG4::HistoricalMarketDataRepository::StreamCanonicalCandles(transaction, provenance.sourceSymbol, config, range,
+                [&](const EA::TG1A::Candle& c)
+                {
+                    auto begin = Clock::now();
+                    if (!firstCallback) firstCallback = begin;
+                    candles->Append(c);
+                    snapshotSeconds += Elapsed(begin); lastCallbackEnd = Clock::now();
+                });
+            const auto streamEnd = Clock::now();
+            if (!firstCallback || !lastCallbackEnd)
+                throw std::runtime_error("canonical stream unexpectedly empty after nonempty preflight");
+            std::cout << "loading_timing stream_total_seconds=" << Elapsed(stage)
+                << " stream_initialization_to_first_callback_seconds=" << std::chrono::duration<double>(*firstCallback - stage).count()
+                << " stream_consumption_seconds=" << std::chrono::duration<double>(*lastCallbackEnd - *firstCallback).count()
+                << " snapshot_processing_seconds=" << snapshotSeconds
+                << " evaluator_processing_during_copy_seconds=0"
+                << " stream_completion_after_last_callback_seconds=" << std::chrono::duration<double>(streamEnd - *lastCallbackEnd).count()
+                << " timing_boundary=callback_proxy_includes_conversion_and_stream_finalization" << std::endl;
+            stage = Clock::now(); candles->Seal();
+            std::cout << "loading_timing snapshot_seal_validation_seconds=" << Elapsed(stage) << std::endl;
+            stage = Clock::now(); transaction.commit();
+            std::cout << "loading_timing transaction_completion_seconds=" << Elapsed(stage) << std::endl;
+        } // COPY, transaction and connection no longer exist before detector construction.
+        provenance.candleSnapshotSHA256 = S::FileHash(candles->Path());
+        provenance.candleSnapshotEncoding = S::ResearchCandleSnapshot::kEncoding;
+        provenance.candleSnapshotBytes = candles->Bytes();
         std::unique_ptr<EA::FibonacciResearch::HistoryShadow::Audit> shadowAudit;
         if (!auditOutput.empty())
         {
@@ -176,13 +229,6 @@ int main(int argc, char** argv)
         }
         EA::FibonacciResearch::HistoryShadow::Observer observer;
         if (shadowAudit) observer = [&](const auto& observation) { shadowAudit->Observe(observation); };
-        pqxx::connection connection{EA::RuntimeDatabaseConnection::ForexConnectionString() + " application_name=fib_trendline_v2_read_only"};
-        pqxx::read_transaction transaction{connection};
-        transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
-        const auto preflight = EA::TG4::HistoricalMarketDataRepository::Preflight(transaction, provenance.sourceSymbol, config, range);
-        if (!preflight.rowCount || preflight.duplicateTimestampCount)
-            throw std::runtime_error("empty or duplicate canonical source; study aborted");
-        provenance.preflightRows = preflight.rowCount;
         S::ArtifactWriter writer(output, tier);
         auto sinks=writer.GetSinks();
         if(shadowAudit)
@@ -197,9 +243,14 @@ int main(int argc, char** argv)
         }
         S::HistoricalEvaluator evaluator(protocol, EA::TG1B::CalibrationConfiguration(config.referenceBarScale),
             config.fibonacci, config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), std::move(sinks), score, {}, std::move(observer));
-        EA::TG4::HistoricalMarketDataRepository::StreamCanonicalCandles(transaction, provenance.sourceSymbol, config, range,
-            [&](const EA::TG1A::Candle& c) { evaluator.AddCompletedBar(c); });
-        evaluator.Finalize(); transaction.commit();
+        auto replay = Clock::now(); double evaluatorSeconds = 0;
+        candles->Replay([&](const EA::TG1A::Candle& c)
+        { auto begin = Clock::now(); evaluator.AddCompletedBar(c); evaluatorSeconds += Elapsed(begin); });
+        evaluator.Finalize();
+        if (evaluator.Engine().CandleDigest() != candles->CanonicalDigest())
+            throw std::runtime_error("snapshot replay canonical candle digest mismatch");
+        std::cout << "loading_timing replay_seconds=" << Elapsed(replay)
+            << " evaluator_processing_seconds=" << evaluatorSeconds << " database_closed_before_replay=true" << std::endl;
         writer.Complete(evaluator.Engine(), config, provenance);
         if (shadowAudit && !shadowAudit->Complete({evaluator.Engine().Fingerprint(), provenance.gitCommit,
             provenance.sourceSHA256, evaluator.Engine().CandleDigest(), output}))

@@ -20,7 +20,7 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/Ca
              'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
              'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
              'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
-new_files = ['Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
+new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
 files += new_files
 assert not git('diff', '--cached', '--name-only'), 'STOP: staged changes'
 untracked = set(git('ls-files', '--others', '--exclude-standard').splitlines())
@@ -51,7 +51,7 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp', 'Headers/Ca
          'Sources/CausalFibonacciTrendlineHistoricalArtifact.cpp', 'Sources/CausalFibonacciTrendlineHistoricalEvaluationCLI.cpp',
          'Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
-new_files = ['Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
+new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
 files += new_files
 checks = 0
 for script in ['Scripts/run_causal_fibonacci_trendline_study.sh', 'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']:

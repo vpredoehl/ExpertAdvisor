@@ -41,6 +41,9 @@ struct Provenance
     std::filesystem::path sourceManifest, sourceArchive, executable, configurationFile;
     std::size_t preflightRows = 0;
     std::string sourceSymbol = "audcadrmp";
+    // Optional research-only retrieval evidence; absent for legacy publications.
+    std::string candleSnapshotSHA256, candleSnapshotEncoding;
+    std::size_t candleSnapshotBytes = 0;
 };
 // Streams bounded-memory artifacts. COMPLETE is processing completion, never
 // a statistical result; missing calendar coverage stays explicitly UNVERIFIED.

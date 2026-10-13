@@ -28,7 +28,7 @@ files = ['Headers/CausalFibonacciTrendlineHistoricalEvaluation.hpp',
          'Scripts/run_causal_fibonacci_trendline_study.sh',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.cpp',
          'Tests/CausalFibonacciTrendlineHistoricalEvaluationTests.sh']
-new_files = ['Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
+new_files = ['Headers/CausalFibonacciResearchCandleSnapshot.hpp', 'Headers/CausalFractalHistoryShadowAudit.hpp', 'Sources/CausalFractalHistoryShadowAudit.cpp', 'Tests/CausalFractalHistoryShadowAuditTests.cpp']
 files += new_files
 def git(*args):
     return subprocess.check_output([os.environ['EA_RESEARCH_GIT'], '-C', str(root), *args], text=True).strip()

@@ -497,6 +497,15 @@ void ArtifactWriter::Complete(const EventEngine& engine, const TG4::EvaluationCo
     if (a.firstTimestamp) manifest << *a.firstTimestamp; else manifest << "null";
     manifest << ",\n\"last_source_utc_epoch\":";
     if (a.lastTimestamp) manifest << *a.lastTimestamp; else manifest << "null";
+    if (!p.candleSnapshotSHA256.empty())
+    {
+        if (!IsHash(p.candleSnapshotSHA256) || p.candleSnapshotEncoding.empty() || !p.candleSnapshotBytes)
+            throw std::runtime_error("missing candle snapshot provenance");
+        manifest << ",\n\"research_candle_snapshot\":{\"sha256\":" << Json(p.candleSnapshotSHA256)
+            << ",\"encoding\":" << Json(p.candleSnapshotEncoding) << ",\"bytes\":" << p.candleSnapshotBytes
+            << ",\"rows\":" << p.preflightRows
+            << ",\"loading\":\"unchanged canonical loader; immutable bounded UTC/OHLC snapshot; transaction closed before evaluator\"}";
+    }
     manifest << ",\n\"source_symbol\":\"audcadrmp\",\n\"source\":\"canonical candlestick loader, not 2025 reference view\",\n"
         << "\"database_access\":\"read_only_repeatable_read\",\n\"coverage\":\"UNVERIFIED\",\n\"statistical_estimation\":\"NOT_EXECUTED\"\n}\n";
     Write("provenance_manifest.json", manifest.str());

@@ -1,4 +1,5 @@
 #include "CausalFibonacciTrendlineHistoricalArtifact.hpp"
+#include "CausalFibonacciResearchCandleSnapshot.hpp"
 #include <cassert>
 #include <iostream>
 #include <random>
@@ -552,10 +553,86 @@ void StreamingMemory(const std::filesystem::path& temp)
               << " output_buffer_bytes=" << S::CompressedCsv::kBufferBytes << " producer_chunk_invariance=true\n";
 }
 
+void SnapshotLoading(const EA::TG4::EvaluationConfiguration& original, const std::filesystem::path& temp)
+{
+    auto data = RandomCandles(2112);
+    for (std::size_t i = 1056; i < data.size(); ++i) data[i].timestamp += 900; // Preserve a real gap.
+    S::ResearchCandleSnapshot snapshot(temp, S::kOrigin, Time(2120), data.size(), {});
+    S::ResearchCandleSnapshot repeat(temp, S::kOrigin, Time(2120), data.size(), {});
+    for (const auto& c : data) { snapshot.Append(c); repeat.Append(c); }
+    snapshot.Seal(); repeat.Seal();
+    assert(S::FileHash(snapshot.Path()) == S::FileHash(repeat.Path()));
+    std::size_t at = 0;
+    snapshot.Replay([&](const Candle& c)
+    {
+        const auto& expected = data.at(at++);
+        assert(c.timestamp == expected.timestamp);
+        for (const auto [a,b] : {std::pair{c.open,expected.open}, {c.high,expected.high},
+             {c.low,expected.low}, {c.close,expected.close}})
+            assert(std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b));
+    });
+    assert(at == data.size());
+    Reject([&] { snapshot.Append(data.back()); }); Reject([&] { snapshot.Seal(); });
+    {
+        S::ResearchCandleSnapshot partial(temp, S::kOrigin, Time(2120), 2, {});
+        partial.Append(data.front()); Reject([&] { partial.Seal(); });
+        Reject([&] { partial.Append(data.front()); });
+        Reject([&] { partial.Append(Bar(2120)); });
+        Reject([&] { partial.Replay([](const auto&) {}); });
+    }
+    auto limited = S::ResearchCandleSnapshot::Budgets{}; limited.maxRows = 1;
+    Reject([&] { S::ResearchCandleSnapshot bad(temp, S::kOrigin, Time(2120), 2, limited); });
+    limited = {}; limited.maxBytes = 100;
+    Reject([&] { S::ResearchCandleSnapshot bad(temp, S::kOrigin, Time(2120), 2, limited); });
+    limited = {}; limited.reserveDiskBytes = std::numeric_limits<std::uint64_t>::max();
+    Reject([&] { S::ResearchCandleSnapshot bad(temp, S::kOrigin, Time(2120), 2, limited); });
+    const auto config = SmallConfig(original);
+    S::Provenance provenance;
+    provenance.gitCommit = std::string(40, 'a'); provenance.compiler = "synthetic compiler fixture"; provenance.libraryVersion = "synthetic library fixture";
+    provenance.sourceManifest = temp / "fixture-source"; provenance.executable = temp / "fixture-executable";
+    provenance.configurationFile = temp / "fixture-config"; provenance.sourceArchive = temp / "fixture-archive";
+    provenance.sourceSHA256 = S::FileHash(provenance.sourceManifest); provenance.executableSHA256 = S::FileHash(provenance.executable);
+    provenance.configurationFileSHA256 = S::FileHash(provenance.configurationFile); provenance.preflightRows = data.size();
+    for (bool staged : {false, true})
+    {
+        S::ArtifactWriter writer(temp / (staged ? "snapshot-staged" : "snapshot-direct"));
+        S::Protocol p; p.maxABAgeBars = config.fibonacci.maxABAgeBars; p.maxLineAgeBars = config.geometry.maxCandidateAgeBars;
+        S::HistoricalEvaluator evaluator(p, EA::TG1B::CalibrationConfiguration(config.referenceBarScale), config.fibonacci,
+            config.geometry, config.behavior, EA::TG4::ConfigurationFingerprint(config), writer.GetSinks(), S::ScoreRange{Time(2048),Time(2120)});
+        if (staged) snapshot.Replay([&](const auto& c) { evaluator.AddCompletedBar(c); });
+        else for (const auto& c : data) evaluator.AddCompletedBar(c);
+        evaluator.Finalize(); assert(evaluator.Engine().CandleDigest() == snapshot.CanonicalDigest());
+        if (staged)
+        {
+            provenance.candleSnapshotSHA256 = S::FileHash(snapshot.Path());
+            provenance.candleSnapshotEncoding = S::ResearchCandleSnapshot::kEncoding;
+            provenance.candleSnapshotBytes = snapshot.Bytes();
+        }
+        writer.Complete(evaluator.Engine(),config,provenance);
+        S::ValidateArtifactPublication(temp / (staged ? "snapshot-staged" : "snapshot-direct"));
+    }
+    for (const char* name : {"decisions.csv","outcomes.csv","geometry_measurements.csv.gz","exclusions.csv","gaps.csv","protocol.json"})
+        assert(S::FileHash(temp / "snapshot-staged" / name) == S::FileHash(temp / "snapshot-direct" / name));
+    // Corruption must be detected BEFORE a consumer is invoked, including a
+    // bit-exact payload revision that leaves ordering/OHLC apparently plausible.
+    assert(chmod(repeat.Path().c_str(), S_IRUSR | S_IWUSR) == 0);
+    {
+        std::fstream f(repeat.Path(),std::ios::in|std::ios::out|std::ios::binary);
+        f.seekg(47); char byte=0; f.get(byte); byte ^= 1; f.seekp(47); f.put(byte);
+    }
+    bool consumed=false; Reject([&] { repeat.Replay([&](const auto&) { consumed=true; }); }); assert(!consumed);
+    std::filesystem::resize_file(repeat.Path(),repeat.Bytes()-1); Reject([&] { repeat.Validate(); });
+    {
+        S::ResearchCandleSnapshot large(temp,S::kOrigin,Time(50001),50000,{});
+        for (std::size_t i=0;i<50000;++i) large.Append(Bar(i));
+        large.Seal(); assert(large.Bytes()==50000*40+96); static_assert(sizeof(large)<4096);
+    }
+    std::cout << "RESEARCH_SNAPSHOT bit_exact=true deterministic=true primary_bytes_equal=true gap_preserved=true corruption_before_replay=true truncation=true budgets=true streamed_rows=50000\n";
+}
 }
 int main(int argc, char** argv)
 {
     assert(argc == 3); const auto config = EA::TG4::LoadConfigurationFile(argv[1]);
-    Cohorts(); ScheduleCoverageOutcomes(); InvarianceAndCapacity(); ReplayPartitionsPrefix(config); Artifacts(config, argv[2]); StreamingMemory(argv[2]);
+    Cohorts(); ScheduleCoverageOutcomes(); InvarianceAndCapacity(); ReplayPartitionsPrefix(config); Artifacts(config, argv[2]); StreamingMemory(argv[2]); SnapshotLoading(config, argv[2]);
     std::cout << "CausalFibonacciTrendlineHistoricalEvaluationTests v2 passed\n";
 }
